@@ -16,6 +16,8 @@ export type ExportPayload = {
   model: string;
   title: string;
   tags: string;
+  /** Extra image filenames in order, e.g. wr0001-01.jpg */
+  additionalImages?: string[];
 };
 
 export type SkuRow = {

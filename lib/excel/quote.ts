@@ -133,10 +133,46 @@ export async function buildQuoteWorkbook(payload: ExportPayload) {
     setByHeader(row, headers, "각인 포함 유무", defaults.engraving);
     setByHeader(row, headers, "어린이용 여부", "어린이용 아님");
     setByHeader(row, headers, "귀걸이 종류", payload.product.category === "피어싱" ? "피어싱" : "귀걸이");
-    setByHeader(row, headers, "Parent Manufacturer Part Number", payload.model);
-    setByHeader(row, headers, "Manufacturer Part Number", sku.sku);
+    // Parent / Manufacturer Part Number must stay blank for all rows
+    for (const [key, col] of headers.entries()) {
+      const norm = key.replace(/\s+/g, " ").trim().toLowerCase();
+      if (
+        norm === "parent manufacturer part number" ||
+        norm === "manufacturer part number"
+      ) {
+        row.getCell(col).value = null;
+      }
+    }
     setByHeader(row, headers, "대표이미지 파일명", sku.thumbFile);
     setByHeader(row, headers, "상세이미지 파일명", sku.detailFile);
+
+    const extras = payload.additionalImages || [];
+    const extraHeaders = [...headers.entries()]
+      .filter(([key]) => /추가\s*이미지/.test(key) || /additional\s*image/i.test(key))
+      .sort((a, b) => a[1] - b[1]);
+    if (extraHeaders.length) {
+      extraHeaders.forEach(([, col], i) => {
+        row.getCell(col).value = extras[i] || null;
+      });
+    } else {
+      // numbered columns: 추가이미지1, 추가이미지 1, 추가이미지파일명1 …
+      for (let i = 0; i < 10; i++) {
+        const candidates = [
+          `추가이미지${i + 1}`,
+          `추가이미지 ${i + 1}`,
+          `추가이미지파일명${i + 1}`,
+          `추가 이미지${i + 1}`,
+          `추가 이미지 ${i + 1}`,
+        ];
+        for (const h of candidates) {
+          const col = headers.get(h);
+          if (col) {
+            row.getCell(col).value = extras[i] || null;
+            break;
+          }
+        }
+      }
+    }
     setByHeader(row, headers, "이미지 대체 텍스트", altText(payload.title));
     setByHeader(row, headers, "공급가", defaults.supply);
     setByHeader(row, headers, "쿠팡 판매가", defaults.sale);

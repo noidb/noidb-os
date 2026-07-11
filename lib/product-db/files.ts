@@ -1,4 +1,5 @@
 export type ProductDbFile = {
+  /** Empty string = flat file directly under model folder */
   folder: string;
   filename: string;
   blob: Blob;
@@ -8,6 +9,8 @@ export type ProductDbFile = {
 export type CollectResult = {
   files: ProductDbFile[];
   skipped: string[];
+  readyFiles: string[];
+  missingFiles: string[];
 };
 
 export function dataUrlToBlob(dataUrl: string): Blob {
@@ -65,7 +68,7 @@ export async function createLabelBlob(model: string): Promise<Blob> {
 
   ctx.fillStyle = "#111111";
   ctx.textAlign = "center";
-  ctx.font = "bold 34px Arial, sans-serif";
+  ctx.font = "bold 32px Arial, sans-serif";
   ctx.fillText("전기용품 및 생활용품 안전관리법에 의한표시", 450, 105);
 
   const now = new Date();
@@ -75,17 +78,28 @@ export async function createLabelBlob(model: string): Promise<Blob> {
     `2. 제조연월 : ${ym}`,
     "3. 제조자명 : 프리스타일 협력사",
     "4. 수입자명 : 프리스타일",
-    "5. 주소 및 전화번호 : 경기도 고양시 탄현동 탄현동 1559-1",
+    "5. 주소 및 전화번호 : 경기도 고양시 탄현동 1559-1 / 010-5769-5602",
     "6. 제조국명 : 중국",
     "7. 사용연령 : 14세 이상",
     "8. 주의사항 : 분실, 파손주의",
   ];
 
   ctx.textAlign = "left";
-  ctx.font = "29px Arial, sans-serif";
-  let y = 220;
+  ctx.font = "26px Arial, sans-serif";
+  let y = 210;
   for (const line of lines) {
-    ctx.fillText(line, 85, y);
+    // wrap long address line
+    if (line.length > 42) {
+      const mid = line.indexOf(" / ");
+      if (mid > 0) {
+        ctx.fillText(line.slice(0, mid), 70, y);
+        y += 48;
+        ctx.fillText(line.slice(mid + 1).trim(), 70, y);
+        y += 88;
+        continue;
+      }
+    }
+    ctx.fillText(line, 70, y);
     y += 100;
   }
 
@@ -93,17 +107,12 @@ export async function createLabelBlob(model: string): Promise<Blob> {
   return dataUrlToBlob(dataUrl);
 }
 
-function pushFile(
-  files: ProductDbFile[],
-  folder: string,
-  filename: string,
-  blob: Blob
-) {
+function pushFlat(files: ProductDbFile[], filename: string, blob: Blob) {
   files.push({
-    folder,
+    folder: "",
     filename,
     blob,
-    path: `${folder}/${filename}`,
+    path: filename,
   });
 }
 
@@ -115,9 +124,16 @@ export type CollectInput = {
   product: Record<string, string>;
   analysis: unknown;
   ready: boolean;
-  imageDataUrl: string;
+  /** Multi photo data URLs in order */
+  photos: string[];
+  /** Legacy single photo fallback */
+  imageDataUrl?: string;
+  /** Approved option → dataUrl only */
   thumbnails: Record<string, string>;
+  /** Extra images in order (already 1000×1000) */
+  extraImages: string[];
   detailPreview: string;
+  sourcingUrl?: string;
 };
 
 export async function collectProductDbFiles(
@@ -125,28 +141,44 @@ export async function collectProductDbFiles(
 ): Promise<CollectResult> {
   const files: ProductDbFile[] = [];
   const skipped: string[] = [];
+  const readyFiles: string[] = [];
+  const missingFiles: string[] = [];
   const { model, category } = input;
 
   if (!model) {
     return {
       files: [],
-      skipped: [
+      skipped: ["모델명 없음"],
+      readyFiles: [],
+      missingFiles: [
         "원본사진",
         "썸네일",
+        "추가이미지",
         "상세페이지",
         "라벨",
         "견적서",
-        "쿠팡등록",
+        "상품입력자동화",
         "상품정보",
       ],
     };
   }
 
-  if (input.imageDataUrl?.startsWith("data:image/")) {
-    const ext = input.imageDataUrl.includes("image/png") ? "png" : "jpg";
-    pushFile(files, "원본사진", `${model}_원본.${ext}`, dataUrlToBlob(input.imageDataUrl));
+  const photoUrls =
+    input.photos?.filter(u => u?.startsWith("data:image/")) ??
+    [];
+  if (!photoUrls.length && input.imageDataUrl?.startsWith("data:image/")) {
+    photoUrls.push(input.imageDataUrl);
+  }
+
+  if (photoUrls.length) {
+    photoUrls.forEach((url, index) => {
+      const name = `원본_${String(index + 1).padStart(2, "0")}.jpg`;
+      pushFlat(files, name, dataUrlToBlob(url));
+      readyFiles.push(name);
+    });
   } else {
     skipped.push("원본사진 (제품사진 없음)");
+    missingFiles.push("원본_01.jpg …");
   }
 
   const options = Object.keys(input.thumbnails);
@@ -161,24 +193,42 @@ export async function collectProductDbFiles(
         option,
         input.product.sizes || ""
       )) {
-        pushFile(files, "썸네일", filename, blob);
+        pushFlat(files, filename, blob);
+        readyFiles.push(filename);
       }
     }
   } else {
-    skipped.push("썸네일 (생성된 썸네일 없음)");
+    skipped.push("썸네일 (승인한 썸네일 없음)");
+    missingFiles.push("옵션별 SKU 썸네일");
+  }
+
+  if (input.extraImages?.length) {
+    input.extraImages.forEach((url, index) => {
+      if (!url?.startsWith("data:image/")) return;
+      const name = `${model}-${String(index + 1).padStart(2, "0")}.jpg`;
+      pushFlat(files, name, dataUrlToBlob(url));
+      readyFiles.push(name);
+    });
+  } else {
+    missingFiles.push(`${model}-01.jpg (추가이미지)`);
   }
 
   if (input.detailPreview?.startsWith("data:image/")) {
-    pushFile(files, "상세페이지", `${model}.jpg`, dataUrlToBlob(input.detailPreview));
+    pushFlat(files, `${model}.jpg`, dataUrlToBlob(input.detailPreview));
+    readyFiles.push(`${model}.jpg`);
   } else {
     skipped.push("상세페이지 (상세페이지 미생성)");
+    missingFiles.push(`${model}.jpg`);
   }
 
   try {
     const labelBlob = await createLabelBlob(model);
-    pushFile(files, "라벨", `라벨_${model}.jpg`, labelBlob);
+    const labelName = `라벨_${model}.jpg`;
+    pushFlat(files, labelName, labelBlob);
+    readyFiles.push(labelName);
   } catch {
     skipped.push("라벨 (생성 실패)");
+    missingFiles.push(`라벨_${model}.jpg`);
   }
 
   const payload = {
@@ -186,6 +236,8 @@ export async function collectProductDbFiles(
     model: input.model,
     title: input.title,
     tags: input.tags,
+    additionalImages: (input.extraImages || [])
+      .map((_, i) => `${model}-${String(i + 1).padStart(2, "0")}.jpg`),
   };
 
   const quoteCategories = ["반지", "귀걸이", "피어싱", "목걸이", "팔찌", "발찌"];
@@ -200,19 +252,18 @@ export async function collectProductDbFiles(
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "견적서 생성 실패");
       }
-      pushFile(
-        files,
-        "견적서",
-        `견적서_${model}_${category}.xlsx`,
-        await res.blob()
-      );
+      const quoteName = `견적서_${model}_${category}.xlsx`;
+      pushFlat(files, quoteName, await res.blob());
+      readyFiles.push(quoteName);
     } catch (error) {
       skipped.push(
         `견적서 (${error instanceof Error ? error.message : "생성 실패"})`
       );
+      missingFiles.push(`견적서_${model}_${category}.xlsx`);
     }
   } else {
     skipped.push("견적서 (카테고리 템플릿 없음 또는 상품명 없음)");
+    missingFiles.push("견적서");
   }
 
   if (input.title) {
@@ -226,19 +277,18 @@ export async function collectProductDbFiles(
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "자동화 파일 생성 실패");
       }
-      pushFile(
-        files,
-        "쿠팡등록",
-        `상품입력자동화_${model}.xlsx`,
-        await res.blob()
-      );
+      const autoName = `상품입력자동화_${model}.xlsx`;
+      pushFlat(files, autoName, await res.blob());
+      readyFiles.push(autoName);
     } catch (error) {
       skipped.push(
         `쿠팡등록 (${error instanceof Error ? error.message : "생성 실패"})`
       );
+      missingFiles.push(`상품입력자동화_${model}.xlsx`);
     }
   } else {
     skipped.push("쿠팡등록 (상품명 없음)");
+    missingFiles.push("상품입력자동화");
   }
 
   const info = {
@@ -247,26 +297,30 @@ export async function collectProductDbFiles(
     title: input.title,
     tags: input.tags,
     analysis: input.analysis,
+    sourcingUrl: input.sourcingUrl || "",
     status: input.ready ? "등록가능" : "정보확인",
   };
-  pushFile(
+  const infoName = `상품정보_${model}.json`;
+  pushFlat(
     files,
-    "상품정보",
-    `상품정보_${model}.json`,
+    infoName,
     new Blob([JSON.stringify(info, null, 2)], {
       type: "application/json;charset=utf-8",
     })
   );
+  readyFiles.push(infoName);
 
-  return { files, skipped };
+  if (input.sourcingUrl?.trim()) {
+    pushFlat(
+      files,
+      "sourcing-url.txt",
+      new Blob([input.sourcingUrl.trim()], { type: "text/plain;charset=utf-8" })
+    );
+    readyFiles.push("sourcing-url.txt");
+  }
+
+  return { files, skipped, readyFiles, missingFiles };
 }
 
-export const PRODUCT_DB_SUBFOLDERS = [
-  "원본사진",
-  "썸네일",
-  "상세페이지",
-  "라벨",
-  "견적서",
-  "쿠팡등록",
-  "상품정보",
-] as const;
+/** @deprecated Flat structure — no subfolders created for new saves */
+export const PRODUCT_DB_SUBFOLDERS = [] as const;

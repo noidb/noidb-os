@@ -119,3 +119,41 @@
   .grid{grid-template-columns:1fr}
   img,video,canvas,svg{max-width:100%;height:auto}
 }
+
+.progressSteps{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}
+.progressStep{background:#f3f4f6;padding:9px 12px;border-radius:10px;font-weight:700;font-size:13px;color:#6b7280;border:1px solid transparent}
+.progressStep.done{background:#ecfdf5;color:#047857;border-color:#a7f3d0}
+.progressStep.nextStepHighlight{background:#111827;color:#fff;border-color:#111827;box-shadow:0 4px 14px rgba(17,24,39,.18)}
+.dropZone{border:2px dashed #cbd5e1;border-radius:14px;padding:22px;text-align:center;background:#fafafa;cursor:pointer;transition:border-color .15s,background .15s}
+.dropZone.dragging{border-color:#0f766e;background:#f0fdfa}
+.dropZone input{display:none}
+.dropZone strong{display:block;margin-bottom:6px;color:#111827}
+.dropZone span{color:#6b7280;font-size:13px;line-height:1.5}
+.photoGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;margin-top:14px}
+.photoCard{border:1px solid #e5e7eb;border-radius:12px;padding:10px;background:#fff;position:relative}
+.photoCard.primary{border-color:#0f766e;box-shadow:0 0 0 2px rgba(15,118,110,.15)}
+.photoCard img{width:100%;aspect-ratio:1;object-fit:contain;background:#f9fafb;border-radius:8px}
+.photoCard .photoActions{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.photoCard .photoActions button{border:0;border-radius:8px;padding:8px;font-weight:700;cursor:pointer;background:#e5e7eb;font-size:12px}
+.photoCard .badgePrimary{position:absolute;top:14px;left:14px;background:#0f766e;color:#fff;font-size:11px;font-weight:800;padding:3px 7px;border-radius:999px}
+.approveButton{background:#15803d!important;color:#fff!important}
+.approveButton:disabled{opacity:.45!important;cursor:not-allowed!important}
+.search1688Button{width:100%;border:0;border-radius:12px;padding:16px;font-weight:800;font-size:17px;background:#ea580c;color:#fff;cursor:pointer;margin:12px 0}
+.search1688Button:hover{background:#c2410c}
+.saveExplain{margin:12px 0;padding:12px 14px;background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;color:#9a3412;font-weight:700}
+.cropControls{margin-top:10px;display:grid;gap:6px;font-size:12px}
+.cropControls label{display:grid;grid-template-columns:70px 1fr;gap:8px;align-items:center}
+.thumbSourcePick{display:flex;gap:8px;overflow-x:auto;padding:6px 0;margin-bottom:8px}
+.thumbSourcePick button{border:2px solid #e5e7eb;border-radius:8px;padding:0;background:#fff;cursor:pointer;flex:0 0 auto}
+.thumbSourcePick button.selected{border-color:#0f766e}
+.thumbSourcePick img{width:56px;height:56px;object-fit:cover;border-radius:6px;display:block}
+.thumbnailCard.approved{border-color:#86efac;background:#f0fdf4}
+.advancedToggle{margin-top:12px;border:0;background:#e5e7eb;border-radius:10px;padding:11px 14px;font-weight:800;cursor:pointer}
+.experimentalBox{margin-top:16px;border:1px dashed #d1d5db;border-radius:12px;padding:14px;background:#f9fafb}
+.sourcingUrlRow{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.sourcingUrlRow input{flex:1;min-width:220px;padding:12px;border:1px solid #d1d5db;border-radius:10px}
+@media(max-width:760px){
+  .progressSteps{gap:6px}
+  .progressStep{font-size:12px;padding:8px 10px}
+  .photoGrid{grid-template-columns:repeat(2,1fr)}
+}
