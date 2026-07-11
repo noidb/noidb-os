@@ -18,6 +18,12 @@ type Analysis = {
 
 type ThumbnailMap = Record<string, string>;
 
+type DetailImage = {
+  id: string;
+  name: string;
+  dataUrl: string;
+};
+
 const codeMap: Record<string, string> = {
   반지:"wr", 귀걸이:"we", 목걸이:"wn", 팔찌:"wb",
   발찌:"wa", 피어싱:"wp", 브로치:"wc", 세트:"wx",
@@ -55,6 +61,9 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [thumbnails, setThumbnails] = useState<ThumbnailMap>({});
   const [thumbnailLoading, setThumbnailLoading] = useState("");
+  const [detailImages, setDetailImages] = useState<DetailImage[]>([]);
+  const [detailPreview, setDetailPreview] = useState("");
+  const [detailMessage, setDetailMessage] = useState("");
 
   const model = useMemo(() => {
     const no = product.modelNo.replace(/\D/g,"").padStart(4,"0");
@@ -164,6 +173,121 @@ export default function Home() {
     URL.revokeObjectURL(url);
   };
 
+  const onDetailImages = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+
+    Promise.all(
+      files.map(
+        file =>
+          new Promise<DetailImage>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () =>
+              resolve({
+                id: `${Date.now()}-${Math.random()}`,
+                name: file.name,
+                dataUrl: String(reader.result ?? ""),
+              });
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          })
+      )
+    )
+      .then(items => {
+        setDetailImages(prev => [...prev, ...items]);
+        setDetailMessage(`${items.length}장의 상세페이지 사진을 추가했습니다.`);
+      })
+      .catch(() => setDetailMessage("사진을 불러오지 못했습니다."));
+  };
+
+  const moveDetailImage = (index: number, direction: -1 | 1) => {
+    setDetailImages(prev => {
+      const next = [...prev];
+      const target = index + direction;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+    setDetailPreview("");
+  };
+
+  const removeDetailImage = (id: string) => {
+    setDetailImages(prev => prev.filter(item => item.id !== id));
+    setDetailPreview("");
+  };
+
+  const loadImage = (src: string) =>
+    new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+
+  const buildDetailPage = async () => {
+    if (!detailImages.length) {
+      setDetailMessage("상세페이지에 사용할 사진을 먼저 여러 장 선택해주세요.");
+      return;
+    }
+
+    setDetailMessage("780px 롱 상세페이지를 만들고 있습니다...");
+    try {
+      const width = 780;
+      const gap = 16;
+      const prepared = await Promise.all(
+        detailImages.map(async item => {
+          const img = await loadImage(item.dataUrl);
+          const height = Math.max(1, Math.round((img.height / img.width) * width));
+          return { img, height };
+        })
+      );
+
+      const totalHeight =
+        prepared.reduce((sum, item) => sum + item.height, 0) +
+        gap * Math.max(0, prepared.length - 1);
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = totalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
+
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(0, 0, width, totalHeight);
+
+      let y = 0;
+      for (const item of prepared) {
+        ctx.drawImage(item.img, 0, y, width, item.height);
+        y += item.height + gap;
+      }
+
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.94);
+      setDetailPreview(dataUrl);
+      setDetailMessage(
+        `상세페이지 완성: 가로 780px · 사진 ${detailImages.length}장 · 세로 ${totalHeight}px`
+      );
+    } catch (error) {
+      setDetailMessage(
+        `오류: ${error instanceof Error ? error.message : "상세페이지 생성 실패"}`
+      );
+    }
+  };
+
+  const addGeneratedThumbnailsToDetail = () => {
+    const items = Object.entries(thumbnails).map(([option, dataUrl]) => ({
+      id: `${Date.now()}-${option}-${Math.random()}`,
+      name: `${option} 썸네일`,
+      dataUrl,
+    }));
+    if (!items.length) {
+      setDetailMessage("먼저 옵션별 썸네일을 생성해주세요.");
+      return;
+    }
+    setDetailImages(prev => [...prev, ...items]);
+    setDetailPreview("");
+    setDetailMessage(`생성된 썸네일 ${items.length}장을 상세페이지 목록에 추가했습니다.`);
+  };
+
   const generateThumbnail = async (option: string) => {
     if (!imageDataUrl) {
       setMessage("먼저 제품사진을 선택해주세요.");
@@ -247,8 +371,8 @@ export default function Home() {
   return (
     <main className="shell">
       <header className="hero">
-        <div><p className="eyebrow">NOID-B OS V4</p><h1>AI 상품등록 도우미</h1>
-        <p className="sub">상품명을 깔끔하게 정리하고 옵션별 썸네일과 제품표시사항을 생성합니다.</p></div>
+        <div><p className="eyebrow">NOID-B OS V5</p><h1>AI 상품등록 도우미</h1>
+        <p className="sub">상품정보·옵션별 썸네일·780px 롱 상세페이지를 한 번에 만듭니다.</p></div>
         <span className="pill">AI 사진분석</span>
       </header>
 
@@ -353,14 +477,81 @@ export default function Home() {
         </div>
 
         <div className="card full">
-          <h2>6. 제품표시사항 라벨</h2>
+          <h2>6. 가로 780px 롱 상세페이지</h2>
+          <p className="note">
+            제품컷과 착용컷을 원하는 순서대로 여러 장 선택하세요.
+            사진 한 장당 가로 780px 전체 폭으로 배치하며 콜라주로 나누지 않습니다.
+          </p>
+
+          <label className="multiUpload">
+            <input type="file" accept="image/*" multiple onChange={onDetailImages} />
+            <strong>상세페이지 사진 여러 장 선택</strong>
+            <span>정면 · 사선 · 측면 · 클로즈업 · 착용컷 순으로 선택하거나 아래에서 순서를 바꾸세요.</span>
+          </label>
+
+          <div className="detailActions">
+            <button className="secondaryButton" onClick={addGeneratedThumbnailsToDetail}>
+              생성한 옵션별 썸네일 추가
+            </button>
+            <button className="purpleButton" onClick={buildDetailPage}>
+              780px 상세페이지 만들기
+            </button>
+          </div>
+
+          {detailMessage && <p className="detailMessage">{detailMessage}</p>}
+
+          {detailImages.length > 0 && (
+            <div className="detailList">
+              {detailImages.map((item, index) => (
+                <div className="detailItem" key={item.id}>
+                  <img src={item.dataUrl} alt={item.name} />
+                  <div className="detailItemInfo">
+                    <strong>{index + 1}. {item.name}</strong>
+                    <div className="detailItemButtons">
+                      <button disabled={index === 0} onClick={() => moveDetailImage(index, -1)}>
+                        위로
+                      </button>
+                      <button
+                        disabled={index === detailImages.length - 1}
+                        onClick={() => moveDetailImage(index, 1)}
+                      >
+                        아래로
+                      </button>
+                      <button className="removeButton" onClick={() => removeDetailImage(item.id)}>
+                        삭제
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {detailPreview && (
+            <div className="detailResult">
+              <h3>완성된 상세페이지 미리보기</h3>
+              <div className="detailPreviewFrame">
+                <img src={detailPreview} alt="780px 롱 상세페이지" />
+              </div>
+              <button
+                className="green detailDownload"
+                onClick={() => downloadDataUrl(detailPreview, `${model}_상세페이지_780px.jpg`)}
+              >
+                상세페이지 다운로드
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="card full">
+          <h2>7. 제품표시사항 라벨</h2>
           <p className="note">현재 모델명과 이번 달 제조연월이 자동으로 들어간 3:4 흰 배경 PNG입니다.</p>
           <button className="dark labelButton" onClick={downloadLabel}>제품표시사항 라벨 다운로드</button>
         </div>
 
         <div className="card full">
           <h2>다음 단계</h2>
-          <div className="steps"><span>완료: 상품명 정리</span><span>진행: 옵션별 썸네일</span><span>다음: 가로 780px 상세페이지</span></div>
+          <div className="steps"><span>완료: 상품명 정리</span><span>완료: 옵션별 썸네일</span><span>완료: 780px 상세페이지</span><span>다음: AI 추가각도·착용컷 생성</span></div>
         </div>
       </section>
     </main>
