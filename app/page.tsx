@@ -1,6 +1,15 @@
 "use client";
 
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ensureReadWritePermission,
+  loadDirectoryHandle,
+  saveDirectoryHandle,
+  supportsDirectoryPicker,
+} from "@/lib/product-db/idb";
+import { collectProductDbFiles, createLabelBlob } from "@/lib/product-db/files";
+import { writeProductDbFiles } from "@/lib/product-db/fs";
+import { buildProductDbZip } from "@/lib/product-db/zip";
 
 type Product = {
   supplier: string; category: string; gender: string; material: string;
@@ -55,6 +64,21 @@ const codeMap: Record<string, string> = {
   발찌:"wa", 피어싱:"wp", 브로치:"wc", 세트:"wx",
 };
 
+const CATEGORY_WORDS = new Set([
+  "반지", "귀걸이", "목걸이", "팔찌", "발찌", "피어싱", "브로치", "세트",
+]);
+const GENDER_WORDS = new Set(["여성", "남성", "남녀공용", "여성용", "남성용"]);
+
+const FEMALE_RING_SIZES = "9호,11호,14호,17호,20호";
+const MALE_RING_SIZES = "20호,22호,25호";
+const UNISEX_RING_SIZES = "9호,11호,14호,17호,20호,22호,25호";
+
+function defaultRingSizes(gender: string) {
+  if (gender === "남성") return MALE_RING_SIZES;
+  if (gender === "여성") return FEMALE_RING_SIZES;
+  return UNISEX_RING_SIZES;
+}
+
 function colorCode(option: string) {
   const normalized = option.trim().toLowerCase();
   if (normalized.includes("로즈")) return "RG";
@@ -84,8 +108,57 @@ function normalizeKeyword(value: string, product: Product) {
   return [...new Set(words)].slice(0, 5).join(" ");
 }
 
-function uniqueWords(values: string[]) {
-  return [...new Set(values.flatMap(v => v.split(/\s+/)).map(v => v.trim()).filter(Boolean))];
+function normalizeCompare(value: string) {
+  return value.toLowerCase().replace(/\s/g, "");
+}
+
+function buildProductTitle(product: Product, cleanedKeyword: string) {
+  const material = product.material.trim();
+  const gender = product.gender.trim();
+  const category = product.category.trim();
+  const seen = new Set<string>();
+  const parts: string[] = [];
+
+  const addPart = (word: string) => {
+    const trimmed = word.trim();
+    if (!trimmed) return;
+    const key = normalizeCompare(trimmed);
+    if (seen.has(key)) return;
+    seen.add(key);
+    parts.push(trimmed);
+  };
+
+  const designTokens = cleanedKeyword
+    .replace(/[,.，、/|+()[\]{}:;·_\-]+/g, " ")
+    .split(/\s+/)
+    .map(v => v.trim())
+    .filter(Boolean);
+
+  addPart(material);
+
+  for (const token of designTokens) {
+    if (
+      token === material ||
+      token === gender ||
+      token === category ||
+      GENDER_WORDS.has(token) ||
+      CATEGORY_WORDS.has(token)
+    ) {
+      continue;
+    }
+
+    let word = token;
+    if (word.endsWith(category) && word.length > category.length) {
+      word = word.slice(0, -category.length);
+    }
+    if (!word || word.length < 2 || CATEGORY_WORDS.has(word)) continue;
+    addPart(word);
+  }
+
+  addPart(gender);
+  addPart(category);
+
+  return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
 export default function Home() {
@@ -101,6 +174,8 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [thumbnails, setThumbnails] = useState<ThumbnailMap>({});
   const [thumbnailLoading, setThumbnailLoading] = useState("");
+  const [aiThumbnailLoading, setAiThumbnailLoading] = useState("");
+  const sizesUserEditedRef = useRef(false);
   const [detailImages, setDetailImages] = useState<DetailImage[]>([]);
   const [detailPreview, setDetailPreview] = useState("");
   const [detailMessage, setDetailMessage] = useState("");
@@ -111,6 +186,35 @@ export default function Home() {
   const [shotLoading, setShotLoading] = useState("");
   const [shotOption, setShotOption] = useState("로즈골드");
   const [shotMessage, setShotMessage] = useState("");
+  const [exportLoading, setExportLoading] = useState("");
+  const [exportMessage, setExportMessage] = useState("");
+  const [dbSupported, setDbSupported] = useState(false);
+  const [dbHandle, setDbHandle] = useState<FileSystemDirectoryHandle | null>(null);
+  const [dbFolderName, setDbFolderName] = useState("");
+  const [dbStatus, setDbStatus] = useState("");
+  const [dbSaving, setDbSaving] = useState(false);
+  const [dbSavedFiles, setDbSavedFiles] = useState<string[]>([]);
+  const [dbSkippedFiles, setDbSkippedFiles] = useState<string[]>([]);
+
+  useEffect(() => {
+    setDbSupported(supportsDirectoryPicker());
+    (async () => {
+      try {
+        const handle = await loadDirectoryHandle();
+        if (!handle) return;
+        const ok = await ensureReadWritePermission(handle);
+        if (!ok) {
+          setDbStatus("저장된 폴더 권한이 없습니다. 다시 선택해주세요.");
+          return;
+        }
+        setDbHandle(handle);
+        setDbFolderName(handle.name);
+        setDbStatus(`저장폴더 연결 완료: ${handle.name}`);
+      } catch {
+        setDbStatus("저장된 폴더 연결을 복원하지 못했습니다.");
+      }
+    })();
+  }, []);
 
   const model = useMemo(() => {
     const no = product.modelNo.replace(/\D/g,"").padStart(4,"0");
@@ -122,15 +226,10 @@ export default function Home() {
     [product]
   );
 
-  const title = useMemo(() => {
-    const words = uniqueWords([
-      product.material,
-      cleanedKeyword,
-      product.gender,
-      product.category,
-    ]);
-    return words.join(" ").replace(/[,，]+/g, " ").replace(/\s+/g, " ").trim();
-  }, [product, cleanedKeyword]);
+  const title = useMemo(
+    () => buildProductTitle(product, cleanedKeyword),
+    [product, cleanedKeyword]
+  );
 
   const tags = useMemo(() => {
     const designWords = cleanedKeyword.split(/\s+/).filter(Boolean);
@@ -155,16 +254,20 @@ export default function Home() {
   const update = (key:keyof Product, value:string) => {
     setProduct(prev => {
       const next = { ...prev, [key]: value };
-      if ((key === "gender" || key === "category") && next.category === "반지") {
-        next.sizes =
-          next.gender === "남성"
-            ? "20호,22호,25호"
-            : next.gender === "여성"
-              ? "9호,11호,14호,17호,20호"
-              : "9호,11호,14호,17호,20호,22호,25호";
+      if (
+        (key === "gender" || key === "category") &&
+        next.category === "반지" &&
+        !sizesUserEditedRef.current
+      ) {
+        next.sizes = defaultRingSizes(next.gender);
       }
       return next;
     });
+  };
+
+  const updateSizes = (value: string) => {
+    sizesUserEditedRef.current = true;
+    setProduct(prev => ({ ...prev, sizes: value }));
   };
 
   const onImage = (e:ChangeEvent<HTMLInputElement>) => {
@@ -194,19 +297,25 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "분석 실패");
 
-      setProduct(prev => ({
-        ...prev,
-        category:data.category || prev.category,
-        gender:data.gender || prev.gender,
-        material:data.material || prev.material,
-        colors:data.colors || prev.colors,
-        keyword:normalizeKeyword(data.keyword || prev.keyword, {
+      setProduct(prev => {
+        const next = {
           ...prev,
           category:data.category || prev.category,
           gender:data.gender || prev.gender,
           material:data.material || prev.material,
-        }),
-      }));
+          colors:data.colors || prev.colors,
+          keyword:normalizeKeyword(data.keyword || prev.keyword, {
+            ...prev,
+            category:data.category || prev.category,
+            gender:data.gender || prev.gender,
+            material:data.material || prev.material,
+          }),
+        };
+        if (next.category === "반지" && !sizesUserEditedRef.current) {
+          next.sizes = defaultRingSizes(next.gender);
+        }
+        return next;
+      });
       setAnalysis(data);
       setMessage("AI 사진분석이 완료되었습니다. 결과를 확인하고 필요한 부분만 수정하세요.");
     } catch (e) {
@@ -377,28 +486,34 @@ export default function Home() {
 
   const [draggedDetailIndex, setDraggedDetailIndex] = useState<number | null>(null);
 
-  const moveDetailImage = (index: number, direction: -1 | 1) => {
+  const reorderDetailImage = (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
     setDetailImages(prev => {
       const next = [...prev];
-      const target = index + direction;
-      if (target < 0 || target >= next.length) return prev;
-      [next[index], next[target]] = [next[target], next[index]];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
       return next;
     });
     setDetailPreview("");
+    setDetailMessage("사진 순서를 변경했습니다.");
   };
 
   const dropDetailImage = (targetIndex: number) => {
     if (draggedDetailIndex === null || draggedDetailIndex === targetIndex) return;
-    setDetailImages(prev => {
-      const next = [...prev];
-      const [moved] = next.splice(draggedDetailIndex, 1);
-      next.splice(targetIndex, 0, moved);
-      return next;
-    });
+    reorderDetailImage(draggedDetailIndex, targetIndex);
     setDraggedDetailIndex(null);
-    setDetailPreview("");
-    setDetailMessage("사진 순서를 변경했습니다.");
+  };
+
+  const onDetailTouchMove = (e: React.TouchEvent) => {
+    if (draggedDetailIndex === null) return;
+    const touch = e.touches[0];
+    const target = document.elementFromPoint(touch.clientX, touch.clientY);
+    const row = target?.closest("[data-detail-index]");
+    if (!row) return;
+    const toIndex = Number(row.getAttribute("data-detail-index"));
+    if (Number.isNaN(toIndex) || toIndex === draggedDetailIndex) return;
+    reorderDetailImage(draggedDetailIndex, toIndex);
+    setDraggedDetailIndex(toIndex);
   };
 
   const removeDetailImage = (id: string) => {
@@ -496,8 +611,8 @@ export default function Home() {
       if (!ctx) throw new Error("이미지 캔버스를 만들 수 없습니다.");
       ctx.fillStyle = "#FFFFFF";
       ctx.fillRect(0, 0, 1000, 1000);
-      const maxW = 860;
-      const maxH = 860;
+      const maxW = 850;
+      const maxH = 850;
       const scale = Math.min(maxW / img.width, maxH / img.height);
       const drawW = Math.round(img.width * scale);
       const drawH = Math.round(img.height * scale);
@@ -542,8 +657,8 @@ export default function Home() {
       setMessage("먼저 제품사진을 선택해주세요.");
       return;
     }
-    setThumbnailLoading(option);
-    setMessage(`${option} 썸네일을 생성하고 있습니다. 약 20~60초 걸릴 수 있습니다.`);
+    setAiThumbnailLoading(option);
+    setMessage(`${option} AI 보정 썸네일을 생성하고 있습니다. 약 20~60초 걸릴 수 있습니다.`);
     try {
       const res = await fetch("/api/thumbnail", {
         method: "POST",
@@ -558,11 +673,11 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "썸네일 생성 실패");
       setThumbnails(prev => ({ ...prev, [option]: data.imageDataUrl }));
-      setMessage(`${option} 썸네일 생성이 완료되었습니다.`);
+      setMessage(`${option} AI 보정 썸네일 생성이 완료되었습니다.`);
     } catch (e) {
-      setMessage(`오류: ${e instanceof Error ? e.message : "썸네일 생성 실패"}`);
+      setMessage(`오류: ${e instanceof Error ? e.message : "AI 보정 썸네일 생성 실패"}`);
     } finally {
-      setThumbnailLoading("");
+      setAiThumbnailLoading("");
     }
   };
 
@@ -573,46 +688,214 @@ export default function Home() {
     a.click();
   };
 
-  const downloadLabel = () => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 900;
-    canvas.height = 1200;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+  const exportPayload = () => ({
+    product,
+    model,
+    title,
+    tags,
+  });
 
-    ctx.fillStyle = "#FFFFFF";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = "#111111";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(35, 35, 830, 1130);
+  const downloadBlobFile = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
-    ctx.fillStyle = "#111111";
-    ctx.textAlign = "center";
-    ctx.font = "bold 34px Arial, sans-serif";
-    ctx.fillText("전기용품 및 생활용품 안전관리법에 의한표시", 450, 105);
+  const filenameFromDisposition = (header: string | null, fallback: string) => {
+    if (!header) return fallback;
+    const utf = header.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf?.[1]) return decodeURIComponent(utf[1]);
+    const plain = header.match(/filename="?([^";]+)"?/i);
+    return plain?.[1] || fallback;
+  };
 
-    const now = new Date();
-    const ym = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const lines = [
-      `1. 모델명 : ${model}`,
-      `2. 제조연월 : ${ym}`,
-      "3. 제조자명 : 프리스타일 협력사",
-      "4. 수입자명 : 프리스타일",
-      "5. 주소 및 전화번호 : 경기도 고양시",
-      "   탄현동 1559-1",
-      "6. 제조국명 : 중국",
-      "7. 사용연령 : 14세 이상",
-      "8. 주의사항 : 분실, 파손주의",
-    ];
-
-    ctx.textAlign = "left";
-    ctx.font = "29px Arial, sans-serif";
-    let y = 220;
-    for (const line of lines) {
-      ctx.fillText(line, 85, y);
-      y += 100;
+  const downloadQuoteExcel = async () => {
+    if (!model || !title) {
+      setExportMessage("모델명과 상품명을 먼저 완성해주세요.");
+      return;
     }
-    downloadDataUrl(canvas.toDataURL("image/jpeg", 0.96), `라벨_${model}.jpg`);
+    if (!["반지", "귀걸이", "피어싱", "목걸이", "팔찌", "발찌"].includes(product.category)) {
+      setExportMessage("이 카테고리는 견적서 템플릿이 없습니다. (브로치/세트 제외)");
+      return;
+    }
+    setExportLoading("quote");
+    setExportMessage("카테고리별 견적서를 생성하고 있습니다...");
+    try {
+      const res = await fetch("/api/export-quote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(exportPayload()),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "견적서 생성 실패");
+      }
+      const blob = await res.blob();
+      const filename = filenameFromDisposition(
+        res.headers.get("Content-Disposition"),
+        `견적서_${model}_${product.category}.xlsx`
+      );
+      downloadBlobFile(blob, filename);
+      const skuCount = res.headers.get("X-SKU-Count") || "";
+      setExportMessage(
+        `견적서 다운로드 완료${skuCount ? ` · SKU ${skuCount}행` : ""}: ${filename}`
+      );
+    } catch (error) {
+      setExportMessage(`오류: ${error instanceof Error ? error.message : "견적서 생성 실패"}`);
+    } finally {
+      setExportLoading("");
+    }
+  };
+
+  const downloadAutomationExcel = async () => {
+    if (!model || !title) {
+      setExportMessage("모델명과 상품명을 먼저 완성해주세요.");
+      return;
+    }
+    setExportLoading("automation");
+    setExportMessage("상품입력 자동화 파일을 생성하고 있습니다...");
+    try {
+      const res = await fetch("/api/export-automation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(exportPayload()),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "자동화 파일 생성 실패");
+      }
+      const blob = await res.blob();
+      const filename = filenameFromDisposition(
+        res.headers.get("Content-Disposition"),
+        `상품입력자동화_${model}.xlsx`
+      );
+      downloadBlobFile(blob, filename);
+      const skuCount = res.headers.get("X-SKU-Count") || "";
+      setExportMessage(
+        `상품입력 자동화 파일 다운로드 완료${skuCount ? ` · SKU ${skuCount}행` : ""}: ${filename}`
+      );
+    } catch (error) {
+      setExportMessage(
+        `오류: ${error instanceof Error ? error.message : "자동화 파일 생성 실패"}`
+      );
+    } finally {
+      setExportLoading("");
+    }
+  };
+
+  const downloadLabel = async () => {
+    if (!model) {
+      setMessage("모델명을 먼저 입력해주세요.");
+      return;
+    }
+    try {
+      const blob = await createLabelBlob(model);
+      downloadBlobFile(blob, `라벨_${model}.jpg`);
+    } catch (error) {
+      setMessage(`오류: ${error instanceof Error ? error.message : "라벨 생성 실패"}`);
+    }
+  };
+
+  const collectCurrentDbFiles = () =>
+    collectProductDbFiles({
+      category: product.category,
+      model,
+      title,
+      tags,
+      product,
+      analysis,
+      ready,
+      imageDataUrl,
+      thumbnails,
+      detailPreview,
+    });
+
+  const pickProductDbFolder = async () => {
+    if (!supportsDirectoryPicker()) {
+      setDbStatus("이 브라우저에서는 폴더 선택이 지원되지 않습니다. ZIP 다운로드를 사용하세요.");
+      return;
+    }
+    try {
+      const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+      const ok = await ensureReadWritePermission(handle);
+      if (!ok) {
+        setDbStatus("폴더 쓰기 권한이 필요합니다.");
+        return;
+      }
+      await saveDirectoryHandle(handle);
+      setDbHandle(handle);
+      setDbFolderName(handle.name);
+      setDbStatus(`저장폴더 연결 완료: ${handle.name}`);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setDbStatus(`오류: ${error instanceof Error ? error.message : "폴더 선택 실패"}`);
+    }
+  };
+
+  const saveAllToProductDb = async () => {
+    if (!model) {
+      setDbStatus("모델명을 먼저 완성해주세요.");
+      return;
+    }
+    if (!dbHandle) {
+      setDbStatus("먼저 상품DB 폴더를 선택해주세요.");
+      return;
+    }
+    setDbSaving(true);
+    setDbSavedFiles([]);
+    setDbSkippedFiles([]);
+    setDbStatus("상품DB에 저장 중...");
+    try {
+      const ok = await ensureReadWritePermission(dbHandle);
+      if (!ok) throw new Error("폴더 쓰기 권한이 없습니다. 다시 선택해주세요.");
+
+      const { files, skipped } = await collectCurrentDbFiles();
+      const saved = await writeProductDbFiles(
+        dbHandle,
+        product.category,
+        model,
+        files
+      );
+      setDbSavedFiles(saved);
+      setDbSkippedFiles(skipped);
+      setDbStatus(
+        `상품DB 저장 완료: ${saved.length}개 저장` +
+          (skipped.length ? ` · ${skipped.length}개 건너뜀` : "")
+      );
+    } catch (error) {
+      setDbStatus(`오류: ${error instanceof Error ? error.message : "상품DB 저장 실패"}`);
+    } finally {
+      setDbSaving(false);
+    }
+  };
+
+  const downloadProductDbZip = async () => {
+    if (!model) {
+      setDbStatus("모델명을 먼저 완성해주세요.");
+      return;
+    }
+    setDbSaving(true);
+    setDbSavedFiles([]);
+    setDbSkippedFiles([]);
+    setDbStatus("상품DB ZIP을 만들고 있습니다...");
+    try {
+      const { files, skipped } = await collectCurrentDbFiles();
+      const blob = await buildProductDbZip(product.category, model, files);
+      downloadBlobFile(blob, `상품DB_${model}.zip`);
+      setDbSavedFiles(files.map(f => `${product.category}/${model}/${f.path}`));
+      setDbSkippedFiles(skipped);
+      setDbStatus(
+        `ZIP 다운로드 완료: 상품DB_${model}.zip · ${files.length}개 포함` +
+          (skipped.length ? ` · ${skipped.length}개 건너뜀` : "")
+      );
+    } catch (error) {
+      setDbStatus(`오류: ${error instanceof Error ? error.message : "ZIP 생성 실패"}`);
+    } finally {
+      setDbSaving(false);
+    }
   };
 
   const options = product.colors.split(",").map(v => v.trim()).filter(Boolean);
@@ -620,10 +903,67 @@ export default function Home() {
   return (
     <main className="shell">
       <header className="hero">
-        <div><p className="eyebrow">NOID-B OS V8</p><h1>AI 상품등록 도우미</h1>
-        <p className="sub">원본 디자인을 유지한 썸네일·상세페이지·SKU 파일명을 자동 생성합니다.</p></div>
+        <div><p className="eyebrow">노이드비 AI</p><h1>AI 상품등록 도우미</h1>
+        <p className="sub">사진 한 장으로 쿠팡 등록 준비 완료</p></div>
         <span className="pill">AI 사진분석</span>
       </header>
+
+      <section className="card full dbSetupCard">
+        <h2>저장폴더 설정</h2>
+        <p className="note">G:\내 드라이브\상품DB 폴더를 선택하세요.</p>
+        {dbSupported ? (
+          <div className="exportActions">
+            <button className="dark" onClick={pickProductDbFolder}>
+              상품DB 폴더 선택
+            </button>
+            <button
+              className="green dbSaveAllButton"
+              disabled={dbSaving || !dbHandle}
+              onClick={saveAllToProductDb}
+            >
+              {dbSaving ? "저장 중..." : "상품DB에 전체 저장"}
+            </button>
+          </div>
+        ) : (
+          <div className="exportActions">
+            <button
+              className="green dbSaveAllButton"
+              disabled={dbSaving}
+              onClick={downloadProductDbZip}
+            >
+              {dbSaving ? "ZIP 생성 중..." : "전체 ZIP 다운로드"}
+            </button>
+          </div>
+        )}
+        {dbSupported && dbFolderName && (
+          <p className="detailMessage">저장폴더 연결 완료: {dbFolderName}</p>
+        )}
+        {dbStatus && (
+          <p className={dbStatus.startsWith("오류") ? "error" : "detailMessage"}>
+            {dbStatus}
+          </p>
+        )}
+        {dbSavedFiles.length > 0 && (
+          <div className="dbFileList">
+            <h3>저장된 파일</h3>
+            <ul>
+              {dbSavedFiles.map(path => (
+                <li key={path}>{path}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {dbSkippedFiles.length > 0 && (
+          <div className="dbFileList skipped">
+            <h3>건너뛴 파일</h3>
+            <ul>
+              {dbSkippedFiles.map(item => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
 
       <section className="grid">
         <div className="card">
@@ -655,7 +995,7 @@ export default function Home() {
               <option>써지컬스틸</option><option>925실버</option><option>티타늄</option><option>신주</option><option>14K</option><option>18K</option><option>기타</option>
             </select></Field>
             <Field label="색상옵션"><input value={product.colors} onChange={e=>update("colors",e.target.value)}/></Field>
-            <Field label="사이즈"><input value={product.sizes} onChange={e=>update("sizes",e.target.value)}/></Field>
+            <Field label="사이즈"><input value={product.sizes} onChange={e=>updateSizes(e.target.value)}/></Field>
             <Field label="모델번호 숫자"><input value={product.modelNo} onChange={e=>update("modelNo",e.target.value)}/></Field>
             <Field label="핵심키워드"><input
               value={product.keyword}
@@ -709,11 +1049,18 @@ export default function Home() {
                   <div className="thumbnailEmpty">아직 생성되지 않음</div>
                 )}
                 <button
-                  className="purple"
-                  disabled={Boolean(thumbnailLoading)}
+                  className="originalButton"
+                  disabled={Boolean(thumbnailLoading) || Boolean(aiThumbnailLoading)}
+                  onClick={()=>buildOriginalThumbnail(option)}
+                >
+                  {thumbnailLoading === option ? "생성 중..." : "원본유지 썸네일 만들기"}
+                </button>
+                <button
+                  className="aiOptionalButton"
+                  disabled={Boolean(thumbnailLoading) || Boolean(aiThumbnailLoading)}
                   onClick={()=>generateThumbnail(option)}
                 >
-                  {thumbnailLoading === option ? "생성 중..." : `${option} 썸네일 생성`}
+                  {aiThumbnailLoading === option ? "AI 보정 중..." : "AI 보정"}
                 </button>
                 {thumbnails[option] && (
                   <button
@@ -885,7 +1232,7 @@ export default function Home() {
           <label className="multiUpload">
             <input type="file" accept="image/*" multiple onChange={onDetailImages} />
             <strong>상세페이지 사진 여러 장 선택</strong>
-            <span>정면 · 사선 · 측면 · 클로즈업 · 착용컷 순으로 선택하거나 아래에서 순서를 바꾸세요.</span>
+            <span>정면 · 측면 · 클로즈업 · 착용컷 순으로 선택하거나 아래에서 순서를 바꾸세요.</span>
           </label>
 
           <div className="detailActions">
@@ -905,11 +1252,15 @@ export default function Home() {
                 <div
                   className="detailItem draggableDetail"
                   key={item.id}
+                  data-detail-index={index}
                   draggable
                   onDragStart={() => setDraggedDetailIndex(index)}
                   onDragOver={e => e.preventDefault()}
                   onDrop={() => dropDetailImage(index)}
                   onDragEnd={() => setDraggedDetailIndex(null)}
+                  onTouchStart={() => setDraggedDetailIndex(index)}
+                  onTouchMove={onDetailTouchMove}
+                  onTouchEnd={() => setDraggedDetailIndex(null)}
                 >
                   <div className="dragHandle">☰</div>
                   <img src={item.dataUrl} alt={item.name} />
@@ -945,13 +1296,42 @@ export default function Home() {
 
         <div className="card full">
           <h2>9. 제품표시사항 라벨</h2>
-          <p className="note">현재 모델명과 이번 달 제조연월이 자동으로 들어간 3:4 흰 배경 PNG입니다.</p>
+          <p className="note">현재 모델명과 이번 달 제조연월이 자동으로 들어간 3:4 흰 배경 JPG입니다.</p>
           <button className="dark labelButton" onClick={downloadLabel}>제품표시사항 라벨 다운로드</button>
         </div>
 
         <div className="card full">
+          <h2>10. 견적서 · 상품입력 자동화</h2>
+          <p className="note">
+            선택한 카테고리 템플릿에 상품정보·색상×사이즈 SKU·이미지 파일명을 자동 입력합니다.
+            반지 예시: wr0012-GO9.jpg / wr0012.jpg / 라벨_wr0012.jpg
+          </p>
+          <div className="exportActions">
+            <button
+              className="green"
+              disabled={Boolean(exportLoading)}
+              onClick={downloadQuoteExcel}
+            >
+              {exportLoading === "quote" ? "견적서 생성 중..." : "카테고리별 견적서 생성"}
+            </button>
+            <button
+              className="dark"
+              disabled={Boolean(exportLoading)}
+              onClick={downloadAutomationExcel}
+            >
+              {exportLoading === "automation" ? "자동화 파일 생성 중..." : "상품입력 자동화 파일 생성"}
+            </button>
+          </div>
+          {exportMessage && (
+            <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>
+              {exportMessage}
+            </p>
+          )}
+        </div>
+
+        <div className="card full">
           <h2>다음 단계</h2>
-          <div className="steps"><span>완료: 상품명 정리</span><span>완료: 옵션별 썸네일</span><span>완료: 780px 상세페이지</span><span>다음: 쿠팡 등록파일 생성</span></div>
+          <div className="steps"><span>완료: 상품명 정리</span><span>완료: 옵션별 썸네일</span><span>완료: 780px 상세페이지</span><span>완료: 견적서·자동화 엑셀</span></div>
         </div>
       </section>
     </main>

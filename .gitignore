@@ -1,0 +1,11 @@
+﻿node_modules/
+.next/
+out/
+*.log
+.env
+.env.*
+.env.local
+test_*.xlsx
+*.tsbuildinfo
+.DS_Store
+Thumbs.db

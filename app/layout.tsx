@@ -2,8 +2,8 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "NOID-B OS",
-  description: "노이드비 쿠팡 상품등록 도우미",
+  title: "노이드비 AI",
+  description: "사진 한 장으로 쿠팡 등록 준비 완료",
 };
 
 export default function RootLayout({
