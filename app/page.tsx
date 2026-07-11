@@ -16,10 +16,31 @@ type Analysis = {
   confidence?: number;
 };
 
+type ThumbnailMap = Record<string, string>;
+
 const codeMap: Record<string, string> = {
   반지:"wr", 귀걸이:"we", 목걸이:"wn", 팔찌:"wb",
   발찌:"wa", 피어싱:"wp", 브로치:"wc", 세트:"wx",
 };
+
+function normalizeKeyword(value: string, product: Product) {
+  const banned = new Set([
+    product.category, product.gender, product.material,
+    "여성용", "남성용", "남녀공용", "주얼리", "쥬얼리",
+    "반지", "귀걸이", "목걸이", "팔찌", "발찌", "피어싱", "브로치", "세트"
+  ]);
+  const words = value
+    .replace(/[,.，、/|+()[\]{}:;·_-]+/g, " ")
+    .split(/\s+/)
+    .map(v => v.trim())
+    .filter(Boolean)
+    .filter(v => !banned.has(v));
+  return [...new Set(words)].slice(0, 5).join(" ");
+}
+
+function uniqueWords(values: string[]) {
+  return [...new Set(values.flatMap(v => v.split(/\s+/)).map(v => v.trim()).filter(Boolean))];
+}
 
 export default function Home() {
   const [product, setProduct] = useState<Product>({
@@ -32,28 +53,43 @@ export default function Home() {
   const [analysis, setAnalysis] = useState<Analysis>({});
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [thumbnails, setThumbnails] = useState<ThumbnailMap>({});
+  const [thumbnailLoading, setThumbnailLoading] = useState("");
 
   const model = useMemo(() => {
     const no = product.modelNo.replace(/\D/g,"").padStart(4,"0");
     return product.modelNo ? `${codeMap[product.category] ?? "wx"}${no}` : "";
   }, [product.category, product.modelNo]);
 
-  const title = useMemo(
-    () => [product.material, product.keyword, product.gender, product.category].filter(Boolean).join(" "),
+  const cleanedKeyword = useMemo(
+    () => normalizeKeyword(product.keyword, product),
     [product]
   );
 
+  const title = useMemo(() => {
+    const words = uniqueWords([
+      product.material,
+      cleanedKeyword,
+      product.gender,
+      product.category,
+    ]);
+    return words.join(" ").replace(/[,，]+/g, " ").replace(/\s+/g, " ").trim();
+  }, [product, cleanedKeyword]);
+
   const tags = useMemo(() => {
-    const words = product.keyword.split(/\s+/).filter(Boolean);
+    const designWords = cleanedKeyword.split(/\s+/).filter(Boolean);
+    const colors = product.colors.split(",").map(v => v.trim()).filter(Boolean);
     const candidates = [
-      `${product.material}${product.category}`, `${product.gender}${product.category}`,
-      ...words.map(w => `${w}${product.category}`),
-      `레이어드${product.category}`, `데일리${product.category}`,
-      `패션${product.category}`, `선물용${product.category}`,
-      ...product.colors.split(",").map(v => `${v.trim()}${product.category}`)
+      `${product.material}${product.category}`,
+      `${product.gender}${product.category}`,
+      ...designWords.map(word => `${word}${product.category}`),
+      `데일리${product.category}`,
+      `패션${product.category}`,
+      `선물용${product.category}`,
+      ...colors.map(color => `${color}${product.category}`),
     ];
-    return [...new Set(candidates.filter(Boolean))].slice(0,10).join(",");
-  }, [product]);
+    return [...new Set(candidates.filter(Boolean))].slice(0, 10).join(",");
+  }, [product, cleanedKeyword]);
 
   const ready = Boolean(
     product.supplier && product.category && product.material && product.colors &&
@@ -96,7 +132,12 @@ export default function Home() {
         gender:data.gender || prev.gender,
         material:data.material || prev.material,
         colors:data.colors || prev.colors,
-        keyword:data.keyword || prev.keyword,
+        keyword:normalizeKeyword(data.keyword || prev.keyword, {
+          ...prev,
+          category:data.category || prev.category,
+          gender:data.gender || prev.gender,
+          material:data.material || prev.material,
+        }),
       }));
       setAnalysis(data);
       setMessage("AI 사진분석이 완료되었습니다. 결과를 확인하고 필요한 부분만 수정하세요.");
@@ -123,11 +164,91 @@ export default function Home() {
     URL.revokeObjectURL(url);
   };
 
+  const generateThumbnail = async (option: string) => {
+    if (!imageDataUrl) {
+      setMessage("먼저 제품사진을 선택해주세요.");
+      return;
+    }
+    setThumbnailLoading(option);
+    setMessage(`${option} 썸네일을 생성하고 있습니다. 약 20~60초 걸릴 수 있습니다.`);
+    try {
+      const res = await fetch("/api/thumbnail", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageDataUrl,
+          option,
+          category: product.category,
+          keyword: cleanedKeyword,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "썸네일 생성 실패");
+      setThumbnails(prev => ({ ...prev, [option]: data.imageDataUrl }));
+      setMessage(`${option} 썸네일 생성이 완료되었습니다.`);
+    } catch (e) {
+      setMessage(`오류: ${e instanceof Error ? e.message : "썸네일 생성 실패"}`);
+    } finally {
+      setThumbnailLoading("");
+    }
+  };
+
+  const downloadDataUrl = (dataUrl: string, filename: string) => {
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = filename;
+    a.click();
+  };
+
+  const downloadLabel = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 900;
+    canvas.height = 1200;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "#111111";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(35, 35, 830, 1130);
+
+    ctx.fillStyle = "#111111";
+    ctx.textAlign = "center";
+    ctx.font = "bold 34px Arial, sans-serif";
+    ctx.fillText("전기용품 및 생활용품 안전관리법에 의한표시", 450, 105);
+
+    const now = new Date();
+    const ym = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const lines = [
+      `1. 모델명 : ${model}`,
+      `2. 제조연월 : ${ym}`,
+      "3. 제조자명 : 노이드비 협력사",
+      "4. 수입자명 : 노이드비(수입품에 한함)",
+      "5. 주소 및 전화번호 : 경기도 파주시 소라지로 150-2",
+      "   / 010-5769-5602",
+      "6. 제조국명 : 중국",
+      "7. 사용연령 : 14세 이상",
+      "8. 주의사항 : 분실, 파손주의",
+    ];
+
+    ctx.textAlign = "left";
+    ctx.font = "29px Arial, sans-serif";
+    let y = 220;
+    for (const line of lines) {
+      ctx.fillText(line, 85, y);
+      y += 100;
+    }
+    downloadDataUrl(canvas.toDataURL("image/png"), `${model}_제품표시사항.png`);
+  };
+
+  const options = product.colors.split(",").map(v => v.trim()).filter(Boolean);
+
   return (
     <main className="shell">
       <header className="hero">
-        <div><p className="eyebrow">NOID-B OS V3</p><h1>AI 상품등록 도우미</h1>
-        <p className="sub">사진을 분석해 상품 핵심키워드와 가품 주의점을 자동 생성합니다.</p></div>
+        <div><p className="eyebrow">NOID-B OS V4</p><h1>AI 상품등록 도우미</h1>
+        <p className="sub">상품명을 깔끔하게 정리하고 옵션별 썸네일과 제품표시사항을 생성합니다.</p></div>
         <span className="pill">AI 사진분석</span>
       </header>
 
@@ -163,7 +284,12 @@ export default function Home() {
             <Field label="색상옵션"><input value={product.colors} onChange={e=>update("colors",e.target.value)}/></Field>
             <Field label="사이즈"><input value={product.sizes} onChange={e=>update("sizes",e.target.value)}/></Field>
             <Field label="모델번호 숫자"><input value={product.modelNo} onChange={e=>update("modelNo",e.target.value)}/></Field>
-            <Field label="핵심키워드"><input value={product.keyword} onChange={e=>update("keyword",e.target.value)}/></Field>
+            <Field label="핵심키워드"><input
+              value={product.keyword}
+              onChange={e=>update("keyword",e.target.value)}
+              onBlur={()=>update("keyword", normalizeKeyword(product.keyword, product))}
+              placeholder="예: 굵은 하트 체인 볼드"
+            /></Field>
             <Field label="원가"><input inputMode="numeric" value={product.cost} onChange={e=>update("cost",e.target.value)} placeholder="예: 1900"/></Field>
             <Field label="쿠팡 판매가"><input inputMode="numeric" value={product.price} onChange={e=>update("price",e.target.value)} placeholder="예: 14900"/></Field>
           </div>
@@ -195,8 +321,46 @@ export default function Home() {
         </div>
 
         <div className="card full">
-          <h2>다음 이미지 제작 단계</h2>
-          <div className="steps"><span>① 옵션별 1000×1000 썸네일</span><span>② 780px 상세페이지</span><span>③ 제품표시사항 라벨</span></div>
+          <h2>5. 옵션별 1000×1000 썸네일</h2>
+          <p className="note">옵션 하나씩 생성 버튼을 누르세요. 생성할 때마다 API 이미지 비용이 발생합니다.</p>
+          <div className="thumbnailGrid">
+            {options.map(option => (
+              <div className="thumbnailCard" key={option}>
+                <h3>{option}</h3>
+                {thumbnails[option] ? (
+                  <img src={thumbnails[option]} alt={`${option} 썸네일`} />
+                ) : (
+                  <div className="thumbnailEmpty">아직 생성되지 않음</div>
+                )}
+                <button
+                  className="purple"
+                  disabled={Boolean(thumbnailLoading)}
+                  onClick={()=>generateThumbnail(option)}
+                >
+                  {thumbnailLoading === option ? "생성 중..." : `${option} 썸네일 생성`}
+                </button>
+                {thumbnails[option] && (
+                  <button
+                    className="green"
+                    onClick={()=>downloadDataUrl(thumbnails[option], `${model}_${option}_1000x1000.png`)}
+                  >
+                    이미지 다운로드
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="card full">
+          <h2>6. 제품표시사항 라벨</h2>
+          <p className="note">현재 모델명과 이번 달 제조연월이 자동으로 들어간 3:4 흰 배경 PNG입니다.</p>
+          <button className="dark labelButton" onClick={downloadLabel}>제품표시사항 라벨 다운로드</button>
+        </div>
+
+        <div className="card full">
+          <h2>다음 단계</h2>
+          <div className="steps"><span>완료: 상품명 정리</span><span>진행: 옵션별 썸네일</span><span>다음: 가로 780px 상세페이지</span></div>
         </div>
       </section>
     </main>

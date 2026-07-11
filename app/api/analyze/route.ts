@@ -10,6 +10,22 @@ function extractJson(text: string) {
   return JSON.parse(cleaned.slice(start, end + 1));
 }
 
+function cleanKeyword(value: unknown, category: string, gender: string, material: string) {
+  const banned = new Set([
+    category, gender, material,
+    "여성용", "남성용", "남녀공용", "주얼리", "쥬얼리",
+    "반지", "귀걸이", "목걸이", "팔찌", "발찌", "피어싱", "브로치", "세트"
+  ]);
+  const words = String(value ?? "")
+    .replace(/[,.，、/|+()[\]{}:;·_-]+/g, " ")
+    .split(/\s+/)
+    .map(v => v.trim())
+    .filter(Boolean)
+    .filter(v => !banned.has(v));
+
+  return [...new Set(words)].slice(0, 5).join(" ");
+}
+
 export async function POST(req: NextRequest) {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -38,7 +54,7 @@ export async function POST(req: NextRequest) {
   "gender": "여성|남성|남녀공용",
   "material": "써지컬스틸|925실버|티타늄|신주|14K|18K|기타",
   "colors": "쉼표로 구분한 옵션",
-  "keyword": "쿠팡 상품명에 넣을 핵심 디자인 키워드 2~4개, 소재/성별/카테고리 제외",
+  "keyword": "공백으로만 구분한 핵심 디자인 키워드 2~4개. 쉼표 금지. 소재, 성별, 색상, 카테고리명 제외",
   "visualFeatures": ["사진에서 확인되는 특징"],
   "engraving": "각인 내용 또는 없음",
   "counterfeitRisk": "낮음|확인필요|높음",
@@ -50,6 +66,9 @@ export async function POST(req: NextRequest) {
 - 확인할 수 없는 사실은 추측하지 말 것.
 - '써지컬스틸'은 사진만으로 확정하기 어려우므로 사용자가 제공한 소재 기본값을 유지할 수 있다.
 - 상품명 키워드는 중복 없이 짧게 작성한다.
+- keyword에는 쉼표, 슬래시, 괄호를 절대 넣지 않는다.
+- keyword에 반지, 귀걸이, 목걸이 등 카테고리명을 넣지 않는다.
+- keyword에 여성, 남성, 써지컬스틸, 골드, 실버 등 기본속성을 넣지 않는다.
 - 일반적인 하트, 큐빅, 체인만으로 가품이라고 단정하지 않는다.
 - 문자 각인, 로고, 특정 브랜드를 연상시키는 고유 패턴이 있으면 확인필요로 표시한다.
 `;
@@ -90,6 +109,12 @@ export async function POST(req: NextRequest) {
       "";
 
     const result = extractJson(outputText);
+    result.keyword = cleanKeyword(
+      result.keyword,
+      result.category || body.current?.category || "",
+      result.gender || body.current?.gender || "",
+      result.material || body.current?.material || ""
+    );
     return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "알 수 없는 오류";
