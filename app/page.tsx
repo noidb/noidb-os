@@ -24,6 +24,17 @@ type DetailImage = {
   dataUrl: string;
 };
 
+type SourcingResult = {
+  koreanSummary?: string;
+  chineseKeywords?: string[];
+  englishKeywords?: string[];
+  ocrText?: string[];
+  detectedPrice?: string;
+  detectedSizes?: string[];
+  detectedColors?: string[];
+  searchTips?: string[];
+};
+
 const codeMap: Record<string, string> = {
   반지:"wr", 귀걸이:"we", 목걸이:"wn", 팔찌:"wb",
   발찌:"wa", 피어싱:"wp", 브로치:"wc", 세트:"wx",
@@ -64,6 +75,9 @@ export default function Home() {
   const [detailImages, setDetailImages] = useState<DetailImage[]>([]);
   const [detailPreview, setDetailPreview] = useState("");
   const [detailMessage, setDetailMessage] = useState("");
+  const [sourcing, setSourcing] = useState<SourcingResult>({});
+  const [sourcingLoading, setSourcingLoading] = useState(false);
+  const [sourcingMessage, setSourcingMessage] = useState("");
 
   const model = useMemo(() => {
     const no = product.modelNo.replace(/\D/g,"").padStart(4,"0");
@@ -171,6 +185,73 @@ export default function Home() {
     const a=document.createElement("a");
     a.href=url; a.download=`${model || "noidb-product"}.json`; a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const analyzeForSourcing = async () => {
+    if (!imageDataUrl) {
+      setSourcingMessage("먼저 제품사진을 선택해주세요.");
+      return;
+    }
+    setSourcingLoading(true);
+    setSourcingMessage("중국어 검색어와 사진 속 정보를 분석하고 있습니다...");
+    try {
+      const res = await fetch("/api/sourcing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageDataUrl, current: product }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "소싱 분석 실패");
+      setSourcing(data);
+
+      if (data.detectedPrice && data.detectedPrice !== "없음" && !product.cost) {
+        const number = String(data.detectedPrice).replace(/\D/g, "");
+        if (number) update("cost", number);
+      }
+      if (Array.isArray(data.detectedSizes) && data.detectedSizes.length && !product.sizes) {
+        update("sizes", data.detectedSizes.join(","));
+      }
+      if (Array.isArray(data.detectedColors) && data.detectedColors.length) {
+        const found = data.detectedColors.join(",");
+        if (found) update("colors", found);
+      }
+
+      setSourcingMessage("소싱 검색어 생성이 완료되었습니다.");
+    } catch (error) {
+      setSourcingMessage(
+        `오류: ${error instanceof Error ? error.message : "소싱 분석 실패"}`
+      );
+    } finally {
+      setSourcingLoading(false);
+    }
+  };
+
+  const copyText = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setSourcingMessage(`복사했습니다: ${value}`);
+    } catch {
+      setSourcingMessage("복사하지 못했습니다. 검색어를 길게 눌러 복사해주세요.");
+    }
+  };
+
+  const openSearch = (site: "1688" | "taobao" | "aliexpress" | "googleImages", keyword: string) => {
+    const q = encodeURIComponent(keyword);
+    const urls = {
+      "1688": `https://www.google.com/search?q=${encodeURIComponent("site:1688.com " + keyword)}`,
+      "taobao": `https://www.google.com/search?q=${encodeURIComponent("site:taobao.com " + keyword)}`,
+      "aliexpress": `https://www.google.com/search?q=${encodeURIComponent("site:aliexpress.com/item " + keyword)}`,
+      "googleImages": `https://www.google.com/search?tbm=isch&q=${q}`,
+    };
+    window.open(urls[site], "_blank", "noopener,noreferrer");
+  };
+
+  const downloadSearchImage = () => {
+    if (!imageDataUrl) {
+      setSourcingMessage("먼저 제품사진을 선택해주세요.");
+      return;
+    }
+    downloadDataUrl(imageDataUrl, `${model || "상품"}_이미지검색용.jpg`);
   };
 
   const onDetailImages = (e: ChangeEvent<HTMLInputElement>) => {
@@ -371,8 +452,8 @@ export default function Home() {
   return (
     <main className="shell">
       <header className="hero">
-        <div><p className="eyebrow">NOID-B OS V5</p><h1>AI 상품등록 도우미</h1>
-        <p className="sub">상품정보·옵션별 썸네일·780px 롱 상세페이지를 한 번에 만듭니다.</p></div>
+        <div><p className="eyebrow">NOID-B OS V6</p><h1>AI 상품등록 도우미</h1>
+        <p className="sub">상품등록부터 중국 도매 소싱 검색까지 한 화면에서 처리합니다.</p></div>
         <span className="pill">AI 사진분석</span>
       </header>
 
@@ -477,7 +558,86 @@ export default function Home() {
         </div>
 
         <div className="card full">
-          <h2>6. 가로 780px 롱 상세페이지</h2>
+          <h2>6. 신상품 AI 소싱 검색</h2>
+          <p className="note">
+            사진에서 중국어·영어 검색어와 가격·사이즈·색상을 추출합니다.
+            검색 버튼을 누르면 새 창에서 해당 쇼핑몰 결과를 바로 확인할 수 있습니다.
+          </p>
+
+          <div className="sourcingTop">
+            <button
+              className="sourceAnalyzeButton"
+              onClick={analyzeForSourcing}
+              disabled={sourcingLoading}
+            >
+              {sourcingLoading ? "소싱 분석 중..." : "🔎 중국 도매 소싱 분석"}
+            </button>
+            <button className="secondaryButton" onClick={downloadSearchImage}>
+              이미지검색용 사진 다운로드
+            </button>
+          </div>
+
+          {sourcingMessage && (
+            <p className={sourcingMessage.startsWith("오류") ? "error" : "detailMessage"}>
+              {sourcingMessage}
+            </p>
+          )}
+
+          {sourcing.koreanSummary && (
+            <div className="sourcingSummary">
+              <span>AI 제품 요약</span>
+              <strong>{sourcing.koreanSummary}</strong>
+            </div>
+          )}
+
+          {(sourcing.chineseKeywords?.length ?? 0) > 0 && (
+            <div className="keywordSection">
+              <h3>1688·타오바오 중국어 검색어</h3>
+              {sourcing.chineseKeywords!.map((keyword, index) => (
+                <div className="keywordRow" key={`${keyword}-${index}`}>
+                  <strong>{keyword}</strong>
+                  <button onClick={() => copyText(keyword)}>복사</button>
+                  <button onClick={() => openSearch("1688", keyword)}>1688 검색</button>
+                  <button onClick={() => openSearch("taobao", keyword)}>타오바오 검색</button>
+                  <button onClick={() => openSearch("googleImages", keyword)}>이미지 검색</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {(sourcing.englishKeywords?.length ?? 0) > 0 && (
+            <div className="keywordSection">
+              <h3>알리익스프레스·구글 영어 검색어</h3>
+              {sourcing.englishKeywords!.map((keyword, index) => (
+                <div className="keywordRow" key={`${keyword}-${index}`}>
+                  <strong>{keyword}</strong>
+                  <button onClick={() => copyText(keyword)}>복사</button>
+                  <button onClick={() => openSearch("aliexpress", keyword)}>알리 검색</button>
+                  <button onClick={() => openSearch("googleImages", keyword)}>이미지 검색</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {(sourcing.ocrText?.length ?? 0) > 0 && (
+            <div className="sourcingFacts">
+              <div><span>사진 속 문구</span><strong>{sourcing.ocrText!.join(" / ")}</strong></div>
+              <div><span>읽힌 가격</span><strong>{sourcing.detectedPrice || "없음"}</strong></div>
+              <div><span>읽힌 사이즈</span><strong>{sourcing.detectedSizes?.join(", ") || "없음"}</strong></div>
+              <div><span>확인된 색상</span><strong>{sourcing.detectedColors?.join(", ") || "없음"}</strong></div>
+            </div>
+          )}
+
+          {(sourcing.searchTips?.length ?? 0) > 0 && (
+            <div className="searchTips">
+              <h3>검색 팁</h3>
+              <p>{sourcing.searchTips!.join(" · ")}</p>
+            </div>
+          )}
+        </div>
+
+        <div className="card full">
+          <h2>7. 가로 780px 롱 상세페이지</h2>
           <p className="note">
             제품컷과 착용컷을 원하는 순서대로 여러 장 선택하세요.
             사진 한 장당 가로 780px 전체 폭으로 배치하며 콜라주로 나누지 않습니다.
@@ -544,7 +704,7 @@ export default function Home() {
         </div>
 
         <div className="card full">
-          <h2>7. 제품표시사항 라벨</h2>
+          <h2>8. 제품표시사항 라벨</h2>
           <p className="note">현재 모델명과 이번 달 제조연월이 자동으로 들어간 3:4 흰 배경 PNG입니다.</p>
           <button className="dark labelButton" onClick={downloadLabel}>제품표시사항 라벨 다운로드</button>
         </div>

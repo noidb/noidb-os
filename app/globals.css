@@ -46,3 +46,27 @@
   .detailItem{align-items:flex-start}
   .detailItem img{width:72px;height:72px}
 }
+
+.sourcingTop{display:flex;gap:10px;flex-wrap:wrap}
+.sourcingTop button{border:0;border-radius:10px;padding:13px 17px;font-weight:800;cursor:pointer}
+.sourceAnalyzeButton{background:#0f766e;color:#fff}
+.sourceAnalyzeButton:disabled{opacity:.6;cursor:wait}
+.sourcingSummary{margin-top:14px;border:1px solid #ccfbf1;background:#f0fdfa;border-radius:12px;padding:14px}
+.sourcingSummary span,.sourcingFacts span{display:block;font-size:12px;color:#6b7280;margin-bottom:5px}
+.keywordSection{margin-top:18px}
+.keywordSection h3{font-size:16px;margin:0 0 10px}
+.keywordRow{display:grid;grid-template-columns:minmax(180px,1fr) auto auto auto auto;gap:7px;align-items:center;border:1px solid #e5e7eb;background:#fafafa;border-radius:11px;padding:10px;margin-bottom:8px}
+.keywordRow strong{word-break:break-word}
+.keywordRow button{border:0;border-radius:8px;padding:8px 10px;background:#e5e7eb;font-weight:700;cursor:pointer}
+.sourcingFacts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px}
+.sourcingFacts div{border:1px solid #e5e7eb;border-radius:11px;padding:12px;background:#fafafa}
+.searchTips{margin-top:14px;border-left:4px solid #0f766e;padding:10px 14px;background:#f0fdfa}
+.searchTips h3{font-size:15px;margin:0 0 5px}
+.searchTips p{margin:0;line-height:1.6;color:#374151}
+@media(max-width:760px){
+  .sourcingTop{flex-direction:column}
+  .sourcingTop button{width:100%}
+  .keywordRow{grid-template-columns:1fr 1fr}
+  .keywordRow strong{grid-column:1/-1}
+  .sourcingFacts{grid-template-columns:1fr}
+}
