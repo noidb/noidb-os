@@ -35,6 +35,23 @@ type SourcingResult = {
   searchTips?: string[];
 };
 
+type GeneratedShot = {
+  key: string;
+  label: string;
+  dataUrl: string;
+  option: string;
+};
+
+const shotTypes = [
+  { key: "front", label: "정면 제품컷" },
+  { key: "angle", label: "사선 제품컷" },
+  { key: "side", label: "측면 제품컷" },
+  { key: "closeup", label: "디테일 클로즈업" },
+  { key: "back", label: "뒷면·구조컷" },
+  { key: "wearingFront", label: "손 착용 정면컷" },
+  { key: "wearingSide", label: "손 착용 측면컷" }
+] as const;
+
 const codeMap: Record<string, string> = {
   반지:"wr", 귀걸이:"we", 목걸이:"wn", 팔찌:"wb",
   발찌:"wa", 피어싱:"wp", 브로치:"wc", 세트:"wx",
@@ -78,6 +95,10 @@ export default function Home() {
   const [sourcing, setSourcing] = useState<SourcingResult>({});
   const [sourcingLoading, setSourcingLoading] = useState(false);
   const [sourcingMessage, setSourcingMessage] = useState("");
+  const [generatedShots, setGeneratedShots] = useState<Record<string, GeneratedShot>>({});
+  const [shotLoading, setShotLoading] = useState("");
+  const [shotOption, setShotOption] = useState("로즈골드");
+  const [shotMessage, setShotMessage] = useState("");
 
   const model = useMemo(() => {
     const no = product.modelNo.replace(/\D/g,"").padStart(4,"0");
@@ -252,6 +273,55 @@ export default function Home() {
       return;
     }
     downloadDataUrl(imageDataUrl, `${model || "상품"}_이미지검색용.jpg`);
+  };
+
+  const generateDetailShot = async (shotType: string, label: string) => {
+    if (!imageDataUrl) {
+      setShotMessage("먼저 제품사진을 선택해주세요.");
+      return;
+    }
+    setShotLoading(shotType);
+    setShotMessage(`${shotOption} ${label}을 생성하고 있습니다. 약 20~60초 걸릴 수 있습니다.`);
+
+    try {
+      const res = await fetch("/api/detail-shot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageDataUrl,
+          shotType,
+          option: shotOption,
+          category: product.category,
+          keyword: cleanedKeyword
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "추가컷 생성 실패");
+
+      const resultKey = `${shotOption}-${shotType}`;
+      setGeneratedShots(prev => ({
+        ...prev,
+        [resultKey]: { key: resultKey, label, dataUrl: data.imageDataUrl, option: shotOption }
+      }));
+      setShotMessage(`${shotOption} ${label} 생성이 완료되었습니다.`);
+    } catch (error) {
+      setShotMessage(`오류: ${error instanceof Error ? error.message : "추가컷 생성 실패"}`);
+    } finally {
+      setShotLoading("");
+    }
+  };
+
+  const addShotToDetail = (shot: GeneratedShot) => {
+    setDetailImages(prev => [
+      ...prev,
+      {
+        id: `${Date.now()}-${shot.key}-${Math.random()}`,
+        name: `${shot.option} ${shot.label}`,
+        dataUrl: shot.dataUrl
+      }
+    ]);
+    setDetailPreview("");
+    setShotMessage(`${shot.option} ${shot.label}을 상세페이지 목록에 추가했습니다.`);
   };
 
   const onDetailImages = (e: ChangeEvent<HTMLInputElement>) => {
@@ -452,8 +522,8 @@ export default function Home() {
   return (
     <main className="shell">
       <header className="hero">
-        <div><p className="eyebrow">NOID-B OS V6</p><h1>AI 상품등록 도우미</h1>
-        <p className="sub">상품등록부터 중국 도매 소싱 검색까지 한 화면에서 처리합니다.</p></div>
+        <div><p className="eyebrow">NOID-B OS V7</p><h1>AI 상품등록 도우미</h1>
+        <p className="sub">상품등록·소싱검색·AI 추가각도·착용컷까지 한 화면에서 처리합니다.</p></div>
         <span className="pill">AI 사진분석</span>
       </header>
 
@@ -558,7 +628,75 @@ export default function Home() {
         </div>
 
         <div className="card full">
-          <h2>6. 신상품 AI 소싱 검색</h2>
+          <h2>6. AI 추가각도·착용컷 생성</h2>
+          <p className="note">
+            원본 제품사진을 기준으로 필요한 컷만 한 장씩 생성하세요.
+            생성 결과가 실제 제품과 다르면 사용하지 말고 다시 생성하거나 원본사진을 사용하세요.
+          </p>
+
+          <div className="shotOptionRow">
+            <label>
+              <span>생성할 금속 색상</span>
+              <select value={shotOption} onChange={e => setShotOption(e.target.value)}>
+                {product.colors.split(",").map(v => v.trim()).filter(Boolean).map(option =>
+                  <option key={option}>{option}</option>
+                )}
+              </select>
+            </label>
+          </div>
+
+          {shotMessage && (
+            <p className={shotMessage.startsWith("오류") ? "error" : "detailMessage"}>
+              {shotMessage}
+            </p>
+          )}
+
+          <div className="shotGrid">
+            {shotTypes.map(shot => {
+              const resultKey = `${shotOption}-${shot.key}`;
+              const result = generatedShots[resultKey];
+
+              return (
+                <div className="shotCard" key={shot.key}>
+                  <h3>{shot.label}</h3>
+                  {result ? (
+                    <img src={result.dataUrl} alt={`${shotOption} ${shot.label}`} />
+                  ) : (
+                    <div className="shotEmpty">아직 생성되지 않음</div>
+                  )}
+
+                  <button
+                    className="purple"
+                    disabled={Boolean(shotLoading)}
+                    onClick={() => generateDetailShot(shot.key, shot.label)}
+                  >
+                    {shotLoading === shot.key ? "생성 중..." : `${shot.label} 생성`}
+                  </button>
+
+                  {result && (
+                    <>
+                      <button className="secondaryButton shotAction" onClick={() => addShotToDetail(result)}>
+                        상세페이지에 추가
+                      </button>
+                      <button
+                        className="green shotAction"
+                        onClick={() => downloadDataUrl(
+                          result.dataUrl,
+                          `${model}_${shotOption}_${shot.label}.png`
+                        )}
+                      >
+                        이미지 다운로드
+                      </button>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="card full">
+          <h2>7. 신상품 AI 소싱 검색</h2>
           <p className="note">
             사진에서 중국어·영어 검색어와 가격·사이즈·색상을 추출합니다.
             검색 버튼을 누르면 새 창에서 해당 쇼핑몰 결과를 바로 확인할 수 있습니다.
@@ -637,7 +775,7 @@ export default function Home() {
         </div>
 
         <div className="card full">
-          <h2>7. 가로 780px 롱 상세페이지</h2>
+          <h2>8. 가로 780px 롱 상세페이지</h2>
           <p className="note">
             제품컷과 착용컷을 원하는 순서대로 여러 장 선택하세요.
             사진 한 장당 가로 780px 전체 폭으로 배치하며 콜라주로 나누지 않습니다.
@@ -704,14 +842,14 @@ export default function Home() {
         </div>
 
         <div className="card full">
-          <h2>8. 제품표시사항 라벨</h2>
+          <h2>9. 제품표시사항 라벨</h2>
           <p className="note">현재 모델명과 이번 달 제조연월이 자동으로 들어간 3:4 흰 배경 PNG입니다.</p>
           <button className="dark labelButton" onClick={downloadLabel}>제품표시사항 라벨 다운로드</button>
         </div>
 
         <div className="card full">
           <h2>다음 단계</h2>
-          <div className="steps"><span>완료: 상품명 정리</span><span>완료: 옵션별 썸네일</span><span>완료: 780px 상세페이지</span><span>다음: AI 추가각도·착용컷 생성</span></div>
+          <div className="steps"><span>완료: 상품명 정리</span><span>완료: 옵션별 썸네일</span><span>완료: 780px 상세페이지</span><span>다음: 쿠팡 등록파일 생성</span></div>
         </div>
       </section>
     </main>

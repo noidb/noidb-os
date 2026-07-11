@@ -70,3 +70,18 @@
   .keywordRow strong{grid-column:1/-1}
   .sourcingFacts{grid-template-columns:1fr}
 }
+
+.shotOptionRow{display:flex;gap:12px;align-items:end;margin:14px 0}
+.shotOptionRow label{display:flex;flex-direction:column;gap:6px;min-width:220px}
+.shotOptionRow span{font-size:13px;font-weight:700}
+.shotOptionRow select{padding:11px;border:1px solid #d1d5db;border-radius:10px;background:#fff}
+.shotGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:16px}
+.shotCard{border:1px solid #e5e7eb;border-radius:14px;padding:14px;background:#fafafa}
+.shotCard h3{margin:0 0 10px;text-align:center;font-size:16px}
+.shotCard img{width:100%;aspect-ratio:2/3;object-fit:contain;background:#fff;border:1px solid #e5e7eb;border-radius:10px}
+.shotEmpty{width:100%;aspect-ratio:2/3;display:flex;align-items:center;justify-content:center;background:#fff;border:1px dashed #cbd5e1;border-radius:10px;color:#6b7280}
+.shotCard button{width:100%;border:0;border-radius:9px;padding:11px;margin-top:9px;font-weight:800;cursor:pointer}
+.shotCard button:disabled{opacity:.6;cursor:wait}
+.shotAction{display:block}
+@media(max-width:900px){.shotGrid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:760px){.shotGrid{grid-template-columns:1fr}.shotOptionRow label{width:100%;min-width:0}}
