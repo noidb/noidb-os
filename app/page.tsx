@@ -44,10 +44,8 @@ type GeneratedShot = {
 
 const shotTypes = [
   { key: "front", label: "정면 제품컷" },
-  { key: "angle", label: "사선 제품컷" },
   { key: "side", label: "측면 제품컷" },
   { key: "closeup", label: "디테일 클로즈업" },
-  { key: "back", label: "뒷면·구조컷" },
   { key: "wearingFront", label: "손 착용 정면컷" },
   { key: "wearingSide", label: "손 착용 측면컷" }
 ] as const;
@@ -56,6 +54,20 @@ const codeMap: Record<string, string> = {
   반지:"wr", 귀걸이:"we", 목걸이:"wn", 팔찌:"wb",
   발찌:"wa", 피어싱:"wp", 브로치:"wc", 세트:"wx",
 };
+
+function colorCode(option: string) {
+  const normalized = option.trim().toLowerCase();
+  if (normalized.includes("로즈")) return "RG";
+  if (normalized.includes("골드") || normalized.includes("gold")) return "GO";
+  if (normalized.includes("실버") || normalized.includes("silver")) return "SI";
+  if (normalized.includes("블랙") || normalized.includes("black")) return "BK";
+  if (normalized.includes("화이트") || normalized.includes("white")) return "WH";
+  return normalized.replace(/[^a-z0-9가-힣]/g, "").slice(0, 2).toUpperCase() || "OP";
+}
+
+function ringSizeNumber(size: string) {
+  return size.replace(/[^0-9]/g, "");
+}
 
 function normalizeKeyword(value: string, product: Product) {
   const banned = new Set([
@@ -79,7 +91,7 @@ function uniqueWords(values: string[]) {
 export default function Home() {
   const [product, setProduct] = useState<Product>({
     supplier:"부산", category:"반지", gender:"여성", material:"써지컬스틸",
-    colors:"로즈골드,골드,실버", sizes:"9호,11호,14호,20호",
+    colors:"로즈골드,골드,실버", sizes:"9호,11호,14호,17호,20호",
     modelNo:"12", keyword:"큐빅 투라인 레이어드", cost:"", price:"",
   });
   const [preview, setPreview] = useState("");
@@ -140,8 +152,20 @@ export default function Home() {
     product.sizes && product.modelNo && product.keyword && product.price
   );
 
-  const update = (key:keyof Product, value:string) =>
-    setProduct(prev => ({...prev,[key]:value}));
+  const update = (key:keyof Product, value:string) => {
+    setProduct(prev => {
+      const next = { ...prev, [key]: value };
+      if ((key === "gender" || key === "category") && next.category === "반지") {
+        next.sizes =
+          next.gender === "남성"
+            ? "20호,22호,25호"
+            : next.gender === "여성"
+              ? "9호,11호,14호,17호,20호"
+              : "9호,11호,14호,17호,20호,22호,25호";
+      }
+      return next;
+    });
+  };
 
   const onImage = (e:ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -351,6 +375,8 @@ export default function Home() {
       .catch(() => setDetailMessage("사진을 불러오지 못했습니다."));
   };
 
+  const [draggedDetailIndex, setDraggedDetailIndex] = useState<number | null>(null);
+
   const moveDetailImage = (index: number, direction: -1 | 1) => {
     setDetailImages(prev => {
       const next = [...prev];
@@ -360,6 +386,19 @@ export default function Home() {
       return next;
     });
     setDetailPreview("");
+  };
+
+  const dropDetailImage = (targetIndex: number) => {
+    if (draggedDetailIndex === null || draggedDetailIndex === targetIndex) return;
+    setDetailImages(prev => {
+      const next = [...prev];
+      const [moved] = next.splice(draggedDetailIndex, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+    setDraggedDetailIndex(null);
+    setDetailPreview("");
+    setDetailMessage("사진 순서를 변경했습니다.");
   };
 
   const removeDetailImage = (id: string) => {
@@ -384,7 +423,7 @@ export default function Home() {
     setDetailMessage("780px 롱 상세페이지를 만들고 있습니다...");
     try {
       const width = 780;
-      const gap = 16;
+      const gap = 30;
       const prepared = await Promise.all(
         detailImages.map(async item => {
           const img = await loadImage(item.dataUrl);
@@ -394,8 +433,10 @@ export default function Home() {
       );
 
       const totalHeight =
+        gap +
         prepared.reduce((sum, item) => sum + item.height, 0) +
-        gap * Math.max(0, prepared.length - 1);
+        gap * Math.max(0, prepared.length - 1) +
+        gap;
 
       const canvas = document.createElement("canvas");
       canvas.width = width;
@@ -406,7 +447,7 @@ export default function Home() {
       ctx.fillStyle = "#FFFFFF";
       ctx.fillRect(0, 0, width, totalHeight);
 
-      let y = 0;
+      let y = gap;
       for (const item of prepared) {
         ctx.drawImage(item.img, 0, y, width, item.height);
         y += item.height + gap;
@@ -437,6 +478,63 @@ export default function Home() {
     setDetailImages(prev => [...prev, ...items]);
     setDetailPreview("");
     setDetailMessage(`생성된 썸네일 ${items.length}장을 상세페이지 목록에 추가했습니다.`);
+  };
+
+  const buildOriginalThumbnail = async (option: string) => {
+    if (!imageDataUrl) {
+      setMessage("먼저 제품사진을 선택해주세요.");
+      return;
+    }
+    setThumbnailLoading(option);
+    setMessage(`${option} 원본유지 썸네일을 만들고 있습니다...`);
+    try {
+      const img = await loadImage(imageDataUrl);
+      const canvas = document.createElement("canvas");
+      canvas.width = 1000;
+      canvas.height = 1000;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("이미지 캔버스를 만들 수 없습니다.");
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(0, 0, 1000, 1000);
+      const maxW = 860;
+      const maxH = 860;
+      const scale = Math.min(maxW / img.width, maxH / img.height);
+      const drawW = Math.round(img.width * scale);
+      const drawH = Math.round(img.height * scale);
+      const x = Math.round((1000 - drawW) / 2);
+      const y = Math.round((1000 - drawH) / 2);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(img, x, y, drawW, drawH);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.96);
+      setThumbnails(prev => ({ ...prev, [option]: dataUrl }));
+      setMessage(`${option} 썸네일 완성: 원본 디자인을 변경하지 않았습니다.`);
+    } catch (error) {
+      setMessage(`오류: ${error instanceof Error ? error.message : "썸네일 생성 실패"}`);
+    } finally {
+      setThumbnailLoading("");
+    }
+  };
+
+  const downloadSkuThumbnails = (option: string) => {
+    const dataUrl = thumbnails[option];
+    if (!dataUrl) {
+      setMessage(`${option} 썸네일을 먼저 만들어주세요.`);
+      return;
+    }
+    const sizes = product.sizes.split(",").map(v => v.trim()).filter(Boolean);
+    const code = colorCode(option);
+    if (product.category === "반지" && sizes.length) {
+      sizes.forEach((size, index) => {
+        window.setTimeout(() => {
+          downloadDataUrl(dataUrl, `${model}-${code}${ringSizeNumber(size)}.jpg`);
+        }, index * 300);
+      });
+      setMessage(`${option} SKU 썸네일 ${sizes.length}개를 다운로드했습니다.`);
+    } else {
+      downloadDataUrl(dataUrl, `${model}-${code}.jpg`);
+      setMessage(`${option} 썸네일을 다운로드했습니다.`);
+    }
   };
 
   const generateThumbnail = async (option: string) => {
@@ -498,10 +596,10 @@ export default function Home() {
     const lines = [
       `1. 모델명 : ${model}`,
       `2. 제조연월 : ${ym}`,
-      "3. 제조자명 : 노이드비 협력사",
-      "4. 수입자명 : 노이드비(수입품에 한함)",
-      "5. 주소 및 전화번호 : 경기도 파주시 소라지로 150-2",
-      "   / 010-5769-5602",
+      "3. 제조자명 : 프리스타일 협력사",
+      "4. 수입자명 : 프리스타일",
+      "5. 주소 및 전화번호 : 경기도 고양시 탄현동",
+      "   탄현동 1559-1",
       "6. 제조국명 : 중국",
       "7. 사용연령 : 14세 이상",
       "8. 주의사항 : 분실, 파손주의",
@@ -514,7 +612,7 @@ export default function Home() {
       ctx.fillText(line, 85, y);
       y += 100;
     }
-    downloadDataUrl(canvas.toDataURL("image/png"), `${model}_제품표시사항.png`);
+    downloadDataUrl(canvas.toDataURL("image/jpeg", 0.96), `라벨_${model}.jpg`);
   };
 
   const options = product.colors.split(",").map(v => v.trim()).filter(Boolean);
@@ -522,8 +620,8 @@ export default function Home() {
   return (
     <main className="shell">
       <header className="hero">
-        <div><p className="eyebrow">NOID-B OS V7</p><h1>AI 상품등록 도우미</h1>
-        <p className="sub">상품등록·소싱검색·AI 추가각도·착용컷까지 한 화면에서 처리합니다.</p></div>
+        <div><p className="eyebrow">NOID-B OS V8</p><h1>AI 상품등록 도우미</h1>
+        <p className="sub">원본 디자인을 유지한 썸네일·상세페이지·SKU 파일명을 자동 생성합니다.</p></div>
         <span className="pill">AI 사진분석</span>
       </header>
 
@@ -597,7 +695,10 @@ export default function Home() {
 
         <div className="card full">
           <h2>5. 옵션별 1000×1000 썸네일</h2>
-          <p className="note">옵션 하나씩 생성 버튼을 누르세요. 생성할 때마다 API 이미지 비용이 발생합니다.</p>
+          <p className="note">
+            기본 버튼은 원본사진을 그대로 흰 배경 1000×1000에 배치하므로 디자인이 변형되지 않고 API 비용도 없습니다.
+            AI 보정은 꼭 필요한 경우에만 선택하세요.
+          </p>
           <div className="thumbnailGrid">
             {options.map(option => (
               <div className="thumbnailCard" key={option}>
@@ -617,9 +718,9 @@ export default function Home() {
                 {thumbnails[option] && (
                   <button
                     className="green"
-                    onClick={()=>downloadDataUrl(thumbnails[option], `${model}_${option}_1000x1000.png`)}
+                    onClick={()=>downloadSkuThumbnails(option)}
                   >
-                    이미지 다운로드
+                    SKU 파일명으로 전체 다운로드
                   </button>
                 )}
               </div>
@@ -630,8 +731,8 @@ export default function Home() {
         <div className="card full">
           <h2>6. AI 추가각도·착용컷 생성</h2>
           <p className="note">
-            원본 제품사진을 기준으로 필요한 컷만 한 장씩 생성하세요.
-            생성 결과가 실제 제품과 다르면 사용하지 말고 다시 생성하거나 원본사진을 사용하세요.
+            정면·측면·클로즈업·착용 정면·착용 측면만 제공합니다.
+            AI 결과가 실제 제품과 다르면 사용하지 말고 원본사진을 우선 사용하세요.
           </p>
 
           <div className="shotOptionRow">
@@ -778,7 +879,7 @@ export default function Home() {
           <h2>8. 가로 780px 롱 상세페이지</h2>
           <p className="note">
             제품컷과 착용컷을 원하는 순서대로 여러 장 선택하세요.
-            사진 한 장당 가로 780px 전체 폭으로 배치하며 콜라주로 나누지 않습니다.
+            사진 한 장당 가로 780px 전체 폭으로 배치하고, 위·아래·사진 사이에 각각 30px 흰 여백을 넣습니다.
           </p>
 
           <label className="multiUpload">
@@ -801,20 +902,21 @@ export default function Home() {
           {detailImages.length > 0 && (
             <div className="detailList">
               {detailImages.map((item, index) => (
-                <div className="detailItem" key={item.id}>
+                <div
+                  className="detailItem draggableDetail"
+                  key={item.id}
+                  draggable
+                  onDragStart={() => setDraggedDetailIndex(index)}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={() => dropDetailImage(index)}
+                  onDragEnd={() => setDraggedDetailIndex(null)}
+                >
+                  <div className="dragHandle">☰</div>
                   <img src={item.dataUrl} alt={item.name} />
                   <div className="detailItemInfo">
                     <strong>{index + 1}. {item.name}</strong>
+                    <span className="dragGuide">길게 눌러 끌어서 순서를 변경하세요.</span>
                     <div className="detailItemButtons">
-                      <button disabled={index === 0} onClick={() => moveDetailImage(index, -1)}>
-                        위로
-                      </button>
-                      <button
-                        disabled={index === detailImages.length - 1}
-                        onClick={() => moveDetailImage(index, 1)}
-                      >
-                        아래로
-                      </button>
                       <button className="removeButton" onClick={() => removeDetailImage(item.id)}>
                         삭제
                       </button>
@@ -833,7 +935,7 @@ export default function Home() {
               </div>
               <button
                 className="green detailDownload"
-                onClick={() => downloadDataUrl(detailPreview, `${model}_상세페이지_780px.jpg`)}
+                onClick={() => downloadDataUrl(detailPreview, `${model}.jpg`)}
               >
                 상세페이지 다운로드
               </button>
