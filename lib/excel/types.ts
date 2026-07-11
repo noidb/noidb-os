@@ -16,8 +16,10 @@ export type ExportPayload = {
   model: string;
   title: string;
   tags: string;
-  /** Extra image filenames in order, e.g. wr0001-01.jpg */
+  /** Extra image filenames list */
   additionalImages?: string[];
+  /** Comma-joined extras for one cell: wr0001-01.jpg,wr0001-02.jpg,wr0001-03.jpg */
+  additionalImagesCsv?: string;
 };
 
 export type SkuRow = {

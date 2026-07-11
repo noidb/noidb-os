@@ -1,15 +1,17 @@
 import JSZip from "jszip";
 import type { ProductDbFile } from "./files";
 
-/** Flat ZIP: all files at the root of the archive (no nested folders). */
+/** ZIP mirrors 상품DB/카테고리/모델명/*.files */
 export async function buildProductDbZip(
-  _category: string,
-  _model: string,
+  category: string,
+  model: string,
   files: ProductDbFile[]
 ) {
   const zip = new JSZip();
+  const folder = zip.folder(category)?.folder(model);
+  if (!folder) throw new Error("ZIP 폴더를 만들 수 없습니다.");
   for (const file of files) {
-    zip.file(file.filename, file.blob);
+    folder.file(file.filename, file.blob);
   }
   return zip.generateAsync({ type: "blob" });
 }

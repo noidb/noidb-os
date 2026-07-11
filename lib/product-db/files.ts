@@ -1,5 +1,4 @@
 export type ProductDbFile = {
-  /** Empty string = flat file directly under model folder */
   folder: string;
   filename: string;
   blob: Blob;
@@ -88,7 +87,6 @@ export async function createLabelBlob(model: string): Promise<Blob> {
   ctx.font = "26px Arial, sans-serif";
   let y = 210;
   for (const line of lines) {
-    // wrap long address line
     if (line.length > 42) {
       const mid = line.indexOf(" / ");
       if (mid > 0) {
@@ -103,17 +101,11 @@ export async function createLabelBlob(model: string): Promise<Blob> {
     y += 100;
   }
 
-  const dataUrl = canvas.toDataURL("image/jpeg", 0.96);
-  return dataUrlToBlob(dataUrl);
+  return dataUrlToBlob(canvas.toDataURL("image/jpeg", 0.96));
 }
 
 function pushFlat(files: ProductDbFile[], filename: string, blob: Blob) {
-  files.push({
-    folder: "",
-    filename,
-    blob,
-    path: filename,
-  });
+  files.push({ folder: "", filename, blob, path: filename });
 }
 
 export type CollectInput = {
@@ -124,19 +116,34 @@ export type CollectInput = {
   product: Record<string, string>;
   analysis: unknown;
   ready: boolean;
-  /** Multi photo data URLs in order (excludes 1688 sourcing extras) */
+  /** Reference product photos → 원본_01.jpg … */
   photos: string[];
-  /** 1688 sourcing reference photos, saved as 원본_추가01.jpg, 원본_추가02.jpg, ... */
-  extraOriginalPhotos?: string[];
-  /** Legacy single photo fallback */
-  imageDataUrl?: string;
-  /** Approved option → dataUrl only */
-  thumbnails: Record<string, string>;
-  /** Extra images in order (already 1000×1000) */
-  extraImages: string[];
+  /** option → approved thumbnail dataUrl */
+  optionThumbs: Record<string, string>;
+  /** 전체옵션 → model-00.jpg */
+  allOptionsImage?: string;
+  /** include all-options in quote extras? default false */
+  includeAllOptionsInQuote?: boolean;
+  /** 추가이미지 01~03 */
+  extra01?: string;
+  extra02?: string;
+  extra03?: string;
+  detailCut?: string;
+  wear01?: string;
+  wear02?: string;
   detailPreview: string;
   sourcingUrl?: string;
 };
+
+export function buildAdditionalImagesCsv(model: string, extras: (string | undefined)[]) {
+  const names: string[] = [];
+  extras.forEach((url, i) => {
+    if (url?.startsWith("data:image/")) {
+      names.push(`${model}-${String(i + 1).padStart(2, "0")}.jpg`);
+    }
+  });
+  return names.join(",");
+}
 
 export async function collectProductDbFiles(
   input: CollectInput
@@ -152,51 +159,31 @@ export async function collectProductDbFiles(
       files: [],
       skipped: ["모델명 없음"],
       readyFiles: [],
-      missingFiles: [
-        "원본사진",
-        "썸네일",
-        "추가이미지",
-        "상세페이지",
-        "라벨",
-        "견적서",
-        "상품입력자동화",
-        "상품정보",
-      ],
+      missingFiles: ["모델명", "원본", "썸네일", "추가이미지", "상세", "라벨", "견적서"],
     };
   }
 
-  const photoUrls =
-    input.photos?.filter(u => u?.startsWith("data:image/")) ??
-    [];
-  if (!photoUrls.length && input.imageDataUrl?.startsWith("data:image/")) {
-    photoUrls.push(input.imageDataUrl);
-  }
-
-  if (photoUrls.length) {
-    photoUrls.forEach((url, index) => {
+  const photos = input.photos?.filter(u => u?.startsWith("data:image/")) ?? [];
+  if (photos.length) {
+    photos.forEach((url, index) => {
       const name = `원본_${String(index + 1).padStart(2, "0")}.jpg`;
       pushFlat(files, name, dataUrlToBlob(url));
       readyFiles.push(name);
     });
   } else {
-    skipped.push("원본사진 (제품사진 없음)");
-    missingFiles.push("원본_01.jpg …");
+    missingFiles.push("원본_01.jpg");
   }
 
-  const extraOriginalUrls =
-    input.extraOriginalPhotos?.filter(u => u?.startsWith("data:image/")) ?? [];
-  if (extraOriginalUrls.length) {
-    extraOriginalUrls.forEach((url, index) => {
-      const name = `원본_추가${String(index + 1).padStart(2, "0")}.jpg`;
-      pushFlat(files, name, dataUrlToBlob(url));
-      readyFiles.push(name);
-    });
+  if (input.allOptionsImage?.startsWith("data:image/")) {
+    const name = `${model}-00.jpg`;
+    pushFlat(files, name, dataUrlToBlob(input.allOptionsImage));
+    readyFiles.push(name);
   }
 
-  const options = Object.keys(input.thumbnails);
+  const options = Object.keys(input.optionThumbs || {});
   if (options.length) {
     for (const option of options) {
-      const dataUrl = input.thumbnails[option];
+      const dataUrl = input.optionThumbs[option];
       if (!dataUrl) continue;
       const blob = dataUrlToBlob(dataUrl);
       for (const filename of buildSkuThumbFilenames(
@@ -210,46 +197,64 @@ export async function collectProductDbFiles(
       }
     }
   } else {
-    skipped.push("썸네일 (승인한 썸네일 없음)");
-    missingFiles.push("옵션별 SKU 썸네일");
+    skipped.push("옵션별 썸네일 없음");
+    missingFiles.push("옵션별 썸네일 SKU");
   }
 
-  if (input.extraImages?.length) {
-    input.extraImages.forEach((url, index) => {
-      if (!url?.startsWith("data:image/")) return;
-      const name = `${model}-${String(index + 1).padStart(2, "0")}.jpg`;
-      pushFlat(files, name, dataUrlToBlob(url));
-      readyFiles.push(name);
-    });
-  } else {
-    missingFiles.push(`${model}-01.jpg (추가이미지)`);
+  const extras = [input.extra01, input.extra02, input.extra03];
+  extras.forEach((url, i) => {
+    if (!url?.startsWith("data:image/")) {
+      missingFiles.push(`${model}-${String(i + 1).padStart(2, "0")}.jpg`);
+      return;
+    }
+    const name = `${model}-${String(i + 1).padStart(2, "0")}.jpg`;
+    pushFlat(files, name, dataUrlToBlob(url));
+    readyFiles.push(name);
+  });
+
+  if (input.detailCut?.startsWith("data:image/")) {
+    const name = `${model}-detail.jpg`;
+    pushFlat(files, name, dataUrlToBlob(input.detailCut));
+    readyFiles.push(name);
+  }
+  if (input.wear01?.startsWith("data:image/")) {
+    const name = `${model}-wear01.jpg`;
+    pushFlat(files, name, dataUrlToBlob(input.wear01));
+    readyFiles.push(name);
+  }
+  if (input.wear02?.startsWith("data:image/")) {
+    const name = `${model}-wear02.jpg`;
+    pushFlat(files, name, dataUrlToBlob(input.wear02));
+    readyFiles.push(name);
   }
 
   if (input.detailPreview?.startsWith("data:image/")) {
     pushFlat(files, `${model}.jpg`, dataUrlToBlob(input.detailPreview));
     readyFiles.push(`${model}.jpg`);
   } else {
-    skipped.push("상세페이지 (상세페이지 미생성)");
+    skipped.push("상세페이지 미생성");
     missingFiles.push(`${model}.jpg`);
   }
 
   try {
     const labelBlob = await createLabelBlob(model);
-    const labelName = `라벨_${model}.jpg`;
-    pushFlat(files, labelName, labelBlob);
-    readyFiles.push(labelName);
+    pushFlat(files, `라벨_${model}.jpg`, labelBlob);
+    readyFiles.push(`라벨_${model}.jpg`);
   } catch {
-    skipped.push("라벨 (생성 실패)");
+    skipped.push("라벨 생성 실패");
     missingFiles.push(`라벨_${model}.jpg`);
   }
 
+  const additionalImagesCsv = buildAdditionalImagesCsv(model, extras);
   const payload = {
     product: input.product,
     model: input.model,
     title: input.title,
     tags: input.tags,
-    additionalImages: (input.extraImages || [])
-      .map((_, i) => `${model}-${String(i + 1).padStart(2, "0")}.jpg`),
+    additionalImages: additionalImagesCsv
+      ? additionalImagesCsv.split(",")
+      : [],
+    additionalImagesCsv,
   };
 
   const quoteCategories = ["반지", "귀걸이", "피어싱", "목걸이", "팔찌", "발찌"];
@@ -264,17 +269,14 @@ export async function collectProductDbFiles(
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "견적서 생성 실패");
       }
-      const quoteName = `견적서_${model}.xlsx`;
+      const quoteName = `견적서_${model}_${category}.xlsx`;
       pushFlat(files, quoteName, await res.blob());
       readyFiles.push(quoteName);
     } catch (error) {
-      skipped.push(
-        `견적서 (${error instanceof Error ? error.message : "생성 실패"})`
-      );
-      missingFiles.push(`견적서_${model}.xlsx`);
+      skipped.push(`견적서 (${error instanceof Error ? error.message : "실패"})`);
+      missingFiles.push(`견적서_${model}_${category}.xlsx`);
     }
   } else {
-    skipped.push("견적서 (카테고리 템플릿 없음 또는 상품명 없음)");
     missingFiles.push("견적서");
   }
 
@@ -293,14 +295,9 @@ export async function collectProductDbFiles(
       pushFlat(files, autoName, await res.blob());
       readyFiles.push(autoName);
     } catch (error) {
-      skipped.push(
-        `쿠팡등록 (${error instanceof Error ? error.message : "생성 실패"})`
-      );
+      skipped.push(`자동화 (${error instanceof Error ? error.message : "실패"})`);
       missingFiles.push(`상품입력자동화_${model}.xlsx`);
     }
-  } else {
-    skipped.push("쿠팡등록 (상품명 없음)");
-    missingFiles.push("상품입력자동화");
   }
 
   const info = {
@@ -310,17 +307,15 @@ export async function collectProductDbFiles(
     tags: input.tags,
     analysis: input.analysis,
     sourcingUrl: input.sourcingUrl || "",
+    additionalImagesCsv,
     status: input.ready ? "등록가능" : "정보확인",
   };
-  const infoName = `상품정보_${model}.json`;
   pushFlat(
     files,
-    infoName,
-    new Blob([JSON.stringify(info, null, 2)], {
-      type: "application/json;charset=utf-8",
-    })
+    `상품정보_${model}.json`,
+    new Blob([JSON.stringify(info, null, 2)], { type: "application/json;charset=utf-8" })
   );
-  readyFiles.push(infoName);
+  readyFiles.push(`상품정보_${model}.json`);
 
   if (input.sourcingUrl?.trim()) {
     pushFlat(
@@ -334,5 +329,4 @@ export async function collectProductDbFiles(
   return { files, skipped, readyFiles, missingFiles };
 }
 
-/** @deprecated Flat structure — no subfolders created for new saves */
 export const PRODUCT_DB_SUBFOLDERS = [] as const;

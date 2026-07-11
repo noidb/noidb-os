@@ -146,28 +146,56 @@ export async function buildQuoteWorkbook(payload: ExportPayload) {
     setByHeader(row, headers, "대표이미지 파일명", sku.thumbFile);
     setByHeader(row, headers, "상세이미지 파일명", sku.detailFile);
 
-    const extras = payload.additionalImages || [];
-    const extraHeaders = [...headers.entries()]
-      .filter(([key]) => /추가\s*이미지/.test(key) || /additional\s*image/i.test(key))
-      .sort((a, b) => a[1] - b[1]);
-    if (extraHeaders.length) {
-      extraHeaders.forEach(([, col], i) => {
-        row.getCell(col).value = extras[i] || null;
-      });
+    // 추가이미지: one cell, comma-joined, no spaces after commas
+    const extrasCsv =
+      payload.additionalImagesCsv ||
+      (payload.additionalImages || []).filter(Boolean).join(",");
+
+    const extraCols: number[] = [];
+    for (const [key, col] of headers.entries()) {
+      if (/추가\s*이미지/.test(key) || /additional\s*image/i.test(key)) {
+        extraCols.push(col);
+      }
+    }
+    extraCols.sort((a, b) => a - b);
+
+    if (extraCols.length === 1) {
+      row.getCell(extraCols[0]).value = extrasCsv || null;
+    } else if (extraCols.length > 1) {
+      // Prefer putting the full CSV in the first matching cell; clear the rest
+      row.getCell(extraCols[0]).value = extrasCsv || null;
+      for (let i = 1; i < extraCols.length; i++) {
+        row.getCell(extraCols[i]).value = null;
+      }
     } else {
-      // numbered columns: 추가이미지1, 추가이미지 1, 추가이미지파일명1 …
-      for (let i = 0; i < 10; i++) {
-        const candidates = [
-          `추가이미지${i + 1}`,
-          `추가이미지 ${i + 1}`,
-          `추가이미지파일명${i + 1}`,
-          `추가 이미지${i + 1}`,
-          `추가 이미지 ${i + 1}`,
-        ];
-        for (const h of candidates) {
+      // Try common single-header names
+      const singleNames = [
+        "추가이미지 파일명",
+        "추가이미지파일명",
+        "추가이미지",
+        "추가 이미지 파일명",
+      ];
+      let written = false;
+      for (const h of singleNames) {
+        const col = headers.get(h);
+        if (col) {
+          row.getCell(col).value = extrasCsv || null;
+          written = true;
+          break;
+        }
+      }
+      if (!written && extrasCsv) {
+        // Fallback numbered: put entire CSV only in column 1
+        for (const h of [
+          "추가이미지1",
+          "추가이미지 1",
+          "추가이미지파일명1",
+          "추가 이미지1",
+          "추가 이미지 1",
+        ]) {
           const col = headers.get(h);
           if (col) {
-            row.getCell(col).value = extras[i] || null;
+            row.getCell(col).value = extrasCsv;
             break;
           }
         }

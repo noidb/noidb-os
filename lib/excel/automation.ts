@@ -117,6 +117,10 @@ export async function buildAutomationWorkbook(payload: ExportPayload) {
     ];
   });
 
+  const extrasCsv =
+    payload.additionalImagesCsv ||
+    (payload.additionalImages || []).filter(Boolean).join(",");
+
   // 4) 쿠팡반지_앞부분 / 뒷부분 — fill when 반지 (sheet is ring-oriented)
   const front = workbook.getWorksheet("쿠팡반지_앞부분");
   const back = workbook.getWorksheet("쿠팡반지_뒷부분");
@@ -149,10 +153,10 @@ export async function buildAutomationWorkbook(payload: ExportPayload) {
           "",
           "",
           "",
-          payload.model,
-          sku.sku,
+          "", // Parent MPN blank
+          "", // Manufacturer Part Number blank
           sku.thumbFile,
-          "",
+          extrasCsv || "",
           sku.detailFile,
           "",
           "",

@@ -1,26 +1,38 @@
 import type { ProductDbFile } from "./files";
-import { createLocalStorage } from "./storage";
+
+async function getOrCreateDir(parent: FileSystemDirectoryHandle, name: string) {
+  return parent.getDirectoryHandle(name, { create: true });
+}
 
 /**
- * Save all product files directly into the selected 상품DB root folder.
- * No category/model subfolders.
+ * Save into 상품DB/카테고리/모델명/ (flat inside model folder).
  */
 export async function writeProductDbFiles(
   root: FileSystemDirectoryHandle,
-  _category: string,
-  _model: string,
+  category: string,
+  model: string,
   files: ProductDbFile[]
 ) {
-  const storage = createLocalStorage(root);
-  const result = await storage.saveFlat(files);
-  return result.saved;
+  const categoryDir = await getOrCreateDir(root, category);
+  const modelDir = await getOrCreateDir(categoryDir, model);
+  const saved: string[] = [];
+
+  for (const file of files) {
+    const handle = await modelDir.getFileHandle(file.filename, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(file.blob);
+    await writable.close();
+    saved.push(`${category}/${model}/${file.filename}`);
+  }
+
+  return saved;
 }
 
-/** @deprecated Kept for compatibility — no longer creates nested folders. */
 export async function ensureProductFolderTree(
   root: FileSystemDirectoryHandle,
-  _category: string,
-  _model: string
+  category: string,
+  model: string
 ) {
-  return root;
+  const categoryDir = await getOrCreateDir(root, category);
+  return getOrCreateDir(categoryDir, model);
 }
