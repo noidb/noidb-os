@@ -124,8 +124,10 @@ export type CollectInput = {
   product: Record<string, string>;
   analysis: unknown;
   ready: boolean;
-  /** Multi photo data URLs in order */
+  /** Multi photo data URLs in order (excludes 1688 sourcing extras) */
   photos: string[];
+  /** 1688 sourcing reference photos, saved as 원본_추가01.jpg, 원본_추가02.jpg, ... */
+  extraOriginalPhotos?: string[];
   /** Legacy single photo fallback */
   imageDataUrl?: string;
   /** Approved option → dataUrl only */
@@ -179,6 +181,16 @@ export async function collectProductDbFiles(
   } else {
     skipped.push("원본사진 (제품사진 없음)");
     missingFiles.push("원본_01.jpg …");
+  }
+
+  const extraOriginalUrls =
+    input.extraOriginalPhotos?.filter(u => u?.startsWith("data:image/")) ?? [];
+  if (extraOriginalUrls.length) {
+    extraOriginalUrls.forEach((url, index) => {
+      const name = `원본_추가${String(index + 1).padStart(2, "0")}.jpg`;
+      pushFlat(files, name, dataUrlToBlob(url));
+      readyFiles.push(name);
+    });
   }
 
   const options = Object.keys(input.thumbnails);
@@ -252,14 +264,14 @@ export async function collectProductDbFiles(
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "견적서 생성 실패");
       }
-      const quoteName = `견적서_${model}_${category}.xlsx`;
+      const quoteName = `견적서_${model}.xlsx`;
       pushFlat(files, quoteName, await res.blob());
       readyFiles.push(quoteName);
     } catch (error) {
       skipped.push(
         `견적서 (${error instanceof Error ? error.message : "생성 실패"})`
       );
-      missingFiles.push(`견적서_${model}_${category}.xlsx`);
+      missingFiles.push(`견적서_${model}.xlsx`);
     }
   } else {
     skipped.push("견적서 (카테고리 템플릿 없음 또는 상품명 없음)");

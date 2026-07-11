@@ -26,19 +26,18 @@ function cleanKeyword(value: unknown, category: string, gender: string, material
   return [...new Set(words)].slice(0, 5).join(" ");
 }
 
-function collectImageUrls(body: Record<string, unknown>): string[] {
-  const urls: string[] = [];
+/** Only ONE image is accepted for OpenAI (prevents 413). */
+function pickSingleImage(body: Record<string, unknown>): string | null {
+  const single = body.imageDataUrl;
+  if (typeof single === "string" && single.startsWith("data:image/")) return single;
+
   const multi = body.imageDataUrls;
   if (Array.isArray(multi)) {
     for (const item of multi) {
-      if (typeof item === "string" && item.startsWith("data:image/")) urls.push(item);
+      if (typeof item === "string" && item.startsWith("data:image/")) return item;
     }
   }
-  const single = body.imageDataUrl;
-  if (typeof single === "string" && single.startsWith("data:image/")) {
-    if (!urls.includes(single)) urls.unshift(single);
-  }
-  return urls.slice(0, 10);
+  return null;
 }
 
 export async function POST(req: NextRequest) {
@@ -51,22 +50,39 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const body = await req.json();
-    const imageDataUrls = collectImageUrls(body);
-
-    if (!imageDataUrls.length) {
-      return NextResponse.json({ error: "분석할 제품사진이 없습니다." }, { status: 400 });
+    let body: Record<string, unknown>;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(
+        { error: "요청 본문을 읽을 수 없습니다. AI 분석용 사진 1장을 지정해주세요." },
+        { status: 400 }
+      );
     }
 
-    const rolesHint = body.photoRoles
-      ? `사진 역할 힌트: ${JSON.stringify(body.photoRoles)}`
-      : "사진에는 전체 옵션·앞면·뒷면·착용컷·상세컷이 섞여 있을 수 있다. 모든 사진을 종합해 분석한다.";
+    const imageDataUrl = pickSingleImage(body);
+    if (!imageDataUrl) {
+      return NextResponse.json(
+        { error: "AI 분석용 사진 1장을 지정해주세요." },
+        { status: 400 }
+      );
+    }
+
+    // Guard against oversized payloads (413)
+    if (imageDataUrl.length > 2_500_000) {
+      return NextResponse.json(
+        {
+          error:
+            "AI 분석용 사진이 너무 큽니다. 사진을 다시 지정하거나 압축 후 분석해주세요. (AI 분석용 사진 1장만 전송)",
+        },
+        { status: 413 }
+      );
+    }
 
     const instruction = `
 너는 대한민국 쿠팡 로켓배송용 주얼리 상품등록 전문가다.
-첨부한 제품사진 전체를 함께 분석하되, 보이지 않는 소재·사이즈는 단정하지 않는다.
+첨부한 제품사진 1장만 분석하되, 보이지 않는 소재·사이즈는 단정하지 않는다.
 사용자가 제공한 기본값은 참고하되 사진과 명백히 다를 때만 수정한다.
-${rolesHint}
 
 반드시 아래 JSON 한 개만 출력한다.
 {
@@ -79,39 +95,14 @@ ${rolesHint}
   "engraving": "각인 내용 또는 없음",
   "counterfeitRisk": "낮음|확인필요|높음",
   "counterfeitReason": "상표·로고·유명 디자인 유사성 관점의 짧은 설명",
-  "confidence": 0부터 100 사이 정수,
-  "photoNotes": ["각 사진에서 확인된 각도/역할 요약"]
+  "confidence": 0부터 100 사이 정수
 }
 
 규칙:
 - 확인할 수 없는 사실은 추측하지 말 것.
-- '써지컬스틸'은 사진만으로 확정하기 어려우므로 사용자가 제공한 소재 기본값을 유지할 수 있다.
-- 상품명 키워드는 중복 없이 짧게 작성한다.
-- keyword에는 쉼표, 슬래시, 괄호를 절대 넣지 않는다.
-- keyword에 반지, 귀걸이, 목걸이 등 카테고리명을 넣지 않는다.
-- keyword에 여성, 남성, 써지컬스틸, 골드, 실버 등 기본속성을 넣지 않는다.
 - colors 필드는 사용자가 입력한 순서를 강제 정렬하지 않는다.
-- 일반적인 하트, 큐빅, 체인만으로 가품이라고 단정하지 않는다.
-- 문자 각인, 로고, 특정 브랜드를 연상시키는 고유 패턴이 있으면 확인필요로 표시한다.
+- keyword에 카테고리명·성별·소재·색상을 넣지 않는다.
 `;
-
-    const content: Array<Record<string, unknown>> = [
-      { type: "input_text", text: instruction },
-      { type: "input_text", text: `현재 입력값: ${JSON.stringify(body.current ?? {})}` },
-      { type: "input_text", text: `첨부 사진 수: ${imageDataUrls.length}` },
-    ];
-
-    for (let i = 0; i < imageDataUrls.length; i++) {
-      content.push({
-        type: "input_text",
-        text: `사진 ${i + 1}/${imageDataUrls.length}`,
-      });
-      content.push({
-        type: "input_image",
-        image_url: imageDataUrls[i],
-        detail: "high",
-      });
-    }
 
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -121,15 +112,45 @@ ${rolesHint}
       },
       body: JSON.stringify({
         model: "gpt-4.1-mini",
-        input: [{ role: "user", content }],
-        max_output_tokens: 1200,
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: instruction },
+              { type: "input_text", text: `현재 입력값: ${JSON.stringify(body.current ?? {})}` },
+              { type: "input_image", image_url: imageDataUrl, detail: "high" },
+            ],
+          },
+        ],
+        max_output_tokens: 900,
       }),
     });
 
-    const data = await response.json();
+    const rawText = await response.text();
+    let data: any = {};
+    try {
+      data = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      if (!response.ok) {
+        return NextResponse.json(
+          {
+            error:
+              response.status === 413
+                ? "AI 분석용 사진 1장을 지정해주세요. (요청 용량 초과)"
+                : `OpenAI 응답을 해석하지 못했습니다 (${response.status}).`,
+          },
+          { status: response.status === 413 ? 413 : 502 }
+        );
+      }
+      return NextResponse.json({ error: "OpenAI 응답 JSON 파싱 실패" }, { status: 502 });
+    }
 
     if (!response.ok) {
-      const message = data?.error?.message ?? "OpenAI API 호출에 실패했습니다.";
+      const message =
+        data?.error?.message ??
+        (response.status === 413
+          ? "AI 분석용 사진 1장을 지정해주세요."
+          : "OpenAI API 호출에 실패했습니다.");
       return NextResponse.json({ error: message }, { status: response.status });
     }
 
@@ -139,19 +160,25 @@ ${rolesHint}
         ?.find((item: any) => item.type === "output_text")?.text ??
       "";
 
-    const result = extractJson(outputText);
+    let result: any;
+    try {
+      result = extractJson(outputText);
+    } catch {
+      return NextResponse.json(
+        { error: "AI 분석 결과를 해석하지 못했습니다. 잠시 후 다시 시도해주세요." },
+        { status: 502 }
+      );
+    }
+
     result.keyword = cleanKeyword(
       result.keyword,
-      result.category || body.current?.category || "",
-      result.gender || body.current?.gender || "",
-      result.material || body.current?.material || ""
+      result.category || (body.current as any)?.category || "",
+      result.gender || (body.current as any)?.gender || "",
+      result.material || (body.current as any)?.material || ""
     );
 
-    // Never force-sort colors: keep user's existing order when provided
-    const userColors = String(body.current?.colors ?? "").trim();
-    if (userColors) {
-      result.colors = userColors;
-    }
+    const userColors = String((body.current as any)?.colors ?? "").trim();
+    if (userColors) result.colors = userColors;
 
     return NextResponse.json(result);
   } catch (error) {

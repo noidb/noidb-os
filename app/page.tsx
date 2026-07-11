@@ -13,6 +13,7 @@ import { buildProductDbZip } from "@/lib/product-db/zip";
 import { composeWhiteThumbnail, detectContentCrop, loadImageElement } from "@/lib/thumbnail/compose";
 import { applyMetalColorPreset } from "@/lib/thumbnail/recolor";
 import { buildCloseupFromSource, buildOptionsCollage } from "@/lib/shots/extra";
+import { compressImageDataUrl } from "@/lib/image/compress";
 
 type Product = {
   supplier: string; category: string; gender: string; material: string;
@@ -58,19 +59,21 @@ type ProductPhoto = {
   id: string;
   name: string;
   dataUrl: string;
+  isPrimary: boolean;
+  isAiAnalyze: boolean;
+  isThumbSource: boolean;
+  includeInDetail: boolean;
+  /** 1688 extras saved as 원본_추가NN */
+  isSourcingExtra?: boolean;
 };
-
-type CropRect = { x: number; y: number; w: number; h: number };
 
 type OptionThumbState = {
   sourceId: string;
   draftDataUrl: string;
   approvedDataUrl: string;
-  crop: CropRect | null;
-  useAutoCrop: boolean;
 };
 
-type ExtraImageKind = "closeup" | "collage";
+type ExtraImageKind = "closeup" | "collage" | "upload";
 
 type ExtraImage = {
   id: string;
@@ -102,6 +105,15 @@ const UNISEX_RING_SIZES = "9호,11호,14호,17호,20호,22호,25호";
 const MAX_PHOTOS = 10;
 const ACCEPTED_IMAGE_TYPES = ["image/jpeg", "image/jpg", "image/png"];
 
+const STEP_GUIDE: Record<string, string> = {
+  photos: "① 사진 업로드: 제품사진을 1장 이상 올려주세요. 대표사진 · AI분석용 사진을 지정하면 더 정확합니다.",
+  analyze: "② AI 분석: AI 사진분석 버튼을 눌러 카테고리 · 소재 · 키워드를 자동으로 채워보세요.",
+  info: "③ 기본정보 확인: 거래처 · 색상 · 사이즈 · 모델번호 · 판매가를 확인하고 필요한 부분만 수정하세요.",
+  thumbs: "④ 썸네일 승인: 옵션별 흰배경 썸네일을 만들고 승인해주세요. 전체 생성 버튼이 자동으로 만들어 드립니다.",
+  detail: "⑤ 상세페이지 승인: 상세페이지에 포함할 사진을 체크하고 780px 상세페이지를 만들어주세요.",
+  generate: "⑥ 전체 생성: 모든 준비가 끝났습니다. 전체 생성 버튼 한 번으로 상품DB까지 저장하세요.",
+};
+
 function defaultRingSizes(gender: string) {
   if (gender === "남성") return MALE_RING_SIZES;
   if (gender === "여성") return FEMALE_RING_SIZES;
@@ -120,6 +132,13 @@ function colorCode(option: string) {
 
 function ringSizeNumber(size: string) {
   return size.replace(/[^0-9]/g, "");
+}
+
+function looksLikeMetalColorOption(option: string) {
+  const n = option.trim().toLowerCase();
+  return ["로즈", "골드", "gold", "실버", "silver", "블랙", "black", "화이트", "white"].some(
+    k => n.includes(k)
+  );
 }
 
 function normalizeKeyword(value: string, product: Product) {
@@ -204,6 +223,41 @@ function readFileAsDataUrl(file: File) {
   });
 }
 
+async function composeDetailPageDataUrl(items: { dataUrl: string }[], gap = 60): Promise<string> {
+  if (!items.length) throw new Error("상세페이지에 사용할 사진이 없습니다.");
+  const width = 780;
+  const prepared = await Promise.all(
+    items.map(async item => {
+      const img = await loadImageElement(item.dataUrl);
+      const height = Math.max(1, Math.round((img.height / img.width) * width));
+      return { img, height };
+    })
+  );
+
+  const totalHeight =
+    gap +
+    prepared.reduce((sum, item) => sum + item.height, 0) +
+    gap * Math.max(0, prepared.length - 1) +
+    gap;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = totalHeight;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
+
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, width, totalHeight);
+
+  let y = gap;
+  for (const item of prepared) {
+    ctx.drawImage(item.img, 0, y, width, item.height);
+    y += item.height + gap;
+  }
+
+  return canvas.toDataURL("image/jpeg", 0.94);
+}
+
 export default function Home() {
   const [product, setProduct] = useState<Product>({
     supplier:"부산", category:"반지", gender:"여성", material:"써지컬스틸",
@@ -212,7 +266,6 @@ export default function Home() {
   });
 
   const [photos, setPhotos] = useState<ProductPhoto[]>([]);
-  const [primaryId, setPrimaryId] = useState("");
   const [photoMessage, setPhotoMessage] = useState("");
   const [isDraggingPhotos, setIsDraggingPhotos] = useState(false);
   const [draggedPhotoIndex, setDraggedPhotoIndex] = useState<number | null>(null);
@@ -231,9 +284,11 @@ export default function Home() {
   const [detailImages, setDetailImages] = useState<DetailImage[]>([]);
   const [detailPreview, setDetailPreview] = useState("");
   const [detailMessage, setDetailMessage] = useState("");
+  const [draggedDetailIndex, setDraggedDetailIndex] = useState<number | null>(null);
 
   const [sourcing, setSourcing] = useState<SourcingResult>({});
   const [sourcingLoading, setSourcingLoading] = useState(false);
+  const [sourcingImagesLoading, setSourcingImagesLoading] = useState(false);
   const [sourcingMessage, setSourcingMessage] = useState("");
   const [sourcingUrl, setSourcingUrl] = useState("");
   const [sourcingUrlInput, setSourcingUrlInput] = useState("");
@@ -250,11 +305,10 @@ export default function Home() {
   const [shotOption, setShotOption] = useState("");
   const [shotMessage, setShotMessage] = useState("");
 
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
   const [exportLoading, setExportLoading] = useState("");
   const [exportMessage, setExportMessage] = useState("");
-  const [labelDownloaded, setLabelDownloaded] = useState(false);
-  const [quoteDownloaded, setQuoteDownloaded] = useState(false);
-  const [automationDownloaded, setAutomationDownloaded] = useState(false);
   const [fullSaveDone, setFullSaveDone] = useState(false);
 
   const [dbSupported, setDbSupported] = useState(false);
@@ -266,6 +320,9 @@ export default function Home() {
   const [dbSkippedFiles, setDbSkippedFiles] = useState<string[]>([]);
   const [dbReadyFiles, setDbReadyFiles] = useState<string[]>([]);
   const [dbMissingFiles, setDbMissingFiles] = useState<string[]>([]);
+
+  const [generateBusy, setGenerateBusy] = useState(false);
+  const [generateStatus, setGenerateStatus] = useState("");
 
   useEffect(() => {
     setDbSupported(supportsDirectoryPicker());
@@ -295,16 +352,44 @@ export default function Home() {
       if (draft.analysis) setAnalysis(draft.analysis);
 
       if (Array.isArray(draft.photos) && draft.photos.length) {
-        setPhotos(draft.photos);
-        const validPrimary = draft.photos.some((p: ProductPhoto) => p.id === draft.primaryId);
-        setPrimaryId(validPrimary ? draft.primaryId : draft.photos[0].id);
+        const legacy = draft.photos.some((p: Record<string, unknown>) => typeof p.isPrimary === "undefined");
+        const migrated: ProductPhoto[] = draft.photos.map((p: Record<string, unknown>, index: number) => ({
+          id: String(p.id ?? `${Date.now()}-${index}`),
+          name: String(p.name ?? `사진${index + 1}.jpg`),
+          dataUrl: String(p.dataUrl ?? ""),
+          isPrimary: legacy ? index === 0 : Boolean(p.isPrimary),
+          isAiAnalyze: legacy ? index === 0 : Boolean(p.isAiAnalyze),
+          isThumbSource: legacy ? true : Boolean(p.isThumbSource ?? true),
+          includeInDetail: legacy ? true : Boolean(p.includeInDetail ?? true),
+          isSourcingExtra: Boolean(p.isSourcingExtra),
+        })).filter((p: ProductPhoto) => p.dataUrl);
+
+        if (migrated.length && !migrated.some(p => p.isPrimary)) migrated[0].isPrimary = true;
+        if (migrated.length && !migrated.some(p => p.isAiAnalyze)) migrated[0].isAiAnalyze = true;
+        setPhotos(migrated);
       } else if (typeof draft.imageDataUrl === "string" && draft.imageDataUrl.startsWith("data:image/")) {
-        const legacyId = `legacy-${Date.now()}`;
-        setPhotos([{ id: legacyId, name: "기존사진.jpg", dataUrl: draft.imageDataUrl }]);
-        setPrimaryId(legacyId);
+        setPhotos([{
+          id: `legacy-${Date.now()}`,
+          name: "기존사진.jpg",
+          dataUrl: draft.imageDataUrl,
+          isPrimary: true,
+          isAiAnalyze: true,
+          isThumbSource: true,
+          includeInDetail: true,
+        }]);
       }
 
-      if (draft.optionThumbs) setOptionThumbs(draft.optionThumbs);
+      if (draft.optionThumbs) {
+        const migratedThumbs: Record<string, OptionThumbState> = {};
+        for (const [option, state] of Object.entries(draft.optionThumbs as Record<string, Record<string, unknown>>)) {
+          migratedThumbs[option] = {
+            sourceId: String(state.sourceId ?? ""),
+            draftDataUrl: String(state.draftDataUrl ?? ""),
+            approvedDataUrl: String(state.approvedDataUrl ?? ""),
+          };
+        }
+        setOptionThumbs(migratedThumbs);
+      }
       if (Array.isArray(draft.extraImages)) setExtraImages(draft.extraImages);
       if (Array.isArray(draft.detailImages)) setDetailImages(draft.detailImages);
       if (typeof draft.detailPreview === "string") setDetailPreview(draft.detailPreview);
@@ -361,10 +446,15 @@ export default function Home() {
   );
 
   const primaryPhoto = useMemo(
-    () => photos.find(p => p.id === primaryId) || photos[0],
-    [photos, primaryId]
+    () => photos.find(p => p.isPrimary) || photos[0],
+    [photos]
   );
   const imageDataUrl = primaryPhoto?.dataUrl ?? "";
+
+  const thumbSourceCandidates = useMemo(() => {
+    const flagged = photos.filter(p => p.isThumbSource);
+    return flagged.length ? flagged : photos;
+  }, [photos]);
 
   useEffect(() => {
     if (options.length && !options.includes(shotOption)) {
@@ -372,12 +462,13 @@ export default function Home() {
     }
   }, [options, shotOption]);
 
+  const defaultThumbSourceId = () =>
+    thumbSourceCandidates[0]?.id || primaryPhoto?.id || photos[0]?.id || "";
+
   const defaultOptionThumb = (): OptionThumbState => ({
-    sourceId: primaryId || photos[0]?.id || "",
+    sourceId: defaultThumbSourceId(),
     draftDataUrl: "",
     approvedDataUrl: "",
-    crop: null,
-    useAutoCrop: true,
   });
 
   useEffect(() => {
@@ -386,13 +477,7 @@ export default function Home() {
       const next = { ...prev };
       for (const option of options) {
         if (!next[option]) {
-          next[option] = {
-            sourceId: primaryId || photos[0]?.id || "",
-            draftDataUrl: "",
-            approvedDataUrl: "",
-            crop: null,
-            useAutoCrop: true,
-          };
+          next[option] = defaultOptionThumb();
           changed = true;
         }
       }
@@ -404,16 +489,14 @@ export default function Home() {
   const approvedCount = options.filter(o => optionThumbs[o]?.approvedDataUrl).length;
 
   const progressSteps: ProgressStep[] = [
-    { key: "photos", label: "사진등록", done: photos.length > 0 },
-    { key: "analyze", label: "AI 분석", done: Object.keys(analysis).length > 0 },
-    { key: "info", label: "정보확인", done: ready },
-    { key: "thumbs", label: "썸네일", done: approvedCount > 0 },
-    { key: "extra", label: "추가이미지", done: extraImages.length > 0 },
-    { key: "detail", label: "상세페이지", done: Boolean(detailPreview) },
-    { key: "labelExcel", label: "라벨·엑셀", done: labelDownloaded && (quoteDownloaded || automationDownloaded) },
-    { key: "save", label: "전체저장", done: fullSaveDone },
+    { key: "photos", label: "① 사진 업로드", done: photos.length > 0 },
+    { key: "analyze", label: "② AI 분석", done: Object.keys(analysis).length > 0 },
+    { key: "info", label: "③ 기본정보 확인", done: ready },
+    { key: "thumbs", label: "④ 썸네일 승인", done: approvedCount > 0 && approvedCount >= options.length },
+    { key: "detail", label: "⑤ 상세페이지 승인", done: Boolean(detailPreview) },
+    { key: "generate", label: "⑥ 전체 생성", done: fullSaveDone },
   ];
-  const nextStepKey = progressSteps.find(s => !s.done)?.key;
+  const nextStepKey = progressSteps.find(s => !s.done)?.key || "generate";
 
   const update = (key:keyof Product, value:string) => {
     setProduct(prev => {
@@ -434,7 +517,11 @@ export default function Home() {
     setProduct(prev => ({ ...prev, sizes: value }));
   };
 
-  const addPhotoFiles = async (fileList: FileList | File[]) => {
+  // ----------------------------------------------------------------------
+  // Photos
+  // ----------------------------------------------------------------------
+
+  const addPhotoFiles = async (fileList: FileList | File[], opts?: { isSourcingExtra?: boolean }) => {
     const files = Array.from(fileList).filter(isAcceptedImageFile);
     if (!files.length) {
       setPhotoMessage("JPG 또는 PNG 파일만 추가할 수 있습니다.");
@@ -446,16 +533,24 @@ export default function Home() {
       return;
     }
     const toAdd = files.slice(0, room);
+    const wasEmpty = photos.length === 0;
     try {
       const items: ProductPhoto[] = await Promise.all(
-        toAdd.map(async file => ({
-          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          name: file.name,
-          dataUrl: await readFileAsDataUrl(file),
-        }))
+        toAdd.map(async (file, index) => {
+          const isFirstEver = wasEmpty && index === 0;
+          return {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            name: file.name,
+            dataUrl: await readFileAsDataUrl(file),
+            isPrimary: isFirstEver,
+            isAiAnalyze: isFirstEver,
+            isThumbSource: true,
+            includeInDetail: true,
+            isSourcingExtra: opts?.isSourcingExtra || false,
+          };
+        })
       );
       setPhotos(prev => [...prev, ...items].slice(0, MAX_PHOTOS));
-      setPrimaryId(prev => prev || items[0]?.id || "");
       setAnalysis({});
       setPhotoMessage(
         files.length > toAdd.length
@@ -465,6 +560,28 @@ export default function Home() {
     } catch {
       setPhotoMessage("사진을 불러오지 못했습니다.");
     }
+  };
+
+  const addPhotosFromDataUrls = (
+    dataUrls: string[],
+    opts: { isSourcingExtra: boolean; namePrefix: string }
+  ) => {
+    setPhotos(prev => {
+      const room = Math.max(0, MAX_PHOTOS - prev.length);
+      if (room <= 0) return prev;
+      const wasEmpty = prev.length === 0;
+      const toAdd: ProductPhoto[] = dataUrls.slice(0, room).map((dataUrl, index) => ({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}-${index}`,
+        name: `${opts.namePrefix}${String(index + 1).padStart(2, "0")}.jpg`,
+        dataUrl,
+        isPrimary: wasEmpty && index === 0,
+        isAiAnalyze: wasEmpty && index === 0,
+        isThumbSource: true,
+        includeInDetail: true,
+        isSourcingExtra: opts.isSourcingExtra,
+      }));
+      return [...prev, ...toAdd];
+    });
   };
 
   const onPhotoInput = (e: ChangeEvent<HTMLInputElement>) => {
@@ -484,8 +601,33 @@ export default function Home() {
   const onPhotoDragLeave = () => setIsDraggingPhotos(false);
 
   const removePhoto = (id: string) => {
-    setPhotos(prev => prev.filter(p => p.id !== id));
-    setPrimaryId(prev => (prev === id ? (photos.find(p => p.id !== id)?.id || "") : prev));
+    setPhotos(prev => {
+      let next = prev.filter(p => p.id !== id);
+      if (!next.length) return next;
+      if (!next.some(p => p.isPrimary)) {
+        next = next.map((p, i) => (i === 0 ? { ...p, isPrimary: true } : p));
+      }
+      if (!next.some(p => p.isAiAnalyze)) {
+        next = next.map((p, i) => (i === 0 ? { ...p, isAiAnalyze: true } : p));
+      }
+      return next;
+    });
+  };
+
+  const setPrimaryPhoto = (id: string) => {
+    setPhotos(prev => prev.map(p => ({ ...p, isPrimary: p.id === id })));
+  };
+
+  const setAiAnalyzePhoto = (id: string) => {
+    setPhotos(prev => prev.map(p => ({ ...p, isAiAnalyze: p.id === id })));
+  };
+
+  const toggleThumbSourcePhoto = (id: string) => {
+    setPhotos(prev => prev.map(p => (p.id === id ? { ...p, isThumbSource: !p.isThumbSource } : p)));
+  };
+
+  const toggleIncludeInDetailPhoto = (id: string) => {
+    setPhotos(prev => prev.map(p => (p.id === id ? { ...p, includeInDetail: !p.includeInDetail } : p)));
   };
 
   const reorderPhoto = (fromIndex: number, toIndex: number) => {
@@ -503,36 +645,61 @@ export default function Home() {
     setDraggedPhotoIndex(null);
   };
 
+  // ----------------------------------------------------------------------
+  // AI 분석
+  // ----------------------------------------------------------------------
+
   const analyzeImage = async () => {
-    if (!photos.length) {
-      setMessage("먼저 제품사진을 1장 이상 등록해주세요.");
+    const aiPhoto = photos.find(p => p.isAiAnalyze) || photos.find(p => p.isPrimary);
+    if (!aiPhoto) {
+      setMessage("AI 분석용 사진 1장을 지정해주세요.");
       return;
     }
     setLoading(true);
     setMessage("AI가 제품 디자인과 각인을 분석하고 있습니다...");
     try {
+      const compressed = await compressImageDataUrl(aiPhoto.dataUrl, 1600, 0.82);
       const res = await fetch("/api/analyze", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({imageDataUrls: photos.map(p => p.dataUrl), current:product}),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageDataUrl: compressed, current: product }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "분석 실패");
+
+      let data: Record<string, unknown> | null = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+
+      if (!res.ok) {
+        if (res.status === 413) {
+          setMessage("AI 분석용 사진 1장을 지정해주세요.");
+        } else {
+          const errorText = data && typeof data.error === "string" ? data.error : "";
+          setMessage(`오류: ${errorText || "AI 분석에 실패했습니다. 잠시 후 다시 시도해주세요."}`);
+        }
+        return;
+      }
+      if (!data) {
+        setMessage("오류: AI 분석 결과를 해석하지 못했습니다. 잠시 후 다시 시도해주세요.");
+        return;
+      }
 
       setProduct(prev => {
         const hasUserColors = prev.colors.trim().length > 0;
         const next: Product = {
           ...prev,
-          category:data.category || prev.category,
-          gender:data.gender || prev.gender,
-          material:data.material || prev.material,
+          category: String(data?.category || prev.category),
+          gender: String(data?.gender || prev.gender),
+          material: String(data?.material || prev.material),
           // Never overwrite user-entered colors, and never re-sort them.
-          colors: hasUserColors ? prev.colors : (data.colors || prev.colors),
-          keyword:normalizeKeyword(data.keyword || prev.keyword, {
+          colors: hasUserColors ? prev.colors : String(data?.colors || prev.colors),
+          keyword: normalizeKeyword(String(data?.keyword || prev.keyword), {
             ...prev,
-            category:data.category || prev.category,
-            gender:data.gender || prev.gender,
-            material:data.material || prev.material,
+            category: String(data?.category || prev.category),
+            gender: String(data?.gender || prev.gender),
+            material: String(data?.material || prev.material),
           }),
         };
         if (next.category === "반지" && !sizesUserEditedRef.current) {
@@ -540,21 +707,29 @@ export default function Home() {
         }
         return next;
       });
-      setAnalysis(data);
+      setAnalysis(data as Analysis);
       setMessage("AI 사진분석이 완료되었습니다. 결과를 확인하고 필요한 부분만 수정하세요.");
-    } catch (e) {
-      setMessage(`오류: ${e instanceof Error ? e.message : "분석에 실패했습니다."}`);
+    } catch {
+      setMessage("오류: AI 분석 중 문제가 발생했습니다. 네트워크 상태를 확인하고 다시 시도해주세요.");
     } finally {
       setLoading(false);
     }
   };
 
-  const saveDraft = () => {
+  // ----------------------------------------------------------------------
+  // Draft save / download
+  // ----------------------------------------------------------------------
+
+  const persistDraft = () => {
     localStorage.setItem("noidb-product-draft", JSON.stringify({
       product, analysis, model, title, tags,
-      photos, primaryId, optionThumbs, extraImages, sourcingUrl,
+      photos, optionThumbs, extraImages, sourcingUrl,
       detailImages, detailPreview,
     }));
+  };
+
+  const saveDraft = () => {
+    persistDraft();
     setMessage("현재 기기에 임시저장했습니다.");
   };
 
@@ -568,6 +743,10 @@ export default function Home() {
     a.href=url; a.download=`${model || "noidb-product"}.json`; a.click();
     URL.revokeObjectURL(url);
   };
+
+  // ----------------------------------------------------------------------
+  // Sourcing (1688 first)
+  // ----------------------------------------------------------------------
 
   const analyzeForSourcing = async () => {
     if (!imageDataUrl) {
@@ -652,10 +831,56 @@ export default function Home() {
     setSourcingMessage("1688 링크를 저장했습니다. 상품정보 저장시 함께 기록됩니다.");
   };
 
-  const onSourcingPhotos = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files?.length) addPhotoFiles(e.target.files);
+  const fetchSourcingImages = async () => {
+    const url = sourcingUrl || sourcingUrlInput.trim();
+    if (!url) {
+      setSourcingMessage("먼저 1688 상품 URL을 입력하고 저장해주세요.");
+      return;
+    }
+    setSourcingImagesLoading(true);
+    setSourcingMessage("1688 이미지를 가져오고 있습니다...");
+    try {
+      const res = await fetch("/api/sourcing-images", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      let data: { images?: { dataUrl: string }[]; error?: string } | null = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      if (!res.ok || !Array.isArray(data?.images) || !data.images.length) {
+        setSourcingMessage(
+          (data && data.error) ||
+            "1688 이미지를 가져오지 못했습니다. \"1688 이미지 직접 추가\"로 업로드해주세요."
+        );
+        return;
+      }
+      const urls = data.images.map(img => img.dataUrl).filter(Boolean);
+      const room = Math.max(0, MAX_PHOTOS - photos.length);
+      if (room <= 0) {
+        setSourcingMessage(`사진은 최대 ${MAX_PHOTOS}장까지 등록할 수 있습니다.`);
+        return;
+      }
+      addPhotosFromDataUrls(urls, { isSourcingExtra: true, namePrefix: "원본_추가" });
+      setSourcingMessage(`1688 이미지 ${Math.min(urls.length, room)}장을 제품사진 목록에 추가했습니다.`);
+    } catch {
+      setSourcingMessage("1688 이미지 가져오기 중 문제가 발생했습니다. \"1688 이미지 직접 추가\"를 사용해주세요.");
+    } finally {
+      setSourcingImagesLoading(false);
+    }
+  };
+
+  const onSourcingDirectUpload = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.length) addPhotoFiles(e.target.files, { isSourcingExtra: true });
     e.target.value = "";
   };
+
+  // ----------------------------------------------------------------------
+  // Experimental AI wearing shots (advanced only — never auto-included)
+  // ----------------------------------------------------------------------
 
   const generateDetailShot = async (shotType: string, label: string) => {
     if (!imageDataUrl) {
@@ -693,6 +918,10 @@ export default function Home() {
     }
   };
 
+  // ----------------------------------------------------------------------
+  // Detail page
+  // ----------------------------------------------------------------------
+
   const onDetailImages = (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     if (!files.length) return;
@@ -706,13 +935,12 @@ export default function Home() {
     )
       .then(items => {
         setDetailImages(prev => [...prev, ...items]);
+        setDetailPreview("");
         setDetailMessage(`${items.length}장의 상세페이지 사진을 추가했습니다.`);
       })
       .catch(() => setDetailMessage("사진을 불러오지 못했습니다."));
     e.target.value = "";
   };
-
-  const [draggedDetailIndex, setDraggedDetailIndex] = useState<number | null>(null);
 
   const reorderDetailImage = (fromIndex: number, toIndex: number) => {
     if (fromIndex === toIndex) return;
@@ -758,21 +986,19 @@ export default function Home() {
     setDetailMessage(`${photo.name} 사진을 상세페이지 목록에 추가했습니다.`);
   };
 
-  const addApprovedThumbsToDetail = () => {
-    const items = options
-      .filter(option => thumbnails[option])
-      .map(option => ({
-        id: `${Date.now()}-${option}-${Math.random()}`,
-        name: `${option} 승인 썸네일`,
-        dataUrl: thumbnails[option],
-      }));
-    if (!items.length) {
-      setDetailMessage("먼저 옵션별 썸네일을 승인해주세요.");
+  const syncDetailFromPhotos = () => {
+    const included = photos.filter(p => p.includeInDetail);
+    if (!included.length) {
+      setDetailMessage("상세페이지에 포함할 사진을 먼저 체크해주세요 (상세페이지 포함).");
       return;
     }
-    setDetailImages(prev => [...prev, ...items]);
+    setDetailImages(included.map(p => ({
+      id: `${p.id}-detail-${Date.now()}`,
+      name: p.name,
+      dataUrl: p.dataUrl,
+    })));
     setDetailPreview("");
-    setDetailMessage(`승인된 썸네일 ${items.length}장을 상세페이지 목록에 추가했습니다.`);
+    setDetailMessage(`상세페이지 포함 사진 ${included.length}장을 순서대로 불러왔습니다.`);
   };
 
   const buildDetailPage = async () => {
@@ -783,48 +1009,19 @@ export default function Home() {
 
     setDetailMessage("780px 롱 상세페이지를 만들고 있습니다...");
     try {
-      const width = 780;
-      const gap = 60;
-      const prepared = await Promise.all(
-        detailImages.map(async item => {
-          const img = await loadImageElement(item.dataUrl);
-          const height = Math.max(1, Math.round((img.height / img.width) * width));
-          return { img, height };
-        })
-      );
-
-      const totalHeight =
-        gap +
-        prepared.reduce((sum, item) => sum + item.height, 0) +
-        gap * Math.max(0, prepared.length - 1) +
-        gap;
-
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = totalHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
-
-      ctx.fillStyle = "#FFFFFF";
-      ctx.fillRect(0, 0, width, totalHeight);
-
-      let y = gap;
-      for (const item of prepared) {
-        ctx.drawImage(item.img, 0, y, width, item.height);
-        y += item.height + gap;
-      }
-
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.94);
+      const dataUrl = await composeDetailPageDataUrl(detailImages, 60);
       setDetailPreview(dataUrl);
-      setDetailMessage(
-        `상세페이지 완성: 가로 780px · 사진 ${detailImages.length}장 · 세로 ${totalHeight}px`
-      );
+      setDetailMessage(`상세페이지 완성: 가로 780px · 사진 ${detailImages.length}장 · 여백 60px`);
     } catch (error) {
       setDetailMessage(
         `오류: ${error instanceof Error ? error.message : "상세페이지 생성 실패"}`
       );
     }
   };
+
+  // ----------------------------------------------------------------------
+  // Thumbnails
+  // ----------------------------------------------------------------------
 
   const setThumbSource = (option: string, photoId: string) => {
     setOptionThumbs(prev => ({
@@ -833,24 +1030,12 @@ export default function Home() {
     }));
   };
 
-  const toggleAutoCrop = (option: string) => {
-    setOptionThumbs(prev => {
-      const current = prev[option] || defaultOptionThumb();
-      return { ...prev, [option]: { ...current, useAutoCrop: !current.useAutoCrop } };
-    });
-  };
-
-  const updateCrop = (option: string, key: keyof CropRect, value: number) => {
-    setOptionThumbs(prev => {
-      const current = prev[option] || defaultOptionThumb();
-      const base = current.crop || { x: 0, y: 0, w: 1, h: 1 };
-      return { ...prev, [option]: { ...current, crop: { ...base, [key]: value } } };
-    });
-  };
-
   const buildWhiteThumbnail = async (option: string) => {
     const state = optionThumbs[option] || defaultOptionThumb();
-    const source = photos.find(p => p.id === state.sourceId) || primaryPhoto;
+    const source =
+      photos.find(p => p.id === state.sourceId) ||
+      thumbSourceCandidates[0] ||
+      primaryPhoto;
     if (!source) {
       setThumbMessage(`${option} 썸네일을 만들 사진을 먼저 선택해주세요.`);
       return;
@@ -858,23 +1043,13 @@ export default function Home() {
     setThumbBusy(`${option}:white`);
     setThumbMessage(`${option} 흰배경 썸네일을 만들고 있습니다...`);
     try {
-      let crop: CropRect | null = state.crop;
-      let autoCropMissed = false;
-      if (state.useAutoCrop) {
-        const detected = await detectContentCrop(source.dataUrl);
-        crop = detected;
-        autoCropMissed = !detected;
-      }
+      const crop = await detectContentCrop(source.dataUrl).catch(() => null);
       const dataUrl = await composeWhiteThumbnail(source.dataUrl, 0.84, crop);
       setOptionThumbs(prev => ({
         ...prev,
-        [option]: { ...state, sourceId: source.id, draftDataUrl: dataUrl, crop },
+        [option]: { ...(prev[option] || defaultOptionThumb()), sourceId: source.id, draftDataUrl: dataUrl },
       }));
-      setThumbMessage(
-        autoCropMissed
-          ? `${option}: 자동 크롭 영역을 찾지 못했습니다. 아래에서 자동 크롭을 끄고 직접 조정해주세요.`
-          : `${option} 흰배경 썸네일 초안을 만들었습니다.`
-      );
+      setThumbMessage(`${option} 흰배경 썸네일 초안을 만들었습니다.`);
     } catch (error) {
       setThumbMessage(`오류: ${error instanceof Error ? error.message : "썸네일 생성 실패"}`);
     } finally {
@@ -889,18 +1064,18 @@ export default function Home() {
     try {
       let baseDataUrl = state.draftDataUrl;
       if (!baseDataUrl) {
-        const source = photos.find(p => p.id === state.sourceId) || primaryPhoto;
+        const source =
+          photos.find(p => p.id === state.sourceId) ||
+          thumbSourceCandidates[0] ||
+          primaryPhoto;
         if (!source) throw new Error("먼저 썸네일 소스 사진을 선택해주세요.");
-        let crop: CropRect | null = state.crop;
-        if (state.useAutoCrop && !crop) {
-          crop = await detectContentCrop(source.dataUrl);
-        }
+        const crop = await detectContentCrop(source.dataUrl).catch(() => null);
         baseDataUrl = await composeWhiteThumbnail(source.dataUrl, 0.84, crop);
       }
       const recolored = await applyMetalColorPreset(baseDataUrl, option);
       setOptionThumbs(prev => ({
         ...prev,
-        [option]: { ...state, draftDataUrl: recolored },
+        [option]: { ...(prev[option] || defaultOptionThumb()), draftDataUrl: recolored },
       }));
       setThumbMessage(`${option} 색상 보정을 완료했습니다.`);
     } catch (error) {
@@ -921,7 +1096,52 @@ export default function Home() {
       [option]: { ...state, approvedDataUrl: state.draftDataUrl },
     }));
     setThumbnails(prev => ({ ...prev, [option]: state.draftDataUrl }));
-    setThumbMessage(`${option} 썸네일을 승인했습니다. SKU 전체 저장이 가능합니다.`);
+    setThumbMessage(`${option} 썸네일을 승인했습니다. SKU 저장이 가능합니다.`);
+  };
+
+  const regenerateThumbnailWithAI = async (option: string) => {
+    const state = optionThumbs[option] || defaultOptionThumb();
+    const source =
+      photos.find(p => p.id === state.sourceId) ||
+      thumbSourceCandidates[0] ||
+      primaryPhoto;
+    if (!source) {
+      setThumbMessage(`${option} 썸네일을 만들 사진을 먼저 선택해주세요.`);
+      return;
+    }
+    setThumbBusy(`${option}:ai`);
+    setThumbMessage(`${option} AI 썸네일을 새로 생성하고 있습니다. 20~40초 정도 걸릴 수 있습니다.`);
+    try {
+      const res = await fetch("/api/thumbnail", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageDataUrl: source.dataUrl,
+          option,
+          category: product.category,
+          keyword: cleanedKeyword,
+        }),
+      });
+      let data: { imageDataUrl?: string; error?: string } | null = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      if (!res.ok || !data?.imageDataUrl) {
+        setThumbMessage(`${option}: AI 썸네일 생성을 사용할 수 없습니다. 기본 흰배경 썸네일을 이용해주세요.`);
+        return;
+      }
+      setOptionThumbs(prev => ({
+        ...prev,
+        [option]: { ...(prev[option] || defaultOptionThumb()), sourceId: source.id, draftDataUrl: data!.imageDataUrl! },
+      }));
+      setThumbMessage(`${option} AI 썸네일 초안을 만들었습니다. 실제 제품과 비교한 뒤 승인해주세요.`);
+    } catch {
+      setThumbMessage(`${option}: AI 썸네일 생성 중 문제가 발생했습니다. 기본 흰배경 썸네일을 이용해주세요.`);
+    } finally {
+      setThumbBusy("");
+    }
   };
 
   const downloadDataUrl = (dataUrl: string, filename: string) => {
@@ -952,8 +1172,15 @@ export default function Home() {
     }
   };
 
-  const extraImageLabel = (kind: ExtraImageKind) =>
-    kind === "closeup" ? "디테일 클로즈업" : "전체옵션 연출컷";
+  // ----------------------------------------------------------------------
+  // Extra images (closeup / collage / real uploads only)
+  // ----------------------------------------------------------------------
+
+  const extraImageLabel = (kind: ExtraImageKind) => {
+    if (kind === "closeup") return "디테일 클로즈업";
+    if (kind === "collage") return "전체옵션 연출컷";
+    return "실사 사진";
+  };
 
   const buildCloseup = async () => {
     const source = photos.find(p => p.id === closeupSourceId) || primaryPhoto;
@@ -993,6 +1220,28 @@ export default function Home() {
     }
   };
 
+  const onExtraUpload = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []).filter(isAcceptedImageFile);
+    if (!files.length) {
+      setExtraMessage("JPG 또는 PNG 파일만 추가할 수 있습니다.");
+      e.target.value = "";
+      return;
+    }
+    Promise.all(
+      files.map(async file => ({
+        id: `${Date.now()}-${Math.random()}`,
+        kind: "upload" as ExtraImageKind,
+        dataUrl: await readFileAsDataUrl(file),
+      }))
+    )
+      .then(items => {
+        setExtraImages(prev => [...prev, ...items]);
+        setExtraMessage(`${items.length}장의 실사 사진을 추가이미지 목록에 추가했습니다.`);
+      })
+      .catch(() => setExtraMessage("사진을 불러오지 못했습니다."));
+    e.target.value = "";
+  };
+
   const removeExtraImage = (id: string) => {
     setExtraImages(prev => prev.filter(item => item.id !== id));
   };
@@ -1013,6 +1262,10 @@ export default function Home() {
     });
     setExtraMessage(`추가이미지 ${extraImages.length}장을 다운로드했습니다.`);
   };
+
+  // ----------------------------------------------------------------------
+  // Excel exports (advanced)
+  // ----------------------------------------------------------------------
 
   const exportPayload = () => ({
     product,
@@ -1067,7 +1320,6 @@ export default function Home() {
       );
       downloadBlobFile(blob, filename);
       const skuCount = res.headers.get("X-SKU-Count") || "";
-      setQuoteDownloaded(true);
       setExportMessage(
         `견적서 다운로드 완료${skuCount ? ` · SKU ${skuCount}행` : ""}: ${filename}`
       );
@@ -1102,7 +1354,6 @@ export default function Home() {
       );
       downloadBlobFile(blob, filename);
       const skuCount = res.headers.get("X-SKU-Count") || "";
-      setAutomationDownloaded(true);
       setExportMessage(
         `상품입력 자동화 파일 다운로드 완료${skuCount ? ` · SKU ${skuCount}행` : ""}: ${filename}`
       );
@@ -1117,20 +1368,37 @@ export default function Home() {
 
   const downloadLabel = async () => {
     if (!model) {
-      setMessage("모델명을 먼저 입력해주세요.");
+      setExportMessage("모델명을 먼저 입력해주세요.");
       return;
     }
     try {
       const blob = await createLabelBlob(model);
       downloadBlobFile(blob, `라벨_${model}.jpg`);
-      setLabelDownloaded(true);
+      setExportMessage(`라벨_${model}.jpg 다운로드 완료`);
     } catch (error) {
-      setMessage(`오류: ${error instanceof Error ? error.message : "라벨 생성 실패"}`);
+      setExportMessage(`오류: ${error instanceof Error ? error.message : "라벨 생성 실패"}`);
     }
   };
 
-  const collectCurrentDbFiles = () =>
-    collectProductDbFiles({
+  // ----------------------------------------------------------------------
+  // Product DB collection / storage
+  // ----------------------------------------------------------------------
+
+  const buildCollectInput = (overrides?: {
+    photosList?: ProductPhoto[];
+    thumbnailMap?: ThumbnailMap;
+    extraImagesList?: ExtraImage[];
+    detailPreviewValue?: string;
+  }) => {
+    const photosList = overrides?.photosList ?? photos;
+    const thumbnailMap = overrides?.thumbnailMap ?? thumbnails;
+    const extraImagesList = overrides?.extraImagesList ?? extraImages;
+    const detailPreviewValue = overrides?.detailPreviewValue ?? detailPreview;
+
+    const normalPhotoUrls = photosList.filter(p => !p.isSourcingExtra).map(p => p.dataUrl);
+    const extraOriginalPhotoUrls = photosList.filter(p => p.isSourcingExtra).map(p => p.dataUrl);
+
+    return collectProductDbFiles({
       category: product.category,
       model,
       title,
@@ -1138,13 +1406,15 @@ export default function Home() {
       product: product as unknown as Record<string, string>,
       analysis,
       ready,
-      photos: photos.map(p => p.dataUrl),
-      imageDataUrl,
-      thumbnails: Object.fromEntries(options.filter(o => thumbnails[o]).map(o => [o, thumbnails[o]])),
-      extraImages: extraImages.map(e => e.dataUrl),
-      detailPreview,
+      photos: normalPhotoUrls,
+      extraOriginalPhotos: extraOriginalPhotoUrls,
+      imageDataUrl: photosList.find(p => p.isPrimary)?.dataUrl ?? photosList[0]?.dataUrl ?? "",
+      thumbnails: Object.fromEntries(options.filter(o => thumbnailMap[o]).map(o => [o, thumbnailMap[o]])),
+      extraImages: extraImagesList.map(e => e.dataUrl),
+      detailPreview: detailPreviewValue,
       sourcingUrl,
     });
+  };
 
   const previewDbFiles = async () => {
     if (!model) {
@@ -1153,7 +1423,7 @@ export default function Home() {
     }
     setDbStatus("저장 전 파일 구성을 확인하고 있습니다...");
     try {
-      const { readyFiles, missingFiles } = await collectCurrentDbFiles();
+      const { readyFiles, missingFiles } = await buildCollectInput();
       setDbReadyFiles(readyFiles);
       setDbMissingFiles(missingFiles);
       setDbStatus(
@@ -1205,13 +1475,8 @@ export default function Home() {
       const ok = await ensureReadWritePermission(dbHandle);
       if (!ok) throw new Error("폴더 쓰기 권한이 없습니다. 다시 선택해주세요.");
 
-      const { files, skipped, readyFiles, missingFiles } = await collectCurrentDbFiles();
-      const saved = await writeProductDbFiles(
-        dbHandle,
-        product.category,
-        model,
-        files
-      );
+      const { files, skipped, readyFiles, missingFiles } = await buildCollectInput();
+      const saved = await writeProductDbFiles(dbHandle, product.category, model, files);
       setDbSavedFiles(saved);
       setDbSkippedFiles(skipped);
       setDbReadyFiles(readyFiles);
@@ -1238,10 +1503,10 @@ export default function Home() {
     setDbSkippedFiles([]);
     setDbStatus("상품DB ZIP을 만들고 있습니다...");
     try {
-      const { files, skipped, readyFiles, missingFiles } = await collectCurrentDbFiles();
+      const { files, skipped, readyFiles, missingFiles } = await buildCollectInput();
       const blob = await buildProductDbZip(product.category, model, files);
       downloadBlobFile(blob, `상품DB_${model}.zip`);
-      setDbSavedFiles(files.map(f => `${product.category}/${model}/${f.path}`));
+      setDbSavedFiles(files.map(f => f.path));
       setDbSkippedFiles(skipped);
       setDbReadyFiles(readyFiles);
       setDbMissingFiles(missingFiles);
@@ -1257,76 +1522,192 @@ export default function Home() {
     }
   };
 
+  // ----------------------------------------------------------------------
+  // 전체 생성 (one-click pipeline)
+  // ----------------------------------------------------------------------
+
+  const runFullGeneration = async () => {
+    if (generateBusy) return;
+    if (!photos.length) {
+      setGenerateStatus("오류: 먼저 제품사진을 1장 이상 등록해주세요.");
+      return;
+    }
+    if (!model) {
+      setGenerateStatus("오류: 카테고리와 모델번호를 확인해 모델명을 완성해주세요.");
+      return;
+    }
+
+    setGenerateBusy(true);
+    try {
+      // 1. save product JSON draft
+      setGenerateStatus("1/6 상품 정보를 임시저장하고 있습니다...");
+      persistDraft();
+
+      // 2. thumbnails per option
+      setGenerateStatus("2/6 옵션별 흰배경 썸네일을 만들고 있습니다...");
+      const nextOptionThumbs: Record<string, OptionThumbState> = { ...optionThumbs };
+      for (const option of options) {
+        const existing = nextOptionThumbs[option];
+        if (existing?.approvedDataUrl) continue;
+
+        const source =
+          photos.find(p => p.id === existing?.sourceId) ||
+          thumbSourceCandidates[0] ||
+          primaryPhoto;
+        if (!source) continue;
+
+        setGenerateStatus(`2/6 "${option}" 옵션 썸네일을 만들고 있습니다...`);
+        const crop = await detectContentCrop(source.dataUrl).catch(() => null);
+        let composed = await composeWhiteThumbnail(source.dataUrl, 0.84, crop);
+        if (looksLikeMetalColorOption(option)) {
+          composed = await applyMetalColorPreset(composed, option).catch(() => composed);
+        }
+        nextOptionThumbs[option] = {
+          sourceId: source.id,
+          draftDataUrl: composed,
+          approvedDataUrl: composed,
+        };
+      }
+      setOptionThumbs(nextOptionThumbs);
+
+      const approvedMap: ThumbnailMap = {};
+      for (const option of options) {
+        const approved = nextOptionThumbs[option]?.approvedDataUrl;
+        if (approved) approvedMap[option] = approved;
+      }
+      setThumbnails(approvedMap);
+
+      // 4. closeup + collage (rebuilt fresh each run; keep user uploads)
+      setGenerateStatus("3/6 추가이미지(클로즈업 · 연출컷)를 만들고 있습니다...");
+      let nextExtra = extraImages.filter(e => e.kind === "upload");
+      const closeupSource = photos.find(p => p.isPrimary) || photos[0];
+      if (closeupSource) {
+        try {
+          const closeup = await buildCloseupFromSource(closeupSource.dataUrl);
+          nextExtra = [...nextExtra, { id: `${Date.now()}-closeup`, kind: "closeup", dataUrl: closeup }];
+        } catch {
+          // non-fatal — closeup is best-effort
+        }
+      }
+      const approvedList = options.filter(o => approvedMap[o]).map(o => approvedMap[o]);
+      if (approvedList.length >= 2) {
+        try {
+          const collage = await buildOptionsCollage(approvedList);
+          nextExtra = [...nextExtra, { id: `${Date.now()}-collage`, kind: "collage", dataUrl: collage }];
+        } catch {
+          // non-fatal — collage is best-effort
+        }
+      }
+      setExtraImages(nextExtra);
+
+      // 5. detail page from photos with includeInDetail (order preserved), gap=60
+      setGenerateStatus("4/6 상세페이지를 만들고 있습니다...");
+      const includedPhotos = photos.filter(p => p.includeInDetail);
+      let preview = detailPreview;
+      if (includedPhotos.length) {
+        const detailItems: DetailImage[] = includedPhotos.map(p => ({
+          id: `${p.id}-detail`,
+          name: p.name,
+          dataUrl: p.dataUrl,
+        }));
+        setDetailImages(detailItems);
+        preview = await composeDetailPageDataUrl(detailItems, 60);
+        setDetailPreview(preview);
+      }
+
+      // 6+7. label blob ready via collect + gather all product DB files
+      setGenerateStatus("5/6 상품DB 파일을 모으고 있습니다 (라벨 · 견적서 · 자동화 파일 포함)...");
+      const collected = await buildCollectInput({
+        photosList: photos,
+        thumbnailMap: approvedMap,
+        extraImagesList: nextExtra,
+        detailPreviewValue: preview,
+      });
+      setDbReadyFiles(collected.readyFiles);
+      setDbMissingFiles(collected.missingFiles);
+
+      // 8+9. write to folder or fall back to ZIP download
+      setGenerateStatus("6/6 상품DB에 저장하고 있습니다...");
+      if (dbHandle) {
+        const ok = await ensureReadWritePermission(dbHandle);
+        if (!ok) throw new Error("폴더 쓰기 권한이 없습니다. 상품DB 폴더를 다시 선택해주세요.");
+        const saved = await writeProductDbFiles(dbHandle, product.category, model, collected.files);
+        setDbSavedFiles(saved);
+        setDbSkippedFiles(collected.skipped);
+      } else {
+        const blob = await buildProductDbZip(product.category, model, collected.files);
+        downloadBlobFile(blob, `상품DB_${model}.zip`);
+        setDbSavedFiles(collected.files.map(f => f.path));
+        setDbSkippedFiles(collected.skipped);
+      }
+
+      setFullSaveDone(true);
+      setGenerateStatus("상품 생성 완료");
+    } catch (error) {
+      setGenerateStatus(`오류: ${error instanceof Error ? error.message : "전체 생성 중 문제가 발생했습니다."}`);
+    } finally {
+      setGenerateBusy(false);
+    }
+  };
+
   return (
     <main className="shell">
       <header className="hero">
         <div><p className="eyebrow">노이드비 AI</p><h1>AI 상품등록 도우미</h1>
-        <p className="sub">V9 실무 테스트판 · 다중사진 · 원본유지 썸네일</p></div>
+        <p className="sub">V11 · 초보자 간편 흐름 · 전체 생성 원클릭</p></div>
         <span className="pill">AI 사진분석</span>
       </header>
 
-      <div className="progressSteps">
-        {progressSteps.map(step => (
-          <span
-            key={step.key}
-            className={
-              "progressStep" +
-              (step.done ? " done" : "") +
-              (step.key === nextStepKey ? " nextStepHighlight" : "")
-            }
-          >
-            {step.done ? "✓ " : ""}{step.label}
-          </span>
-        ))}
+      <div className="stepGuide">
+        <div className="progressSteps">
+          {progressSteps.map(step => (
+            <span
+              key={step.key}
+              className={
+                "progressStep" +
+                (step.done ? " done" : "") +
+                (step.key === nextStepKey ? " nextStepHighlight" : "")
+              }
+            >
+              {step.done ? "✓ " : ""}{step.label}
+            </span>
+          ))}
+        </div>
+        <p className="guideLine">{STEP_GUIDE[nextStepKey]}</p>
       </div>
 
       <section className="card full dbSetupCard">
-        <h2>저장폴더 설정 · 상품DB 전체 저장</h2>
-        <p className="note">G:\내 드라이브\상품DB 폴더를 선택하세요.</p>
+        <h2>상품DB 저장 폴더 · 전체 생성</h2>
+        <p className="note">
+          G:\내 드라이브\상품DB 폴더를 선택해두면 아래 &quot;전체 생성&quot; 버튼 한 번으로 썸네일 · 추가이미지 ·
+          상세페이지 · 라벨 · 견적서 · 자동화 파일까지 모두 만들어 폴더에 저장합니다.
+          폴더를 선택하지 않으면 ZIP 파일로 대신 다운로드합니다.
+        </p>
         <div className="exportActions">
           {dbSupported && (
             <button className="dark" onClick={pickProductDbFolder}>
               상품DB 폴더 선택
             </button>
           )}
-          <button className="secondaryButton" disabled={dbSaving} onClick={previewDbFiles}>
-            저장 전 파일 확인
-          </button>
         </div>
-
-        <p className="note saveExplain">
-          썸네일, 상세페이지, 라벨, 견적서와 쿠팡 등록파일을 모두 만든 뒤 마지막에 눌러주세요.
-        </p>
-
-        {dbSupported ? (
-          <div className="exportActions">
-            <button
-              className="green dbSaveAllButton"
-              disabled={dbSaving || !dbHandle}
-              onClick={saveAllToProductDb}
-            >
-              {dbSaving ? "저장 중..." : "상품DB에 전체 저장"}
-            </button>
-          </div>
-        ) : (
-          <div className="exportActions">
-            <button
-              className="green dbSaveAllButton"
-              disabled={dbSaving}
-              onClick={downloadProductDbZip}
-            >
-              {dbSaving ? "ZIP 생성 중..." : "전체 ZIP 다운로드"}
-            </button>
-          </div>
-        )}
         {dbSupported && dbFolderName && (
           <p className="detailMessage">저장폴더 연결 완료: {dbFolderName}</p>
         )}
-        {dbStatus && (
-          <p className={dbStatus.startsWith("오류") ? "error" : "detailMessage"}>
-            {dbStatus}
+
+        <button
+          className="generateAllButton green"
+          disabled={generateBusy}
+          onClick={runFullGeneration}
+        >
+          {generateBusy ? "전체 생성 중..." : "🚀 전체 생성"}
+        </button>
+
+        {generateStatus && (
+          <p className={generateStatus.startsWith("오류") ? "error" : "detailMessage"}>
+            {generateStatus}
           </p>
         )}
+
         {(dbReadyFiles.length > 0 || dbMissingFiles.length > 0) && (
           <div className="dbFileList">
             <h3>준비된 파일 ({dbReadyFiles.length})</h3>
@@ -1367,7 +1748,7 @@ export default function Home() {
 
       <section className="grid">
         <div className="card full">
-          <h2>1. 제품사진 (최소 1장, 최대 {MAX_PHOTOS}장)</h2>
+          <h2>① 제품사진 (최소 1장, 최대 {MAX_PHOTOS}장)</h2>
           <div
             className={"dropZone" + (isDraggingPhotos ? " dragging" : "")}
             onDragOver={onPhotoDragOver}
@@ -1382,7 +1763,7 @@ export default function Home() {
                 onChange={onPhotoInput}
               />
               <strong>사진을 끌어놓거나 클릭해서 선택하세요</strong>
-              <span>JPG 또는 PNG · 여러 장 동시 선택 가능</span>
+              <span>JPG 또는 PNG · 여러 장 동시 선택 가능 · 순서는 끌어서 변경</span>
             </label>
           </div>
 
@@ -1394,7 +1775,7 @@ export default function Home() {
             <div className="photoGrid">
               {photos.map((photo, index) => (
                 <div
-                  className={"photoCard" + (photo.id === primaryId ? " primaryPhoto" : "")}
+                  className={"photoCard" + (photo.isPrimary ? " primaryPhoto" : "")}
                   key={photo.id}
                   draggable
                   onDragStart={() => setDraggedPhotoIndex(index)}
@@ -1403,15 +1784,47 @@ export default function Home() {
                   onDragEnd={() => setDraggedPhotoIndex(null)}
                 >
                   <img src={photo.dataUrl} alt={photo.name} />
-                  {photo.id === primaryId && <span className="primaryBadge">대표사진</span>}
+                  {photo.isPrimary && <span className="primaryBadge">대표사진</span>}
+                  {photo.isSourcingExtra && <span className="primaryBadge sourcingBadge">1688 추가</span>}
+
+                  <div className="photoChecks">
+                    <label>
+                      <input
+                        type="radio"
+                        name="photoPrimary"
+                        checked={photo.isPrimary}
+                        onChange={() => setPrimaryPhoto(photo.id)}
+                      />
+                      대표사진
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="photoAiAnalyze"
+                        checked={photo.isAiAnalyze}
+                        onChange={() => setAiAnalyzePhoto(photo.id)}
+                      />
+                      AI분석용
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={photo.isThumbSource}
+                        onChange={() => toggleThumbSourcePhoto(photo.id)}
+                      />
+                      썸네일원본
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={photo.includeInDetail}
+                        onChange={() => toggleIncludeInDetailPhoto(photo.id)}
+                      />
+                      상세페이지 포함
+                    </label>
+                  </div>
+
                   <div className="photoCardActions">
-                    <button
-                      type="button"
-                      disabled={photo.id === primaryId}
-                      onClick={() => setPrimaryId(photo.id)}
-                    >
-                      대표사진 지정
-                    </button>
                     <button type="button" className="removeButton" onClick={() => removePhoto(photo.id)}>
                       삭제
                     </button>
@@ -1420,15 +1833,29 @@ export default function Home() {
               ))}
             </div>
           )}
+        </div>
 
+        <div className="card full">
+          <h2>② AI 사진분석</h2>
+          <p className="note">
+            체크한 &quot;AI분석용&quot; 사진 1장만 서버로 전송해 분석합니다. 지정하지 않으면 대표사진을 사용합니다.
+          </p>
           <button className="aiButton" onClick={analyzeImage} disabled={loading || !photos.length}>
             {loading ? "AI 분석 중..." : "✨ AI 사진분석"}
           </button>
           {message && <p className={message.startsWith("오류") ? "error" : "message"}>{message}</p>}
+
+          <div className="results">
+            <Result label="사진 특징" value={analysis.visualFeatures?.join(", ") || "AI 사진분석 버튼을 눌러주세요."}/>
+            <Result label="확인된 각인" value={analysis.engraving || "-"}/>
+            <Result label="가품 위험도" value={analysis.counterfeitRisk || "-"}/>
+            <Result label="검토 이유" value={analysis.counterfeitReason || "-"}/>
+            <Result label="분석 신뢰도" value={analysis.confidence != null ? `${analysis.confidence}%` : "-"}/>
+          </div>
         </div>
 
-        <div className="card">
-          <h2>2. 기본정보</h2>
+        <div className="card full basicInfoCard">
+          <h2>③ 기본정보 확인</h2>
           <div className="formGrid">
             <Field label="거래처"><select value={product.supplier} onChange={e=>update("supplier",e.target.value)}>
               <option>부산</option><option>광주</option><option>서울</option><option>중국직수입</option><option>자체제작</option><option>기타</option>
@@ -1445,6 +1872,7 @@ export default function Home() {
             <Field label="색상옵션"><input value={product.colors} onChange={e=>update("colors",e.target.value)}/></Field>
             <Field label="사이즈"><input value={product.sizes} onChange={e=>updateSizes(e.target.value)}/></Field>
             <Field label="모델번호 숫자"><input value={product.modelNo} onChange={e=>update("modelNo",e.target.value)}/></Field>
+            <Field label="모델명"><input value={model} readOnly /></Field>
             <Field label="핵심키워드"><input
               value={product.keyword}
               onChange={e=>update("keyword",e.target.value)}
@@ -1452,25 +1880,10 @@ export default function Home() {
               placeholder="예: 굵은 하트 체인 볼드"
             /></Field>
             <Field label="원가"><input inputMode="numeric" value={product.cost} onChange={e=>update("cost",e.target.value)} placeholder="예: 1900"/></Field>
-            <Field label="쿠팡 판매가"><input inputMode="numeric" value={product.price} onChange={e=>update("price",e.target.value)} placeholder="예: 14900"/></Field>
+            <Field label="판매가"><input inputMode="numeric" value={product.price} onChange={e=>update("price",e.target.value)} placeholder="예: 14900"/></Field>
           </div>
-        </div>
 
-        <div className="card full">
-          <h2>3. AI 분석 결과</h2>
           <div className="results">
-            <Result label="사진 특징" value={analysis.visualFeatures?.join(", ") || "AI 사진분석 버튼을 눌러주세요."}/>
-            <Result label="확인된 각인" value={analysis.engraving || "-"}/>
-            <Result label="가품 위험도" value={analysis.counterfeitRisk || "-"}/>
-            <Result label="검토 이유" value={analysis.counterfeitReason || "-"}/>
-            <Result label="분석 신뢰도" value={analysis.confidence != null ? `${analysis.confidence}%` : "-"}/>
-          </div>
-        </div>
-
-        <div className="card full">
-          <h2>4. 자동생성 결과</h2>
-          <div className="results">
-            <Result label="모델명" value={model || "-"}/>
             <Result label="쿠팡 상품명" value={title || "-"}/>
             <Result label="검색태그 10개" value={tags || "-"}/>
             <Result label="등록상태" value={ready ? "등록가능":"판매가를 입력하면 등록가능"} status={ready}/>
@@ -1482,10 +1895,10 @@ export default function Home() {
         </div>
 
         <div className="card full">
-          <h2>5. 옵션별 흰배경 썸네일 (우선순위)</h2>
+          <h2>④ 옵션별 흰배경 썸네일</h2>
           <p className="note">
             사진을 고르고 흰배경 썸네일을 만든 뒤, 필요하면 색상만 보정하세요.
-            승인해야 SKU 파일로 저장할 수 있습니다. 생성형 AI를 호출하지 않아 디자인이 바뀌지 않습니다.
+            승인해야 SKU 파일로 저장할 수 있습니다. &quot;전체 생성&quot; 버튼이 승인 안 된 옵션을 자동으로 채워줍니다.
           </p>
           {thumbMessage && (
             <p className={thumbMessage.startsWith("오류") ? "error" : "detailMessage"}>{thumbMessage}</p>
@@ -1496,11 +1909,11 @@ export default function Home() {
               const state = optionThumbs[option] || defaultOptionThumb();
               const busyWhite = thumbBusy === `${option}:white`;
               const busyColor = thumbBusy === `${option}:color`;
+              const busyAi = thumbBusy === `${option}:ai`;
               const anyBusy = Boolean(thumbBusy);
-              const crop = state.crop || { x: 0, y: 0, w: 1, h: 1 };
 
               return (
-                <div className="thumbnailCard" key={option}>
+                <div className={"thumbnailCard" + (state.approvedDataUrl ? " approved" : "")} key={option}>
                   <h3>{option}</h3>
 
                   <label className="field">
@@ -1509,10 +1922,10 @@ export default function Home() {
                       value={state.sourceId || ""}
                       onChange={e => setThumbSource(option, e.target.value)}
                     >
-                      {photos.length === 0 && <option value="">사진 없음</option>}
-                      {photos.map(photo => (
+                      {thumbSourceCandidates.length === 0 && <option value="">사진 없음</option>}
+                      {thumbSourceCandidates.map(photo => (
                         <option key={photo.id} value={photo.id}>
-                          {photo.name}{photo.id === primaryId ? " (대표)" : ""}
+                          {photo.name}{photo.isPrimary ? " (대표)" : ""}
                         </option>
                       ))}
                     </select>
@@ -1524,39 +1937,12 @@ export default function Home() {
                     <div className="thumbnailEmpty">아직 만들지 않음</div>
                   )}
 
-                  <label className="cropToggle">
-                    <input
-                      type="checkbox"
-                      checked={state.useAutoCrop}
-                      onChange={() => toggleAutoCrop(option)}
-                    />
-                    <span>자동 크롭 사용</span>
-                  </label>
-
-                  {!state.useAutoCrop && (
-                    <div className="cropSliders">
-                      {(["x", "y", "w", "h"] as const).map(key => (
-                        <label key={key} className="cropSliderRow">
-                          <span>{key.toUpperCase()}</span>
-                          <input
-                            type="range"
-                            min={0}
-                            max={1}
-                            step={0.01}
-                            value={crop[key]}
-                            onChange={e => updateCrop(option, key, Number(e.target.value))}
-                          />
-                        </label>
-                      ))}
-                    </div>
-                  )}
-
                   <button
                     className="originalButton"
                     disabled={anyBusy || !photos.length}
                     onClick={() => buildWhiteThumbnail(option)}
                   >
-                    {busyWhite ? "생성 중..." : "흰배경 썸네일 만들기"}
+                    {busyWhite ? "생성 중..." : "흰배경 썸네일 생성"}
                   </button>
                   <button
                     className="aiOptionalButton"
@@ -1570,7 +1956,7 @@ export default function Home() {
                     disabled={!state.draftDataUrl}
                     onClick={() => approveThumbnail(option)}
                   >
-                    썸네일 승인
+                    승인
                   </button>
                   {state.approvedDataUrl && <p className="detailMessage">✓ 승인됨</p>}
                   <button
@@ -1578,7 +1964,14 @@ export default function Home() {
                     disabled={!state.approvedDataUrl}
                     onClick={() => downloadApprovedSku(option)}
                   >
-                    승인한 썸네일 SKU 전체 저장
+                    승인된 SKU 저장
+                  </button>
+                  <button
+                    className="secondaryButton"
+                    disabled={anyBusy || !photos.length}
+                    onClick={() => regenerateThumbnailWithAI(option)}
+                  >
+                    {busyAi ? "AI 생성 중..." : "AI 새로 생성"}
                   </button>
                 </div>
               );
@@ -1587,10 +1980,10 @@ export default function Home() {
         </div>
 
         <div className="card full">
-          <h2>6. 추가이미지 (쿠팡 등록용)</h2>
+          <h2>추가이미지 (쿠팡 등록용)</h2>
           <p className="note">
-            실제 제품사진을 그대로 활용한 클로즈업과, 승인된 옵션 썸네일을 모아 만드는 연출컷만 제공합니다.
-            생성형 AI를 사용하지 않아 실제 제품과 다르게 나올 위험이 없습니다.
+            실제 제품사진을 그대로 활용한 클로즈업과, 승인된 옵션 썸네일을 모아 만드는 연출컷,
+            그리고 직접 촬영한 착용컷 · 제품사진을 추가할 수 있습니다.
           </p>
           {extraMessage && (
             <p className={extraMessage.startsWith("오류") ? "error" : "detailMessage"}>{extraMessage}</p>
@@ -1600,17 +1993,17 @@ export default function Home() {
             <div className="extraTool">
               <label className="field">
                 <span>클로즈업에 사용할 사진</span>
-                <select value={closeupSourceId || primaryId} onChange={e => setCloseupSourceId(e.target.value)}>
+                <select value={closeupSourceId || primaryPhoto?.id || ""} onChange={e => setCloseupSourceId(e.target.value)}>
                   {photos.length === 0 && <option value="">사진 없음</option>}
                   {photos.map(photo => (
                     <option key={photo.id} value={photo.id}>
-                      {photo.name}{photo.id === primaryId ? " (대표)" : ""}
+                      {photo.name}{photo.isPrimary ? " (대표)" : ""}
                     </option>
                   ))}
                 </select>
               </label>
               <button className="purpleButton" disabled={Boolean(extraBusy) || !photos.length} onClick={buildCloseup}>
-                {extraBusy === "closeup" ? "생성 중..." : "디테일 클로즈업 만들기"}
+                {extraBusy === "closeup" ? "생성 중..." : "디테일 클로즈업"}
               </button>
             </div>
 
@@ -1621,10 +2014,16 @@ export default function Home() {
                 disabled={Boolean(extraBusy) || options.filter(o => thumbnails[o]).length < 2}
                 onClick={buildCollage}
               >
-                {extraBusy === "collage" ? "생성 중..." : "전체옵션 연출컷 만들기"}
+                {extraBusy === "collage" ? "생성 중..." : "전체옵션 연출컷"}
               </button>
             </div>
           </div>
+
+          <label className="multiUpload">
+            <input type="file" accept="image/jpeg,image/jpg,image/png" multiple onChange={onExtraUpload} />
+            <strong>실제 착용 · 제품 사진 추가</strong>
+            <span>실사로 촬영한 착용컷이나 제품사진을 그대로 추가이미지 목록에 넣습니다.</span>
+          </label>
 
           {extraImages.length > 0 && (
             <>
@@ -1647,67 +2046,101 @@ export default function Home() {
               </div>
             </>
           )}
-
-          <details
-            className="experimentalSection"
-            open={showExperimental}
-            onToggle={e => setShowExperimental((e.target as HTMLDetailsElement).open)}
-          >
-            <summary>실험 기능: AI 착용컷 생성 (미리보기용 · 상세페이지·쿠팡 등록에 자동 반영되지 않음)</summary>
-            <p className="note">
-              AI로 만든 착용컷은 실제 제품과 달라질 수 있습니다. 반드시 눈으로 비교한 뒤 별도로 사용하세요.
-            </p>
-            <div className="shotOptionRow">
-              <label>
-                <span>생성할 금속 색상</span>
-                <select value={shotOption} onChange={e => setShotOption(e.target.value)}>
-                  {options.map(option => <option key={option}>{option}</option>)}
-                </select>
-              </label>
-            </div>
-
-            {shotMessage && (
-              <p className={shotMessage.startsWith("오류") ? "error" : "detailMessage"}>{shotMessage}</p>
-            )}
-
-            <div className="shotGrid">
-              {experimentalShotTypes.map(shot => {
-                const resultKey = `${shotOption}-${shot.key}`;
-                const result = generatedShots[resultKey];
-                return (
-                  <div className="shotCard" key={shot.key}>
-                    <h3>{shot.label}</h3>
-                    {result ? (
-                      <img src={result.dataUrl} alt={`${shotOption} ${shot.label}`} />
-                    ) : (
-                      <div className="shotEmpty">아직 생성되지 않음</div>
-                    )}
-                    <button
-                      className="purple"
-                      disabled={Boolean(shotLoading)}
-                      onClick={() => generateDetailShot(shot.key, shot.label)}
-                    >
-                      {shotLoading === shot.key ? "생성 중..." : `${shot.label} 생성`}
-                    </button>
-                    {result && (
-                      <button
-                        className="green shotAction"
-                        onClick={() => downloadDataUrl(result.dataUrl, `${model}_${shotOption}_${shot.label}.png`)}
-                      >
-                        이미지 다운로드
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </details>
         </div>
 
         <div className="card full">
-          <h2>7. 신상품 소싱 (1688 우선)</h2>
+          <h2>⑤ 780px 상세페이지</h2>
           <p className="note">
-            대표사진으로 1688 동일제품을 먼저 찾아보세요. AI 분석·타오바오·알리익스프레스 검색은 고급 옵션에서 사용할 수 있습니다.
+            사진 한 장당 가로 780px 전체 폭으로 배치하고, 위 · 아래 · 사진 사이에 각각 60px 흰 여백을 넣습니다.
+          </p>
+
+          <div className="detailActions">
+            <button className="secondaryButton" onClick={syncDetailFromPhotos}>
+              상세 체크 사진 불러오기
+            </button>
+            <button className="purpleButton" onClick={buildDetailPage}>
+              780px 상세페이지 만들기
+            </button>
+          </div>
+
+          <label className="multiUpload">
+            <input type="file" accept="image/*" multiple onChange={onDetailImages} />
+            <strong>상세페이지 사진 여러 장 선택 (직접 추가)</strong>
+            <span>정면 · 측면 · 클로즈업 · 착용컷 순으로 선택하거나 아래에서 순서를 바꾸세요.</span>
+          </label>
+
+          {photos.length > 0 && (
+            <div className="detailPickers">
+              <span className="note">등록한 제품사진 추가:</span>
+              <div className="detailPickerRow">
+                {photos.map(photo => (
+                  <button
+                    key={photo.id}
+                    type="button"
+                    className="secondaryButton"
+                    onClick={() => addPhotoToDetail(photo)}
+                  >
+                    + {photo.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {detailMessage && <p className="detailMessage">{detailMessage}</p>}
+
+          {detailImages.length > 0 && (
+            <div className="detailList">
+              {detailImages.map((item, index) => (
+                <div
+                  className="detailItem draggableDetail"
+                  key={item.id}
+                  data-detail-index={index}
+                  draggable
+                  onDragStart={() => setDraggedDetailIndex(index)}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={() => dropDetailImage(index)}
+                  onDragEnd={() => setDraggedDetailIndex(null)}
+                  onTouchStart={() => setDraggedDetailIndex(index)}
+                  onTouchMove={onDetailTouchMove}
+                  onTouchEnd={() => setDraggedDetailIndex(null)}
+                >
+                  <div className="dragHandle">☰</div>
+                  <img src={item.dataUrl} alt={item.name} />
+                  <div className="detailItemInfo">
+                    <strong>{index + 1}. {item.name}</strong>
+                    <span className="dragGuide">길게 눌러 끌어서 순서를 변경하세요.</span>
+                    <div className="detailItemButtons">
+                      <button className="removeButton" onClick={() => removeDetailImage(item.id)}>
+                        삭제
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {detailPreview && (
+            <div className="detailResult">
+              <h3>완성된 상세페이지 미리보기</h3>
+              <div className="detailPreviewFrame">
+                <img src={detailPreview} alt="780px 롱 상세페이지" />
+              </div>
+              <button
+                className="green detailDownload"
+                onClick={() => downloadDataUrl(detailPreview, `${model}.jpg`)}
+              >
+                상세페이지 다운로드
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="card full">
+          <h2>신상품 소싱 (1688 우선)</h2>
+          <p className="note">
+            대표사진으로 1688 동일제품을 먼저 찾아보세요. 다른 검색 사이트와 AI 분석은 고급 검색 옵션에서 사용할 수 있습니다.
           </p>
 
           <div className="sourcingPrimaryPhoto">
@@ -1734,10 +2167,16 @@ export default function Home() {
           </div>
           {sourcingUrl && <p className="detailMessage">저장된 1688 링크: {sourcingUrl}</p>}
 
+          <div className="exportActions">
+            <button className="green" disabled={sourcingImagesLoading} onClick={fetchSourcingImages}>
+              {sourcingImagesLoading ? "가져오는 중..." : "1688 이미지 가져오기"}
+            </button>
+          </div>
+
           <label className="multiUpload">
-            <input type="file" accept="image/jpeg,image/jpg,image/png" multiple onChange={onSourcingPhotos} />
+            <input type="file" accept="image/jpeg,image/jpg,image/png" multiple onChange={onSourcingDirectUpload} />
             <strong>1688 이미지 직접 추가</strong>
-            <span>1688에서 받은 사진을 제품사진 목록에 추가합니다. (최대 {MAX_PHOTOS}장)</span>
+            <span>자동으로 가져오지 못했다면 1688에서 받은 사진을 직접 업로드해주세요. (최대 {MAX_PHOTOS}장)</span>
           </label>
 
           {sourcingMessage && (
@@ -1817,129 +2256,126 @@ export default function Home() {
           </details>
         </div>
 
-        <div className="card full">
-          <h2>8. 가로 780px 롱 상세페이지</h2>
-          <p className="note">
-            사진 한 장당 가로 780px 전체 폭으로 배치하고, 위·아래·사진 사이에 각각 60px 흰 여백을 넣습니다.
-          </p>
+        <details
+          className="advancedPanel card full"
+          open={showAdvanced}
+          onToggle={e => setShowAdvanced((e.target as HTMLDetailsElement).open)}
+        >
+          <summary>고급 사용자</summary>
 
-          <label className="multiUpload">
-            <input type="file" accept="image/*" multiple onChange={onDetailImages} />
-            <strong>상세페이지 사진 여러 장 선택</strong>
-            <span>정면 · 측면 · 클로즈업 · 착용컷 순으로 선택하거나 아래에서 순서를 바꾸세요.</span>
-          </label>
-
-          {photos.length > 0 && (
-            <div className="detailPickers">
-              <span className="note">등록한 제품사진 추가:</span>
-              <div className="detailPickerRow">
-                {photos.map(photo => (
-                  <button
-                    key={photo.id}
-                    type="button"
-                    className="secondaryButton"
-                    onClick={() => addPhotoToDetail(photo)}
-                  >
-                    + {photo.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="detailActions">
-            <button className="secondaryButton" onClick={addApprovedThumbsToDetail}>
-              승인된 옵션별 썸네일 추가
-            </button>
-            <button className="purpleButton" onClick={buildDetailPage}>
-              780px 상세페이지 만들기
-            </button>
-          </div>
-
-          {detailMessage && <p className="detailMessage">{detailMessage}</p>}
-
-          {detailImages.length > 0 && (
-            <div className="detailList">
-              {detailImages.map((item, index) => (
-                <div
-                  className="detailItem draggableDetail"
-                  key={item.id}
-                  data-detail-index={index}
-                  draggable
-                  onDragStart={() => setDraggedDetailIndex(index)}
-                  onDragOver={e => e.preventDefault()}
-                  onDrop={() => dropDetailImage(index)}
-                  onDragEnd={() => setDraggedDetailIndex(null)}
-                  onTouchStart={() => setDraggedDetailIndex(index)}
-                  onTouchMove={onDetailTouchMove}
-                  onTouchEnd={() => setDraggedDetailIndex(null)}
-                >
-                  <div className="dragHandle">☰</div>
-                  <img src={item.dataUrl} alt={item.name} />
-                  <div className="detailItemInfo">
-                    <strong>{index + 1}. {item.name}</strong>
-                    <span className="dragGuide">길게 눌러 끌어서 순서를 변경하세요.</span>
-                    <div className="detailItemButtons">
-                      <button className="removeButton" onClick={() => removeDetailImage(item.id)}>
-                        삭제
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {detailPreview && (
-            <div className="detailResult">
-              <h3>완성된 상세페이지 미리보기</h3>
-              <div className="detailPreviewFrame">
-                <img src={detailPreview} alt="780px 롱 상세페이지" />
-              </div>
+          <div className="advancedSection">
+            <h3>라벨 · 견적서 · 상품입력 자동화 (개별 다운로드)</h3>
+            <p className="note">
+              &quot;전체 생성&quot; 버튼이 이 파일들을 상품DB 폴더에 자동으로 만들어 줍니다.
+              별도의 개별 파일이 필요할 때만 아래 버튼을 사용하세요.
+              반지 예시: wr0012-GO9.jpg / wr0012.jpg / 라벨_wr0012.jpg
+            </p>
+            <div className="exportActions">
+              <button className="dark" onClick={downloadLabel}>제품표시사항 라벨 다운로드</button>
               <button
-                className="green detailDownload"
-                onClick={() => downloadDataUrl(detailPreview, `${model}.jpg`)}
+                className="green"
+                disabled={Boolean(exportLoading)}
+                onClick={downloadQuoteExcel}
               >
-                상세페이지 다운로드
+                {exportLoading === "quote" ? "견적서 생성 중..." : "카테고리별 견적서 생성"}
+              </button>
+              <button
+                className="dark"
+                disabled={Boolean(exportLoading)}
+                onClick={downloadAutomationExcel}
+              >
+                {exportLoading === "automation" ? "자동화 파일 생성 중..." : "상품입력 자동화 파일 생성"}
               </button>
             </div>
-          )}
-        </div>
-
-        <div className="card full">
-          <h2>9. 제품표시사항 라벨</h2>
-          <p className="note">현재 모델명과 이번 달 제조연월이 자동으로 들어간 3:4 흰 배경 JPG입니다.</p>
-          <button className="dark labelButton" onClick={downloadLabel}>제품표시사항 라벨 다운로드</button>
-        </div>
-
-        <div className="card full">
-          <h2>10. 견적서 · 상품입력 자동화</h2>
-          <p className="note">
-            선택한 카테고리 템플릿에 상품정보·색상×사이즈 SKU·이미지 파일명을 자동 입력합니다.
-            반지 예시: wr0012-GO9.jpg / wr0012.jpg / 라벨_wr0012.jpg
-          </p>
-          <div className="exportActions">
-            <button
-              className="green"
-              disabled={Boolean(exportLoading)}
-              onClick={downloadQuoteExcel}
-            >
-              {exportLoading === "quote" ? "견적서 생성 중..." : "카테고리별 견적서 생성"}
-            </button>
-            <button
-              className="dark"
-              disabled={Boolean(exportLoading)}
-              onClick={downloadAutomationExcel}
-            >
-              {exportLoading === "automation" ? "자동화 파일 생성 중..." : "상품입력 자동화 파일 생성"}
-            </button>
+            {exportMessage && (
+              <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>
+                {exportMessage}
+              </p>
+            )}
           </div>
-          {exportMessage && (
-            <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>
-              {exportMessage}
+
+          <div className="advancedSection">
+            <h3>상품DB 저장 (개별 동작)</h3>
+            <p className="note">전체 생성이 이미 저장을 마쳤다면 다시 사용할 필요가 없습니다.</p>
+            <div className="exportActions">
+              <button className="secondaryButton" disabled={dbSaving} onClick={previewDbFiles}>
+                저장 전 파일 확인
+              </button>
+              {dbSupported && dbHandle && (
+                <button className="dark" disabled={dbSaving} onClick={saveAllToProductDb}>
+                  {dbSaving ? "저장 중..." : "상품DB에 다시 저장"}
+                </button>
+              )}
+              <button className="secondaryButton" disabled={dbSaving} onClick={downloadProductDbZip}>
+                {dbSaving ? "ZIP 생성 중..." : "전체 ZIP 다운로드"}
+              </button>
+            </div>
+            {dbStatus && (
+              <p className={dbStatus.startsWith("오류") ? "error" : "detailMessage"}>
+                {dbStatus}
+              </p>
+            )}
+          </div>
+
+          <div className="advancedSection">
+            <h3>실험 기능: AI 착용컷 생성 (미리보기용 · 자동 반영되지 않음)</h3>
+            <p className="note">
+              AI로 만든 착용컷은 실제 제품과 달라질 수 있습니다. 반드시 눈으로 비교한 뒤 별도로 사용하세요.
+              상세페이지 · 추가이미지에 자동으로 포함되지 않습니다.
             </p>
-          )}
-        </div>
+            <details
+              className="experimentalSection"
+              open={showExperimental}
+              onToggle={e => setShowExperimental((e.target as HTMLDetailsElement).open)}
+            >
+              <summary>AI 착용컷 생성 열기</summary>
+              <div className="shotOptionRow">
+                <label>
+                  <span>생성할 금속 색상</span>
+                  <select value={shotOption} onChange={e => setShotOption(e.target.value)}>
+                    {options.map(option => <option key={option}>{option}</option>)}
+                  </select>
+                </label>
+              </div>
+
+              {shotMessage && (
+                <p className={shotMessage.startsWith("오류") ? "error" : "detailMessage"}>{shotMessage}</p>
+              )}
+
+              <div className="shotGrid">
+                {experimentalShotTypes.map(shot => {
+                  const resultKey = `${shotOption}-${shot.key}`;
+                  const result = generatedShots[resultKey];
+                  return (
+                    <div className="shotCard" key={shot.key}>
+                      <h3>{shot.label}</h3>
+                      {result ? (
+                        <img src={result.dataUrl} alt={`${shotOption} ${shot.label}`} />
+                      ) : (
+                        <div className="shotEmpty">아직 생성되지 않음</div>
+                      )}
+                      <button
+                        className="purple"
+                        disabled={Boolean(shotLoading)}
+                        onClick={() => generateDetailShot(shot.key, shot.label)}
+                      >
+                        {shotLoading === shot.key ? "생성 중..." : `${shot.label} 생성`}
+                      </button>
+                      {result && (
+                        <button
+                          className="green shotAction"
+                          onClick={() => downloadDataUrl(result.dataUrl, `${model}_${shotOption}_${shot.label}.png`)}
+                        >
+                          이미지 다운로드
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
+          </div>
+        </details>
       </section>
     </main>
   );

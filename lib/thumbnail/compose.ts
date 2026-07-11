@@ -1,7 +1,6 @@
-/** Canvas-only white-background thumbnail. Never redesigns the product. */
+/** Compose a 1000×1000 white-background thumbnail. Never redesigns the product. */
 
 export type CropRect = {
-  /** Normalized 0–1 relative to source image */
   x: number;
   y: number;
   w: number;
@@ -71,9 +70,30 @@ export async function detectContentCrop(sourceDataUrl: string): Promise<CropRect
   };
 }
 
+function enhancePixels(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  brightness = 8,
+  contrast = 1.08
+) {
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const d = imageData.data;
+  const factor = contrast;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i] > 248 && d[i + 1] > 248 && d[i + 2] > 248) continue;
+    for (let c = 0; c < 3; c++) {
+      let v = d[i + c];
+      v = (v - 128) * factor + 128 + brightness;
+      d[i + c] = Math.max(0, Math.min(255, Math.round(v)));
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
 /**
- * Place product on #FFFFFF 1000×1000 canvas.
- * Target fill ~84% (within 80–88%). Optional crop keeps design unchanged.
+ * Place product on #FFFFFF 1000×1000.
+ * Mild brightness/contrast only — shape never changed.
  */
 export async function composeWhiteThumbnail(
   sourceDataUrl: string,
@@ -104,15 +124,16 @@ export async function composeWhiteThumbnail(
   const y = Math.round((size - drawH) / 2);
 
   ctx.save();
-  ctx.fillStyle = "rgba(0,0,0,0.09)";
+  ctx.fillStyle = "rgba(0,0,0,0.10)";
   ctx.beginPath();
-  ctx.ellipse(size / 2, y + drawH - 4, Math.max(36, drawW * 0.3), 12, 0, 0, Math.PI * 2);
+  ctx.ellipse(size / 2, y + drawH - 4, Math.max(36, drawW * 0.3), 13, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(img, sx, sy, sw, sh, x, y, drawW, drawH);
+  enhancePixels(ctx, size, size, 6, 1.06);
 
   return canvas.toDataURL("image/jpeg", 0.96);
 }

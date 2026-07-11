@@ -157,3 +157,25 @@
   .progressStep{font-size:12px;padding:8px 10px}
   .photoGrid{grid-template-columns:repeat(2,1fr)}
 }
+
+.stepGuide{margin:0 0 18px}
+.guideLine{margin:10px 0 0;padding:12px 14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;color:#1e3a8a;font-weight:700;line-height:1.5}
+.generateAllButton{width:100%;border:0;border-radius:14px;padding:18px;margin-top:12px;font-weight:900;font-size:20px;background:#16a34a;color:#fff;cursor:pointer;box-shadow:0 6px 18px rgba(22,163,74,.28)}
+.generateAllButton:disabled{opacity:.65;cursor:wait}
+.generateAllButton:hover:not(:disabled){background:#15803d}
+.basicInfoCard .formGrid{grid-template-columns:1fr 1fr;gap:14px}
+.basicInfoCard .field input,.basicInfoCard .field select{min-height:46px;font-size:15px}
+.photoChecks{display:grid;gap:4px;margin-top:8px;font-size:12px;text-align:left}
+.photoChecks label{display:flex;align-items:center;gap:6px;font-weight:600;color:#374151;cursor:pointer}
+.photoChecks input{width:16px;height:16px;accent-color:#0f766e}
+.advancedPanel{margin-top:18px;border:1px solid #e5e7eb;border-radius:14px;padding:12px 16px;background:#fafafa}
+.advancedPanel>summary{cursor:pointer;font-weight:800;font-size:16px;padding:8px 0;list-style:none}
+.advancedPanel>summary::-webkit-details-marker{display:none}
+.advancedPanel>summary::before{content:"▸ ";color:#6b7280}
+.advancedPanel[open]>summary::before{content:"▾ "}
+.advancedPanel .nestedAdvanced{margin-top:12px;border:1px dashed #d1d5db;border-radius:10px;padding:10px 12px;background:#fff}
+.thumbFlowHint{font-size:12px;color:#6b7280;margin:0 0 8px;line-height:1.45}
+@media(max-width:760px){
+  .basicInfoCard .formGrid{grid-template-columns:1fr}
+  .generateAllButton{font-size:18px;padding:16px}
+}
