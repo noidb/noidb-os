@@ -74,7 +74,7 @@ export default function Home() {
     return raw.slice(0, 10).join(",");
   }, [product]);
 
-  const ready =
+  const ready = Boolean(
     product.supplier &&
     product.category &&
     product.material &&
@@ -82,7 +82,8 @@ export default function Home() {
     product.sizes &&
     product.modelNo &&
     product.keyword &&
-    product.price;
+    product.price
+  );
 
   const update = (key: keyof Product, value: string) => {
     setProduct((prev) => ({ ...prev, [key]: value }));
