@@ -127,6 +127,9 @@ function doPost(e) {
     if (data.action === 'deleteReplacementLegacyRows') {
       return deleteReplacementLegacyRows_(ss, input, db, String(data.model || ''), String(data.replacementSku || ''));
     }
+    if (data.action === 'normalizeCatalogIds') {
+      return json_({ ok: true, normalized: normalizeCatalogIdColumns_(db) });
+    }
 
     if (data.action === 'importSkuMaster') return importSkuMaster_(ss, db, data.items || []);
     if (data.action === 'importLegacyProducts') return importLegacyProducts_(ss, db, data.items || []);
@@ -700,13 +703,14 @@ function formatProductDb_(db) {
 /** 노출상품ID와 옵션ID를 천 단위 쉼표가 없는 일반 텍스트 숫자로 통일합니다. */
 function normalizeCatalogIdColumns_(db) {
   const rowCount = Math.max(0, db.getLastRow() - 1);
-  if (!rowCount) return;
+  if (!rowCount) return 0;
   ['노출상품ID','옵션ID'].forEach(name => {
     const range = db.getRange(2, dbColumn_(name) + 1, rowCount, 1);
     const values = range.getDisplayValues().map(row => [normalizeSkuId_(row[0])]);
     range.setNumberFormat('@');
     range.setValues(values);
   });
+  return rowCount;
 }
 
 /** 새 등록 상품이 항상 위에 오도록 복원용 순서를 채웁니다. */
@@ -1294,9 +1298,17 @@ function writeDbMatrix_(db, rows) {
     return;
   }
   ensureSheetSize_(db, rows.length + 1, PRODUCT_DB_HEADERS.length);
+  const normalizedRows = rows.map(source => {
+    const row = source.slice(0, PRODUCT_DB_HEADERS.length);
+    while (row.length < PRODUCT_DB_HEADERS.length) row.push('');
+    row[dbColumn_('노출상품ID')] = normalizeSkuId_(row[dbColumn_('노출상품ID')]);
+    row[dbColumn_('옵션ID')] = normalizeSkuId_(row[dbColumn_('옵션ID')]);
+    return row;
+  });
   db.getRange(2, dbColumn_('SKU ID') + 1, rows.length, 1).setNumberFormat('@');
   db.getRange(2, dbColumn_('바코드') + 1, rows.length, 1).setNumberFormat('@');
-  db.getRange(2, 1, rows.length, PRODUCT_DB_HEADERS.length).setValues(rows);
+  db.getRange(2, dbColumn_('노출상품ID') + 1, rows.length, 2).setNumberFormat('@');
+  db.getRange(2, 1, rows.length, PRODUCT_DB_HEADERS.length).setValues(normalizedRows);
   if (oldRows > rows.length) db.getRange(rows.length + 2, 1, oldRows - rows.length, PRODUCT_DB_HEADERS.length).clearContent();
   formatProductDb_(db);
   sortProductDbDefault_(db);
