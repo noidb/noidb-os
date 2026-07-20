@@ -877,7 +877,7 @@ export default function Home() {
   const importCoupangData = async (mode: "skuMaster" | "inboundHistory" | "poList" | "legacyProducts" | "verifiedCatalog", fileList: FileList | null) => {
     if (!fileList?.length) return;
     const label = mode === "skuMaster" ? "SKU 전체 목록"
-      : mode === "inboundHistory" ? "입고·반출 이력"
+      : mode === "inboundHistory" ? "입고상세내역"
       : mode === "legacyProducts" ? "기존 상품정보"
       : mode === "verifiedCatalog" ? "검증된 이미지·쿠팡 노출가"
       : "발주 SKU 목록";
@@ -905,13 +905,13 @@ export default function Home() {
       } else if (mode === "inboundHistory") {
         setCoupangImportMessage(data.skipped
           ? `이미 반영한 동일한 입고 파일 ${data.files}개라서 중복 적용하지 않았습니다.`
-          : `입고 파일 ${data.files}개 반영 완료 · 총입고 ${Number(data.totalInbound || 0).toLocaleString()} · 반출 ${Number(data.totalOutbound || 0).toLocaleString()} · 순누적입고 ${Number(data.netInbound || 0).toLocaleString()}`);
+          : `입고상세내역 ${data.files}개 반영 완료 · 실제 입고 ${Number(data.totalInbound || 0).toLocaleString()} · 누적입고 갱신 SKU ${Number(data.cumulativeInboundUpdated || 0).toLocaleString()} · 미입고 재계산 SKU ${Number(data.missingUpdated || 0).toLocaleString()}`);
       } else if (mode === "legacyProducts") {
         setCoupangImportMessage(`기존 상품정보 연결 완료 · SKU 매칭 ${Number(data.matched || 0).toLocaleString()} · 신규행 ${Number(data.inserted || 0).toLocaleString()} · 빈 정보 입력 ${Number(data.fieldsFilled || 0).toLocaleString()}칸 · 구 SKU 건너뜀 ${Number(data.retiredSkipped || 0).toLocaleString()} · 재추가된 구 SKU 정리 ${Number(data.removedRetired || 0).toLocaleString()} · 중복행 정리 ${Number(data.duplicatesRemoved || 0).toLocaleString()}`);
       } else if (mode === "verifiedCatalog") {
         setCoupangImportMessage(`이미지·쿠팡 노출가 연결 완료 · SKU 매칭 ${Number(data.matched || 0).toLocaleString()} · 노출상품ID 갱신 ${Number(data.productIdUpdated || 0).toLocaleString()} · 옵션ID 갱신 ${Number(data.optionIdUpdated || 0).toLocaleString()} · 노출상품ID로 옵션 연결 ${Number(data.matchedByProductId || 0).toLocaleString()} · 이미지 갱신 ${Number(data.imageUpdated || 0).toLocaleString()} · 같은 모델명 이미지 채움 ${Number(data.propagatedImages || 0).toLocaleString()} · 쿠팡 노출가 갱신 ${Number(data.exposurePriceUpdated || 0).toLocaleString()} · 모델명+노출상품ID 복원 ${Number(data.recoveredByModelProduct || 0).toLocaleString()} · 노출상품ID 단독복원 ${Number(data.recoveredByProduct || 0).toLocaleString()} · 미연결 ${Number(data.unmatched || 0).toLocaleString()} · 다음으로 ③ 신규 발주목록을 다시 올려 발주서 출력을 갱신하세요.`);
       } else {
-        setCoupangImportMessage(`발주 ${data.parsed?.toLocaleString?.() || data.parsed}행 반영 완료 · 합배송 ${data.shippingGroups || 0}묶음 · 발주서 출력 ${data.pickingRows || 0}행 · 쉽먼트전송 ${data.shipmentRows || 0}행 · 이번 주 입고예정 쿠폰 신규 ${data.couponAdded || 0}개 · 쿠폰발행 누적 ${data.couponTotal || 0}개 · 창고번호 미등록 ${data.missingWarehouse || 0} · Google 시트의 발주서 출력·쉽먼트전송·쿠폰발행 탭을 확인하세요.`);
+        setCoupangImportMessage(`발주 ${data.parsed?.toLocaleString?.() || data.parsed}행 반영 완료 · 최근발주일 ${Number(data.recentOrderDatesUpdated || 0).toLocaleString()}개 SKU 갱신 · 미입고 ${Number(data.missingUpdated || 0).toLocaleString()}개 SKU 재계산 · 합배송 ${data.shippingGroups || 0}묶음 · 발주서 출력 ${data.pickingRows || 0}행 · 쉽먼트전송 ${data.shipmentRows || 0}행 · 창고번호 미등록 ${data.missingWarehouse || 0}`);
       }
     } catch (error) {
       setCoupangImportMessage(`오류: ${error instanceof Error ? error.message : "쿠팡 데이터 가져오기 실패"}`);

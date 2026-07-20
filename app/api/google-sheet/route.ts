@@ -39,7 +39,7 @@ function productDbRow(values: {
     values.warehouse, "", values.image, values.title, values.color, values.size, values.dimension,
     values.cost || "", values.sale || "", values.supply,
     "", values.sourcingUrl || "", values.supply - values.cost, "", 0, 0,
-    "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+    "", "", "", "", "", "", "", "", "", "", "", "",
   ];
 }
 
@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({ configured: called.configured, ...called.result });
     }
-    if (["cloudDraftSave", "cloudDraftDelete", "quoteQueueClear", "quoteQueueDeleteModel", "linkReplacementExisting", "deleteReplacementLegacyRows", "normalizeCatalogIds", "repairSkuUploadDuplicates"].includes(raw?.action)) {
+    if (["cloudDraftSave", "cloudDraftDelete", "quoteQueueClear", "quoteQueueDeleteModel", "linkReplacementExisting", "deleteReplacementLegacyRows", "normalizeCatalogIds", "repairSkuUploadDuplicates", "migrateInventoryTracking"].includes(raw?.action)) {
       const called = await callWebhook({
         ...raw,
         secret: process.env.GOOGLE_SHEETS_WEBHOOK_SECRET || "",

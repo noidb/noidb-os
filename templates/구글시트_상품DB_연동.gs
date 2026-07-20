@@ -14,14 +14,13 @@ const LEGACY_PRODUCT_DB_HEADERS = [
 const PRODUCT_DB_HEADERS = [
   'SKU매칭상태','거래처','성별','카테고리','모델명/품번','모델SKU','창고번호','SKU ID','이미지','상품명','색상',
   '주얼리사이즈','치수','원가(부가세포함)','쿠팡 판매가','공급가','발주가능상태','제품링크',
-  '마진','바코드','현재고','누적입고','총입고','반출누계','누적발주','미입고','최근발주수량',
+  '마진','바코드','현재고','누적입고','미입고','최근발주일',
   '최근입고일','이전쿠팡공급가','최근쿠팡공급가','공급가차이','공급가확인',
-  'SKU매칭점수','SKU최초발견일','쿠팡 노출가','기본순서','노출상품ID','옵션ID'
+  '쿠팡 노출가','기본순서','노출상품ID','옵션ID','패키지'
 ];
 const PO_HISTORY_SHEET = '_발주이력';
 const INBOUND_HISTORY_SHEET = '_입고요약';
 const SKU_MASTER_SHEET = '_SKU마스터';
-const SKU_MATCH_SHEET = 'SKU매칭확인';
 const PO_PICKING_SHEET = '발주서 출력';
 const PO_SHIPMENT_SHEET = '쉽먼트전송';
 const COUPON_ISSUE_SHEET = '쿠폰발행';
@@ -30,7 +29,6 @@ const SKU_REPLACEMENT_SHEET = '_SKU교체이력';
 const PO_HISTORY_HEADERS = ['고유키','발주번호','SKU ID','물류센터','발주현황','상품명','바코드','입고예정일','발주일','발주수량','확정수량','입고수량','매입가','공급가','부가세','반영일'];
 const INBOUND_HISTORY_HEADERS = ['데이터세트','SKU ID','상품명','총입고','반출','순누적입고','최근입고일','이전공급가일','이전공급가','최근공급가일','최근공급가','반영일'];
 const SKU_MASTER_HEADERS = ['SKU ID','상품명','바코드','발주가능상태','최초발견일','최근확인일'];
-const SKU_MATCH_HEADERS = ['처리상태','SKU ID','SKU명','바코드','후보 모델SKU','후보 모델명','점수','발견일','안내'];
 const PO_PICKING_HEADERS = ['물류센터','발주서 번호','발주일시','입고예정일','창고번호','상품코드(SKU ID)','상품명','바코드','원가','매입가','발주수량','업체납품가능수량','거래처'];
 const PO_SHIPMENT_HEADERS = ['합배송묶음','발주서 NO','물류센터','입고예정일','상품코드(SKU ID)','상품명','발주수량','납품가능수량','입고수량','공급가','전송확인'];
 const COUPON_ISSUE_HEADERS = ['입고예정일','상품코드(SKU ID)','상품명'];
@@ -47,7 +45,6 @@ function setupProductDbSheets() {
   const poHistory = getOrCreateSheet_(ss, PO_HISTORY_SHEET);
   const inboundHistory = getOrCreateSheet_(ss, INBOUND_HISTORY_SHEET);
   const skuMaster = getOrCreateSheet_(ss, SKU_MASTER_SHEET);
-  const skuMatch = getOrCreateSheet_(ss, SKU_MATCH_SHEET);
   const poPicking = getOrCreateSheet_(ss, PO_PICKING_SHEET);
   const poShipment = getOrCreateSheet_(ss, PO_SHIPMENT_SHEET);
   const couponIssue = getOrCreateSheet_(ss, COUPON_ISSUE_SHEET);
@@ -58,12 +55,13 @@ function setupProductDbSheets() {
   syncHeaders_(poHistory, PO_HISTORY_HEADERS);
   syncHeaders_(inboundHistory, INBOUND_HISTORY_HEADERS);
   syncHeaders_(skuMaster, SKU_MASTER_HEADERS);
-  syncHeaders_(skuMatch, SKU_MATCH_HEADERS);
   syncHeaders_(poPicking, PO_PICKING_HEADERS);
   syncHeaders_(poShipment, PO_SHIPMENT_HEADERS);
   syncHeaders_(couponIssue, COUPON_ISSUE_HEADERS);
   syncHeaders_(quoteQueue, QUOTE_QUEUE_HEADERS);
   syncHeaders_(replacementHistory, SKU_REPLACEMENT_HEADERS);
+  const obsoleteSkuMatch = ss.getSheetByName('SKU매칭확인');
+  if (obsoleteSkuMatch) ss.deleteSheet(obsoleteSkuMatch);
   poHistory.hideSheet();
   inboundHistory.hideSheet();
   skuMaster.hideSheet();
@@ -74,7 +72,6 @@ function setupProductDbSheets() {
   normalizeTextColumn_(input, 6);
   normalizeTextColumn_(skuMaster, 2);
   normalizeTextColumn_(poHistory, 6);
-  normalizeTextColumn_(skuMatch, 3);
   normalizeTextColumn_(poPicking, 7);
   normalizeTextColumn_(poShipment, 6);
   normalizeQuoteQueuePayloads_(quoteQueue);
@@ -95,7 +92,7 @@ function setupProductDbSheets() {
   ensureWeeklyCouponTrigger_(ss);
   getImageFolder_();
   ss.getSheets().forEach(sheet => {
-    if (!['상품입력','제품DB',PO_HISTORY_SHEET,INBOUND_HISTORY_SHEET,SKU_MASTER_SHEET,SKU_MATCH_SHEET,PO_PICKING_SHEET,PO_SHIPMENT_SHEET,COUPON_ISSUE_SHEET,QUOTE_QUEUE_SHEET,SKU_REPLACEMENT_SHEET].includes(sheet.getName())) ss.deleteSheet(sheet);
+    if (!['상품입력','제품DB',PO_HISTORY_SHEET,INBOUND_HISTORY_SHEET,SKU_MASTER_SHEET,PO_PICKING_SHEET,PO_SHIPMENT_SHEET,COUPON_ISSUE_SHEET,QUOTE_QUEUE_SHEET,SKU_REPLACEMENT_SHEET].includes(sheet.getName())) ss.deleteSheet(sheet);
   });
   SpreadsheetApp.getUi().alert('상품DB 설정 완료\n구 SKU 정리: ' + retiredRemoved + '행\n교체이력 정보 복구: ' + replacementRepair.restoredFields + '칸\n사라진 기존행 복구: ' + replacementRepair.restoredRows + '행\n중복 정리: ' + duplicateRemoved + '행');
 }
@@ -132,6 +129,14 @@ function doPost(e) {
     }
     if (data.action === 'repairSkuUploadDuplicates') {
       return repairSkuUploadDuplicates_(db, data.mappings || []);
+    }
+    if (data.action === 'migrateInventoryTracking') {
+      const obsoleteSkuMatch = ss.getSheetByName('SKU매칭확인');
+      if (obsoleteSkuMatch) ss.deleteSheet(obsoleteSkuMatch);
+      const tracking = applyInventoryTracking_(ss, db);
+      formatProductDb_(db);
+      return json_({ ok: true, columns: PRODUCT_DB_HEADERS.length, packageColumn: dbColumn_('패키지') + 1,
+        skuMatchSheetDeleted: !ss.getSheetByName('SKU매칭확인'), tracking: tracking });
     }
 
     if (data.action === 'importSkuMaster') return importSkuMaster_(ss, db, data.items || []);
@@ -180,10 +185,6 @@ function onEdit(e) {
   try {
     const range = e && e.range;
     if (!range) return;
-    if (range.getSheet().getName() === SKU_MATCH_SHEET) {
-      handleSkuMatchApproval_(range);
-      return;
-    }
     if (range.getSheet().getName() === '제품DB') {
       const watched = ['창고번호','SKU ID','상품명','바코드','원가(부가세포함)','거래처']
         .map(name => dbColumn_(name) + 1);
@@ -215,46 +216,6 @@ function onEdit(e) {
   } catch (error) {
     console.error(error);
   }
-}
-
-function handleSkuMatchApproval_(range) {
-  if (range.getRow() < 2) return;
-  const sheet = range.getSheet();
-  const status = String(sheet.getRange(range.getRow(), 1).getValue() || '').trim();
-  if (status !== '연결승인') return;
-  const sku = String(sheet.getRange(range.getRow(), 2).getDisplayValue() || '').trim();
-  const modelSku = String(sheet.getRange(range.getRow(), 5).getDisplayValue() || '').trim();
-  if (!sku || !modelSku) {
-    sheet.getRange(range.getRow(), 9).setValue('SKU ID와 후보 모델SKU를 확인해주세요.');
-    return;
-  }
-  const ss = sheet.getParent();
-  const db = ss.getSheetByName('제품DB');
-  if (!db || db.getLastRow() < 2) return;
-  const values = dbMatrix_(db);
-  const skuColumn = dbColumn_('SKU ID');
-  const modelSkuColumn = dbColumn_('모델SKU');
-  const duplicate = values.findIndex(row => String(row[skuColumn] || '').trim() === sku);
-  const target = values.findIndex(row => String(row[modelSkuColumn] || '').trim() === modelSku);
-  if (target < 0) {
-    sheet.getRange(range.getRow(), 9).setValue('후보 모델SKU를 제품DB에서 찾지 못했습니다.');
-    return;
-  }
-  const targetRow = values[target];
-  const targetRegistrationStatus = String(targetRow[dbColumn_('SKU매칭상태')] || '').indexOf('재등록') >= 0
-    ? '재등록대기' : '등록대기';
-  const duplicateRow = duplicate >= 0 && duplicate !== target ? values[duplicate] : null;
-  targetRow[skuColumn] = sku;
-  targetRow[dbColumn_('바코드')] = sheet.getRange(range.getRow(), 4).getDisplayValue() || (duplicateRow && duplicateRow[dbColumn_('바코드')]) || '';
-  targetRow[dbColumn_('발주가능상태')] = (duplicateRow && duplicateRow[dbColumn_('발주가능상태')]) || targetRow[dbColumn_('발주가능상태')] || '';
-  targetRow[dbColumn_('SKU매칭상태')] = targetRegistrationStatus;
-  targetRow[dbColumn_('SKU매칭점수')] = 100;
-  targetRow[dbColumn_('SKU최초발견일')] = new Date();
-  const output = values.filter((row, index) => index !== duplicate || duplicate === target);
-  writeDbMatrix_(db, dedupeProductDbRows_(output).rows);
-  refreshPurchasePrintProductLinks_(ss, db);
-  sheet.getRange(range.getRow(), 1).setValue('연결완료');
-  sheet.getRange(range.getRow(), 9).setValue('제품DB 연결 완료');
 }
 
 function upsertProduct_(input, db, productInputRow, productDbRows) {
@@ -302,9 +263,9 @@ function replaceDbRowsForModel_(db, model, newRows) {
       const imageColumn = dbColumn_('이미지');
       if ((!row[imageColumn] || !String(row[imageColumn]).startsWith('=')) && old.imageFormula) row[imageColumn] = old.imageFormula;
       if (!replacementPending) {
-        ['창고번호','SKU ID','발주가능상태','제품링크','바코드','현재고','누적입고','총입고','반출누계',
-          '누적발주','미입고','최근발주수량','최근입고일','이전쿠팡공급가','최근쿠팡공급가','공급가차이',
-          '공급가확인','SKU매칭상태','SKU매칭점수','SKU최초발견일','쿠팡 노출가','기본순서','노출상품ID','옵션ID']
+        ['창고번호','SKU ID','발주가능상태','제품링크','바코드','현재고','누적입고','미입고','최근발주일',
+          '최근입고일','이전쿠팡공급가','최근쿠팡공급가','공급가차이','공급가확인',
+          'SKU매칭상태','쿠팡 노출가','기본순서','노출상품ID','옵션ID','패키지']
           .forEach(name => { const column = dbColumn_(name); row[column] = old.values[column]; });
       }
     }
@@ -403,7 +364,7 @@ function mergeReplacementRows_(newRows, oldRows, forceSequentialFallback) {
     const old = bestIndex >= 0 ? available.splice(bestIndex, 1)[0] : null;
     if (old) {
       matchedOptions++;
-      ['현재고','누적입고','총입고','반출누계','누적발주','창고번호','SKU매칭상태'].forEach(name => {
+      ['현재고','누적입고','미입고','최근발주일','창고번호','SKU매칭상태','패키지'].forEach(name => {
         const column = dbColumn_(name);
         if (String(old[column] == null ? '' : old[column]).trim()) row[column] = old[column];
       });
@@ -415,8 +376,6 @@ function mergeReplacementRows_(newRows, oldRows, forceSequentialFallback) {
     row[dbColumn_('쿠팡 노출가')] = '';
     row[dbColumn_('발주가능상태')] = '';
     row[dbColumn_('SKU매칭상태')] = '재등록대기';
-    row[dbColumn_('SKU매칭점수')] = '';
-    row[dbColumn_('SKU최초발견일')] = '';
     return row;
   });
   return { rows: prepared, matchedOptions: matchedOptions, forcedMatches: forcedMatches,
@@ -692,8 +651,9 @@ function formatProductDb_(db) {
   if (db.getLastRow() > 1) {
     db.getRange(2, dbColumn_('SKU ID') + 1, db.getLastRow() - 1, 1).setNumberFormat('@');
     db.getRange(2, dbColumn_('바코드') + 1, db.getLastRow() - 1, 1).setNumberFormat('@');
-    db.getRange(2, dbColumn_('현재고') + 1, db.getLastRow() - 1, 7).setNumberFormat('#,##0');
-    db.getRange(2, dbColumn_('최근입고일') + 1, db.getLastRow() - 1, 1).setNumberFormat('yyyy/MM/dd');
+    db.getRange(2, dbColumn_('현재고') + 1, db.getLastRow() - 1, 2).setNumberFormat('#,##0');
+    db.getRange(2, dbColumn_('미입고') + 1, db.getLastRow() - 1, 1).setWrap(true);
+    db.getRange(2, dbColumn_('최근발주일') + 1, db.getLastRow() - 1, 2).setNumberFormat('yyyy/MM/dd');
     db.getRange(2, dbColumn_('이전쿠팡공급가') + 1, db.getLastRow() - 1, 3).setNumberFormat('#,##0');
     db.getRange(2, dbColumn_('쿠팡 노출가') + 1, db.getLastRow() - 1, 1).setNumberFormat('#,##0');
     db.getRange(2, dbColumn_('노출상품ID') + 1, db.getLastRow() - 1, 2).setNumberFormat('@');
@@ -1246,7 +1206,7 @@ function repairReplacementDataFromHistory_(ss, db) {
     const merged = mergeReplacementRows_(current, batch.rows, false);
     merged.rows.forEach((mergedRow, position) => {
       const before = rows[indices[position]];
-      ['현재고','누적입고','총입고','반출누계','누적발주','창고번호','SKU매칭상태'].forEach(name => {
+      ['현재고','누적입고','미입고','최근발주일','창고번호','SKU매칭상태','패키지'].forEach(name => {
         const column = dbColumn_(name);
         if (String(before[column] || '') !== String(mergedRow[column] || '') && String(mergedRow[column] || '').trim()) restoredFields++;
       });
@@ -1271,15 +1231,6 @@ function repairReplacementDataFromHistory_(ss, db) {
   const result = dedupeProductDbRows_(rows);
   if (restoredFields || restoredRows || result.removed) writeDbMatrix_(db, result.rows);
   return { restoredFields: restoredFields, restoredRows: restoredRows, duplicatesRemoved: result.removed };
-}
-
-function removeRetiredSkuMatchRows_(ss, retired) {
-  const sheet = ss.getSheetByName(SKU_MATCH_SHEET);
-  if (!sheet || sheet.getLastRow() < 2) return;
-  const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, SKU_MATCH_HEADERS.length).getValues();
-  const kept = values.filter(row => !retired[String(row[1] || '').trim()]);
-  sheet.getRange(2, 1, sheet.getLastRow() - 1, SKU_MATCH_HEADERS.length).clearContent();
-  if (kept.length) sheet.getRange(2, 1, kept.length, SKU_MATCH_HEADERS.length).setValues(kept);
 }
 
 function ensureDbRow_(rows, skuMap, sku, name) {
@@ -1395,30 +1346,6 @@ function findPendingSkuMatch_(rows, itemName, candidateIndexes, availableCandida
   return { index: top.index, score: top.score, automatic: top.score >= 90 && !tied, tied: tied };
 }
 
-function writeSkuMatchLog_(ss, entries, resolvedSkus) {
-  const sheet = getOrCreateSheet_(ss, SKU_MATCH_SHEET);
-  syncHeaders_(sheet, SKU_MATCH_HEADERS);
-  const existing = (sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, SKU_MATCH_HEADERS.length).getValues() : [])
-    .filter(row => ['확인필요','미매칭','이관 실패'].includes(String(row[0] || '').trim()))
-    .filter(row => !(resolvedSkus || {})[String(row[1] || '').trim()]);
-  const map = {};
-  existing.forEach((row, index) => { if (String(row[1] || '').trim()) map[String(row[1]).trim()] = index; });
-  entries.filter(row => ['확인필요','미매칭','이관 실패'].includes(String(row[0] || '').trim())).forEach(row => {
-    const sku = String(row[1] || '').trim();
-    if (map[sku] === undefined) { map[sku] = existing.length; existing.push(row); }
-    else existing[map[sku]] = row;
-  });
-  if (existing.length) {
-    ensureSheetSize_(sheet, existing.length + 1, SKU_MATCH_HEADERS.length);
-    sheet.getRange(2, 1, existing.length, SKU_MATCH_HEADERS.length).setValues(existing);
-  }
-  const oldCount = Math.max(0, sheet.getLastRow() - 1);
-  if (oldCount > existing.length) sheet.getRange(existing.length + 2, 1, oldCount - existing.length, SKU_MATCH_HEADERS.length).clearContent();
-  sheet.setFrozenRows(1);
-  sheet.getRange(1, 1, 1, SKU_MATCH_HEADERS.length).setFontWeight('bold').setFontColor('#ffffff').setBackground('#7f6000');
-  sheet.autoResizeColumns(1, SKU_MATCH_HEADERS.length);
-}
-
 function importSkuMaster_(ss, db, items) {
   const master = getOrCreateSheet_(ss, SKU_MASTER_SHEET);
   syncHeaders_(master, SKU_MASTER_HEADERS);
@@ -1511,8 +1438,6 @@ function importSkuMaster_(ss, db, items) {
   if (originalMasterRows.length > masterRows.length) {
     master.getRange(masterRows.length + 2, 1, originalMasterRows.length - masterRows.length, SKU_MASTER_HEADERS.length).clearContent();
   }
-  removeRetiredSkuMatchRows_(ss, retired);
-  writeSkuMatchLog_(ss, matchLog, resolvedSkus);
   return json_({ ok: true, inserted: 0, updated: updated, total: rows.length,
     baseline: bootstrap, newSkus: bootstrap ? 0 : newSkus, matched: matched, review: review,
     retiredSkipped: retiredSkipped,
@@ -1783,49 +1708,16 @@ function importInboundSummary_(ss, db, data) {
     });
   });
   if (!importedDatasets) {
-    normalizeRecentInboundDates_(db);
-    return json_({ ok: true, skipped: true, importedDatasets: 0, skippedDatasets: skippedDatasets });
+    const tracking = applyInventoryTracking_(ss, db);
+    return json_({ ok: true, skipped: true, importedDatasets: 0, skippedDatasets: skippedDatasets,
+      cumulativeInboundUpdated: tracking.inboundUpdated, missingUpdated: tracking.missingUpdated });
   }
   if (incoming.length) history.getRange(history.getLastRow() + 1, 1, incoming.length, INBOUND_HISTORY_HEADERS.length).setValues(incoming);
 
-  const all = history.getLastRow() > 1 ? history.getRange(2, 1, history.getLastRow() - 1, INBOUND_HISTORY_HEADERS.length).getValues() : [];
-  const totals = {};
-  all.forEach(row => {
-    const sku = String(row[1] || '').trim();
-    if (!sku) return;
-    const current = totals[sku] || { name: row[2], inbound: 0, outbound: 0, lastDate: '', prices: [] };
-    current.inbound += number_(row[3]);
-    current.outbound += number_(row[4]);
-    const inboundDate = dateOnlyText_(row[6]);
-    if (inboundDate > current.lastDate) current.lastDate = inboundDate;
-    if (number_(row[8]) > 0) current.prices.push({ date: dateOnlyText_(row[7] || row[6]), price: number_(row[8]) });
-    if (number_(row[10]) > 0) current.prices.push({ date: dateOnlyText_(row[9] || row[6]), price: number_(row[10]) });
-    totals[sku] = current;
-  });
-
-  const rows = dbMatrix_(db);
-  const skuColumn = dbColumn_('SKU ID');
-  const skuMap = {};
-  rows.forEach((row, index) => { const sku = String(row[skuColumn] || '').trim(); if (sku) skuMap[sku] = index; });
-  Object.keys(totals).forEach(sku => {
-    const item = totals[sku];
-    const index = ensureDbRow_(rows, skuMap, sku, item.name);
-    const row = rows[index];
-    const prices = item.prices.sort((a, b) => a.date.localeCompare(b.date));
-    const latest = prices.length ? prices[prices.length - 1].price : 0;
-    const previous = prices.length > 1 ? prices[prices.length - 2].price : 0;
-    row[dbColumn_('총입고')] = item.inbound;
-    row[dbColumn_('반출누계')] = item.outbound;
-    row[dbColumn_('누적입고')] = item.inbound - item.outbound;
-    row[dbColumn_('최근입고일')] = dateOnlyText_(item.lastDate);
-    row[dbColumn_('이전쿠팡공급가')] = previous || '';
-    row[dbColumn_('최근쿠팡공급가')] = latest || '';
-    row[dbColumn_('공급가차이')] = latest && previous ? latest - previous : '';
-    row[dbColumn_('공급가확인')] = latest && previous ? (latest === previous ? '일치' : '확인필요') : '기준없음';
-  });
-  writeDbMatrix_(db, rows);
-  normalizeRecentInboundDates_(db);
-  return json_({ ok: true, skipped: false, imported: incoming.length, importedDatasets: importedDatasets, skippedDatasets: skippedDatasets });
+  const tracking = applyInventoryTracking_(ss, db);
+  return json_({ ok: true, skipped: false, imported: incoming.length, importedDatasets: importedDatasets,
+    skippedDatasets: skippedDatasets, cumulativeInboundUpdated: tracking.inboundUpdated,
+    missingUpdated: tracking.missingUpdated, unmatchedSkus: tracking.unmatchedSkus });
 }
 
 function dateOnlyText_(value) {
@@ -2033,63 +1925,113 @@ function refreshPurchasePrintProductLinks_(ss, db) {
   return updated;
 }
 
-function applyPurchaseAggregates_(db, aggregates) {
-  const rowCount = Math.max(0, db.getLastRow() - 1);
-  const skuValues = rowCount ? db.getRange(2, dbColumn_('SKU ID') + 1, rowCount, 1).getDisplayValues() : [];
-  const titleValues = rowCount ? db.getRange(2, dbColumn_('상품명') + 1, rowCount, 1).getValues() : [];
-  const barcodeValues = rowCount ? db.getRange(2, dbColumn_('바코드') + 1, rowCount, 1).getValues() : [];
-  const trackingStart = dbColumn_('누적발주') + 1;
-  const trackingWidth = dbColumn_('공급가확인') - dbColumn_('누적발주') + 1;
-  const trackingValues = rowCount ? db.getRange(2, trackingStart, rowCount, trackingWidth).getValues() : [];
-  const skuMap = {};
-  skuValues.forEach((row, index) => { const sku = String(row[0] || '').trim(); if (sku) skuMap[sku] = index; });
-  const newRows = [];
-
-  Object.keys(aggregates).forEach(sku => {
-    const item = aggregates[sku];
-    const latestDate = Object.keys(item.dates).sort().pop() || '';
-    const prices = item.prices.sort((a, b) => a.date.localeCompare(b.date));
-    const latest = prices.length ? prices[prices.length - 1].price : 0;
-    const index = skuMap[sku];
-    if (index === undefined) {
-      const row = new Array(PRODUCT_DB_HEADERS.length).fill('');
-      row[dbColumn_('상품명')] = item.name;
-      row[dbColumn_('SKU ID')] = sku;
-      row[dbColumn_('바코드')] = item.barcode;
-      row[dbColumn_('누적발주')] = item.order;
-      row[dbColumn_('미입고')] = item.missing;
-      row[dbColumn_('최근발주수량')] = number_(item.dates[latestDate]);
-      row[dbColumn_('최근쿠팡공급가')] = latest || '';
-      row[dbColumn_('공급가확인')] = '기준없음';
-      newRows.push(row);
-      return;
-    }
-    if (!String(titleValues[index][0] || '').trim()) titleValues[index][0] = item.name;
-    if (!String(barcodeValues[index][0] || '').trim()) barcodeValues[index][0] = item.barcode;
-    const tracking = trackingValues[index];
-    const existingLatest = number_(tracking[5]);
-    const existingPrevious = number_(tracking[4]);
-    const previous = prices.length > 1 ? prices[prices.length - 2].price : (latest !== existingLatest ? existingLatest : existingPrevious);
-    tracking[0] = item.order;
-    tracking[1] = item.missing;
-    tracking[2] = number_(item.dates[latestDate]);
-    tracking[4] = previous || '';
-    tracking[5] = latest || existingLatest || '';
-    tracking[6] = latest && previous ? latest - previous : '';
-    tracking[7] = latest && previous ? (latest === previous ? '일치' : '확인필요') : '기준없음';
+function inboundTrackingTotals_(ss) {
+  const history = ss.getSheetByName(INBOUND_HISTORY_SHEET);
+  const totals = {};
+  if (!history || history.getLastRow() < 2) return totals;
+  const values = history.getRange(2, 1, history.getLastRow() - 1, INBOUND_HISTORY_HEADERS.length).getValues();
+  values.forEach(row => {
+    const sku = normalizeSkuId_(row[1]);
+    if (!sku) return;
+    const current = totals[sku] || { inbound: 0, outbound: 0, lastDate: '', prices: [] };
+    current.inbound += number_(row[3]);
+    current.outbound += number_(row[4]);
+    const inboundDate = dateOnlyText_(row[6]);
+    if (inboundDate && inboundDate > current.lastDate) current.lastDate = inboundDate;
+    if (number_(row[8]) > 0) current.prices.push({ date: dateOnlyText_(row[7] || row[6]), price: number_(row[8]) });
+    if (number_(row[10]) > 0) current.prices.push({ date: dateOnlyText_(row[9] || row[6]), price: number_(row[10]) });
+    totals[sku] = current;
   });
+  Object.keys(totals).forEach(sku => {
+    const item = totals[sku];
+    item.net = Math.max(0, item.inbound - item.outbound);
+    item.prices.sort((a, b) => purchaseDateNumber_(a.date) - purchaseDateNumber_(b.date));
+    item.latestPrice = item.prices.length ? item.prices[item.prices.length - 1].price : 0;
+    item.previousPrice = item.prices.length > 1 ? item.prices[item.prices.length - 2].price : 0;
+  });
+  return totals;
+}
 
-  if (rowCount) {
-    db.getRange(2, dbColumn_('상품명') + 1, rowCount, 1).setValues(titleValues);
-    db.getRange(2, dbColumn_('바코드') + 1, rowCount, 1).setValues(barcodeValues);
-    db.getRange(2, trackingStart, rowCount, trackingWidth).setValues(trackingValues);
-  }
-  if (newRows.length) {
-    const startRow = db.getLastRow() + 1;
-    ensureSheetSize_(db, startRow + newRows.length - 1, PRODUCT_DB_HEADERS.length);
-    db.getRange(startRow, 1, newRows.length, PRODUCT_DB_HEADERS.length).setValues(newRows);
-  }
-  return purchaseProductMap_(db);
+function purchaseTrackingTotals_(ss, inboundTotals) {
+  const history = ss.getSheetByName(PO_HISTORY_SHEET);
+  const grouped = {};
+  if (!history || history.getLastRow() < 2) return grouped;
+  const rows = history.getRange(2, 1, history.getLastRow() - 1, PO_HISTORY_HEADERS.length).getValues();
+  rows.forEach(row => {
+    const sku = normalizeSkuId_(row[2]);
+    if (!sku) return;
+    const orderQty = number_(row[10]) || number_(row[9]);
+    if (orderQty <= 0) return;
+    const item = grouped[sku] || { entries: [], recentOrderDate: '' };
+    const orderDate = dateOnlyText_(row[8]);
+    const expectedDate = dateOnlyText_(row[7]) || purchaseDateOnly_(row[7]);
+    item.entries.push({ key: String(row[0] || ''), qty: orderQty, expectedDate: expectedDate, orderDate: orderDate });
+    if (orderDate && orderDate > item.recentOrderDate) item.recentOrderDate = orderDate;
+    grouped[sku] = item;
+  });
+  Object.keys(grouped).forEach(sku => {
+    const item = grouped[sku];
+    item.entries.sort((a, b) => purchaseDateNumber_(a.expectedDate) - purchaseDateNumber_(b.expectedDate)
+      || purchaseDateNumber_(a.orderDate) - purchaseDateNumber_(b.orderDate) || a.key.localeCompare(b.key));
+    let actualInbound = number_(inboundTotals[sku] && inboundTotals[sku].net);
+    const missingByDate = {};
+    const dateOrder = [];
+    item.entries.forEach(entry => {
+      const fulfilled = Math.min(entry.qty, actualInbound);
+      actualInbound -= fulfilled;
+      const missing = Math.max(0, entry.qty - fulfilled);
+      if (!missing) return;
+      const date = entry.expectedDate || '입고일 미확인';
+      if (missingByDate[date] === undefined) { missingByDate[date] = 0; dateOrder.push(date); }
+      missingByDate[date] += missing;
+    });
+    item.missingText = dateOrder.map(date => date + ' · ' + missingByDate[date] + '개').join('\n');
+  });
+  return grouped;
+}
+
+/** 현재고와 상품 기본정보는 건드리지 않고 입고·발주 추적 열만 갱신합니다. */
+function applyInventoryTracking_(ss, db) {
+  const rowCount = Math.max(0, db.getLastRow() - 1);
+  if (!rowCount) return { inboundUpdated: 0, missingUpdated: 0, unmatchedSkus: 0 };
+  const inboundTotals = inboundTrackingTotals_(ss);
+  const purchaseTotals = purchaseTrackingTotals_(ss, inboundTotals);
+  const skuValues = db.getRange(2, dbColumn_('SKU ID') + 1, rowCount, 1).getDisplayValues();
+  const skuMap = {};
+  skuValues.forEach((row, index) => { const sku = normalizeSkuId_(row[0]); if (sku) skuMap[sku] = index; });
+  const names = ['누적입고','미입고','최근발주일','최근입고일','이전쿠팡공급가','최근쿠팡공급가','공급가차이','공급가확인'];
+  const columns = {};
+  names.forEach(name => { columns[name] = db.getRange(2, dbColumn_(name) + 1, rowCount, 1).getValues(); });
+  let inboundUpdated = 0;
+  let missingUpdated = 0;
+  const unmatched = {};
+  Object.keys(inboundTotals).forEach(sku => {
+    const index = skuMap[sku];
+    if (index === undefined) { unmatched[sku] = true; return; }
+    const item = inboundTotals[sku];
+    columns['누적입고'][index][0] = item.net;
+    columns['최근입고일'][index][0] = item.lastDate;
+    columns['이전쿠팡공급가'][index][0] = item.previousPrice || '';
+    columns['최근쿠팡공급가'][index][0] = item.latestPrice || '';
+    columns['공급가차이'][index][0] = item.latestPrice && item.previousPrice ? item.latestPrice - item.previousPrice : '';
+    columns['공급가확인'][index][0] = item.latestPrice && item.previousPrice ? (item.latestPrice === item.previousPrice ? '일치' : '확인필요') : '기준없음';
+    inboundUpdated++;
+  });
+  Object.keys(purchaseTotals).forEach(sku => {
+    const index = skuMap[sku];
+    if (index === undefined) { unmatched[sku] = true; return; }
+    columns['미입고'][index][0] = purchaseTotals[sku].missingText;
+    columns['최근발주일'][index][0] = purchaseTotals[sku].recentOrderDate;
+    missingUpdated++;
+  });
+  names.forEach(name => {
+    const range = db.getRange(2, dbColumn_(name) + 1, rowCount, 1);
+    range.setValues(columns[name]);
+    if (name === '누적입고' || ['이전쿠팡공급가','최근쿠팡공급가','공급가차이'].includes(name)) range.setNumberFormat('#,##0');
+    if (name === '최근발주일' || name === '최근입고일') range.setNumberFormat('yyyy/MM/dd');
+    if (name === '미입고') range.setWrap(true);
+  });
+  return { inboundUpdated: inboundUpdated, missingUpdated: missingUpdated, unmatchedSkus: Object.keys(unmatched).length };
 }
 
 function createPurchasePrint_(ss, productMap, items) {
@@ -2270,29 +2212,16 @@ function importPurchaseOrders_(ss, db, items) {
     history.getRange(existing.length + 2, 1, rawExisting.length - existing.length, PO_HISTORY_HEADERS.length).clearContent();
   }
 
-  const aggregates = {};
-  existing.forEach(row => {
-    const sku = String(row[2] || '').trim();
-    if (!sku) return;
-    const current = aggregates[sku] || { name: row[5], barcode: row[6], order: 0, missing: 0, dates: {}, prices: [] };
-    const orderQty = number_(row[9]);
-    const confirmed = number_(row[10]) || orderQty;
-    const received = number_(row[11]);
-    const date = String(row[8] || '');
-    current.order += orderQty;
-    current.missing += Math.max(0, confirmed - received);
-    current.dates[date] = (current.dates[date] || 0) + orderQty;
-    if (number_(row[13]) > 0) current.prices.push({ date: date, price: number_(row[13]) });
-    aggregates[sku] = current;
-  });
-
-  const productMap = applyPurchaseAggregates_(db, aggregates);
+  const tracking = applyInventoryTracking_(ss, db);
+  const productMap = purchaseProductMap_(db);
   const printSummary = createPurchasePrint_(ss, productMap, items);
   const couponSummary = updateWeeklyCouponIssue_(ss, new Date());
   return json_({ ok: true, inserted: inserted, updated: updated, total: existing.length,
     shippingGroups: printSummary.groups, pickingRows: printSummary.pickingRows, shipmentRows: printSummary.shipmentRows,
     missingWarehouse: printSummary.missingWarehouse, missingImage: printSummary.missingImage,
-    couponAdded: couponSummary.added, couponUpdated: couponSummary.updated, couponTotal: couponSummary.total });
+    couponAdded: couponSummary.added, couponUpdated: couponSummary.updated, couponTotal: couponSummary.total,
+    recentOrderDatesUpdated: tracking.missingUpdated, missingUpdated: tracking.missingUpdated,
+    unmatchedSkus: tracking.unmatchedSkus });
 }
 
 function saveCloudDraft_(record) {
