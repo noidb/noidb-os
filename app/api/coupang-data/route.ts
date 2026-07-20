@@ -4,7 +4,8 @@ import JSZip from "jszip";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// 대량 SKU 파일은 Apps Script의 시트 갱신까지 기다려야 하므로 60초보다 넉넉하게 허용합니다.
+export const maxDuration = 180;
 
 type TableRow = Record<string, string>;
 
