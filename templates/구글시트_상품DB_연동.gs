@@ -2002,6 +2002,9 @@ function applyInventoryTracking_(ss, db) {
   const names = ['누적입고','미입고','최근발주일','최근입고일','이전쿠팡공급가','최근쿠팡공급가','공급가차이','공급가확인'];
   const columns = {};
   names.forEach(name => { columns[name] = db.getRange(2, dbColumn_(name) + 1, rowCount, 1).getValues(); });
+  // 미입고는 현재 발주·실입고 비교 결과가 있을 때만 표시하고 과거 숫자값은 남기지 않습니다.
+  columns['미입고'].forEach(row => { row[0] = ''; });
+  columns['최근발주일'].forEach(row => { row[0] = ''; });
   let inboundUpdated = 0;
   let missingUpdated = 0;
   const unmatched = {};
