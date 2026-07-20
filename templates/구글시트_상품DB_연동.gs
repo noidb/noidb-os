@@ -1471,10 +1471,9 @@ function importSkuMaster_(ss, db, items) {
       return;
     }
     const existingIndex = skuMap[sku];
-    const existingHasModel = existingIndex !== undefined && String(rows[existingIndex][modelSkuColumn] || '').trim();
-    const candidate = !existingHasModel
+    const candidate = existingIndex === undefined
       ? findPendingSkuMatch_(rows, itemName, pendingCandidateIndexes, availablePendingCandidates) : null;
-    const targetIndex = existingHasModel ? existingIndex : (candidate && candidate.automatic ? candidate.index : undefined);
+    const targetIndex = existingIndex !== undefined ? existingIndex : (candidate && candidate.automatic ? candidate.index : undefined);
     if (targetIndex === undefined) {
       review++;
       matchLog.push(['이관 실패',sku,itemName,String(item.barcode || ''),candidate ? String(rows[candidate.index][modelSkuColumn] || '') : '',candidate ? String(rows[candidate.index][dbColumn_('모델명/품번')] || '') : '',candidate ? candidate.score : 0,now,
