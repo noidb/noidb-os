@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({ configured: called.configured, ...called.result });
     }
-    if (["cloudDraftSave", "cloudDraftDelete", "quoteQueueClear", "quoteQueueDeleteModel", "linkReplacementExisting", "deleteReplacementLegacyRows", "normalizeCatalogIds", "repairSkuUploadDuplicates", "migrateInventoryTracking"].includes(raw?.action)) {
+    if (["cloudDraftSave", "cloudDraftDelete", "quoteQueueClear", "quoteQueueDeleteModel", "linkReplacementExisting", "deleteReplacementLegacyRows", "undoReplacementLink", "normalizeCatalogIds", "repairSkuUploadDuplicates", "migrateInventoryTracking"].includes(raw?.action)) {
       const called = await callWebhook({
         ...raw,
         secret: process.env.GOOGLE_SHEETS_WEBHOOK_SECRET || "",

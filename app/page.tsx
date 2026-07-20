@@ -54,6 +54,7 @@ type SlotImage = { dataUrl: string; fileName: string };
 type DetailImage = { id: string; name: string; dataUrl: string };
 type CustomSlot = { id: string; type: "all" | "detail" | "wear"; slot: SlotImage | null };
 type QuoteQueueRecord = { model: string; gender: string; category: string; skuCount: number; savedAt: number | string; payload: any };
+type PendingReplacementCleanup = { model: string; legacySku: string; oldRows: number; matchedOptions: number };
 type ChineseKeyword = { chinese: string; koreanMeaning: string };
 type EnglishKeyword = { english: string; koreanMeaning: string };
 type SourcingAnalysis = {
@@ -280,6 +281,7 @@ export default function Home() {
   const [draftStatus, setDraftStatus] = useState("");
   const [modelDuplicate, setModelDuplicate] = useState(false);
   const [modelCheckMessage, setModelCheckMessage] = useState("");
+  const [pendingReplacementCleanup, setPendingReplacementCleanup] = useState<PendingReplacementCleanup | null>(null);
 
   const [dbSupported, setDbSupported] = useState(false);
   const [dbHandle, setDbHandle] = useState<FileSystemDirectoryHandle | null>(null);
@@ -498,7 +500,7 @@ export default function Home() {
       return;
     }
     const legacySku = product.replacementSku.trim();
-    if (!window.confirm(`${model}의 기존 등록행에 구 SKU ${legacySku}의 옵션별 창고번호와 재고 이력을 연결할까요? 이관 결과를 확인한 뒤 기존행 삭제 여부를 다시 묻습니다.`)) return;
+    if (!window.confirm(`${model}에 구 SKU ${legacySku}의 옵션별 창고번호와 재고 이력을 이관할까요?\n\n이 단계에서는 기존행을 삭제하지 않습니다.`)) return;
     const requestLink = async (forceLegacyOptions: boolean) => {
       const linkPayload = exportPayload();
       const response = await fetch("/api/google-sheet", {
@@ -540,33 +542,68 @@ export default function Home() {
         data = await requestLink(true);
       }
       const warehouses = Array.isArray(data.warehouses) ? data.warehouses.filter(Boolean) : [];
-      let cleanupMessage = " · 기존행 유지";
       if (data.cleanupAvailable) {
-        const deleteOldRows = window.confirm(
-          `${Number(data.matchedOptions || 0).toLocaleString()}건 이관 완료했습니다.\n창고번호·누적입고 등 이관 내용을 확인했습니다. 기존 ${Number(data.oldRows || 0).toLocaleString()}행을 삭제할까요?`
-        );
-        if (deleteOldRows) {
-          const cleanupResponse = await fetch("/api/google-sheet", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "deleteReplacementLegacyRows", model, replacementSku: legacySku }),
-          });
-          const cleanupData = await cleanupResponse.json();
-          if (!cleanupResponse.ok || !cleanupData.ok) throw new Error(cleanupData.error || "기존행 삭제 실패");
-          cleanupMessage = ` · 기존 ${Number(cleanupData.deleted || 0).toLocaleString()}행 삭제 완료`;
-        }
+        setPendingReplacementCleanup({ model, legacySku, oldRows: Number(data.oldRows || 0), matchedOptions: Number(data.matchedOptions || 0) });
       } else if (data.recoveredFromHistory) {
-        cleanupMessage = " · 기존 활성행 없음";
+        setPendingReplacementCleanup(null);
       }
-      setProduct(prev => ({ ...prev, replacementSku: "" }));
       setModelCheckMessage(
         `기존 상품 연결 완료 · 옵션 ${Number(data.matchedOptions || 0).toLocaleString()}개 이관` +
         `${Number(data.unmatchedNew || 0) ? ` · 새 옵션 ${Number(data.unmatchedNew).toLocaleString()}개는 기존 행 없음` : ""}` +
-        ` · 창고번호 ${warehouses.length ? warehouses.join(", ") : "없음"} · 구 SKU 입력값 자동 해제` +
-        `${data.recoveredFromHistory ? " · 교체이력에서 복구" : ""}${data.forcedFallback ? " · 구형 옵션 저장순서로 연결" : ""}${cleanupMessage}`
+        ` · 창고번호 ${warehouses.length ? warehouses.join(", ") : "없음"}` +
+        `${data.recoveredFromHistory ? " · 교체이력에서 복구" : ""}${data.forcedFallback ? " · 구형 옵션 저장순서로 연결" : ""}` +
+        `${data.cleanupAvailable ? " · 제품DB 확인 후 아래 버튼으로 기존행 삭제 또는 연결 취소" : " · 기존 활성행 없음"}`
       );
     } catch (error) {
       setModelCheckMessage(`오류: ${error instanceof Error ? error.message : "기존 SKU 연결 실패"}`);
+    }
+  };
+
+  const deleteLinkedLegacyRows = async () => {
+    const pending = pendingReplacementCleanup;
+    if (!pending) return;
+    const confirmed = window.confirm(
+      `정보를 이관하고 기존행을 삭제하겠습니까?\n\n${pending.model} · 이관 ${pending.matchedOptions.toLocaleString()}건 · 삭제 대상 ${pending.oldRows.toLocaleString()}행\n확인을 누른 경우에만 기존행을 삭제합니다.`
+    );
+    if (!confirmed) {
+      setModelCheckMessage("기존행 삭제를 취소했습니다. 기존행은 그대로 유지됩니다.");
+      return;
+    }
+    setModelCheckMessage("확인된 기존행만 삭제하고 있습니다...");
+    try {
+      const response = await fetch("/api/google-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "deleteReplacementLegacyRows", model: pending.model, replacementSku: pending.legacySku, confirmed: true }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "기존행 삭제 실패");
+      setPendingReplacementCleanup(null);
+      setProduct(prev => ({ ...prev, replacementSku: "" }));
+      setModelCheckMessage(`정보 이관 완료 · 확인한 기존 ${Number(data.deleted || 0).toLocaleString()}행 삭제 완료`);
+    } catch (error) {
+      setModelCheckMessage(`오류: ${error instanceof Error ? error.message : "기존행 삭제 실패"}`);
+    }
+  };
+
+  const undoLinkedReplacement = async () => {
+    const pending = pendingReplacementCleanup;
+    if (!pending) return;
+    if (!window.confirm(`${pending.model}의 이번 SKU 연결을 취소하고 기존행을 복원할까요?`)) return;
+    setModelCheckMessage("기존행을 복원하고 있습니다...");
+    try {
+      const response = await fetch("/api/google-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "undoReplacementLink", model: pending.model, replacementSku: pending.legacySku }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "연결 취소 실패");
+      setPendingReplacementCleanup(null);
+      setProduct(prev => ({ ...prev, replacementSku: "" }));
+      setModelCheckMessage(`SKU 연결 취소 완료 · 기존 ${Number(data.restored || 0).toLocaleString()}행 복원`);
+    } catch (error) {
+      setModelCheckMessage(`오류: ${error instanceof Error ? error.message : "연결 취소 실패"}`);
     }
   };
 
@@ -1518,6 +1555,10 @@ export default function Home() {
   };
 
   const batchSave = async () => {
+    if (pendingReplacementCleanup) {
+      setBatchStatus("SKU 이관 결과 확인이 끝나지 않았습니다. 기존행 삭제 또는 연결 취소를 먼저 선택해주세요.");
+      return;
+    }
     const required: string[] = [];
     if (!model) required.push("모델명");
     if (!product.category) required.push("카테고리");
@@ -1857,8 +1898,12 @@ export default function Home() {
           <Field label="기존상품 재등록 SKU ID">
             <input inputMode="numeric" value={product.replacementSku || ""} onChange={e => update("replacementSku", e.target.value)}
               placeholder="재등록 상품만 기존 대표 SKU ID 입력" />
-            <small>입력하면 기존 옵션별 창고번호·재고 이력만 가져오고, 기존 SKU ID와 바코드는 활성 행에서 제거합니다.</small>
+            <small>연결하면 기존 옵션별 창고번호·재고 이력을 가져옵니다. 기존행은 별도 최종 확인 전까지 삭제하지 않습니다.</small>
             <button className="secondaryButton replacementLinkButton" type="button" onClick={() => void linkExistingReplacement()}>기존 등록행에 연결</button>
+            {pendingReplacementCleanup && <>
+              <button className="secondaryButton replacementLinkButton" type="button" onClick={() => void deleteLinkedLegacyRows()}>이관 확인 후 기존행 삭제</button>
+              <button className="secondaryButton replacementLinkButton" type="button" onClick={() => void undoLinkedReplacement()}>연결 취소 · 기존행 복원</button>
+            </>}
           </Field>
           <Field label="핵심키워드">
             <input value={product.keyword} onChange={e => update("keyword", e.target.value)} />
