@@ -1334,12 +1334,15 @@ function scorePendingSkuMatch_(itemName, row) {
   return Math.max(0, Math.min(100, score));
 }
 
-function findPendingSkuMatch_(rows, itemName) {
+function findPendingSkuMatch_(rows, itemName, candidateIndexes, availableCandidates) {
   const skuColumn = dbColumn_('SKU ID');
   const modelSkuColumn = dbColumn_('모델SKU');
   const matchColumn = dbColumn_('SKU매칭상태');
   const scored = [];
-  rows.forEach((row, index) => {
+  const indexes = Array.isArray(candidateIndexes) ? candidateIndexes : rows.map((row, index) => index);
+  indexes.forEach(index => {
+    if (availableCandidates && !availableCandidates[index]) return;
+    const row = rows[index];
     if (String(row[skuColumn] || '').trim() || !String(row[modelSkuColumn] || '').trim()) return;
     if (!['등록대기','재등록대기','이관 실패'].includes(String(row[matchColumn] || '').trim())) return;
     const score = scorePendingSkuMatch_(itemName, row);
@@ -1403,6 +1406,17 @@ function importSkuMaster_(ss, db, items) {
   const skuColumn = dbColumn_('SKU ID');
   const skuMap = {};
   rows.forEach((row, index) => { const sku = String(row[skuColumn] || '').trim(); if (sku) skuMap[sku] = index; });
+  // 전체 제품DB를 SKU마다 반복 검색하지 않고 실제 연결대기 행만 한 번 색인합니다.
+  const pendingCandidateIndexes = [];
+  const availablePendingCandidates = {};
+  rows.forEach((row, index) => {
+    const waiting = !String(row[skuColumn] || '').trim()
+      && String(row[dbColumn_('모델SKU')] || '').trim()
+      && ['등록대기','재등록대기','이관 실패'].includes(String(row[dbColumn_('SKU매칭상태')] || '').trim());
+    if (!waiting) return;
+    pendingCandidateIndexes.push(index);
+    availablePendingCandidates[index] = true;
+  });
   const removed = {};
   const matchLog = [];
   const resolvedSkus = {};
@@ -1428,7 +1442,8 @@ function importSkuMaster_(ss, db, items) {
     if (isNew) newSkus++;
     const existingIndex = skuMap[sku];
     const existingHasModel = existingIndex !== undefined && String(rows[existingIndex][dbColumn_('모델SKU')] || '').trim();
-    const candidate = !existingHasModel ? findPendingSkuMatch_(rows, itemName) : null;
+    const candidate = !existingHasModel
+      ? findPendingSkuMatch_(rows, itemName, pendingCandidateIndexes, availablePendingCandidates) : null;
     let targetIndex = existingIndex;
 
     if (candidate && candidate.automatic) {
@@ -1448,11 +1463,13 @@ function importSkuMaster_(ss, db, items) {
       rows[targetIndex][dbColumn_('SKU매칭상태')] = registrationStatus;
       rows[targetIndex][dbColumn_('SKU매칭점수')] = candidate.score;
       rows[targetIndex][dbColumn_('SKU최초발견일')] = now;
+      availablePendingCandidates[targetIndex] = false;
       skuMap[sku] = targetIndex;
       matched++;
       matchLog.push(['자동연결',sku,itemName,String(item.barcode || ''),String(rows[targetIndex][dbColumn_('모델SKU')] || ''),String(rows[targetIndex][dbColumn_('모델명/품번')] || ''),candidate.score,now,'상품명·옵션이 유일하게 일치']);
     } else if (candidate) {
       review++;
+      availablePendingCandidates[candidate.index] = false;
       rows[candidate.index][dbColumn_('SKU매칭상태')] = '이관 실패';
       matchLog.push(['확인필요',sku,itemName,String(item.barcode || ''),String(rows[candidate.index][dbColumn_('모델SKU')] || ''),String(rows[candidate.index][dbColumn_('모델명/품번')] || ''),candidate.score,now,candidate.tied ? '동점 후보가 여러 개입니다.' : '유사하지만 자동연결 기준 미달']);
     } else if (isNew && !bootstrap) {
@@ -1941,23 +1958,45 @@ function refreshPurchasePrintProductLinks_(ss, db) {
   if (!sheet || sheet.getLastRow() < 3) return 0;
   const productMap = purchaseProductMap_(db);
   const rowCount = sheet.getLastRow() - 2;
-  const skus = sheet.getRange(3, 6, rowCount, 1).getDisplayValues();
+  const dataRange = sheet.getRange(3, 1, rowCount, PO_PICKING_HEADERS.length);
+  const values = dataRange.getValues();
+  const displays = dataRange.getDisplayValues();
+  const runs = [];
+  let currentRun = null;
+  const registeredCells = [];
+  const missingCells = [];
   let updated = 0;
-  skus.forEach((value, index) => {
-    const sku = String(value[0] || '').trim();
-    if (!sku) return;
+  displays.forEach((displayRow, index) => {
+    const sku = String(displayRow[5] || '').trim();
+    if (!sku) { currentRun = null; return; }
+    if (!currentRun || currentRun.end !== index - 1) {
+      currentRun = { start: index, end: index };
+      runs.push(currentRun);
+    } else currentRun.end = index;
     const product = productMap[sku];
     const rowNumber = index + 3;
     const warehouse = product ? String(product[dbColumn_('창고번호')] || '').trim() : '';
-    sheet.getRange(rowNumber, 5).setValue(warehouse || '미등록').setBackground(warehouse ? null : '#f4cccc');
+    values[index][4] = warehouse || '미등록';
+    (warehouse ? registeredCells : missingCells).push('E' + rowNumber);
     if (product) {
-      sheet.getRange(rowNumber, 7).setValue(productDisplayName_(product, sheet.getRange(rowNumber, 7).getDisplayValue()));
-      sheet.getRange(rowNumber, 8).setValue(String(product[dbColumn_('바코드')] || ''));
-      sheet.getRange(rowNumber, 9).setValue(number_(product[dbColumn_('원가(부가세포함)')]));
-      sheet.getRange(rowNumber, 13).setValue(String(product[dbColumn_('거래처')] || ''));
+      values[index][6] = productDisplayName_(product, displayRow[6]);
+      values[index][7] = String(product[dbColumn_('바코드')] || '');
+      values[index][8] = number_(product[dbColumn_('원가(부가세포함)')]);
+      values[index][12] = String(product[dbColumn_('거래처')] || '');
       updated++;
     }
   });
+  // 합배송 제목행은 병합되어 있으므로 실제 SKU 데이터행 묶음만 일괄 기록합니다.
+  runs.forEach(run => {
+    const startRow = run.start + 3;
+    const length = run.end - run.start + 1;
+    const rows = values.slice(run.start, run.end + 1);
+    sheet.getRange(startRow, 5, length, 1).setValues(rows.map(row => [row[4]]));
+    sheet.getRange(startRow, 7, length, 3).setValues(rows.map(row => row.slice(6, 9)));
+    sheet.getRange(startRow, 13, length, 1).setValues(rows.map(row => [row[12]]));
+  });
+  if (registeredCells.length) sheet.getRangeList(registeredCells).setBackground(null);
+  if (missingCells.length) sheet.getRangeList(missingCells).setBackground('#f4cccc');
   return updated;
 }
 
