@@ -130,6 +130,9 @@ function doPost(e) {
     if (data.action === 'normalizeCatalogIds') {
       return json_({ ok: true, normalized: normalizeCatalogIdColumns_(db) });
     }
+    if (data.action === 'repairSkuUploadDuplicates') {
+      return repairSkuUploadDuplicates_(db, data.mappings || []);
+    }
 
     if (data.action === 'importSkuMaster') return importSkuMaster_(ss, db, data.items || []);
     if (data.action === 'importLegacyProducts') return importLegacyProducts_(ss, db, data.items || []);
@@ -1346,18 +1349,43 @@ function scorePendingSkuMatch_(itemName, row) {
   return Math.max(0, Math.min(100, score));
 }
 
+/** 상품명 또는 모델SKU에서 RGWH/RGBK/SIWH/SIBK/GOWH/GOBK 옵션 코드를 찾습니다. */
+function skuOptionCode_(value) {
+  const raw = String(value || '').trim();
+  const modelMatch = raw.toUpperCase().match(/(?:^|[-_])(RG|SI|GO)(WH|BK)$/);
+  if (modelMatch) return modelMatch[1] + modelMatch[2];
+  const text = normalizeSkuMatchText_(raw);
+  let metal = '';
+  if (text.indexOf('로즈골드') >= 0) metal = 'RG';
+  else if (text.indexOf('실버') >= 0) metal = 'SI';
+  else if (text.indexOf('골드') >= 0) metal = 'GO';
+  let color = '';
+  if (text.indexOf('화이트') >= 0) color = 'WH';
+  else if (text.indexOf('블랙') >= 0) color = 'BK';
+  return metal && color ? metal + color : '';
+}
+
 function findPendingSkuMatch_(rows, itemName, candidateIndexes, availableCandidates) {
   const skuColumn = dbColumn_('SKU ID');
   const modelSkuColumn = dbColumn_('모델SKU');
   const matchColumn = dbColumn_('SKU매칭상태');
   const scored = [];
   const indexes = Array.isArray(candidateIndexes) ? candidateIndexes : rows.map((row, index) => index);
-  indexes.forEach(index => {
+  const itemOptionCode = skuOptionCode_(itemName);
+  const optionMatches = itemOptionCode ? indexes.filter(index => {
+    const row = rows[index];
+    return row && skuOptionCode_(row[modelSkuColumn]) === itemOptionCode;
+  }) : [];
+  const searchIndexes = optionMatches.length ? optionMatches : indexes;
+  searchIndexes.forEach(index => {
     if (availableCandidates && !availableCandidates[index]) return;
     const row = rows[index];
     if (String(row[skuColumn] || '').trim() || !String(row[modelSkuColumn] || '').trim()) return;
     if (!['등록대기','재등록대기','이관 실패'].includes(String(row[matchColumn] || '').trim())) return;
-    const score = scorePendingSkuMatch_(itemName, row);
+    let score = scorePendingSkuMatch_(itemName, row);
+    if (itemOptionCode && skuOptionCode_(row[modelSkuColumn]) === itemOptionCode) {
+      score = optionMatches.length === 1 ? 100 : Math.min(100, score + 8);
+    }
     if (score >= 70) scored.push({ index: index, score: score });
   });
   scored.sort((a, b) => b.score - a.score);
@@ -1401,38 +1429,29 @@ function importSkuMaster_(ss, db, items) {
   masterRows.forEach((row, index) => { const sku = String(row[0] || '').trim(); if (sku) known[sku] = index; });
   const bootstrap = masterRows.length === 0;
   const now = new Date();
-
-  normalizePendingRegistrationStatuses_(ss, db);
-  purgeRetiredProductRows_(ss, db);
-  repairReplacementDataFromHistory_(ss, db);
-  const originalRows = dbMatrix_(db);
+  const rows = dbMatrix_(db);
   const retired = retiredSkuSet_(ss);
-  const activeRows = originalRows.filter(row => {
-    const nonRocket = /^S/i.test(String(row[dbColumn_('바코드')] || '').trim());
-    return !nonRocket;
-  });
-  const dedupedActive = dedupeProductDbRows_(activeRows);
-  const rows = dedupedActive.rows;
-  const removedNonRocket = originalRows.length - activeRows.length;
-  const duplicatesRemoved = dedupedActive.removed;
   const skuColumn = dbColumn_('SKU ID');
+  const modelSkuColumn = dbColumn_('모델SKU');
   const skuMap = {};
-  rows.forEach((row, index) => { const sku = String(row[skuColumn] || '').trim(); if (sku) skuMap[sku] = index; });
-  // 전체 제품DB를 SKU마다 반복 검색하지 않고 실제 연결대기 행만 한 번 색인합니다.
+  rows.forEach((row, index) => {
+    const sku = normalizeSkuId_(row[skuColumn]);
+    if (!sku) return;
+    const current = skuMap[sku];
+    if (current === undefined || (!String(rows[current][modelSkuColumn] || '').trim() && String(row[modelSkuColumn] || '').trim())) skuMap[sku] = index;
+  });
   const pendingCandidateIndexes = [];
   const availablePendingCandidates = {};
   rows.forEach((row, index) => {
     const waiting = !String(row[skuColumn] || '').trim()
-      && String(row[dbColumn_('모델SKU')] || '').trim()
+      && String(row[modelSkuColumn] || '').trim()
       && ['등록대기','재등록대기','이관 실패'].includes(String(row[dbColumn_('SKU매칭상태')] || '').trim());
     if (!waiting) return;
     pendingCandidateIndexes.push(index);
     availablePendingCandidates[index] = true;
   });
-  const removed = {};
   const matchLog = [];
   const resolvedSkus = {};
-  let inserted = 0;
   let updated = 0;
   let matched = 0;
   let review = 0;
@@ -1440,89 +1459,52 @@ function importSkuMaster_(ss, db, items) {
   let retiredSkipped = 0;
 
   (Array.isArray(items) ? items : []).filter(item => !/^S/i.test(String(item.barcode || '').trim())).forEach(item => {
-    const sku = String(item.sku || '').trim();
+    const sku = normalizeSkuId_(item.sku);
     if (!sku) return;
     const itemName = cleanText_(item.name);
     const isNew = known[sku] === undefined;
+    const masterRow = [sku,itemName,String(item.barcode || ''),String(item.status || ''),isNew ? now : masterRows[known[sku]][4],now];
+    if (isNew) { known[sku] = masterRows.length; masterRows.push(masterRow); newSkus++; }
+    else masterRows[known[sku]] = masterRow;
     if (retired[sku]) {
-      const masterRow = [sku,itemName,String(item.barcode || ''),String(item.status || ''),isNew ? now : masterRows[known[sku]][4],now];
-      if (isNew) { known[sku] = masterRows.length; masterRows.push(masterRow); }
-      else masterRows[known[sku]] = masterRow;
       retiredSkipped++;
       return;
     }
-    if (isNew) newSkus++;
     const existingIndex = skuMap[sku];
-    const existingHasModel = existingIndex !== undefined && String(rows[existingIndex][dbColumn_('모델SKU')] || '').trim();
+    const existingHasModel = existingIndex !== undefined && String(rows[existingIndex][modelSkuColumn] || '').trim();
     const candidate = !existingHasModel
       ? findPendingSkuMatch_(rows, itemName, pendingCandidateIndexes, availablePendingCandidates) : null;
-    let targetIndex = existingIndex;
-
-    if (candidate && candidate.automatic) {
-      targetIndex = candidate.index;
-      const registrationStatus = String(rows[targetIndex][dbColumn_('SKU매칭상태')] || '').indexOf('재등록') >= 0
-        ? '재등록대기' : '등록대기';
-      if (existingIndex !== undefined && existingIndex !== targetIndex) {
-        ['창고번호','발주가능상태','제품링크','바코드','현재고','누적입고','총입고','반출누계','누적발주',
-          '미입고','최근발주수량','최근입고일','이전쿠팡공급가','최근쿠팡공급가','공급가차이','공급가확인',
-          '쿠팡 노출가','노출상품ID','옵션ID'].forEach(name => {
-          const column = dbColumn_(name);
-          if (!rows[targetIndex][column] && rows[existingIndex][column]) rows[targetIndex][column] = rows[existingIndex][column];
-        });
-        removed[existingIndex] = true;
-      }
-      rows[targetIndex][skuColumn] = sku;
-      rows[targetIndex][dbColumn_('SKU매칭상태')] = registrationStatus;
-      rows[targetIndex][dbColumn_('SKU매칭점수')] = candidate.score;
-      rows[targetIndex][dbColumn_('SKU최초발견일')] = now;
-      availablePendingCandidates[targetIndex] = false;
-      skuMap[sku] = targetIndex;
-      matched++;
-      matchLog.push(['자동연결',sku,itemName,String(item.barcode || ''),String(rows[targetIndex][dbColumn_('모델SKU')] || ''),String(rows[targetIndex][dbColumn_('모델명/품번')] || ''),candidate.score,now,'상품명·옵션이 유일하게 일치']);
-    } else if (candidate) {
-      review++;
-      availablePendingCandidates[candidate.index] = false;
-      rows[candidate.index][dbColumn_('SKU매칭상태')] = '이관 실패';
-      matchLog.push(['확인필요',sku,itemName,String(item.barcode || ''),String(rows[candidate.index][dbColumn_('모델SKU')] || ''),String(rows[candidate.index][dbColumn_('모델명/품번')] || ''),candidate.score,now,candidate.tied ? '동점 후보가 여러 개입니다.' : '유사하지만 자동연결 기준 미달']);
-    } else if (isNew && !bootstrap) {
-      matchLog.push(['이관 실패',sku,itemName,String(item.barcode || ''),'','',0,now,'등록대기 상품에서 후보를 찾지 못했습니다. 후보 모델SKU를 입력한 뒤 처리상태를 연결승인으로 바꾸세요.']);
-    }
-
-    if (candidate && !candidate.automatic) {
-      const masterRow = [sku,itemName,String(item.barcode || ''),String(item.status || ''),isNew ? now : masterRows[known[sku]][4],now];
-      if (isNew) { known[sku] = masterRows.length; masterRows.push(masterRow); }
-      else masterRows[known[sku]] = masterRow;
-      return;
-    }
+    const targetIndex = existingHasModel ? existingIndex : (candidate && candidate.automatic ? candidate.index : undefined);
     if (targetIndex === undefined) {
-      if (!isNew) matchLog.push(['이관 실패',sku,itemName,String(item.barcode || ''),'','',0,now,'제품DB 등록대기 행을 찾지 못했습니다. 후보 모델SKU를 입력한 뒤 처리상태를 연결승인으로 바꾸세요.']);
-      const masterRow = [sku,itemName,String(item.barcode || ''),String(item.status || ''),isNew ? now : masterRows[known[sku]][4],now];
-      if (isNew) { known[sku] = masterRows.length; masterRows.push(masterRow); }
-      else masterRows[known[sku]] = masterRow;
       review++;
+      matchLog.push(['이관 실패',sku,itemName,String(item.barcode || ''),candidate ? String(rows[candidate.index][modelSkuColumn] || '') : '',candidate ? String(rows[candidate.index][dbColumn_('모델명/품번')] || '') : '',candidate ? candidate.score : 0,now,
+        candidate ? (candidate.tied ? '동점 후보가 여러 개입니다. 제품DB는 수정하지 않았습니다.' : '자동연결 기준 미달로 제품DB는 수정하지 않았습니다.') : '기존 등록대기 행을 찾지 못해 제품DB는 수정하지 않았습니다.']);
       return;
+    }
+    if (candidate && candidate.automatic) {
+      availablePendingCandidates[targetIndex] = false;
+      matched++;
+      matchLog.push(['자동연결',sku,itemName,String(item.barcode || ''),String(rows[targetIndex][modelSkuColumn] || ''),String(rows[targetIndex][dbColumn_('모델명/품번')] || ''),candidate.score,now,'기존행의 허용된 4개 필드만 갱신']);
     }
     updated++;
     const row = rows[targetIndex];
     row[skuColumn] = sku;
-    row[dbColumn_('상품명')] = itemName || cleanText_(row[dbColumn_('상품명')]);
+    row[dbColumn_('상품명')] = itemName;
     row[dbColumn_('바코드')] = String(item.barcode || '');
     row[dbColumn_('발주가능상태')] = String(item.status || '');
-    if (!candidate) {
-      row[dbColumn_('SKU매칭상태')] = String(row[dbColumn_('SKU매칭상태')] || '').indexOf('재등록') >= 0
-        ? '재등록대기' : '등록대기';
-      row[dbColumn_('SKU매칭점수')] = 100;
-    }
-    if (String(row[dbColumn_('모델SKU')] || '').trim() && !(candidate && !candidate.automatic)) resolvedSkus[sku] = true;
-
-    const masterRow = [sku,itemName,String(item.barcode || ''),String(item.status || ''),isNew ? now : masterRows[known[sku]][4],now];
-    if (isNew) { known[sku] = masterRows.length; masterRows.push(masterRow); }
-    else masterRows[known[sku]] = masterRow;
+    skuMap[sku] = targetIndex;
+    resolvedSkus[sku] = true;
   });
 
-  const finalRows = dedupeProductDbRows_(rows.filter((row, index) => !removed[index])).rows;
-  writeDbMatrix_(db, finalRows);
-  refreshPurchasePrintProductLinks_(ss, db);
+  // 상품공급상태 업로드는 아래 4개 열 외에는 쓰기·정렬·삭제를 절대 하지 않습니다.
+  if (rows.length) {
+    ['SKU ID','상품명','발주가능상태','바코드'].forEach(name => {
+      const column = dbColumn_(name);
+      const range = db.getRange(2, column + 1, rows.length, 1);
+      if (name === 'SKU ID' || name === '바코드') range.setNumberFormat('@');
+      range.setValues(rows.map(row => [row[column]]));
+    });
+  }
   if (masterRows.length) {
     ensureSheetSize_(master, masterRows.length + 1, SKU_MASTER_HEADERS.length);
     master.getRange(2, 1, masterRows.length, SKU_MASTER_HEADERS.length).setValues(masterRows);
@@ -1532,11 +1514,51 @@ function importSkuMaster_(ss, db, items) {
   }
   removeRetiredSkuMatchRows_(ss, retired);
   writeSkuMatchLog_(ss, matchLog, resolvedSkus);
-  return json_({ ok: true, inserted: inserted, updated: updated, total: finalRows.length,
+  return json_({ ok: true, inserted: 0, updated: updated, total: rows.length,
     baseline: bootstrap, newSkus: bootstrap ? 0 : newSkus, matched: matched, review: review,
     retiredSkipped: retiredSkipped,
-    duplicatesRemoved: duplicatesRemoved,
-    removedNonRocket: removedNonRocket + (originalMasterRows.length - masterRows.length) });
+    duplicatesRemoved: 0,
+    removedNonRocket: originalMasterRows.length - masterRows.length,
+    strictFields: ['SKU ID','상품명','발주가능상태','바코드'] });
+}
+
+/** 잘못 생성된 SKU 전용행을 지정된 기존 모델SKU 행으로 옮기고 전용행만 삭제합니다. */
+function repairSkuUploadDuplicates_(db, mappings) {
+  const rows = dbMatrix_(db);
+  const skuColumn = dbColumn_('SKU ID');
+  const modelSkuColumn = dbColumn_('모델SKU');
+  const modelMap = {};
+  const skuRows = {};
+  rows.forEach((row, index) => {
+    const modelSku = String(row[modelSkuColumn] || '').trim().toUpperCase();
+    const sku = normalizeSkuId_(row[skuColumn]);
+    if (modelSku) modelMap[modelSku] = index;
+    if (sku) (skuRows[sku] || (skuRows[sku] = [])).push(index);
+  });
+  const deleteIndexes = {};
+  const missing = [];
+  let moved = 0;
+  (Array.isArray(mappings) ? mappings : []).forEach(item => {
+    const sku = normalizeSkuId_(item.sku);
+    const modelSku = String(item.modelSku || '').trim().toUpperCase();
+    const targetIndex = modelMap[modelSku];
+    if (!sku || targetIndex === undefined) {
+      missing.push({ sku: sku, modelSku: modelSku });
+      return;
+    }
+    const targetRow = targetIndex + 2;
+    db.getRange(targetRow, skuColumn + 1).setNumberFormat('@').setValue(sku);
+    db.getRange(targetRow, dbColumn_('상품명') + 1).setValue(cleanText_(item.name));
+    db.getRange(targetRow, dbColumn_('발주가능상태') + 1).setValue(String(item.status || ''));
+    db.getRange(targetRow, dbColumn_('바코드') + 1).setNumberFormat('@').setValue(String(item.barcode || ''));
+    (skuRows[sku] || []).forEach(index => {
+      if (index !== targetIndex && !String(rows[index][modelSkuColumn] || '').trim()) deleteIndexes[index] = true;
+    });
+    moved++;
+  });
+  const sortedDeletes = Object.keys(deleteIndexes).map(Number).sort((a, b) => b - a);
+  sortedDeletes.forEach(index => db.deleteRow(index + 2));
+  return json_({ ok: true, moved: moved, deleted: sortedDeletes.length, missing: missing });
 }
 
 function normalizeLegacyGender_(value) {
