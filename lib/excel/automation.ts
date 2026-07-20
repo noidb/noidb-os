@@ -1,13 +1,9 @@
 import ExcelJS from "exceljs";
 import path from "path";
 import {
-  altText,
   buildSkuRows,
-  categoryPath,
-  detectStone,
+  costWithVat,
   dimensionText,
-  genderTarget,
-  kindLabel,
   msrpPrice,
   parseNumber,
   supplierLabel,
@@ -35,24 +31,28 @@ export async function buildAutomationWorkbook(payload: ExportPayload) {
   await workbook.xlsx.readFile(templatePath);
 
   const sale = parseNumber(payload.product.price);
-  const cost = parseNumber(payload.product.cost);
+  const cost = costWithVat(parseNumber(payload.product.cost));
   const supply = supplyPrice(sale || 0);
   const msrp = msrpPrice(sale || 0);
   const supplier = supplierLabel(payload.product.supplier, payload.product.gender);
   const dimension = dimensionText(payload.product);
   const skus = buildSkuRows(payload);
-  const target = genderTarget(payload.product.gender);
-  const stone = detectStone(payload.product.keyword);
-  const engraving = /각인/.test(payload.product.keyword + payload.title) ? "각인 포함" : "각인 미포함";
-  const pathValue = categoryPath(payload.product.category, payload.product.gender);
-  const kind = kindLabel(payload.product.gender, payload.product.category);
+
+  for (const sheet of [...workbook.worksheets]) {
+    if (!["상품입력", "제품DB"].includes(sheet.name)) {
+      workbook.removeWorksheet(sheet.id);
+    }
+  }
 
   // 1) 상품입력 — current product only
   const input = workbook.getWorksheet("상품입력");
   if (!input) throw new Error("상품입력 시트가 없습니다.");
   clearSheetFrom(input, 2);
+  input.getRow(1).values = [
+    "등록여부", "거래처", "성별", "카테고리", "모델명/품번", "상품명",
+    "색상목록", "사이즈목록", "원가(부가세포함)", "쿠팡 판매가", "치수", "창고번호",
+  ];
   input.getRow(2).values = [
-    undefined,
     "등록",
     supplier,
     payload.product.gender,
@@ -64,146 +64,77 @@ export async function buildAutomationWorkbook(payload: ExportPayload) {
     cost || "",
     sale || "",
     dimension,
+    payload.product.warehouse || "",
   ];
 
-  // 2) AI분석요청
-  const ai = workbook.getWorksheet("AI분석요청");
-  if (ai) {
-    clearSheetFrom(ai, 2);
-    const prompt =
-      `첨부한 상품 이미지를 참고해서 아래 상품을 분석해줘.\n\n` +
-      `[상품정보]\n카테고리 : ${kind}\n모델명 : ${payload.model}\n현재 상품명 : ${payload.title}\n` +
-      `옵션 : ${payload.product.colors}\n사이즈 : ${payload.product.sizes}\n치수 : ${dimension}`;
-    ai.getRow(2).values = [
-      undefined,
-      payload.model,
-      kind,
-      payload.title,
-      prompt,
-      "",
-      "미완료",
-      "미완료",
-      "미완료",
-    ];
-  }
-
-  // 3) 제품DB — SKU rows
+  // 2) 제품DB — 재고관리용 SKU rows
   const db = workbook.getWorksheet("제품DB");
   if (!db) throw new Error("제품DB 시트가 없습니다.");
-  clearSheetFrom(db, 2);
+  clearSheetFrom(db, 1);
+  const dbHeaders = [
+    "거래처", "성별", "카테고리", "모델명/품번", "모델SKU", "이미지",
+    "상품명", "색상", "주얼리사이즈", "치수", "원가(부가세포함)", "쿠팡 판매가",
+    "공급가", "권장소비자가격", "SKU ID", "발주가능상태", "제품링크", "마진",
+    "바코드", "현재고", "누적입고", "창고번호",
+  ];
+  db.getRow(1).values = dbHeaders;
+  const header = db.getRow(1);
+  header.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  header.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
+  header.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+  header.height = 32;
   skus.forEach((sku, index) => {
-    db.getRow(2 + index).values = [
-      undefined,
+    const rowNumber = 2 + index;
+    const row = db.getRow(rowNumber);
+    row.values = [
       supplier,
       payload.product.gender,
       payload.product.category,
       payload.model,
       sku.sku,
+      "",
       payload.title,
       sku.color,
       sku.size,
       dimension,
       cost || "",
       sale || "",
-      payload.tags,
-      sku.thumbFile,
-      sku.detailFile,
-      altText(payload.title),
       supply,
       msrp,
-      kind,
-      sku.labelFile,
-      payload.product.material,
+      "",
+      "",
+      payload.sourcingUrl || "",
+      supply - cost,
+      "",
+      0,
+      0,
+      payload.product.warehouse || "",
     ];
+    row.getCell(13).value = { formula: `ROUND(L${rowNumber}*0.58,0)`, result: supply };
+    row.getCell(14).value = { formula: `CEILING(L${rowNumber}*1.5,1000)`, result: msrp };
+    row.getCell(18).value = { formula: `M${rowNumber}-K${rowNumber}`, result: supply - cost };
+    const imageData = payload.optionImages?.[sku.color];
+    if (imageData?.startsWith("data:image/")) {
+      const extension: "jpeg" | "png" = imageData.startsWith("data:image/png") ? "png" : "jpeg";
+      const imageId = workbook.addImage({ base64: imageData, extension });
+      db.addImage(imageId, {
+        tl: { col: 5.12, row: rowNumber - 0.88 },
+        ext: { width: 68, height: 68 },
+        editAs: "oneCell",
+      });
+      row.height = 56;
+    }
   });
-
-  const extrasCsv =
-    payload.additionalImagesCsv ||
-    (payload.additionalImages || []).filter(Boolean).join(",");
-
-  // 4) 쿠팡반지_앞부분 / 뒷부분 — fill when 반지 (sheet is ring-oriented)
-  const front = workbook.getWorksheet("쿠팡반지_앞부분");
-  const back = workbook.getWorksheet("쿠팡반지_뒷부분");
-  if (front) {
-    clearSheetFrom(front, 2);
-    if (payload.product.category === "반지") {
-      skus.forEach((sku, index) => {
-        front.getRow(2 + index).values = [
-          undefined,
-          pathValue,
-          payload.title,
-          "바코드 없음(쿠팡 바코드 생성 요청)",
-          payload.tags,
-          "브랜드 없음",
-          sku.color,
-          sku.size,
-          payload.product.material,
-          "주문제작 아님",
-          "사이즈 조절 아님",
-          stone,
-          payload.model,
-          target,
-          engraving,
-          sku.size,
-          "",
-          "",
-          "",
-          target,
-          "",
-          "",
-          "",
-          "",
-          "", // Parent MPN blank
-          "", // Manufacturer Part Number blank
-          sku.thumbFile,
-          extrasCsv || "",
-          sku.detailFile,
-          "",
-          "",
-          altText(payload.title),
-          supply,
-          sale,
-          "과세",
-          "프리스타일 협력업체",
-          "기타 도소매업자",
-          "수입상품",
-          500,
-          0,
-          "해당사항없음",
-          10,
-          "70*60*10",
-          "",
-          "",
-          "",
-          "",
-          sku.labelFile,
-        ];
-      });
-    }
-  }
-  if (back) {
-    clearSheetFrom(back, 2);
-    if (payload.product.category === "반지") {
-      skus.forEach((_sku, index) => {
-        back.getRow(2 + index).values = [
-          undefined,
-          kind,
-          payload.product.material,
-          dimension,
-          "프리스타일 협력사",
-          "중국",
-          "분실, 파손주의",
-          "제품 이상 시 공정거래위원회 고시 소비자분쟁해결 기준에 의거 보상합니다.",
-          "쿠팡 1577-7011",
-        ];
-      });
-    }
-  }
+  db.views = [{ state: "frozen", ySplit: 1 }];
+  db.autoFilter = { from: "A1", to: "V1" };
+  db.columns.forEach((column, index) => {
+    column.width = index === 5 || index === 6 || index === 16 ? 24 : 15;
+  });
 
   const buffer = await workbook.xlsx.writeBuffer();
   return {
     buffer: Buffer.from(buffer),
-    downloadName: `상품입력자동화_${payload.model}.xlsx`,
+    downloadName: "상품DB.xlsx",
     skuCount: skus.length,
   };
 }

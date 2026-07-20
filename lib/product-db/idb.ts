@@ -1,11 +1,12 @@
-const DB_NAME = "noidb-product-db";
+const DB_NAME = "laura-product-db";
+const LEGACY_DB_NAME = ["noi", "db-product-db"].join("");
 const DB_VERSION = 1;
 const STORE = "handles";
 const ROOT_KEY = "product-db-root";
 
-function openDb(): Promise<IDBDatabase> {
+function openNamedDb(name: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    const req = indexedDB.open(name, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) {
@@ -17,7 +18,45 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
+function openDb() {
+  return openNamedDb(DB_NAME);
+}
+
+let legacyMigration: Promise<void> | null = null;
+function migrateLegacyHandle() {
+  if (legacyMigration) return legacyMigration;
+  legacyMigration = (async () => {
+    const current = await openDb();
+    const currentHandle = await new Promise<FileSystemDirectoryHandle | null>((resolve, reject) => {
+      const req = current.transaction(STORE, "readonly").objectStore(STORE).get(ROOT_KEY);
+      req.onsuccess = () => resolve((req.result as FileSystemDirectoryHandle) || null);
+      req.onerror = () => reject(req.error);
+    });
+    if (!currentHandle) {
+      const legacy = await openNamedDb(LEGACY_DB_NAME);
+      const legacyHandle = await new Promise<FileSystemDirectoryHandle | null>((resolve, reject) => {
+        const req = legacy.transaction(STORE, "readonly").objectStore(STORE).get(ROOT_KEY);
+        req.onsuccess = () => resolve((req.result as FileSystemDirectoryHandle) || null);
+        req.onerror = () => reject(req.error);
+      });
+      legacy.close();
+      if (legacyHandle) {
+        await new Promise<void>((resolve, reject) => {
+          const tx = current.transaction(STORE, "readwrite");
+          tx.objectStore(STORE).put(legacyHandle, ROOT_KEY);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+      }
+    }
+    current.close();
+    indexedDB.deleteDatabase(LEGACY_DB_NAME);
+  })().catch(() => undefined);
+  return legacyMigration;
+}
+
 export async function saveDirectoryHandle(handle: FileSystemDirectoryHandle) {
+  await migrateLegacyHandle();
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
@@ -29,6 +68,7 @@ export async function saveDirectoryHandle(handle: FileSystemDirectoryHandle) {
 }
 
 export async function loadDirectoryHandle(): Promise<FileSystemDirectoryHandle | null> {
+  await migrateLegacyHandle();
   const db = await openDb();
   const handle = await new Promise<FileSystemDirectoryHandle | null>((resolve, reject) => {
     const tx = db.transaction(STORE, "readonly");

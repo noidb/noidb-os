@@ -6,16 +6,31 @@ export const ALT_TEXT_FOOTER =
 
 export function colorCode(option: string) {
   const normalized = option.trim().toLowerCase();
-  if (normalized.includes("로즈")) return "RG";
-  if (normalized.includes("골드") || normalized.includes("gold")) return "GO";
-  if (normalized.includes("실버") || normalized.includes("silver")) return "SI";
-  if (normalized.includes("블랙") || normalized.includes("black")) return "BK";
-  if (normalized.includes("화이트") || normalized.includes("white")) return "WH";
+  const codes: string[] = [];
+  if (normalized.includes("로즈") || normalized.includes("rose gold") || normalized.includes("rosegold")) codes.push("RG");
+  else if (normalized.includes("골드") || normalized.includes("gold")) codes.push("GO");
+  else if (normalized.includes("실버") || normalized.includes("silver")) codes.push("SI");
+  if ((normalized.includes("화이트") || normalized.includes("white")) && !codes.includes("WH")) codes.push("WH");
+  if ((normalized.includes("블랙") || normalized.includes("black")) && !codes.includes("BK")) codes.push("BK");
+  if (codes.length) return codes.join("");
   return normalized.replace(/[^a-z0-9가-힣]/g, "").slice(0, 2).toUpperCase() || "OP";
 }
 
 export function ringSizeNumber(size: string) {
   return size.replace(/[^0-9]/g, "");
+}
+
+export function sizeOptionCodes(sizes: string[]) {
+  const used = new Set<string>();
+  return sizes.map((size, index) => {
+    const numeric = ringSizeNumber(size);
+    const base = numeric || colorCode(size) || `SZ${index + 1}`;
+    let code = base;
+    let suffix = 2;
+    while (used.has(code)) code = `${base}${suffix++}`;
+    used.add(code);
+    return code;
+  });
 }
 
 export function splitList(value: string) {
@@ -27,19 +42,21 @@ export function splitList(value: string) {
 
 export function buildSkuRows(payload: ExportPayload): SkuRow[] {
   const { product, model } = payload;
-  const colors = splitList(product.colors);
-  const sizes = splitList(product.sizes);
+  const colors = [...new Set(splitList(product.colors))];
+  const sizes = [...new Set(splitList(product.sizes))];
   const useSizeCombo =
+    sizes.length >= 2 ||
     product.category === "반지" ||
     (sizes.length > 0 && sizes.some(s => /\d/.test(s)));
+  const sizeCodes = sizeOptionCodes(sizes);
 
   const rows: SkuRow[] = [];
   for (const color of colors) {
     const code = colorCode(color);
     if (useSizeCombo && sizes.length) {
-      for (const size of sizes) {
-        const num = ringSizeNumber(size);
-        const sku = num ? `${model}-${code}${num}` : `${model}-${code}`;
+      for (let sizeIndex = 0; sizeIndex < sizes.length; sizeIndex++) {
+        const size = sizes[sizeIndex];
+        const sku = `${model}-${code}${sizeCodes[sizeIndex]}`;
         rows.push({
           color,
           size,
@@ -63,6 +80,11 @@ export function buildSkuRows(payload: ExportPayload): SkuRow[] {
       });
     }
   }
+  const generated = new Set<string>();
+  rows.forEach(row => {
+    if (generated.has(row.sku)) throw new Error(`모델SKU가 중복 생성되었습니다: ${row.sku}`);
+    generated.add(row.sku);
+  });
   return rows;
 }
 
@@ -129,6 +151,7 @@ export function kindLabel(gender: string, category: string) {
 }
 
 export function dimensionText(product: ExportPayload["product"]) {
+  if (product.dimension?.trim()) return product.dimension.trim();
   const sizes = product.sizes || "";
   if (product.category === "반지") {
     return `반지너비 약 1cm, 한국사이즈 ${sizes || "9호,11호,14호,17호,20호,22호,25호"}`;
@@ -141,6 +164,10 @@ export function supplyPrice(salePrice: number) {
   return Math.round(salePrice * 0.58);
 }
 
+export function costWithVat(costPrice: number) {
+  return Math.round(costPrice * 1.1);
+}
+
 export function msrpPrice(salePrice: number) {
   return Math.ceil((salePrice * 1.5) / 1000) * 1000;
 }
@@ -150,14 +177,14 @@ export function altText(title: string) {
 }
 
 export function supplierLabel(supplier: string, gender: string) {
-  if (supplier && supplier !== "기타") {
-    if (gender === "남성") return `${supplier}(남성)`;
-    if (gender === "여성") return `${supplier}(여성)`;
-    return supplier;
+  void gender;
+  const normalized = String(supplier || "").trim()
+    .replace(/\s*\((?:여성|남성|여자|남자|남녀공용)\)\s*$/u, "")
+    .trim();
+  if (!normalized || /^(?:부산|여성 거래처|남성 거래처|공용 거래처|공용거래처)$/u.test(normalized)) {
+    return "프리스타일";
   }
-  if (gender === "남성") return "남성 거래처";
-  if (gender === "남녀공용") return "공용 거래처";
-  return "여성 거래처";
+  return normalized;
 }
 
 export function detectStone(keyword: string) {

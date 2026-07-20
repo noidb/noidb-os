@@ -14,10 +14,13 @@ import {
   colorCode,
   ringSizeNumber,
 } from "@/lib/product-db/files";
-import { writeProductDbFiles } from "@/lib/product-db/fs";
+import { ensureProductFolderTree, writeCategoryFile, writeProductDbFiles } from "@/lib/product-db/fs";
+import { dataUrlToBlob } from "@/lib/product-db/files";
 import { buildProductDbZip } from "@/lib/product-db/zip";
 import { compressImageDataUrl } from "@/lib/image/compress";
+import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
 import { defaultFitAdjust, fitToWhiteCanvas, type FitAdjust } from "@/lib/thumbnail/fit";
+import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 
 type Product = {
   supplier: string;
@@ -27,7 +30,13 @@ type Product = {
   colors: string;
   sizes: string;
   modelNo: string;
+  modelName?: string;
+  warehouse: string;
+  replacementSku: string;
   keyword: string;
+  coupangTitle?: string;
+  searchTags?: string;
+  dimension: string;
   cost: string;
   price: string;
 };
@@ -43,6 +52,16 @@ type Analysis = {
 type ProductPhoto = { id: string; name: string; dataUrl: string };
 type SlotImage = { dataUrl: string; fileName: string };
 type DetailImage = { id: string; name: string; dataUrl: string };
+type CustomSlot = { id: string; type: "all" | "detail" | "wear"; slot: SlotImage | null };
+type QuoteQueueRecord = { model: string; gender: string; category: string; skuCount: number; savedAt: number | string; payload: any };
+type ChineseKeyword = { chinese: string; koreanMeaning: string };
+type EnglishKeyword = { english: string; koreanMeaning: string };
+type SourcingAnalysis = {
+  koreanSummary?: string;
+  chineseKeywords?: ChineseKeyword[];
+  englishKeywords?: EnglishKeyword[];
+  searchTips?: string[];
+};
 
 const codeMap: Record<string, string> = {
   반지: "wr", 귀걸이: "we", 목걸이: "wn", 팔찌: "wb",
@@ -58,11 +77,86 @@ const MALE_RING_SIZES = "20호,22호,25호";
 const UNISEX_RING_SIZES = "9호,11호,14호,17호,20호,22호,25호";
 const MAX_PHOTOS = 10;
 const ACCEPTED = ["image/jpeg", "image/jpg", "image/png"];
+const DRAFT_STORAGE_KEY = "laura-product-draft";
+const LEGACY_DRAFT_STORAGE_KEY = ["noi", "db-product-draft"].join("");
+const DEFAULT_SUPPLIERS = [
+  "프리스타일", "JK인터내셔널", "닝구네", "단종", "모건쥬얼리", "블루", "비에이블리",
+  "샬롬", "세븐", "스콜피온", "실버데이", "아트피어싱", "자체제작", "제작", "쥬얼리김",
+  "창성", "캐럿", "케이원", "태양사", "팝비즈도매", "피어싱도매닷컴", "한나도매", "현", "기타",
+];
+
+function normalizeSupplierName(value: string) {
+  let supplier = String(value || "").trim();
+  supplier = supplier.replace(/\s*\((?:여성|남성|여자|남자|남녀공용)\)\s*$/u, "").trim();
+  if (!supplier || /^(?:부산|여성 거래처|남성 거래처|공용 거래처|공용거래처)$/u.test(supplier)) return "프리스타일";
+  return supplier;
+}
+
+function mergeSupplierOptions(values: string[]) {
+  const unique = [...new Set(values.map(normalizeSupplierName).filter(Boolean))];
+  return [
+    "프리스타일",
+    ...unique.filter(value => value !== "프리스타일" && value !== "기타").sort((a, b) => a.localeCompare(b, "ko")),
+    ...(unique.includes("기타") ? ["기타"] : []),
+  ];
+}
+
+function openExternalUrl(url: string) {
+  const standalone = window.matchMedia("(display-mode: standalone)").matches ||
+    Boolean((window.navigator as Navigator & { standalone?: boolean }).standalone);
+  if (standalone) {
+    window.location.assign(url);
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+const DEFAULT_PRODUCT: Product = {
+  supplier: "프리스타일",
+  category: "반지",
+  gender: "여성",
+  material: "써지컬스틸",
+  colors: "로즈골드,골드,실버",
+  sizes: "9호,11호,14호,17호,20호",
+  modelNo: "1",
+  warehouse: "",
+  replacementSku: "",
+  keyword: "체인패턴 볼드",
+  coupangTitle: "",
+  searchTags: "",
+  dimension: "",
+  cost: "1900",
+  price: "14900",
+};
 
 function defaultRingSizes(gender: string) {
   if (gender === "남성") return MALE_RING_SIZES;
   if (gender === "여성") return FEMALE_RING_SIZES;
   return UNISEX_RING_SIZES;
+}
+
+function defaultSizes(gender: string, category: string) {
+  if (category === "반지") return defaultRingSizes(gender);
+  if (gender === "여성" && category === "목걸이") return "약 40~46cm";
+  if (gender === "여성" && category === "발찌") return "약 20~26cm";
+  if (gender === "여성" && category === "팔찌") return "약 16~21cm";
+  if (gender === "남성" && category === "목걸이") return "약 60cm";
+  if (gender === "남성" && category === "팔찌") return "약 22cm";
+  return "";
+}
+
+function defaultDimension(category: string) {
+  if (category === "피어싱") return "바길이 6바, 바두께 1.2cm, 총길이 5cm";
+  if (category === "귀걸이") return "링너비 0.5cm, 링지름 1.3cm";
+  return "";
+}
+
+function buildAutoModel(product: Pick<Product, "category" | "gender" | "modelNo">) {
+  const no = product.modelNo.replace(/\D/g, "").padStart(4, "0");
+  if (!product.modelNo) return "";
+  const categoryCode = codeMap[product.category] ?? "wx";
+  const genderPrefix = product.gender === "남성" ? "m" : product.gender === "남녀공용" ? "u" : "w";
+  return `${genderPrefix}${categoryCode.slice(1)}${no}`;
 }
 
 function normalizeKeyword(value: string, product: Product) {
@@ -74,7 +168,7 @@ function normalizeKeyword(value: string, product: Product) {
   return [...new Set(
     value.replace(/[,.，、/|+()[\]{}:;·_-]+/g, " ").split(/\s+/)
       .map(v => v.trim()).filter(Boolean).filter(v => !banned.has(v))
-  )].slice(0, 5).join(" ");
+  )].join(" ");
 }
 
 function normalizeCompare(value: string) {
@@ -98,10 +192,8 @@ function buildProductTitle(product: Product, cleanedKeyword: string) {
   addPart(material);
   for (const token of cleanedKeyword.replace(/[,.，、/|+()[\]{}:;·_\-]+/g, " ").split(/\s+/).map(v => v.trim()).filter(Boolean)) {
     if (token === material || token === gender || token === category || GENDER_WORDS.has(token) || CATEGORY_WORDS.has(token)) continue;
-    let word = token;
-    if (word.endsWith(category) && word.length > category.length) word = word.slice(0, -category.length);
-    if (!word || word.length < 2 || CATEGORY_WORDS.has(word)) continue;
-    addPart(word);
+    if (!token || CATEGORY_WORDS.has(token)) continue;
+    addPart(token);
   }
   addPart(gender);
   addPart(category);
@@ -131,18 +223,8 @@ function loadImage(src: string) {
 }
 
 export default function Home() {
-  const [product, setProduct] = useState<Product>({
-    supplier: "부산",
-    category: "반지",
-    gender: "여성",
-    material: "써지컬스틸",
-    colors: "로즈골드,골드,실버",
-    sizes: "9호,11호,14호,17호,20호",
-    modelNo: "1",
-    keyword: "체인패턴 볼드",
-    cost: "1900",
-    price: "14900",
-  });
+  const [product, setProduct] = useState<Product>({ ...DEFAULT_PRODUCT });
+  const [supplierOptions, setSupplierOptions] = useState<string[]>(DEFAULT_SUPPLIERS);
 
   const [photos, setPhotos] = useState<ProductPhoto[]>([]);
   const [photoMessage, setPhotoMessage] = useState("");
@@ -155,6 +237,7 @@ export default function Home() {
 
   const sizesUserEditedRef = useRef(false);
 
+  const [mainWear, setMainWear] = useState<SlotImage | null>(null);
   const [allOptions, setAllOptions] = useState<SlotImage | null>(null);
   const [optionThumbs, setOptionThumbs] = useState<Record<string, SlotImage | null>>({});
   const [extra01, setExtra01] = useState<SlotImage | null>(null);
@@ -163,6 +246,7 @@ export default function Home() {
   const [detailCut, setDetailCut] = useState<SlotImage | null>(null);
   const [wear01, setWear01] = useState<SlotImage | null>(null);
   const [wear02, setWear02] = useState<SlotImage | null>(null);
+  const [customSlots, setCustomSlots] = useState<CustomSlot[]>([]);
   const [includeAllOptionsInDetail] = useState(true);
   const [adjustKey, setAdjustKey] = useState("");
   const [adjust, setAdjust] = useState<FitAdjust>(defaultFitAdjust());
@@ -174,20 +258,36 @@ export default function Home() {
   const [detailMessage, setDetailMessage] = useState("");
   const [dragDetailIndex, setDragDetailIndex] = useState<number | null>(null);
 
-  const [sourcingUrl, setSourcingUrl] = useState("");
-  const [sourcingUrlInput, setSourcingUrlInput] = useState("");
+  const [sourcingUrls, setSourcingUrls] = useState(["", "", ""]);
+  const [sourcingUrlInputs, setSourcingUrlInputs] = useState(["", "", ""]);
   const [sourcingMessage, setSourcingMessage] = useState("");
+  const [sourcingAnalysis, setSourcingAnalysis] = useState<SourcingAnalysis>({});
+  const [sourcingLoading, setSourcingLoading] = useState(false);
+  const [sourcingImages, setSourcingImages] = useState<ProductPhoto[]>([]);
+  const [sourcingSaveStatus, setSourcingSaveStatus] = useState("");
+  const [uploadPool, setUploadPool] = useState<SlotImage[]>([]);
 
   const [exportLoading, setExportLoading] = useState("");
   const [exportMessage, setExportMessage] = useState("");
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchStatus, setBatchStatus] = useState("");
+  const [coupangImportBusy, setCoupangImportBusy] = useState("");
+  const [coupangImportMessage, setCoupangImportMessage] = useState("");
+  const [quoteQueue, setQuoteQueue] = useState<QuoteQueueRecord[]>([]);
+  const [quoteQueueBusy, setQuoteQueueBusy] = useState("");
+  const [drafts, setDrafts] = useState<ProductDraftRecord[]>([]);
+  const [showDrafts, setShowDrafts] = useState(false);
+  const [draftStatus, setDraftStatus] = useState("");
+  const [modelDuplicate, setModelDuplicate] = useState(false);
+  const [modelCheckMessage, setModelCheckMessage] = useState("");
 
   const [dbSupported, setDbSupported] = useState(false);
   const [dbHandle, setDbHandle] = useState<FileSystemDirectoryHandle | null>(null);
   const [dbFolderName, setDbFolderName] = useState("");
   const [dbStatus, setDbStatus] = useState("");
   const [dbSavedFiles, setDbSavedFiles] = useState<string[]>([]);
+  const existingDetailInputRef = useRef<HTMLInputElement>(null);
+  const uploadPoolInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setDbSupported(supportsDirectoryPicker());
@@ -208,10 +308,19 @@ export default function Home() {
     })();
 
     try {
-      const raw = localStorage.getItem("noidb-product-draft");
+      const legacyRaw = localStorage.getItem(LEGACY_DRAFT_STORAGE_KEY);
+      const raw = localStorage.getItem(DRAFT_STORAGE_KEY) || legacyRaw;
       if (!raw) return;
+      if (legacyRaw) {
+        localStorage.setItem(DRAFT_STORAGE_KEY, raw);
+        localStorage.removeItem(LEGACY_DRAFT_STORAGE_KEY);
+      }
       const draft = JSON.parse(raw);
-      if (draft.product) setProduct((prev: Product) => ({ ...prev, ...draft.product }));
+      if (draft.product) setProduct((prev: Product) => ({
+        ...prev,
+        ...draft.product,
+        supplier: normalizeSupplierName(draft.product.supplier || prev.supplier),
+      }));
       if (draft.analysis) setAnalysis(draft.analysis);
       if (Array.isArray(draft.photos) && draft.photos.length) {
         setPhotos(
@@ -224,6 +333,7 @@ export default function Home() {
       } else if (typeof draft.imageDataUrl === "string" && draft.imageDataUrl.startsWith("data:image/")) {
         setPhotos([{ id: "legacy", name: "기존사진.jpg", dataUrl: draft.imageDataUrl }]);
       }
+      if (draft.mainWear) setMainWear(draft.mainWear);
       if (draft.allOptions) setAllOptions(draft.allOptions);
       if (draft.optionThumbs) setOptionThumbs(draft.optionThumbs);
       if (draft.extra01) setExtra01(draft.extra01);
@@ -235,8 +345,10 @@ export default function Home() {
       if (Array.isArray(draft.detailImages)) setDetailImages(draft.detailImages);
       if (typeof draft.detailPreview === "string") setDetailPreview(draft.detailPreview);
       if (typeof draft.sourcingUrl === "string" && draft.sourcingUrl) {
-        setSourcingUrl(draft.sourcingUrl);
-        setSourcingUrlInput(draft.sourcingUrl);
+        const urls = draft.sourcingUrl.split(/\r?\n/).filter(Boolean).slice(0, 3);
+        const restored = [urls[0] || "", urls[1] || "", urls[2] || ""];
+        setSourcingUrls(restored);
+        setSourcingUrlInputs(restored);
       }
       setMessage("임시저장된 정보를 불러왔습니다.");
     } catch {
@@ -244,14 +356,49 @@ export default function Home() {
     }
   }, []);
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        const response = await fetch(`/api/google-sheet?action=supplierList&t=${Date.now()}`, { cache: "no-store" });
+        const data = await response.json();
+        if (response.ok && Array.isArray(data.suppliers)) {
+          setSupplierOptions(mergeSupplierOptions([...DEFAULT_SUPPLIERS, ...data.suppliers]));
+        }
+      } catch {
+        setSupplierOptions(mergeSupplierOptions(DEFAULT_SUPPLIERS));
+      }
+    })();
+  }, []);
+
   const model = useMemo(() => {
-    const no = product.modelNo.replace(/\D/g, "").padStart(4, "0");
-    return product.modelNo ? `${codeMap[product.category] ?? "wx"}${no}` : "";
-  }, [product.category, product.modelNo]);
+    return product.modelName?.trim() || buildAutoModel(product);
+  }, [product.category, product.gender, product.modelNo, product.modelName]);
+
+  useEffect(() => {
+    if (!model) {
+      setModelDuplicate(false);
+      setModelCheckMessage("");
+      return;
+    }
+    const timer = window.setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/google-sheet?model=${encodeURIComponent(model)}`, { cache: "no-store" });
+        const data = await res.json();
+        setModelDuplicate(Boolean(data.duplicate));
+        setModelCheckMessage(
+          data.duplicate ? "중복번호" : data.configured === false ? "Google DB 연결 후 중복확인" : "사용 가능한 모델명"
+        );
+      } catch {
+        setModelDuplicate(false);
+        setModelCheckMessage("중복확인 실패");
+      }
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [model]);
 
   const cleanedKeyword = useMemo(() => normalizeKeyword(product.keyword, product), [product]);
-  const title = useMemo(() => buildProductTitle(product, cleanedKeyword), [product, cleanedKeyword]);
-  const tags = useMemo(() => {
+  const generatedTitle = useMemo(() => buildProductTitle(product, cleanedKeyword), [product, cleanedKeyword]);
+  const generatedTags = useMemo(() => {
     const designWords = cleanedKeyword.split(/\s+/).filter(Boolean);
     const colors = product.colors.split(",").map(v => v.trim()).filter(Boolean);
     return [...new Set([
@@ -264,6 +411,12 @@ export default function Home() {
       ...colors.map(c => `${c}${product.category}`),
     ].filter(Boolean))].slice(0, 10).join(",");
   }, [product, cleanedKeyword]);
+  const title = product.coupangTitle?.trim() || generatedTitle;
+  const tags = product.searchTags?.trim() || generatedTags;
+  const availableSuppliers = useMemo(
+    () => mergeSupplierOptions([...supplierOptions, product.supplier]),
+    [supplierOptions, product.supplier]
+  );
 
   const ready = Boolean(
     product.supplier && product.category && product.material && product.colors &&
@@ -274,20 +427,147 @@ export default function Home() {
     () => product.colors.split(",").map(v => v.trim()).filter(Boolean),
     [product.colors]
   );
+  const quoteGroups = useMemo(() => {
+    const groups = new Map<string, { key: string; gender: string; category: string; models: number; modelNames: string[]; skuCount: number; records: QuoteQueueRecord[] }>();
+    quoteQueue.forEach(record => {
+      const key = `${record.gender}\u0000${record.category}`;
+      const group = groups.get(key) || { key, gender: record.gender, category: record.category, models: 0, modelNames: [], skuCount: 0, records: [] };
+      if (record.model && !group.modelNames.includes(record.model)) group.modelNames.push(record.model);
+      group.models = group.modelNames.length;
+      group.skuCount += Number(record.skuCount || 0);
+      group.records.push(record);
+      groups.set(key, group);
+    });
+    return [...groups.values()].sort((a, b) => `${a.gender}${a.category}`.localeCompare(`${b.gender}${b.category}`, "ko"));
+  }, [quoteQueue]);
+
+  useEffect(() => {
+    const automatic: DetailImage[] = [];
+    const add = (id: string, name: string, slot: SlotImage | null | undefined) => {
+      if (slot?.dataUrl) automatic.push({ id: `slot:${id}`, name, dataUrl: slot.dataUrl });
+    };
+    add("mainWear", "메인착용컷", mainWear);
+    add("all", "전체옵션", allOptions);
+    options.forEach(option => add(`option:${option}`, `${option} 썸네일`, optionThumbs[option]));
+    add("detail", "디테일컷", detailCut);
+    add("wear01", "착용컷 01", wear01);
+    add("wear02", "착용컷 02", wear02);
+    customSlots.forEach((item, index) => add(`custom:${item.id}`, `${item.type === "all" ? "전체옵션" : item.type === "detail" ? "디테일컷" : "착용컷"} 추가 ${index + 1}`, item.slot));
+    setDetailImages(prev => [...automatic, ...prev.filter(item => !item.id.startsWith("slot:"))]);
+    setDetailPreview("");
+  }, [mainWear, allOptions, optionThumbs, options, detailCut, wear01, wear02, customSlots]);
 
   const update = (key: keyof Product, value: string) => {
     setProduct(prev => {
       const next = { ...prev, [key]: value };
-      if ((key === "gender" || key === "category") && next.category === "반지" && !sizesUserEditedRef.current) {
-        next.sizes = defaultRingSizes(next.gender);
+      if (key === "gender" || key === "category") {
+        sizesUserEditedRef.current = false;
+        next.sizes = defaultSizes(next.gender, next.category);
+        next.material = "써지컬스틸";
+      }
+      if (key === "category") next.dimension = defaultDimension(value);
+      if (key === "gender" && value === "남성") {
+        next.colors = "실버";
+      }
+      if (key === "gender" || key === "category" || key === "modelNo") {
+        next.modelName = buildAutoModel(next);
       }
       return next;
+    });
+  };
+
+  const updateModel = (value: string) => {
+    setProduct(prev => {
+      const digits = value.match(/\d+/)?.[0];
+      return {
+        ...prev,
+        modelName: value,
+        modelNo: digits || prev.modelNo,
+      };
     });
   };
 
   const updateSizes = (value: string) => {
     sizesUserEditedRef.current = true;
     setProduct(prev => ({ ...prev, sizes: value }));
+  };
+
+  const linkExistingReplacement = async () => {
+    if (!model || !product.replacementSku?.trim()) {
+      setModelCheckMessage("현재 새 모델명과 기존 대표 SKU ID를 입력해주세요.");
+      return;
+    }
+    const legacySku = product.replacementSku.trim();
+    if (!window.confirm(`${model}의 기존 등록행에 구 SKU ${legacySku}의 옵션별 창고번호와 재고 이력을 연결할까요? 이관 결과를 확인한 뒤 기존행 삭제 여부를 다시 묻습니다.`)) return;
+    const requestLink = async (forceLegacyOptions: boolean) => {
+      const linkPayload = exportPayload();
+      const response = await fetch("/api/google-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "linkReplacementExisting",
+          model,
+          replacementSku: legacySku,
+          forceLegacyOptions,
+          payload: { ...linkPayload, optionImages: {} },
+        }),
+      });
+      const responseText = await response.text();
+      let data: any = {};
+      try { data = JSON.parse(responseText); }
+      catch { throw new Error(responseText.startsWith("Request Entity Too Large") ? "연결 요청 용량이 너무 큽니다. 최신 버전으로 다시 시도해주세요." : "서버 응답을 읽지 못했습니다."); }
+      if (!response.ok || !data.ok) throw new Error(data.error || "기존 SKU 연결 실패");
+      return data;
+    };
+    setModelCheckMessage("기존 SKU 정보를 연결하고 있습니다...");
+    try {
+      let data: any;
+      try {
+        data = await requestLink(false);
+      } catch (initialError) {
+        const reason = initialError instanceof Error ? initialError.message : "";
+        if (!reason.includes("색상·사이즈 옵션을 연결하지 못했습니다") && !reason.includes("새 옵션과 연결할 수 없습니다")) throw initialError;
+        const counts = reason.match(/\[기존\s*(\d+)개\s*\/\s*새\s*(\d+)개\]/);
+        const countText = counts ? `\n\n기존 옵션 ${counts[1]}개 · 새 옵션 ${counts[2]}개` : "";
+        const proceed = window.confirm(
+          `예전 상품은 색상·사이즈 표기 방식이 달라 자동 연결할 수 없습니다.${countText}\n\n기존 제품DB 저장 순서대로 연결할까요? 대응되는 기존 행이 없는 새 옵션은 창고번호를 비워둡니다.`
+        );
+        if (!proceed) {
+          setModelCheckMessage("기존 옵션 연결을 취소했습니다. 기존 제품DB 행은 변경되지 않았습니다.");
+          return;
+        }
+        setModelCheckMessage("구형 옵션을 기존 저장 순서대로 연결하고 있습니다...");
+        data = await requestLink(true);
+      }
+      const warehouses = Array.isArray(data.warehouses) ? data.warehouses.filter(Boolean) : [];
+      let cleanupMessage = " · 기존행 유지";
+      if (data.cleanupAvailable) {
+        const deleteOldRows = window.confirm(
+          `${Number(data.matchedOptions || 0).toLocaleString()}건 이관 완료했습니다.\n창고번호·누적입고 등 이관 내용을 확인했습니다. 기존 ${Number(data.oldRows || 0).toLocaleString()}행을 삭제할까요?`
+        );
+        if (deleteOldRows) {
+          const cleanupResponse = await fetch("/api/google-sheet", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "deleteReplacementLegacyRows", model, replacementSku: legacySku }),
+          });
+          const cleanupData = await cleanupResponse.json();
+          if (!cleanupResponse.ok || !cleanupData.ok) throw new Error(cleanupData.error || "기존행 삭제 실패");
+          cleanupMessage = ` · 기존 ${Number(cleanupData.deleted || 0).toLocaleString()}행 삭제 완료`;
+        }
+      } else if (data.recoveredFromHistory) {
+        cleanupMessage = " · 기존 활성행 없음";
+      }
+      setProduct(prev => ({ ...prev, replacementSku: "" }));
+      setModelCheckMessage(
+        `기존 상품 연결 완료 · 옵션 ${Number(data.matchedOptions || 0).toLocaleString()}개 이관` +
+        `${Number(data.unmatchedNew || 0) ? ` · 새 옵션 ${Number(data.unmatchedNew).toLocaleString()}개는 기존 행 없음` : ""}` +
+        ` · 창고번호 ${warehouses.length ? warehouses.join(", ") : "없음"} · 구 SKU 입력값 자동 해제` +
+        `${data.recoveredFromHistory ? " · 교체이력에서 복구" : ""}${data.forcedFallback ? " · 구형 옵션 저장순서로 연결" : ""}${cleanupMessage}`
+      );
+    } catch (error) {
+      setModelCheckMessage(`오류: ${error instanceof Error ? error.message : "기존 SKU 연결 실패"}`);
+    }
   };
 
   const addPhotoFiles = async (fileList: FileList | File[]) => {
@@ -361,21 +641,26 @@ export default function Home() {
         return;
       }
       setProduct(prev => {
+        const analyzedGender = data.gender || prev.gender;
         const next = {
           ...prev,
           category: data.category || prev.category,
-          gender: data.gender || prev.gender,
-          material: data.material || prev.material,
-          colors: prev.colors.trim() ? prev.colors : (data.colors || prev.colors),
+          gender: analyzedGender,
+          material: "써지컬스틸",
+          colors: analyzedGender === "남성" ? "실버" : (prev.colors.trim() ? prev.colors : (data.colors || prev.colors)),
           keyword: normalizeKeyword(data.keyword || prev.keyword, {
             ...prev,
             category: data.category || prev.category,
-            gender: data.gender || prev.gender,
-            material: data.material || prev.material,
+            gender: analyzedGender,
+            material: "써지컬스틸",
           }),
+          dimension: data.category && data.category !== prev.category
+            ? defaultDimension(data.category)
+            : prev.dimension,
         };
-        if (next.category === "반지" && !sizesUserEditedRef.current) {
-          next.sizes = defaultRingSizes(next.gender);
+        next.modelName = buildAutoModel(next);
+        if (!sizesUserEditedRef.current) {
+          next.sizes = defaultSizes(next.gender, next.category);
         }
         return next;
       });
@@ -388,32 +673,460 @@ export default function Home() {
     }
   };
 
-  const searchKeyword = cleanedKeyword || title || `${product.material} ${product.category}`;
+  const materialCategoryKeywords = product.material === "써지컬스틸"
+    ? [`써지컬스틸 ${product.category}`, `티타늄 ${product.category}`]
+    : [`${product.material} ${product.category}`];
+  const searchKeyword = materialCategoryKeywords.join(" OR ");
+  const sourcingUrl = sourcingUrls.filter(Boolean).join("\n");
 
   const openGoogleImages = () => {
-    window.open(
-      `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(searchKeyword)}`,
-      "_blank",
-      "noopener,noreferrer"
-    );
+    openExternalUrl(`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(searchKeyword)}`);
   };
 
   const open1688Search = () => {
-    window.open(
-      `https://www.google.com/search?q=${encodeURIComponent("site:1688.com " + searchKeyword)}`,
-      "_blank",
-      "noopener,noreferrer"
-    );
+    openExternalUrl(`https://s.1688.com/selloffer/offer_search.htm?keywords=${encodeURIComponent(materialCategoryKeywords[0])}`);
   };
 
-  const saveSourcingUrl = () => {
-    const url = sourcingUrlInput.trim();
-    if (!url) {
-      setSourcingMessage("1688 링크를 입력해주세요.");
+  const openCoupangSearch = () => {
+    openExternalUrl(`https://www.coupang.com/np/search?q=${encodeURIComponent(materialCategoryKeywords[0])}`);
+  };
+
+  const analyzeSourcingImage = async () => {
+    if (!photos[0]) {
+      setSourcingMessage("제품사진을 먼저 올려주세요.");
       return;
     }
-    setSourcingUrl(url);
-    setSourcingMessage("1688 링크를 저장했습니다.");
+    setSourcingLoading(true);
+    setSourcingMessage("사진의 소재·분류·디자인을 조합해 검색어를 만들고 있습니다...");
+    try {
+      const imageDataUrl = await compressImageDataUrl(photos[0].dataUrl, 1600, 0.82);
+      const res = await fetch("/api/sourcing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageDataUrl, current: product }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "검색어 분석 실패");
+      setSourcingAnalysis(data);
+      setSourcingMessage("사진 기반 검색어가 준비되었습니다. 중국어 뜻을 확인한 뒤 검색할 수 있습니다.");
+    } catch (e) {
+      setSourcingMessage(`오류: ${e instanceof Error ? e.message : "검색어 분석 실패"}`);
+    } finally {
+      setSourcingLoading(false);
+    }
+  };
+
+  const addSourcingFiles = async (fileList: FileList | File[]) => {
+    const items: ProductPhoto[] = [];
+    for (const file of Array.from(fileList).filter(isAccepted)) {
+      items.push({ id: `${Date.now()}-${Math.random()}`, name: file.name, dataUrl: await readFile(file) });
+    }
+    setSourcingImages(prev => [...prev, ...items]);
+    setSourcingSaveStatus(`${items.length}장의 이미지를 추가했습니다.`);
+  };
+
+  const createSourcingFolder = async () => {
+    if (!dbHandle) return setSourcingSaveStatus("먼저 상품DB 폴더를 선택해주세요.");
+    if (!model || !product.category) return setSourcingSaveStatus("카테고리와 모델명을 먼저 확인해주세요.");
+    try {
+      await ensureProductFolderTree(dbHandle, product.category, model);
+      setSourcingSaveStatus(`폴더 생성 완료: ${product.category}/${model}/`);
+    } catch (e) {
+      setSourcingSaveStatus(`오류: ${e instanceof Error ? e.message : "폴더 생성 실패"}`);
+    }
+  };
+
+  const saveSourcingImages = async () => {
+    if (!dbHandle) return setSourcingSaveStatus("먼저 상품DB 폴더를 선택해주세요.");
+    if (!sourcingImages.length) return setSourcingSaveStatus("저장할 이미지를 추가해주세요.");
+    const files = sourcingImages.map((item, index) => ({
+      folder: "원본",
+      filename: `수집이미지_${String(index + 1).padStart(2, "0")}.jpg`,
+      blob: dataUrlToBlob(item.dataUrl),
+      path: `원본/수집이미지_${String(index + 1).padStart(2, "0")}.jpg`,
+    }));
+    try {
+      const saved = await writeProductDbFiles(dbHandle, product.category, model, files);
+      setSourcingSaveStatus(`이미지 ${saved.length}장 저장 완료 → ${product.category}/${model}/원본/`);
+    } catch (e) {
+      setSourcingSaveStatus(`오류: ${e instanceof Error ? e.message : "이미지 저장 실패"}`);
+    }
+  };
+
+  const openModelFolder = async () => {
+    if (!dbHandle) return setSourcingSaveStatus("먼저 상품DB 폴더를 선택해주세요.");
+    if (!model || !product.category) return setSourcingSaveStatus("카테고리와 모델명을 먼저 확인해주세요.");
+    try {
+      const modelDir = await ensureProductFolderTree(dbHandle, product.category, model);
+      const picker = (window as any).showOpenFilePicker;
+      if (typeof picker !== "function") {
+        setSourcingSaveStatus("이 브라우저에서는 파일 목록 바로가기를 지원하지 않습니다.");
+        return;
+      }
+      await picker({ startIn: modelDir, multiple: false });
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      setSourcingSaveStatus(`오류: ${e instanceof Error ? e.message : "폴더 열기 실패"}`);
+    }
+  };
+
+  const uploadExistingDetail = async (file: File | undefined) => {
+    if (!file || !isAccepted(file)) {
+      setDetailMessage("JPG/JPEG/PNG 상세페이지 이미지를 선택해주세요.");
+      return;
+    }
+    setDetailPreview(await readFile(file));
+    setDetailMessage(`완성된 상세페이지를 불러왔습니다: ${file.name}`);
+  };
+
+  const openExistingDetailPicker = async () => {
+    try {
+      if (dbHandle && model && product.category) {
+        const modelDir = await ensureProductFolderTree(dbHandle, product.category, model);
+        const picker = (window as any).showOpenFilePicker;
+        if (typeof picker === "function") {
+          const [handle] = await picker({
+            startIn: modelDir,
+            multiple: false,
+            types: [{ description: "상세페이지 이미지", accept: { "image/jpeg": [".jpg", ".jpeg"], "image/png": [".png"] } }],
+          });
+          if (handle) await uploadExistingDetail(await handle.getFile());
+          return;
+        }
+      }
+      existingDetailInputRef.current?.click();
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      setDetailMessage(`오류: ${e instanceof Error ? e.message : "상세페이지 선택 실패"}`);
+    }
+  };
+
+  const addUploadPoolFiles = async (fileList: FileList | File[]) => {
+    const items: SlotImage[] = [];
+    for (const file of Array.from(fileList).filter(isAccepted)) {
+      items.push({ dataUrl: await readFile(file), fileName: file.name });
+    }
+    setUploadPool(prev => [...prev, ...items]);
+  };
+
+  const openUploadPoolPicker = async () => {
+    try {
+      if (dbHandle && model && product.category) {
+        const modelDir = await ensureProductFolderTree(dbHandle, product.category, model);
+        const picker = (window as any).showOpenFilePicker;
+        if (typeof picker === "function") {
+          const handles = await picker({
+            startIn: modelDir,
+            multiple: true,
+            types: [{ description: "상품 이미지", accept: { "image/jpeg": [".jpg", ".jpeg"], "image/png": [".png"] } }],
+          });
+          const files = await Promise.all(handles.map((handle: any) => handle.getFile()));
+          await addUploadPoolFiles(files);
+          return;
+        }
+      }
+      uploadPoolInputRef.current?.click();
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      setPhotoMessage(`오류: ${e instanceof Error ? e.message : "이미지 선택 실패"}`);
+    }
+  };
+
+  const resetCoupangImages = () => {
+    setMainWear(null);
+    setAllOptions(null);
+    setOptionThumbs({});
+    setExtra01(null);
+    setExtra02(null);
+    setExtra03(null);
+    setDetailCut(null);
+    setWear01(null);
+    setWear02(null);
+    setCustomSlots([]);
+    setUploadPool([]);
+    setAdjustKey("");
+    setAdjustPreview("");
+    setDetailPreview("");
+    setMessage("쿠팡 등록 이미지를 초기화했습니다.");
+  };
+
+  const resetAll = () => {
+    if (!window.confirm("기본값을 제외한 입력값과 업로드 이미지를 모두 초기화할까요?")) return;
+    setProduct({ ...DEFAULT_PRODUCT });
+    sizesUserEditedRef.current = false;
+    setPhotos([]);
+    setPhotoMessage("");
+    setAnalysis({});
+    resetCoupangImages();
+    setDetailImages([]);
+    setDetailMessage("");
+    setSourcingUrls(["", "", ""]);
+    setSourcingUrlInputs(["", "", ""]);
+    setSourcingMessage("");
+    setSourcingAnalysis({});
+    setSourcingImages([]);
+    setSourcingSaveStatus("");
+    setExportMessage("");
+    setBatchStatus("");
+    setDbSavedFiles([]);
+    localStorage.removeItem(DRAFT_STORAGE_KEY);
+    localStorage.removeItem(LEGACY_DRAFT_STORAGE_KEY);
+    setMessage("전체 입력값을 기본값으로 초기화했습니다.");
+  };
+
+  const importCoupangData = async (mode: "skuMaster" | "inboundHistory" | "poList" | "legacyProducts" | "verifiedCatalog", fileList: FileList | null) => {
+    if (!fileList?.length) return;
+    const label = mode === "skuMaster" ? "SKU 전체 목록"
+      : mode === "inboundHistory" ? "입고·반출 이력"
+      : mode === "legacyProducts" ? "기존 상품정보"
+      : mode === "verifiedCatalog" ? "검증된 이미지·쿠팡 노출가"
+      : "발주 SKU 목록";
+    setCoupangImportBusy(mode);
+    setCoupangImportMessage(`${label}을 Google 상품DB에 반영하고 있습니다...`);
+    try {
+      const form = new FormData();
+      form.set("mode", mode);
+      Array.from(fileList).forEach(file => form.append("files", file));
+      const response = await fetch("/api/coupang-data", { method: "POST", body: form });
+      const responseText = await response.text();
+      let data: any;
+      try { data = JSON.parse(responseText); }
+      catch {
+        throw new Error(response.status === 504
+          ? "서버 처리 시간이 초과됐습니다. 잠시 후 다시 시도해주세요."
+          : `서버 처리 중 오류가 발생했습니다. (${response.status || "응답 없음"})`);
+      }
+      if (!response.ok || !data.ok) throw new Error(data.error || "가져오기 실패");
+      if (mode === "skuMaster") {
+        const nonRocketText = ` · 업로드 S바코드 제외 ${Number(data.excluded || 0).toLocaleString()} · 비활성·기존 S바코드 정리 ${Number(data.removedNonRocket || 0).toLocaleString()} · 구 SKU 재추가 방지 ${Number(data.retiredSkipped || 0).toLocaleString()} · 중복행 정리 ${Number(data.duplicatesRemoved || 0).toLocaleString()}`;
+        setCoupangImportMessage(data.baseline
+          ? `SKU 기준목록 ${data.parsed?.toLocaleString?.() || data.parsed}개 생성 완료 · 등록대기 자동연결 ${data.matched || 0} · 확인필요 ${data.review || 0}${nonRocketText}`
+          : `SKU 전체 목록 ${data.parsed?.toLocaleString?.() || data.parsed}개 반영 완료 · 새 SKU ${data.newSkus || 0} · 자동연결 ${data.matched || 0} · 확인필요 ${data.review || 0} · 신규행 ${data.inserted || 0} · 수정 ${data.updated || 0}${nonRocketText}`);
+      } else if (mode === "inboundHistory") {
+        setCoupangImportMessage(data.skipped
+          ? `이미 반영한 동일한 입고 파일 ${data.files}개라서 중복 적용하지 않았습니다.`
+          : `입고 파일 ${data.files}개 반영 완료 · 총입고 ${Number(data.totalInbound || 0).toLocaleString()} · 반출 ${Number(data.totalOutbound || 0).toLocaleString()} · 순누적입고 ${Number(data.netInbound || 0).toLocaleString()}`);
+      } else if (mode === "legacyProducts") {
+        setCoupangImportMessage(`기존 상품정보 연결 완료 · SKU 매칭 ${Number(data.matched || 0).toLocaleString()} · 신규행 ${Number(data.inserted || 0).toLocaleString()} · 빈 정보 입력 ${Number(data.fieldsFilled || 0).toLocaleString()}칸 · 구 SKU 건너뜀 ${Number(data.retiredSkipped || 0).toLocaleString()} · 재추가된 구 SKU 정리 ${Number(data.removedRetired || 0).toLocaleString()} · 중복행 정리 ${Number(data.duplicatesRemoved || 0).toLocaleString()}`);
+      } else if (mode === "verifiedCatalog") {
+        setCoupangImportMessage(`이미지·쿠팡 노출가 연결 완료 · SKU 매칭 ${Number(data.matched || 0).toLocaleString()} · 노출상품ID 갱신 ${Number(data.productIdUpdated || 0).toLocaleString()} · 옵션ID 갱신 ${Number(data.optionIdUpdated || 0).toLocaleString()} · 노출상품ID로 옵션 연결 ${Number(data.matchedByProductId || 0).toLocaleString()} · 이미지 갱신 ${Number(data.imageUpdated || 0).toLocaleString()} · 같은 모델명 이미지 채움 ${Number(data.propagatedImages || 0).toLocaleString()} · 쿠팡 노출가 갱신 ${Number(data.exposurePriceUpdated || 0).toLocaleString()} · 모델명+노출상품ID 복원 ${Number(data.recoveredByModelProduct || 0).toLocaleString()} · 노출상품ID 단독복원 ${Number(data.recoveredByProduct || 0).toLocaleString()} · 미연결 ${Number(data.unmatched || 0).toLocaleString()} · 다음으로 ③ 신규 발주목록을 다시 올려 발주서 출력을 갱신하세요.`);
+      } else {
+        setCoupangImportMessage(`발주 ${data.parsed?.toLocaleString?.() || data.parsed}행 반영 완료 · 합배송 ${data.shippingGroups || 0}묶음 · 발주서 출력 ${data.pickingRows || 0}행 · 쉽먼트전송 ${data.shipmentRows || 0}행 · 이번 주 입고예정 쿠폰 신규 ${data.couponAdded || 0}개 · 쿠폰발행 누적 ${data.couponTotal || 0}개 · 창고번호 미등록 ${data.missingWarehouse || 0} · Google 시트의 발주서 출력·쉽먼트전송·쿠폰발행 탭을 확인하세요.`);
+      }
+    } catch (error) {
+      setCoupangImportMessage(`오류: ${error instanceof Error ? error.message : "쿠팡 데이터 가져오기 실패"}`);
+    } finally {
+      setCoupangImportBusy("");
+    }
+  };
+
+  const dropCoupangFiles = (mode: "skuMaster" | "inboundHistory" | "poList" | "legacyProducts" | "verifiedCatalog", event: React.DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (coupangImportBusy || !event.dataTransfer.files.length) return;
+    void importCoupangData(mode, event.dataTransfer.files);
+  };
+
+  const loadQuoteQueue = async () => {
+    setQuoteQueueBusy("목록");
+    try {
+      const response = await fetch("/api/google-sheet?action=quoteQueueList", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || "견적서 대기목록 조회 실패");
+      setQuoteQueue(Array.isArray(data.records) ? data.records : []);
+      if (data.configured === false) setExportMessage("Google 시트 연결 후 견적서 대기목록을 사용할 수 있습니다.");
+    } catch (error) {
+      setExportMessage(`오류: ${error instanceof Error ? error.message : "견적서 대기목록 조회 실패"}`);
+    } finally {
+      setQuoteQueueBusy("");
+    }
+  };
+
+  const downloadQuoteGroup = async (group: { key: string; gender: string; category: string; skuCount: number; records: QuoteQueueRecord[] }) => {
+    setQuoteQueueBusy(group.key);
+    setExportMessage(`${group.gender} ${group.category} 최신 대기목록을 확인하고 있습니다...`);
+    try {
+      // 화면에 표시된 목록이 오래되었더라도 항상 Google 시트의 최신 내용으로 생성합니다.
+      const queueResponse = await fetch(`/api/google-sheet?action=quoteQueueList&t=${Date.now()}`, { cache: "no-store" });
+      const queueData = await queueResponse.json();
+      if (!queueResponse.ok || queueData.error) {
+        throw new Error(queueData.error || "최신 견적서 대기목록 조회 실패");
+      }
+      const latestRecords = (Array.isArray(queueData.records) ? queueData.records : [])
+        .filter((record: QuoteQueueRecord) => record.gender === group.gender && record.category === group.category);
+      if (!latestRecords.length) throw new Error("이 카테고리의 견적서 대기목록이 비어 있습니다.");
+      setQuoteQueue(Array.isArray(queueData.records) ? queueData.records : []);
+      const latestSkuCount = latestRecords.reduce(
+        (sum: number, record: QuoteQueueRecord) => sum + Number(record.skuCount || 0),
+        0
+      );
+      setExportMessage(`${group.gender} ${group.category} 최신 정보로 묶음 견적서를 만들고 있습니다...`);
+      const response = await fetch("/api/export-quote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payloads: latestRecords.map((record: QuoteQueueRecord) => record.payload) }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "묶음 견적서 생성 실패");
+      }
+      const encodedName = response.headers.get("X-Download-Name") || "";
+      const name = encodedName ? decodeURIComponent(encodedName) : `견적서_${group.gender}_${group.category}.${latestSkuCount > 1000 ? "zip" : "xlsx"}`;
+      const blob = await response.blob();
+      if (dbHandle && await ensureReadWritePermission(dbHandle)) {
+        const savedPath = await writeCategoryFile(dbHandle, group.category, name, blob);
+        // 카테고리 폴더 원본 저장과 별도로 검수용 사본을 브라우저 다운로드에도 보냅니다.
+        // 브라우저 다운로드 목록에서 누르면 Excel로 바로 열 수 있습니다.
+        downloadBlobFile(blob, name);
+        setExportMessage(`${group.gender} ${group.category} · ${latestRecords.length}모델 · ${latestSkuCount.toLocaleString()} SKU 최신 묶음 견적서 저장 완료 → ${savedPath} · 검수용 파일도 다운로드했습니다. 브라우저 다운로드 목록에서 눌러 Excel로 여세요.`);
+      } else {
+        downloadBlobFile(blob, name);
+        setExportMessage(`${group.gender} ${group.category} · ${latestRecords.length}모델 · ${latestSkuCount.toLocaleString()} SKU 최신 묶음 견적서 다운로드 완료 · 상품DB 폴더를 선택하면 ${group.category} 폴더에 바로 저장됩니다.`);
+      }
+    } catch (error) {
+      setExportMessage(`오류: ${error instanceof Error ? error.message : "묶음 견적서 생성 실패"}`);
+    } finally {
+      setQuoteQueueBusy("");
+    }
+  };
+
+  const openQuoteCategoryFolder = async (group: { category: string }) => {
+    if (!dbHandle) {
+      setExportMessage("먼저 상품DB 폴더를 선택해주세요.");
+      return;
+    }
+    try {
+      if (!(await ensureReadWritePermission(dbHandle))) throw new Error("상품DB 폴더 권한이 필요합니다.");
+      const categoryDir = await dbHandle.getDirectoryHandle(group.category, { create: true });
+      const picker = (window as any).showOpenFilePicker;
+      if (typeof picker !== "function") {
+        setExportMessage("이 브라우저에서는 폴더 파일 목록 바로가기를 지원하지 않습니다.");
+        return;
+      }
+      const handles = await picker({
+        startIn: categoryDir,
+        multiple: false,
+        types: [{
+          description: "Excel 견적서",
+          accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] },
+        }],
+      });
+      const selected = handles?.[0] as FileSystemFileHandle | undefined;
+      if (!selected) return;
+      const file = await selected.getFile();
+      // 브라우저 보안상 로컬 Excel을 직접 실행할 수 없으므로, 선택한 파일을 다운로드 목록에
+      // 전달합니다. 사용자는 브라우저 다운로드 항목을 눌러 Excel로 바로 열 수 있습니다.
+      downloadBlobFile(file, file.name);
+      setExportMessage(`${file.name}을(를) 열 수 있도록 다운로드했습니다. 브라우저의 다운로드 항목에서 파일을 누르면 Excel로 열립니다.`);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setExportMessage(`오류: ${error instanceof Error ? error.message : "견적서 저장 폴더 열기 실패"}`);
+    }
+  };
+
+  const clearQuoteGroup = async (group: { key: string; gender: string; category: string; records: QuoteQueueRecord[] }) => {
+    if (!window.confirm(`${group.gender} ${group.category} 대기목록 ${group.records.length}모델을 비울까요? 견적서를 다운로드하고 쿠팡 업로드까지 확인한 뒤 비우세요.`)) return;
+    setQuoteQueueBusy(group.key);
+    try {
+      const response = await fetch("/api/google-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "quoteQueueClear", gender: group.gender, category: group.category }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || "견적서 대기목록 비우기 실패");
+      setExportMessage(`${group.gender} ${group.category} 대기목록 ${Number(data.cleared || 0).toLocaleString()}모델을 비웠습니다.`);
+      await loadQuoteQueue();
+    } catch (error) {
+      setExportMessage(`오류: ${error instanceof Error ? error.message : "견적서 대기목록 비우기 실패"}`);
+    } finally {
+      setQuoteQueueBusy("");
+    }
+  };
+
+  const deleteQuoteModel = async (modelName: string) => {
+    if (!window.confirm(`${modelName}을(를) 묶음 견적서 대기목록에서 삭제할까요?\n상품DB의 제품 정보는 삭제되지 않습니다.`)) return;
+    setQuoteQueueBusy(`삭제:${modelName}`);
+    try {
+      const response = await fetch("/api/google-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "quoteQueueDeleteModel", model: modelName }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || "모델 삭제 실패");
+      setExportMessage(`${modelName}을(를) 묶음 견적서 대기목록에서 삭제했습니다.`);
+      await loadQuoteQueue();
+    } catch (error) {
+      setExportMessage(`오류: ${error instanceof Error ? error.message : "모델 삭제 실패"}`);
+    } finally {
+      setQuoteQueueBusy("");
+    }
+  };
+
+  const assignPoolItem = (index: number, setter: (slot: SlotImage | null) => void) => {
+    const slot = uploadPool[index];
+    if (!slot) return;
+    setter(slot);
+    setUploadPool(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const getSlotValue = (key: string): SlotImage | null => {
+    if (key === "mainWear") return mainWear;
+    if (key === "all") return allOptions;
+    if (key === "detail") return detailCut;
+    if (key === "wear01") return wear01;
+    if (key === "wear02") return wear02;
+    if (key.startsWith("opt:")) return optionThumbs[key.slice(4)] || null;
+    if (key.startsWith("custom:")) return customSlots.find(item => item.id === key.slice(7))?.slot || null;
+    return null;
+  };
+
+  const setSlotValue = (key: string, value: SlotImage | null) => {
+    if (key === "mainWear") setMainWear(value);
+    else if (key === "all") setAllOptions(value);
+    else if (key === "detail") setDetailCut(value);
+    else if (key === "wear01") setWear01(value);
+    else if (key === "wear02") setWear02(value);
+    else if (key.startsWith("opt:")) setOptionThumb(key.slice(4), value);
+    else if (key.startsWith("custom:")) {
+      setCustomSlots(prev => prev.map(item => item.id === key.slice(7) ? { ...item, slot: value } : item));
+    }
+  };
+
+  const swapSlots = (sourceKey: string, targetKey: string) => {
+    if (!sourceKey || sourceKey === targetKey) return;
+    const source = getSlotValue(sourceKey);
+    const target = getSlotValue(targetKey);
+    setSlotValue(sourceKey, target);
+    setSlotValue(targetKey, source);
+  };
+
+  const addCustomSlot = (type: CustomSlot["type"]) => {
+    setCustomSlots(prev => {
+      if (prev.length >= 5) {
+        setBatchStatus("사용자 추가 이미지는 05~09번까지 최대 5개입니다.");
+        return prev;
+      }
+      return [...prev, { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type, slot: null }];
+    });
+  };
+
+  const customSlotTitle = (item: CustomSlot, index: number) => {
+    const sameTypeBefore = customSlots.slice(0, index).filter(slot => slot.type === item.type).length;
+    if (item.type === "wear") return `착용컷 ${String(3 + sameTypeBefore).padStart(2, "0")}`;
+    if (item.type === "detail") return `디테일컷 ${2 + sameTypeBefore}`;
+    return `전체옵션 이미지 ${2 + sameTypeBefore}`;
+  };
+
+  const saveSourcingUrl = (index: number) => {
+    const url = sourcingUrlInputs[index].trim();
+    if (!url) {
+      setSourcingMessage("링크를 입력해주세요.");
+      return;
+    }
+    setSourcingUrls(prev => prev.map((value, i) => i === index ? url : value));
+    setSourcingMessage("링크를 저장했습니다.");
   };
 
   const copyText = async (value: string) => {
@@ -470,40 +1183,71 @@ export default function Home() {
     setDetailMessage(`${name}을(를) 상세페이지 목록에 추가했습니다.`);
   };
 
-  const buildDetailPage = async () => {
+  const composeDetailPage = async () => {
     if (!detailImages.length) {
-      setDetailMessage("상세페이지에 사용할 사진을 추가해주세요.");
-      return;
+      throw new Error("상세페이지에 사용할 사진을 추가해주세요.");
     }
+    const width = 780;
+    const gap = 60;
+    const prepared = await Promise.all(
+      detailImages.map(async item => {
+        const img = await loadImage(item.dataUrl);
+        const height = Math.max(1, Math.round((img.height / img.width) * width));
+        return { img, height };
+      })
+    );
+    const totalHeight =
+      gap + prepared.reduce((s, i) => s + i.height, 0) + gap * Math.max(0, prepared.length - 1) + gap;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = totalHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(0, 0, width, totalHeight);
+    let y = gap;
+    for (const item of prepared) {
+      ctx.drawImage(item.img, 0, y, width, item.height);
+      y += item.height + gap;
+    }
+    return { dataUrl: canvas.toDataURL("image/jpeg", 0.94), totalHeight };
+  };
+
+  const buildDetailPage = async () => {
     setDetailMessage("780px 상세페이지를 만들고 있습니다...");
     try {
-      const width = 780;
-      const gap = 60;
-      const prepared = await Promise.all(
-        detailImages.map(async item => {
-          const img = await loadImage(item.dataUrl);
-          const height = Math.max(1, Math.round((img.height / img.width) * width));
-          return { img, height };
-        })
-      );
-      const totalHeight =
-        gap + prepared.reduce((s, i) => s + i.height, 0) + gap * Math.max(0, prepared.length - 1) + gap;
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = totalHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
-      ctx.fillStyle = "#FFFFFF";
-      ctx.fillRect(0, 0, width, totalHeight);
-      let y = gap;
-      for (const item of prepared) {
-        ctx.drawImage(item.img, 0, y, width, item.height);
-        y += item.height + gap;
-      }
-      setDetailPreview(canvas.toDataURL("image/jpeg", 0.94));
-      setDetailMessage(`상세페이지 완성 · ${detailImages.length}장 · ${totalHeight}px`);
+      const built = await composeDetailPage();
+      setDetailPreview(built.dataUrl);
+      setDetailMessage(`상세페이지 완성 · ${detailImages.length}장 · ${built.totalHeight}px`);
     } catch (e) {
       setDetailMessage(`오류: ${e instanceof Error ? e.message : "상세페이지 실패"}`);
+    }
+  };
+
+  const saveDetailPageOnly = async () => {
+    if (!model || !product.category) {
+      setDetailMessage("오류: 모델명과 카테고리를 먼저 확인해주세요.");
+      return;
+    }
+    try {
+      setDetailMessage("상세페이지만 저장하고 있습니다...");
+      const dataUrl = detailPreview || (await composeDetailPage()).dataUrl;
+      setDetailPreview(dataUrl);
+      if (dbHandle) {
+        const saved = await writeProductDbFiles(dbHandle, product.category, model, [{
+          folder: "",
+          filename: `${model}.jpg`,
+          blob: dataUrlToBlob(dataUrl),
+          path: `${model}.jpg`,
+        }]);
+        setDbSavedFiles(prev => [...new Set([...prev, ...saved])]);
+        setDetailMessage(`상세페이지 저장 완료 → ${product.category}/${model}/${model}.jpg`);
+      } else {
+        downloadDataUrl(dataUrl, `${model}.jpg`);
+        setDetailMessage("상세페이지 다운로드 완료");
+      }
+    } catch (e) {
+      setDetailMessage(`오류: ${e instanceof Error ? e.message : "상세페이지 저장 실패"}`);
     }
   };
 
@@ -523,33 +1267,112 @@ export default function Home() {
     URL.revokeObjectURL(url);
   };
 
-  const exportPayload = () => ({
+  const exportPayload = () => {
+    const fallbackOptionImage = allOptions?.dataUrl || photos[0]?.dataUrl || "";
+    return {
     product,
     model,
     title,
     tags,
-    additionalImagesCsv: buildAdditionalImagesCsv(model, [
-      extra01?.dataUrl,
-      extra02?.dataUrl,
-      extra03?.dataUrl,
-    ]),
-    additionalImages: buildAdditionalImagesCsv(model, [
-      extra01?.dataUrl,
-      extra02?.dataUrl,
-      extra03?.dataUrl,
-    ]).split(",").filter(Boolean),
-  });
-
-  const saveDraft = () => {
-    localStorage.setItem(
-      "noidb-product-draft",
-      JSON.stringify({
-        product, analysis, photos, allOptions, optionThumbs,
-        extra01, extra02, extra03, detailCut, wear01, wear02,
-        detailImages, detailPreview, sourcingUrl, model, title, tags,
+    sourcingUrl,
+    optionImages: Object.fromEntries(
+      options.flatMap(option => {
+        const dataUrl = optionThumbs[option]?.dataUrl || fallbackOptionImage;
+        return dataUrl ? [[option, dataUrl]] : [];
       })
-    );
-    setMessage("임시저장했습니다.");
+    ),
+    additionalImagesCsv: [
+      ...buildAdditionalImagesCsv(model, [allOptions?.dataUrl, detailCut?.dataUrl, wear01?.dataUrl, wear02?.dataUrl])
+        .split(",").filter(Boolean),
+      ...customSlots.filter(item => item.slot?.dataUrl).slice(0, 5)
+        .map((_, index) => `${model}-${String(index + 5).padStart(2, "0")}.jpg`),
+    ].join(","),
+    additionalImages: [
+      ...buildAdditionalImagesCsv(model, [allOptions?.dataUrl, detailCut?.dataUrl, wear01?.dataUrl, wear02?.dataUrl])
+        .split(",").filter(Boolean),
+      ...customSlots.filter(item => item.slot?.dataUrl).slice(0, 5)
+        .map((_, index) => `${model}-${String(index + 5).padStart(2, "0")}.jpg`),
+    ],
+  };
+  };
+
+  const refreshDrafts = async () => {
+    try {
+      const local = await listProductDrafts();
+      const cloudRes = await fetch("/api/google-sheet?action=cloudDraftList");
+      const cloud = await cloudRes.json().catch(() => ({}));
+      const merged = new Map<string, ProductDraftRecord>();
+      for (const record of (cloud.drafts || [])) merged.set(record.model, record);
+      for (const record of local) merged.set(record.model, record);
+      setDrafts([...merged.values()].sort((a, b) => b.savedAt - a.savedAt).slice(0, 20));
+    } catch {
+      setDraftStatus("임시저장 목록을 불러오지 못했습니다.");
+    }
+  };
+
+  const saveDraft = async () => {
+    if (!model) {
+      setDraftStatus("모델명을 먼저 입력해주세요.");
+      return;
+    }
+    try {
+      await saveProductDraft({
+        model,
+        savedAt: Date.now(),
+        data: {
+          product, analysis, photos, mainWear, allOptions, optionThumbs, detailCut, wear01, wear02, customSlots,
+          detailImages, detailPreview, sourcingUrls, sourcingUrlInputs, sourcingImages,
+          uploadPool, title, tags,
+        },
+      });
+      await fetch("/api/google-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "cloudDraftSave",
+          record: {
+            model,
+            savedAt: Date.now(),
+            data: { product, analysis, sourcingUrls, sourcingUrlInputs, title, tags, cloudOnly: true },
+          },
+        }),
+      });
+      localStorage.removeItem(DRAFT_STORAGE_KEY);
+      localStorage.removeItem(LEGACY_DRAFT_STORAGE_KEY);
+      setDraftStatus(`${model}으로 임시저장되었습니다.`);
+      setMessage(`${model}으로 임시저장되었습니다.`);
+      await refreshDrafts();
+    } catch {
+      setDraftStatus("임시저장 공간이 부족합니다. 오래된 임시저장을 삭제해주세요.");
+    }
+  };
+
+  const loadDraft = (record: ProductDraftRecord) => {
+    const data = record.data as any;
+    if (data.product) setProduct({
+      ...DEFAULT_PRODUCT,
+      ...data.product,
+      supplier: normalizeSupplierName(data.product.supplier || DEFAULT_PRODUCT.supplier),
+    });
+    if (data.analysis) setAnalysis(data.analysis);
+    setPhotos(Array.isArray(data.photos) ? data.photos : []);
+    setMainWear(data.mainWear || null);
+    setAllOptions(data.allOptions || null);
+    setOptionThumbs(data.optionThumbs || {});
+    setDetailCut(data.detailCut || null);
+    setWear01(data.wear01 || null);
+    setWear02(data.wear02 || null);
+    setCustomSlots(Array.isArray(data.customSlots) ? data.customSlots : []);
+    setDetailImages(Array.isArray(data.detailImages) ? data.detailImages : []);
+    setDetailPreview(data.detailPreview || "");
+    setSourcingUrls(Array.isArray(data.sourcingUrls) ? data.sourcingUrls : ["", "", ""]);
+    setSourcingUrlInputs(Array.isArray(data.sourcingUrlInputs) ? data.sourcingUrlInputs : ["", "", ""]);
+    setSourcingImages(Array.isArray(data.sourcingImages) ? data.sourcingImages : []);
+    setUploadPool(Array.isArray(data.uploadPool) ? data.uploadPool : []);
+    setShowDrafts(false);
+    setDraftStatus(data.cloudOnly
+      ? `${record.model} 기본정보를 불러왔습니다. 다른 기기의 이미지는 다시 올려주세요.`
+      : `${record.model} 임시저장을 불러왔습니다.`);
   };
 
   const pickFolder = async () => {
@@ -573,12 +1396,26 @@ export default function Home() {
     }
   };
 
-  const collectInput = (detailOverride?: string) => {
+  const collectInput = async (detailOverride?: string) => {
     const thumbs: Record<string, string> = {};
-    for (const opt of options) {
-      const s = optionThumbs[opt];
-      if (s?.dataUrl) thumbs[opt] = s.dataUrl;
-    }
+    await Promise.all(options.map(async opt => {
+      const source = optionThumbs[opt]?.dataUrl;
+      if (source) thumbs[opt] = await normalizeCoupangImage(source);
+    }));
+    const normalizeOptional = async (source?: string) => source ? normalizeCoupangImage(source) : undefined;
+    const [normalizedAll, normalizedDetail, normalizedWear01, normalizedWear02] = await Promise.all([
+      normalizeOptional(allOptions?.dataUrl),
+      normalizeOptional(detailCut?.dataUrl),
+      normalizeOptional(wear01?.dataUrl),
+      normalizeOptional(wear02?.dataUrl),
+    ]);
+    const customImages = customSlots
+      .filter(item => item.slot?.dataUrl)
+      .slice(0, 5)
+      .map(async (item, index) => ({
+        filename: `${model}-${String(index + 5).padStart(2, "0")}.jpg`,
+        dataUrl: await normalizeCoupangImage(item.slot!.dataUrl),
+      }));
     return collectProductDbFiles({
       category: product.category,
       model,
@@ -589,17 +1426,95 @@ export default function Home() {
       ready,
       photos: photos.map(p => p.dataUrl),
       optionThumbs: thumbs,
-      allOptionsImage: allOptions?.dataUrl,
+      allOptionsImage: undefined,
       includeAllOptionsInQuote: false,
-      extra01: extra01?.dataUrl,
-      extra02: extra02?.dataUrl,
-      extra03: extra03?.dataUrl,
-      detailCut: detailCut?.dataUrl,
-      wear01: wear01?.dataUrl,
-      wear02: wear02?.dataUrl,
+      extra01: normalizedAll,
+      extra02: normalizedDetail,
+      extra03: normalizedWear01,
+      extra04: normalizedWear02,
+      detailCut: undefined,
+      wear01: undefined,
+      wear02: undefined,
+      customImages: await Promise.all(customImages),
       detailPreview: detailOverride ?? detailPreview,
       sourcingUrl,
     });
+  };
+
+  const migrateExistingDbToGoogle = async () => {
+    if (!dbHandle) {
+      setBatchStatus("먼저 상품DB 폴더를 선택해주세요.");
+      return;
+    }
+    if (!window.confirm("기존 상품정보 JSON을 찾아 Google 상품DB에 중복 없이 이전할까요?")) return;
+    setBatchBusy(true);
+    setBatchStatus("기존 상품DB를 확인하고 있습니다...");
+    let migrated = 0;
+    let duplicates = 0;
+    let failed = 0;
+    let found = 0;
+    let lastError = "";
+    try {
+      async function* findInfoFiles(dir: FileSystemDirectoryHandle): AsyncGenerator<FileSystemFileHandle> {
+        for await (const [name, handle] of (dir as any).entries()) {
+          if (handle.kind === "directory") {
+            yield* findInfoFiles(handle as FileSystemDirectoryHandle);
+          } else if (handle.kind === "file" && /^상품정보_.*\.json$/i.test(name)) {
+            yield handle as FileSystemFileHandle;
+          }
+        }
+      }
+
+      for await (const fileHandle of findInfoFiles(dbHandle)) {
+        found += 1;
+        try {
+          const info = JSON.parse(await (await fileHandle.getFile()).text());
+          // 예전 파일은 product 안이 아니라 최상위에 상품 필드가 저장되어 있습니다.
+          const legacyProduct = info?.product || info;
+          const oldModel = String(info?.model || "").trim();
+          const oldTitle = String(info?.title || "").trim();
+          if (!oldModel || !oldTitle || !legacyProduct?.category) {
+            failed += 1;
+            lastError = "필수 정보(모델명·상품명·카테고리)가 없는 JSON 파일";
+            continue;
+          }
+          const res = await fetch("/api/google-sheet", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              product: { ...DEFAULT_PRODUCT, ...legacyProduct },
+              model: oldModel,
+              title: oldTitle,
+              tags: info.tags || "",
+              sourcingUrl: info.sourcingUrl || "",
+              syncMode: "skipDuplicate",
+            }),
+          });
+          const result = await res.json().catch(() => ({}));
+          if (result.duplicate) duplicates += 1;
+          else if (res.ok && result.synced) migrated += 1;
+          else {
+            failed += 1;
+            lastError = result.error || (result.configured === false ? "Google 시트 연동 미설정" : "Google 시트 저장 실패");
+          }
+        } catch (error) {
+          failed += 1;
+          lastError = error instanceof Error ? error.message : "JSON 읽기 실패";
+        }
+      }
+      if (!found) {
+        setBatchStatus("기존 DB 이전 실패 · 선택한 폴더 안에서 상품정보_*.json 파일을 찾지 못했습니다.");
+      } else {
+        setBatchStatus(
+          `기존 DB 이전 완료 · 발견 ${found}개 · 신규 ${migrated}개 · 중복 건너뜀 ${duplicates}개 · 실패 ${failed}개` +
+          (lastError ? ` · 마지막 오류: ${lastError}` : "")
+        );
+      }
+    } catch (e) {
+      setBatchStatus(`오류: ${e instanceof Error ? e.message : "기존 DB 이전 실패"}`);
+    } finally {
+      setBatchBusy(false);
+    }
   };
 
   const batchSave = async () => {
@@ -612,11 +1527,16 @@ export default function Home() {
       return;
     }
 
+    if (modelDuplicate && !window.confirm(`${model}은(는) 이미 등록된 모델명입니다. 기존 Google 상품DB 내용을 업데이트할까요?`)) {
+      setBatchStatus("기존 모델 업데이트를 취소했습니다.");
+      return;
+    }
+
     const recommended: string[] = [];
     for (const opt of options) {
       if (!optionThumbs[opt]?.dataUrl) recommended.push(`${opt} 썸네일`);
     }
-    if (!extra01 || !extra02 || !extra03) recommended.push("추가이미지 01~03");
+    if (!allOptions || !detailCut || !wear01) recommended.push("전체옵션·디테일컷·착용컷 01");
     if (!detailImages.length && !detailPreview) recommended.push("상세페이지 이미지");
 
     if (recommended.length) {
@@ -662,20 +1582,23 @@ export default function Home() {
       }
 
       const { files, skipped, readyFiles } = await collectInput(preview);
+      const googleStatus = skipped.find(item => item.startsWith("Google 시트"));
       if (dbHandle) {
         const saved = await writeProductDbFiles(dbHandle, product.category, model, files);
         setDbSavedFiles(saved);
         setBatchStatus(
           `상품 생성 완료 · ${saved.length}개 저장 → ${product.category}/${model}/` +
-            (skipped.length ? ` · 건너뜀 ${skipped.length}` : "")
+            (skipped.length ? ` · 건너뜀 ${skipped.length}` : "") +
+            (googleStatus ? ` · ${googleStatus}` : "")
         );
       } else {
         const blob = await buildProductDbZip(product.category, model, files);
         downloadBlobFile(blob, `상품DB_${model}.zip`);
         setDbSavedFiles(readyFiles);
-        setBatchStatus(`상품 생성 완료 · ZIP 다운로드 (${files.length}개 파일)`);
+        setBatchStatus(`상품 생성 완료 · ZIP 다운로드 (${files.length}개 파일)` + (googleStatus ? ` · ${googleStatus}` : ""));
       }
-      saveDraft();
+      await saveDraft();
+      await loadQuoteQueue();
     } catch (e) {
       setBatchStatus(`오류: ${e instanceof Error ? e.message : "저장 실패"}`);
     } finally {
@@ -715,17 +1638,24 @@ export default function Home() {
     }
     setExportLoading("auto");
     try {
+      const payload = exportPayload();
+      payload.optionImages = Object.fromEntries(await Promise.all(
+        Object.entries(payload.optionImages).map(async ([option, dataUrl]) => [
+          option,
+          await normalizeCoupangImage(dataUrl),
+        ])
+      ));
       const res = await fetch("/api/export-automation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(exportPayload()),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "자동화 실패");
       }
-      downloadBlobFile(await res.blob(), `상품입력자동화_${model}.xlsx`);
-      setExportMessage("상품입력 자동화 다운로드 완료");
+      downloadBlobFile(await res.blob(), "상품DB.xlsx");
+      setExportMessage("상품DB 다운로드 완료");
     } catch (e) {
       setExportMessage(`오류: ${e instanceof Error ? e.message : "자동화 실패"}`);
     } finally {
@@ -754,58 +1684,50 @@ export default function Home() {
     }
   };
 
+  const counterfeitAlert = ["확인필요", "높음"].includes(analysis.counterfeitRisk?.trim() || "");
+
   return (
     <main className="shell">
       <header className="hero">
-        <div>
-          <p className="eyebrow">노이드비 AI</p>
-          <h1>AI 상품등록 도우미</h1>
-          <p className="sub">완성 이미지를 칸에 끌어놓고 등록파일로 연결</p>
-        </div>
-        <span className="pill">실무 수동등록</span>
-      </header>
-
-      <div className="progressSteps">
-        {[
-          "1.제품사진", "2.AI분석", "3.이미지검색", "4.기본정보",
-          "5.쿠팡등록이미지", "6.상세페이지", "7.라벨·엑셀", "8.상품DB",
-        ].map(s => (
-          <span key={s} className="progressStep">{s}</span>
-        ))}
-      </div>
-
-      <section className="card full dbSetupCard">
-        <h2>상품DB · 등록파일 일괄 생성</h2>
-        <p className="note">
-          이미지를 각 칸에 직접 등록한 뒤, 마지막에 아래 버튼으로 파일명 정리·견적서·상품DB 저장을 한 번에 실행합니다.
-          AI로 이미지를 자동 만들지 않습니다.
-        </p>
-        <div className="exportActions">
-          {dbSupported && (
-            <button className="dark" type="button" onClick={pickFolder}>상품DB 폴더 선택</button>
-          )}
-          <button className="secondaryButton" type="button" onClick={saveDraft}>임시저장</button>
-        </div>
-        {dbFolderName && <p className="detailMessage">연결: {dbFolderName}</p>}
-        <button
-          className="batchSaveButton"
-          type="button"
-          disabled={batchBusy}
-          onClick={batchSave}
-        >
-          {batchBusy ? "저장 중..." : "등록파일 일괄 생성 및 저장"}
-        </button>
-        {batchStatus && (
-          <p className={batchStatus.startsWith("오류") ? "error" : "detailMessage"}>{batchStatus}</p>
-        )}
-        {dbSavedFiles.length > 0 && (
-          <div className="dbFileList">
-            <h3>저장된 파일</h3>
-            <ul>{dbSavedFiles.slice(0, 40).map(f => <li key={f}>{f}</li>)}</ul>
+        <div className="heroBrandArea">
+          <div className="brandLockup">
+            <span className="lauraMark" aria-hidden="true">L</span>
+            <div><p className="lauraWordmark">LAURA OS</p><span>Seller Workspace</span></div>
           </div>
-        )}
-        {dbStatus && <p className="note">{dbStatus}</p>}
-      </section>
+          <h1>AI 상품등록 도우미</h1>
+          <div className="heroUtilityActions">
+            <button className="draftLoadButton" type="button" onClick={() => {
+              setShowDrafts(value => !value);
+              if (!showDrafts) void refreshDrafts();
+            }}>임시저장 불러오기</button>
+            <button className="resetAllButton" type="button" onClick={resetAll}>전체 초기화</button>
+          </div>
+        </div>
+      </header>
+      {showDrafts && (
+        <section className="card full draftPanel">
+          <h2>임시저장 목록 ({drafts.length}/20)</h2>
+          {!drafts.length && <p className="note">임시저장된 상품이 없습니다.</p>}
+          <div className="draftList">
+            {drafts.map(record => (
+              <div className="draftItem" key={record.model}>
+                <div><strong>{record.model}</strong><span>{new Date(record.savedAt).toLocaleString("ko-KR")}</span></div>
+                <button type="button" className="green" onClick={() => loadDraft(record)}>불러오기</button>
+                <button type="button" className="removeButton" onClick={() => void (async () => {
+                  await deleteProductDraft(record.model);
+                  await fetch("/api/google-sheet", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "cloudDraftDelete", model: record.model }),
+                  });
+                  await refreshDrafts();
+                })()}>삭제</button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      {draftStatus && <p className="detailMessage draftStatus">{draftStatus}</p>}
 
       {/* 1. 제품사진 */}
       <section className="card full">
@@ -873,67 +1795,26 @@ export default function Home() {
         <h2>2. AI 분석 결과</h2>
         <div className="results">
           <Result label="사진 특징" value={analysis.visualFeatures?.join(", ") || "-"} />
-          <Result label="각인" value={analysis.engraving || "-"} />
-          <Result label="가품 위험도" value={analysis.counterfeitRisk || "-"} />
-          <Result label="검토 이유" value={analysis.counterfeitReason || "-"} />
+          <Result label="각인" value={analysis.engraving || "-"} alert={counterfeitAlert} />
+          <Result
+            label="가품 위험도"
+            value={counterfeitAlert
+              ? "⚠ 확인필요 — 상표·로고·디자인을 꼼꼼히 확인하세요."
+              : analysis.counterfeitRisk || "-"}
+            alert={counterfeitAlert}
+          />
+          <Result label="검토 이유" value={analysis.counterfeitReason || "-"} alert={counterfeitAlert} />
           <Result label="신뢰도" value={analysis.confidence != null ? `${analysis.confidence}%` : "-"} />
         </div>
       </section>
 
-      {/* 3. 검색 */}
-      <section className="card full">
-        <h2>3. Google · 1688 이미지 검색</h2>
-        <p className="note">Google: 국내 판매가·브랜드 확인 · 1688: 동일제품·원가 확인</p>
-        <div className="searchTwoButtons">
-          <button className="googleSearchButton" type="button" onClick={openGoogleImages}>
-            Google 이미지 검색
-          </button>
-          <button className="search1688Button" type="button" onClick={open1688Search}>
-            1688 이미지 검색
-          </button>
-        </div>
-        <div className="sourcingUrlRow">
-          <input
-            value={sourcingUrlInput}
-            onChange={e => setSourcingUrlInput(e.target.value)}
-            placeholder="찾은 1688 링크를 붙여넣으세요"
-          />
-          <button className="dark" type="button" onClick={saveSourcingUrl}>1688 링크 저장</button>
-        </div>
-        {sourcingUrl && (
-          <div className="savedLinkBox">
-            <p className="savedLinkText">{sourcingUrl}</p>
-            <div className="savedLinkActions">
-              <button type="button" onClick={() => window.open(sourcingUrl, "_blank")}>링크 열기</button>
-              <button type="button" onClick={() => copyText(sourcingUrl)}>복사</button>
-              <button type="button" onClick={() => { setSourcingUrl(""); setSourcingUrlInput(""); }}>삭제</button>
-            </div>
-          </div>
-        )}
-        {sourcingMessage && <p className="detailMessage">{sourcingMessage}</p>}
-        <label className="multiUpload" style={{ marginTop: 12 }}>
-          <input
-            type="file"
-            accept="image/jpeg,image/jpg,image/png"
-            multiple
-            hidden
-            onChange={e => {
-              if (e.target.files?.length) void addPhotoFiles(e.target.files);
-              e.target.value = "";
-            }}
-          />
-          <strong>1688 이미지 직접 추가</strong>
-          <span>다운로드한 1688 사진을 제품사진 목록에 추가합니다.</span>
-        </label>
-      </section>
-
-      {/* 4. 기본정보 */}
+      {/* 3. 기본정보 */}
       <section className="card full basicInfoCard">
-        <h2>4. 기본정보 확인</h2>
+        <h2>3. 기본정보 확인</h2>
         <div className="formGrid">
           <Field label="거래처">
             <select value={product.supplier} onChange={e => update("supplier", e.target.value)}>
-              <option>부산</option><option>서울</option><option>기타</option>
+              {availableSuppliers.map(supplier => <option key={supplier}>{supplier}</option>)}
             </select>
           </Field>
           <Field label="카테고리">
@@ -958,16 +1839,41 @@ export default function Home() {
           <Field label="사이즈">
             <input value={product.sizes} onChange={e => updateSizes(e.target.value)} />
           </Field>
+          <Field label="치수">
+            <input value={product.dimension} onChange={e => update("dimension", e.target.value)}
+              placeholder="예: 폭 8mm, 길이 42cm" />
+          </Field>
           <Field label="모델번호 숫자">
             <input value={product.modelNo} onChange={e => update("modelNo", e.target.value)} />
           </Field>
           <Field label="모델명">
-            <input value={model} readOnly />
+            <input value={model} onChange={e => updateModel(e.target.value)} />
+            {modelCheckMessage && <small className={modelDuplicate ? "duplicateModel" : "modelAvailable"}>{modelCheckMessage}</small>}
+          </Field>
+          <Field label="창고번호">
+            <input value={product.warehouse || ""} onChange={e => update("warehouse", e.target.value)}
+              placeholder="예: 711(592) · 미정이면 비워두세요" />
+          </Field>
+          <Field label="기존상품 재등록 SKU ID">
+            <input inputMode="numeric" value={product.replacementSku || ""} onChange={e => update("replacementSku", e.target.value)}
+              placeholder="재등록 상품만 기존 대표 SKU ID 입력" />
+            <small>입력하면 기존 옵션별 창고번호·재고 이력만 가져오고, 기존 SKU ID와 바코드는 활성 행에서 제거합니다.</small>
+            <button className="secondaryButton replacementLinkButton" type="button" onClick={() => void linkExistingReplacement()}>기존 등록행에 연결</button>
           </Field>
           <Field label="핵심키워드">
             <input value={product.keyword} onChange={e => update("keyword", e.target.value)} />
           </Field>
-          <Field label="원가">
+          <Field label="쿠팡 상품명">
+            <input value={product.coupangTitle || generatedTitle} onChange={e => update("coupangTitle", e.target.value)} />
+            <small>직접 수정할 수 있습니다. 자동 상품명으로 되돌리려면 아래 버튼을 누르세요.</small>
+            <button className="secondaryButton compactFieldButton" type="button" onClick={() => update("coupangTitle", "")}>자동 상품명 사용</button>
+          </Field>
+          <Field label="검색태그">
+            <input value={product.searchTags || generatedTags} onChange={e => update("searchTags", e.target.value)} />
+            <small>쉼표로 구분해 직접 수정할 수 있습니다.</small>
+            <button className="secondaryButton compactFieldButton" type="button" onClick={() => update("searchTags", "")}>자동 검색태그 사용</button>
+          </Field>
+          <Field label="원가 (부가세 미포함)">
             <input inputMode="numeric" value={product.cost} onChange={e => update("cost", e.target.value)} />
           </Field>
           <Field label="판매가">
@@ -975,26 +1881,173 @@ export default function Home() {
           </Field>
         </div>
         <div className="results" style={{ marginTop: 14 }}>
-          <Result label="쿠팡 상품명" value={title || "-"} />
-          <Result label="검색태그" value={tags || "-"} />
           <Result label="등록상태" value={ready ? "등록가능" : "판매가·키워드 확인"} status={ready} />
         </div>
+      </section>
+
+      {/* 4. 검색 */}
+      <section className="card full">
+        <h2>4. 쿠팡 · Google · 1688 검색</h2>
+        <p className="note">쿠팡에서 판매 여부·가격을 확인하고, Google과 1688에서 동일제품 이미지를 찾습니다.</p>
+        <div className="searchTwoButtons">
+          <button className="coupangSearchButton" type="button" onClick={openCoupangSearch}>
+            쿠팡 검색
+          </button>
+          <button className="googleSearchButton" type="button" onClick={openGoogleImages}>
+            Google 이미지 검색
+          </button>
+          <button className="search1688Button" type="button" onClick={open1688Search}>
+            1688 이미지 검색
+          </button>
+        </div>
+        <button className="sourceAnalyzeButton sourcingAnalyzeFull" type="button" disabled={sourcingLoading}
+          onClick={() => void analyzeSourcingImage()}>
+          {sourcingLoading ? "사진 분석 중..." : "사진으로 1688 검색어 정밀 분석"}
+        </button>
+        {sourcingAnalysis.koreanSummary && <p className="sourcingSummary">{sourcingAnalysis.koreanSummary}</p>}
+        {!!sourcingAnalysis.chineseKeywords?.length && (
+          <div className="chineseKeywordList">
+            <h3>중국어 검색어와 뜻</h3>
+            {sourcingAnalysis.chineseKeywords.map((item, index) => (
+              <div className="chineseKeywordItem" key={`${item.chinese}-${index}`}>
+                <div><strong>{item.chinese}</strong><span>{item.koreanMeaning}</span></div>
+                <button type="button" onClick={() => void copyText(item.chinese)}>복사</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {!!sourcingAnalysis.englishKeywords?.length && (
+          <div className="chineseKeywordList">
+            <h3>영어 검색어와 뜻</h3>
+            {sourcingAnalysis.englishKeywords.map((item, index) => (
+              <div className="chineseKeywordItem" key={`${item.english}-${index}`}>
+                <div><strong>{item.english}</strong><span>{item.koreanMeaning}</span></div>
+                <button type="button" onClick={() => void copyText(item.english)}>복사</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {[0, 1, 2].map(index => (
+          <div key={index}>
+            <div className="sourcingUrlRow">
+              <input value={sourcingUrlInputs[index]}
+                onChange={e => setSourcingUrlInputs(prev => prev.map((value, i) => i === index ? e.target.value : value))}
+                placeholder="링크를 붙여넣으세요" />
+              <button className="dark" type="button" onClick={() => saveSourcingUrl(index)}>링크 저장</button>
+            </div>
+            {sourcingUrls[index] && (
+              <div className="savedLinkBox">
+                <p className="savedLinkText">{sourcingUrls[index]}</p>
+                <div className="savedLinkActions">
+                  <button type="button" onClick={() => openExternalUrl(sourcingUrls[index])}>링크 열기</button>
+                  <button type="button" onClick={() => void copyText(sourcingUrls[index])}>복사</button>
+                  <button type="button" onClick={() => {
+                    setSourcingUrls(prev => prev.map((value, i) => i === index ? "" : value));
+                    setSourcingUrlInputs(prev => prev.map((value, i) => i === index ? "" : value));
+                  }}>삭제</button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+        {sourcingMessage && <p className="detailMessage">{sourcingMessage}</p>}
+        <label className="multiUpload" style={{ marginTop: 12 }}
+          onDragOver={e => e.preventDefault()}
+          onDrop={e => {
+            e.preventDefault();
+            if (e.dataTransfer.files?.length) void addSourcingFiles(e.dataTransfer.files);
+          }}>
+          <input
+            type="file"
+            accept="image/jpeg,image/jpg,image/png"
+            multiple
+            hidden
+            onChange={e => {
+              if (e.target.files?.length) void addSourcingFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+          <strong>이미지 직접 추가</strong>
+          <span>다운로드한 사진은 제품사진과 분리해 아래에 표시합니다. 클릭하거나 드래그앤드롭하세요.</span>
+        </label>
+        {!!sourcingImages.length && (
+          <div className="sourcingImageGrid">
+            {sourcingImages.map(item => (
+              <div key={item.id} className="sourcingImageCard">
+                <img src={item.dataUrl} alt={item.name} onClick={() => setLightbox(item.dataUrl)} />
+                <button type="button" onClick={() => setSourcingImages(prev => prev.filter(v => v.id !== item.id))}>삭제</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="exportActions">
+          {dbSupported && <button className="dark" type="button" onClick={pickFolder}>상품DB 폴더 선택</button>}
+          <button className="secondaryButton" type="button" onClick={() => void createSourcingFolder()}>모델명 폴더 생성</button>
+          <button className="green" type="button" onClick={() => void saveSourcingImages()}>이미지 저장</button>
+          {dbSupported && <button className="secondaryButton" type="button" onClick={() => void openModelFolder()}>폴더 바로가기</button>}
+        </div>
+        {sourcingSaveStatus && <p className="detailMessage">{sourcingSaveStatus}</p>}
       </section>
 
       {/* 5. 쿠팡 등록 이미지 */}
       <section className="card full">
         <h2>5. 쿠팡 등록 이미지</h2>
-        <p className="note">
-          포토샵 등으로 완성한 이미지를 각 칸에 드래그앤드롭하세요. AI 자동생성은 하지 않습니다.
-          파일은 마지막 &quot;등록파일 일괄 생성 및 저장&quot; 때 올바른 이름으로 저장됩니다.
-        </p>
+        <button className="resetImagesButton" type="button" onClick={resetCoupangImages}>쿠팡 이미지 전체 초기화</button>
+        <div className="multiUpload imagePoolUpload" onClick={() => void openUploadPoolPicker()}
+          onDragOver={e => e.preventDefault()}
+          onDrop={e => {
+            e.preventDefault();
+            if (e.dataTransfer.files?.length) void addUploadPoolFiles(e.dataTransfer.files);
+          }}>
+          <input ref={uploadPoolInputRef} type="file" accept="image/jpeg,image/jpg,image/png" multiple hidden
+            onClick={e => e.stopPropagation()}
+            onChange={e => {
+              if (e.target.files?.length) void addUploadPoolFiles(e.target.files);
+              e.target.value = "";
+            }} />
+          <strong>여러 이미지를 한 번에 업로드</strong>
+          <span>클릭하거나 이미지를 이곳으로 드래그한 뒤 각 등록 칸에 배치하세요.</span>
+        </div>
+        {!!uploadPool.length && (
+          <div className="uploadPool">
+            {uploadPool.map((item, index) => (
+              <div className="uploadPoolItem" key={`${item.fileName}-${index}`} draggable
+                onDragStart={e => e.dataTransfer.setData("application/x-laura-pool-index", String(index))}>
+                <img src={item.dataUrl} alt={item.fileName} />
+                <span>{item.fileName}</span>
+                <button type="button" onClick={() => setUploadPool(prev => prev.filter((_, i) => i !== index))}>삭제</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="slotAddButtons">
+          <button type="button" onClick={() => addCustomSlot("all")}>+ 전체옵션 이미지</button>
+          <button type="button" onClick={() => addCustomSlot("detail")}>+ 디테일컷</button>
+          <button type="button" onClick={() => addCustomSlot("wear")}>+ 착용컷</button>
+        </div>
 
         <div className="imageSlotGrid">
           <ImageSlot
+            slotKey="mainWear"
+            title="메인착용컷"
+            subtitle="상세페이지 전용"
+            filename=""
+            value={mainWear}
+            onChange={setMainWear}
+            onPoolDrop={index => assignPoolItem(index, setMainWear)}
+            onSlotSwap={swapSlots}
+            onExpand={setLightbox}
+          />
+          <ImageSlot
+            slotKey="all"
             title="전체옵션 이미지"
-            filename={model ? `${model}-00.jpg` : "모델명-00.jpg"}
+            subtitle="추가이미지 01"
+            filename={model ? `${model}-01.jpg` : "모델명-01.jpg"}
             value={allOptions}
             onChange={setAllOptions}
+            onPoolDrop={index => assignPoolItem(index, setAllOptions)}
+            onSlotSwap={swapSlots}
             onExpand={setLightbox}
             onFit={() => allOptions && openAdjust("all", allOptions.dataUrl)}
             onAddDetail={
@@ -1006,6 +2059,7 @@ export default function Home() {
 
           {options.map(option => (
             <ImageSlot
+              slotKey={`opt:${option}`}
               key={option}
               title={`${option} 썸네일`}
               filename={
@@ -1017,6 +2071,8 @@ export default function Home() {
               }
               value={optionThumbs[option] || null}
               onChange={slot => setOptionThumb(option, slot)}
+              onPoolDrop={index => assignPoolItem(index, slot => setOptionThumb(option, slot))}
+              onSlotSwap={swapSlots}
               onExpand={setLightbox}
               onFit={() => {
                 const s = optionThumbs[option];
@@ -1031,53 +2087,56 @@ export default function Home() {
           ))}
 
           <ImageSlot
-            title="추가이미지 01"
-            filename={model ? `${model}-01.jpg` : "모델명-01.jpg"}
-            value={extra01}
-            onChange={setExtra01}
-            onExpand={setLightbox}
-            onAddDetail={extra01 ? () => pushDetail("추가이미지 01", extra01.dataUrl) : undefined}
-          />
-          <ImageSlot
-            title="추가이미지 02"
-            filename={model ? `${model}-02.jpg` : "모델명-02.jpg"}
-            value={extra02}
-            onChange={setExtra02}
-            onExpand={setLightbox}
-            onAddDetail={extra02 ? () => pushDetail("추가이미지 02", extra02.dataUrl) : undefined}
-          />
-          <ImageSlot
-            title="추가이미지 03"
-            filename={model ? `${model}-03.jpg` : "모델명-03.jpg"}
-            value={extra03}
-            onChange={setExtra03}
-            onExpand={setLightbox}
-            onAddDetail={extra03 ? () => pushDetail("추가이미지 03", extra03.dataUrl) : undefined}
-          />
-          <ImageSlot
+            slotKey="detail"
             title="디테일컷"
-            filename={model ? `${model}-detail.jpg` : "모델명-detail.jpg"}
+            subtitle="추가이미지 02"
+            filename={model ? `${model}-02.jpg` : "모델명-02.jpg"}
             value={detailCut}
             onChange={setDetailCut}
+            onPoolDrop={index => assignPoolItem(index, setDetailCut)}
+            onSlotSwap={swapSlots}
             onExpand={setLightbox}
             onAddDetail={detailCut ? () => pushDetail("디테일컷", detailCut.dataUrl) : undefined}
           />
           <ImageSlot
+            slotKey="wear01"
             title="착용컷 01"
-            filename={model ? `${model}-wear01.jpg` : "모델명-wear01.jpg"}
+            subtitle="추가이미지 03"
+            filename={model ? `${model}-03.jpg` : "모델명-03.jpg"}
             value={wear01}
             onChange={setWear01}
+            onPoolDrop={index => assignPoolItem(index, setWear01)}
+            onSlotSwap={swapSlots}
             onExpand={setLightbox}
             onAddDetail={wear01 ? () => pushDetail("착용컷 01", wear01.dataUrl) : undefined}
           />
           <ImageSlot
+            slotKey="wear02"
             title="착용컷 02"
-            filename={model ? `${model}-wear02.jpg` : "모델명-wear02.jpg"}
+            subtitle="추가이미지 04"
+            filename={model ? `${model}-04.jpg` : "모델명-04.jpg"}
             value={wear02}
             onChange={setWear02}
+            onPoolDrop={index => assignPoolItem(index, setWear02)}
+            onSlotSwap={swapSlots}
             onExpand={setLightbox}
             onAddDetail={wear02 ? () => pushDetail("착용컷 02", wear02.dataUrl) : undefined}
           />
+          {customSlots.map((item, index) => (
+            <ImageSlot
+              key={item.id}
+              slotKey={`custom:${item.id}`}
+              title={customSlotTitle(item, index)}
+              subtitle={`사용자 추가 이미지 ${String(index + 5).padStart(2, "0")}`}
+              filename={model ? `${model}-${String(index + 5).padStart(2, "0")}.jpg` : `모델명-${String(index + 5).padStart(2, "0")}.jpg`}
+              value={item.slot}
+              onChange={slot => setSlotValue(`custom:${item.id}`, slot)}
+              onPoolDrop={poolIndex => assignPoolItem(poolIndex, slot => setSlotValue(`custom:${item.id}`, slot))}
+              onSlotSwap={swapSlots}
+              onExpand={setLightbox}
+              onRemoveSlot={() => setCustomSlots(prev => prev.filter(slot => slot.id !== item.id))}
+            />
+          ))}
         </div>
 
         {adjustKey && (
@@ -1108,35 +2167,20 @@ export default function Home() {
       {/* 6. 상세페이지 */}
       <section className="card full">
         <h2>6. 상세페이지</h2>
-        <p className="note">가로 780px · 상·중·하 여백 60px · 파일명 {model || "모델명"}.jpg</p>
-        <div className="detailActions">
-          <button type="button" className="secondaryButton" disabled={!allOptions}
-            onClick={() => allOptions && pushDetail("전체옵션", allOptions.dataUrl)}>전체옵션 이미지 추가</button>
-          <button type="button" className="secondaryButton"
-            disabled={!options.some(o => optionThumbs[o])}
-            onClick={() => {
-              options.forEach(o => {
-                const s = optionThumbs[o];
-                if (s) pushDetail(`${o} 썸네일`, s.dataUrl);
-              });
-            }}>옵션별 썸네일 모두 추가</button>
-          <button type="button" className="secondaryButton" disabled={!extra01 && !extra02 && !extra03}
-            onClick={() => {
-              if (extra01) pushDetail("추가01", extra01.dataUrl);
-              if (extra02) pushDetail("추가02", extra02.dataUrl);
-              if (extra03) pushDetail("추가03", extra03.dataUrl);
-            }}>추가이미지 01~03 추가</button>
-          <button type="button" className="secondaryButton" disabled={!detailCut}
-            onClick={() => detailCut && pushDetail("디테일컷", detailCut.dataUrl)}>디테일컷 추가</button>
-          <button type="button" className="secondaryButton" disabled={!wear01 && !wear02}
-            onClick={() => {
-              if (wear01) pushDetail("착용01", wear01.dataUrl);
-              if (wear02) pushDetail("착용02", wear02.dataUrl);
-            }}>착용컷 01~02 추가</button>
-          <button type="button" className="secondaryButton" disabled={!photos.length}
-            onClick={() => photos.forEach((p, i) => pushDetail(`제품사진${i + 1}`, p.dataUrl))}>
-            제품사진에서 추가
-          </button>
+        <div className="multiUpload existingDetailUpload" onClick={() => void openExistingDetailPicker()}
+          onDragOver={e => e.preventDefault()}
+          onDrop={e => {
+            e.preventDefault();
+            void uploadExistingDetail(e.dataTransfer.files?.[0]);
+          }}>
+          <input ref={existingDetailInputRef} type="file" accept="image/jpeg,image/jpg,image/png" hidden
+            onClick={e => e.stopPropagation()}
+            onChange={e => {
+              void uploadExistingDetail(e.target.files?.[0]);
+              e.target.value = "";
+            }} />
+          <strong>완성된 상세페이지 업로드</strong>
+          <span>이미 상세페이지가 있으면 클릭하거나 드래그앤드롭하세요.</span>
         </div>
 
         <div className="detailList">
@@ -1179,6 +2223,9 @@ export default function Home() {
           <button type="button" className="purpleButton" onClick={() => void buildDetailPage()}>
             780px 상세페이지 만들기
           </button>
+          <button type="button" className="secondaryButton" onClick={() => void saveDetailPageOnly()}>
+            상세페이지만 다운로드
+          </button>
         </div>
         {detailMessage && <p className="detailMessage">{detailMessage}</p>}
         {detailPreview && (
@@ -1190,40 +2237,95 @@ export default function Home() {
         )}
       </section>
 
-      {/* 7. 라벨·엑셀 */}
-      <section className="card full">
-        <h2>7. 라벨 · 견적서 · 상품입력</h2>
-        <p className="note">
-          보통은 위 &quot;등록파일 일괄 생성 및 저장&quot;만 사용하면 됩니다. 개별 다운로드는 아래에서 가능합니다.
-        </p>
+      {/* 7. 마지막 단계 */}
+      <section className="card full dbSetupCard">
+        <h2>7. 상품DB · 등록파일 일괄 생성</h2>
         <div className="exportActions">
-          <button className="dark labelButton" type="button" onClick={() => void downloadLabel()}>라벨 다운로드</button>
-          <button className="green" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadQuote()}>
-            {exportLoading === "quote" ? "생성 중..." : "견적서 생성"}
-          </button>
-          <button className="dark" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadAutomation()}>
-            {exportLoading === "auto" ? "생성 중..." : "상품입력 자동화"}
-          </button>
+          <button className="secondaryButton" type="button" onClick={() => void saveDraft()}>임시저장</button>
+          {dbSupported && <button className="secondaryButton" type="button" onClick={() => void openModelFolder()}>폴더 바로가기</button>}
         </div>
-        {exportMessage && <p className="detailMessage">{exportMessage}</p>}
-      </section>
-
-      <details className="advancedPanel">
-        <summary>고급 사용자 · 개별 SKU 다운로드</summary>
-        <div className="exportActions" style={{ marginTop: 12 }}>
-          {options.map(option => (
-            <button
-              key={option}
-              type="button"
-              className="secondaryButton"
-              disabled={!optionThumbs[option]}
-              onClick={() => downloadSkuManual(option)}
-            >
-              {option} SKU 저장
+        {draftStatus && <p className="detailMessage">{draftStatus}</p>}
+        {dbFolderName && <p className="detailMessage">연결: {dbFolderName}</p>}
+        <button className="batchSaveButton" type="button" disabled={batchBusy} onClick={batchSave}>
+          {batchBusy ? "저장 중..." : "등록파일 일괄 생성 및 저장"}
+        </button>
+        {!dbSupported && <p className="saveExplain">모바일에서는 상품DB ZIP이 다운로드됩니다. 다운로드 완료 후 공유 또는 파일 앱에서 Google Drive에 저장하세요.</p>}
+        {batchStatus && <p className={batchStatus.startsWith("오류") ? "error" : "detailMessage"}>{batchStatus}</p>}
+        {dbSavedFiles.length > 0 && (
+          <div className="dbFileList"><h3>저장된 파일</h3><ul>{dbSavedFiles.slice(0, 40).map(f => <li key={f}>{f}</li>)}</ul></div>
+        )}
+        <div className="quoteQueuePanel">
+          <div className="quoteQueueHeader">
+            <div><h3>카테고리별 묶음 견적서</h3><p>등록할 때 자동 누적되며 같은 성별·카테고리끼리 최대 1,000 SKU행으로 나뉩니다.</p></div>
+            <button type="button" className="secondaryButton" disabled={Boolean(quoteQueueBusy)} onClick={() => void loadQuoteQueue()}>
+              {quoteQueueBusy === "목록" ? "불러오는 중..." : "대기목록 불러오기"}
             </button>
-          ))}
+          </div>
+          {!quoteGroups.length && <p className="note">대기목록을 불러오거나 새 상품을 저장하면 여기에 표시됩니다.</p>}
+          <div className="quoteGroupList">
+            {quoteGroups.map(group => (
+              <div className="quoteGroupItem" key={group.key}>
+                <div>
+                  <strong>{group.gender} · {group.category}</strong>
+                  <span>{group.models.toLocaleString()}모델 · {group.skuCount.toLocaleString()} SKU행</span>
+                  <span className="quoteModelNames">포함 모델:</span>
+                  <span className="quoteModelChips">
+                    {group.modelNames.map(modelName => (
+                      <span className="quoteModelChip" key={modelName}>
+                        {modelName}
+                        <button
+                          type="button"
+                          aria-label={`${modelName} 대기목록에서 삭제`}
+                          title="이 모델만 대기목록에서 삭제"
+                          disabled={Boolean(quoteQueueBusy)}
+                          onClick={() => void deleteQuoteModel(modelName)}
+                        >×</button>
+                      </span>
+                    ))}
+                  </span>
+                </div>
+                <div className="quoteGroupActions">
+                  <button type="button" disabled={Boolean(quoteQueueBusy)} onClick={() => void downloadQuoteGroup(group)}>묶음 견적서 다운로드</button>
+                  <button type="button" className="secondaryButton" onClick={() => void openQuoteCategoryFolder(group)}>폴더 바로가기</button>
+                  <button type="button" className="dangerTextButton" disabled={Boolean(quoteQueueBusy)} onClick={() => void clearQuoteGroup(group)}>목록 비우기</button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-      </details>
+        {dbStatus && <p className="note">{dbStatus}</p>}
+        <details className="advancedPanel coupangDataPanel">
+          <summary>서플라이허브 데이터 업데이트</summary>
+          <div className="coupangImportGrid">
+            <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("skuMaster", e)}>
+              <strong>① 상품공급상태관리 다운로드</strong>
+              <span>파일명: 상품공급상태관리 SKU 다운로드</span>
+              <input type="file" accept=".xlsx" disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("skuMaster", e.target.files); e.target.value = ""; }} />
+            </label>
+            <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("inboundHistory", e)}>
+              <strong>② 입고상세내역 다운로드</strong>
+              <span>파일명: Coupang_Stocked_Data_List</span>
+              <input type="file" accept=".xlsx" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("inboundHistory", e.target.files); e.target.value = ""; }} />
+            </label>
+            <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("poList", e)}>
+              <strong>③ 발주SKU 리스트 다운로드</strong>
+              <span>파일명: PO_SKU_LIST</span>
+              <input type="file" accept=".csv,.xlsx" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("poList", e.target.files); e.target.value = ""; }} />
+            </label>
+            <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("legacyProducts", e)}>
+              <strong>④ 기존 상품정보 연결</strong>
+              <span>기존 상품관리.xlsx 선택</span>
+              <input type="file" accept=".xlsx" disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("legacyProducts", e.target.files); e.target.value = ""; }} />
+            </label>
+            <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("verifiedCatalog", e)}>
+              <strong>⑤ 이미지·쿠팡 노출가 연결</strong>
+              <span>이미지db_수정.xlsx와 쿠팡쇼핑몰 추출DB.xlsx를 함께 선택</span>
+              <input type="file" accept=".xlsx" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("verifiedCatalog", e.target.files); e.target.value = ""; }} />
+            </label>
+          </div>
+          {coupangImportMessage && <p className={coupangImportMessage.startsWith("오류") ? "error" : "detailMessage"}>{coupangImportMessage}</p>}
+        </details>
+      </section>
 
       {lightbox && (
         <div className="lightbox" onClick={() => setLightbox("")}>
@@ -1238,31 +2340,41 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return <label className="field"><span>{label}</span>{children}</label>;
 }
 
-function Result({ label, value, status }: { label: string; value: string; status?: boolean }) {
+function Result({ label, value, status, alert }: { label: string; value: string; status?: boolean; alert?: boolean }) {
   return (
     <div className="result">
       <span>{label}</span>
-      <strong className={status === undefined ? "" : status ? "good" : "warn"}>{value}</strong>
+      <strong className={alert ? "dangerAlert" : status === undefined ? "" : status ? "good" : "warn"}>{value}</strong>
     </div>
   );
 }
 
 function ImageSlot({
+  slotKey,
   title,
+  subtitle,
   filename,
   value,
   onChange,
   onExpand,
   onFit,
   onAddDetail,
+  onPoolDrop,
+  onSlotSwap,
+  onRemoveSlot,
 }: {
+  slotKey: string;
   title: string;
+  subtitle?: string;
   filename: string;
   value: SlotImage | null;
   onChange: (v: SlotImage | null) => void;
   onExpand: (url: string) => void;
   onFit?: () => void;
   onAddDetail?: () => void;
+  onPoolDrop?: (index: number) => void;
+  onSlotSwap?: (sourceKey: string, targetKey: string) => void;
+  onRemoveSlot?: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -1275,10 +2387,17 @@ function ImageSlot({
   };
 
   return (
-    <div className={"imageSlot" + (value ? " imageSlotFilled" : " imageSlotEmpty") + (dragging ? " dragging" : "")}>
-      <h3>{title}</h3>
-      <p className="slotSpec">1000×1000 JPG</p>
-      <p className="slotFilename">{filename}</p>
+    <div className={"imageSlot" + (value ? " imageSlotFilled" : " imageSlotEmpty") + (dragging ? " dragging" : "")}
+      draggable={Boolean(value)}
+      onDragStart={e => {
+        if (!value) return;
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("application/x-laura-slot-key", slotKey);
+      }}>
+      <div className="imageSlotHeader">
+        <h3>{title}</h3>
+        {subtitle && <p className="slotAlias">{subtitle}</p>}
+      </div>
       <div
         className="slotDrop"
         onClick={() => inputRef.current?.click()}
@@ -1287,11 +2406,21 @@ function ImageSlot({
         onDrop={e => {
           e.preventDefault();
           setDragging(false);
+          const poolIndex = e.dataTransfer.getData("application/x-laura-pool-index");
+          if (poolIndex !== "" && onPoolDrop) {
+            onPoolDrop(Number(poolIndex));
+            return;
+          }
+          const sourceKey = e.dataTransfer.getData("application/x-laura-slot-key");
+          if (sourceKey && onSlotSwap) {
+            onSlotSwap(sourceKey, slotKey);
+            return;
+          }
           void applyFile(e.dataTransfer.files?.[0]);
         }}
       >
         {value ? (
-          <img src={value.dataUrl} alt={title} />
+          <img src={value.dataUrl} alt={title} draggable={false} />
         ) : (
           <div className="slotPlaceholder">
             <strong>{title}</strong>
@@ -1310,11 +2439,8 @@ function ImageSlot({
         }}
       />
       <div className="slotActions">
-        <button type="button" onClick={() => inputRef.current?.click()}>{value ? "교체" : "선택"}</button>
-        {value && <button type="button" onClick={() => onExpand(value.dataUrl)}>확대</button>}
-        {value && onFit && <button type="button" onClick={onFit}>캔버스맞춤</button>}
-        {value && onAddDetail && <button type="button" onClick={onAddDetail}>상세추가</button>}
         {value && <button type="button" className="removeButton" onClick={() => onChange(null)}>삭제</button>}
+        {onRemoveSlot && <button type="button" className="removeButton" onClick={onRemoveSlot}>칸 삭제</button>}
       </div>
     </div>
   );

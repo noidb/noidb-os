@@ -54,6 +54,27 @@ function clearDataRows(sheet: ExcelJS.Worksheet) {
   }
 }
 
+const EARRING_STYLE_BY_KEYWORD: Array<[string, string]> = [
+  ["이어커프", "이어커프"],
+  ["샹들리에", "샹들리에 이어링"],
+  ["투핀", "투핀/투링 이어링"],
+  ["버튼", "버튼 이어링"],
+  ["드롭", "드롭 이어링"],
+  ["링", "링 이어링"],
+];
+
+const EARRING_POST_TYPES = new Set(["메탈", "은침", "금침", "도금", "써지컬스틸", "티타늄/무니켈"]);
+
+function earringStyle(title: string) {
+  const match = EARRING_STYLE_BY_KEYWORD.find(([keyword]) => title.includes(keyword));
+  return match?.[1] || "";
+}
+
+function earringPostType(title: string) {
+  const firstWord = title.trim().split(/\s+/u)[0] || "";
+  return EARRING_POST_TYPES.has(firstWord) ? firstWord : "";
+}
+
 function commonDefaults(payload: ExportPayload) {
   const sale = parseNumber(payload.product.price);
   const supply = supplyPrice(sale || 0);
@@ -63,12 +84,12 @@ function commonDefaults(payload: ExportPayload) {
     supply,
     msrp,
     barcode: "바코드 없음(쿠팡 바코드 생성 요청)",
-    brand: "브랜드 없음",
+    brand: "노이드비",
     material: payload.product.material || "써지컬스틸",
-    custom: "주문제작 아님",
-    sizeAdjust: "사이즈 조절 아님",
+    custom: "",
+    sizeAdjust: "",
     target: genderTarget(payload.product.gender),
-    engraving: /각인/.test(payload.product.keyword + payload.title) ? "각인 포함" : "각인 미포함",
+    engraving: "",
     stone: detectStone(payload.product.keyword),
     tax: "과세",
     maker: "프리스타일 협력사",
@@ -92,13 +113,17 @@ function commonDefaults(payload: ExportPayload) {
   };
 }
 
-export async function buildQuoteWorkbook(payload: ExportPayload) {
-  const fileName = templateFileForCategory(payload.product.category);
+export async function buildQuoteWorkbook(input: ExportPayload | ExportPayload[]) {
+  const payloads = Array.isArray(input) ? input : [input];
+  const first = payloads[0];
+  if (!first) throw new Error("견적서에 넣을 상품이 없습니다.");
+  const fileName = templateFileForCategory(first.product.category);
   if (!fileName) {
-    throw new Error(`지원하지 않는 카테고리입니다: ${payload.product.category}`);
+    throw new Error(`지원하지 않는 카테고리입니다: ${first.product.category}`);
   }
-  if (!payload.model) throw new Error("모델명이 없습니다.");
-  if (!payload.title) throw new Error("상품명이 없습니다.");
+  if (payloads.some(payload => payload.product.category !== first.product.category || payload.product.gender !== first.product.gender)) {
+    throw new Error("성별과 카테고리가 같은 상품만 한 견적서로 묶을 수 있습니다.");
+  }
 
   const templatePath = path.join(templatesDir(), fileName);
   const workbook = new ExcelJS.Workbook();
@@ -108,21 +133,29 @@ export async function buildQuoteWorkbook(payload: ExportPayload) {
   const headers = headerMap(sheet);
   clearDataRows(sheet);
 
-  const defaults = commonDefaults(payload);
-  const skus = buildSkuRows(payload);
-  if (!skus.length) throw new Error("색상/사이즈 조합으로 생성할 SKU가 없습니다.");
+  let totalSkuCount = 0;
+  for (const payload of payloads) {
+    if (!payload.model) throw new Error("모델명이 없습니다.");
+    if (!payload.title) throw new Error("상품명이 없습니다.");
+    const defaults = commonDefaults(payload);
+    const skus = buildSkuRows(payload);
+    if (!skus.length) throw new Error(`${payload.model}: 색상/사이즈 조합으로 생성할 SKU가 없습니다.`);
 
-  skus.forEach((sku, index) => {
-    const row = sheet.getRow(9 + index);
+    skus.forEach((sku, index) => {
+    const row = sheet.getRow(9 + totalSkuCount + index);
+    const optionValues = [sku.color, sku.size]
+      .map(value => String(value || "").trim())
+      .filter(value => value && value.toLowerCase() !== "free");
+    const productNameWithOptions = [payload.title, ...optionValues].join(", ");
     setByHeader(row, headers, "카테고리", defaults.path);
-    setByHeader(row, headers, "상품명", payload.title);
+    setByHeader(row, headers, "상품명", productNameWithOptions);
     setByHeader(row, headers, "상품 바코드", defaults.barcode);
     setByHeader(row, headers, "검색태그", payload.tags);
     setByHeader(row, headers, "브랜드", defaults.brand);
     setByHeader(row, headers, "색상", sku.color);
     setByHeader(row, headers, "주얼리 사이즈", sku.size);
     setByHeader(row, headers, "사이즈", sku.size);
-    setByHeader(row, headers, "반지 사이즈", sku.size);
+    setByHeader(row, headers, "반지 사이즈", "");
     setByHeader(row, headers, "주얼리 소재", defaults.material);
     setByHeader(row, headers, "주문제작 여부", defaults.custom);
     setByHeader(row, headers, "사이즈 조절여부", defaults.sizeAdjust);
@@ -131,8 +164,17 @@ export async function buildQuoteWorkbook(payload: ExportPayload) {
     setByHeader(row, headers, "사용대상 구분", defaults.target);
     setByHeader(row, headers, "패션잡화 사용대상", defaults.target);
     setByHeader(row, headers, "각인 포함 유무", defaults.engraving);
-    setByHeader(row, headers, "어린이용 여부", "어린이용 아님");
+    // 선택값인 어린이용 여부는 공란으로 둡니다.
+    const childrenColumn = headers.get("어린이용 여부");
+    if (childrenColumn) row.getCell(childrenColumn).value = null;
+    setByHeader(row, headers, "출시 연도", new Date().getFullYear());
+    setByHeader(row, headers, "출시연도", new Date().getFullYear());
+    setByHeader(row, headers, "계절", "사계절");
     setByHeader(row, headers, "귀걸이 종류", payload.product.category === "피어싱" ? "피어싱" : "귀걸이");
+    if (payload.product.category === "귀걸이" || payload.product.category === "피어싱") {
+      setByHeader(row, headers, "귀걸이 스타일", earringStyle(payload.title));
+      setByHeader(row, headers, "귀걸이 침 종류", earringPostType(payload.title));
+    }
     // Parent / Manufacturer Part Number must stay blank for all rows
     for (const [key, col] of headers.entries()) {
       const norm = key.replace(/\s+/g, " ").trim().toLowerCase();
@@ -141,6 +183,14 @@ export async function buildQuoteWorkbook(payload: ExportPayload) {
         norm === "manufacturer part number"
       ) {
         row.getCell(col).value = null;
+      }
+      if (
+        /전기용품.*생활용품.*어린이.*kc.*인증.*마크.*타입/i.test(norm) ||
+        /전기용품.*생활용품.*어린이.*kc.*인증번호/i.test(norm) ||
+        /방송통신.*기자재.*emc.*인증.*번호/i.test(norm) ||
+        /^kcs\s*인증번호$/i.test(norm)
+      ) {
+        row.getCell(col).value = "해당사항없음";
       }
     }
     setByHeader(row, headers, "대표이미지 파일명", sku.thumbFile);
@@ -229,14 +279,18 @@ export async function buildQuoteWorkbook(payload: ExportPayload) {
     setByHeader(row, headers, "품질보증기준", defaults.warranty);
     setByHeader(row, headers, "A/S 책임자와 전화번호", defaults.asContact);
     row.commit();
-  });
+    });
+    totalSkuCount += skus.length;
+  }
 
   const buffer = await workbook.xlsx.writeBuffer();
-  const downloadName = `견적서_${payload.model}_${payload.product.category}.xlsx`;
+  const models = [...new Set(payloads.map(payload => String(payload.model || "").trim()).filter(Boolean))];
+  const groupName = models.length <= 1 ? (models[0] || first.model) : `${models[0]}_외${models.length - 1}개`;
+  const downloadName = `견적서_${groupName}_${first.product.category}.xlsx`;
   return {
     buffer: Buffer.from(buffer),
     downloadName,
-    skuCount: skus.length,
+    skuCount: totalSkuCount,
     templateFile: fileName,
   };
 }

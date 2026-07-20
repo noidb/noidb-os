@@ -2,8 +2,22 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "노이드비 AI",
-  description: "사진 한 장으로 쿠팡 등록 준비 완료",
+  title: "LAURA OS",
+  description: "상품 · 이미지 · 재고 · 발주를 관리하는 Seller Workspace",
+  applicationName: "LAURA OS",
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+  appleWebApp: { capable: true, title: "LAURA OS", statusBarStyle: "black-translucent" },
+};
+
+export const viewport = {
+  themeColor: "#252525",
 };
 
 export default function RootLayout({

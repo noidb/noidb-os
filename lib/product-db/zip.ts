@@ -11,7 +11,8 @@ export async function buildProductDbZip(
   const folder = zip.folder(category)?.folder(model);
   if (!folder) throw new Error("ZIP 폴더를 만들 수 없습니다.");
   for (const file of files) {
-    folder.file(file.filename, file.blob);
+    const target = file.folder ? folder.folder(file.folder) : folder;
+    target?.file(file.filename, file.blob);
   }
   return zip.generateAsync({ type: "blob" });
 }

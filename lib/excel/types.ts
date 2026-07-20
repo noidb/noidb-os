@@ -6,7 +6,10 @@ export type ExportProduct = {
   colors: string;
   sizes: string;
   modelNo: string;
+  warehouse: string;
+  replacementSku: string;
   keyword: string;
+  dimension: string;
   cost: string;
   price: string;
 };
@@ -20,6 +23,9 @@ export type ExportPayload = {
   additionalImages?: string[];
   /** Comma-joined extras for one cell: wr0001-01.jpg,wr0001-02.jpg,wr0001-03.jpg */
   additionalImagesCsv?: string;
+  sourcingUrl?: string;
+  /** 색상 옵션명 → 실제 썸네일 data URL */
+  optionImages?: Record<string, string>;
 };
 
 export type SkuRow = {

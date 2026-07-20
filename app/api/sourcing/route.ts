@@ -31,8 +31,15 @@ export async function POST(req: NextRequest) {
 반드시 아래 JSON 하나만 출력한다.
 {
   "koreanSummary": "제품을 찾기 위한 짧은 한국어 설명",
-  "chineseKeywords": ["1688 검색용 중국어 검색어 1", "중국어 검색어 2", "중국어 검색어 3"],
-  "englishKeywords": ["영어 검색어 1", "영어 검색어 2"],
+  "chineseKeywords": [
+    {"chinese": "1688 검색용 중국어 검색어 1", "koreanMeaning": "검색어 전체의 한국어 뜻"},
+    {"chinese": "중국어 검색어 2", "koreanMeaning": "검색어 전체의 한국어 뜻"},
+    {"chinese": "중국어 검색어 3", "koreanMeaning": "검색어 전체의 한국어 뜻"}
+  ],
+  "englishKeywords": [
+    {"english": "English search phrase 1", "koreanMeaning": "검색어 전체의 한국어 뜻"},
+    {"english": "English search phrase 2", "koreanMeaning": "검색어 전체의 한국어 뜻"}
+  ],
   "ocrText": ["사진에서 실제로 읽힌 문구"],
   "detectedPrice": "사진에서 읽힌 가격 또는 없음",
   "detectedSizes": ["사진에서 읽힌 사이즈"],
@@ -42,7 +49,10 @@ export async function POST(req: NextRequest) {
 
 규칙:
 - 중국어 검색어는 1688 판매자가 실제로 쓸 법한 간결한 상품명으로 작성한다.
-- 소재가 사용자 입력으로 제공돼도 사진만으로 확인되지 않으면 중국어 검색어에 필수로 넣지 않는다.
+- 모든 중국어 검색어에는 사용자 입력의 소재와 분류를 반드시 포함한다. 디자인 특징은 사진에서 확실한 것만 더한다.
+- koreanMeaning에는 중국어 검색어 전체를 자연스러운 한국어로 번역해 적는다.
+- 모든 영어 검색어에도 사용자 입력의 소재와 분류를 반드시 포함하고 koreanMeaning에 한국어 뜻을 적는다.
+- 소재가 써지컬스틸이면 써지컬스틸 검색어와 티타늄 검색어를 각각 하나 이상 만든다.
 - 브랜드명은 사진에서 명확히 확인될 때만 기록한다.
 - 가격과 사이즈는 OCR로 실제 읽힌 것만 반환한다.
 - 동일 검색어를 반복하지 않는다.
