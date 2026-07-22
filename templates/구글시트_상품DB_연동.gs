@@ -16,7 +16,7 @@ const PRODUCT_DB_HEADERS = [
   '주얼리사이즈','치수','원가(부가세포함)','쿠팡 판매가','공급가','발주가능상태','제품링크',
   '마진','바코드','현재고','누적입고','미입고','최근발주일',
   '최근입고일','이전쿠팡공급가','최근쿠팡공급가','공급가차이','공급가확인',
-  '쿠팡 노출가','기본순서','노출상품ID','옵션ID','패키지'
+  '쿠팡 노출가','재고현황','기본순서','노출상품ID','옵션ID','패키지'
 ];
 const PO_HISTORY_SHEET = '_발주이력';
 const INBOUND_HISTORY_SHEET = '_입고요약';
@@ -142,8 +142,7 @@ function doPost(e) {
     }
 
     if (data.action === 'importSkuMaster') return importSkuMaster_(ss, db, data.items || []);
-    if (data.action === 'importLegacyProducts') return importLegacyProducts_(ss, db, data.items || []);
-    if (data.action === 'importVerifiedCatalog') return importVerifiedCatalog_(db, data.items || []);
+    if (data.action === 'importCoupangExtract') return importCoupangExtract_(db, data.items || []);
     if (data.action === 'importInboundSummary') return importInboundSummary_(ss, db, data);
     if (data.action === 'importPurchaseOrders') return importPurchaseOrders_(ss, db, data.items || []);
 
@@ -249,7 +248,7 @@ function replaceDbRowsForModel_(db, model, newRows) {
       if (!replacementPending) {
         ['창고번호','SKU ID','발주가능상태','제품링크','바코드','현재고','누적입고','미입고','최근발주일',
           '최근입고일','이전쿠팡공급가','최근쿠팡공급가','공급가차이','공급가확인',
-          '현재상태','쿠팡 노출가','기본순서','노출상품ID','옵션ID','패키지']
+          '현재상태','쿠팡 노출가','재고현황','기본순서','노출상품ID','옵션ID','패키지']
           .forEach(name => { const column = dbColumn_(name); row[column] = old.values[column]; });
       }
     }
@@ -358,6 +357,7 @@ function mergeReplacementRows_(newRows, oldRows, forceSequentialFallback) {
     row[dbColumn_('노출상품ID')] = '';
     row[dbColumn_('옵션ID')] = '';
     row[dbColumn_('쿠팡 노출가')] = '';
+    row[dbColumn_('재고현황')] = '';
     row[dbColumn_('발주가능상태')] = '';
     row[dbColumn_('현재상태')] = '기존상품승인대기';
     return row;
@@ -1646,125 +1646,64 @@ function importLegacyProducts_(ss, db, items) {
     duplicatesRemoved: deduped.removed + finalResult.removed });
 }
 
-function importVerifiedCatalog_(db, items) {
+function importCoupangExtract_(db, items) {
   const rowCount = Math.max(0, db.getLastRow() - 1);
-  if (!rowCount) return json_({ ok: true, matched: 0, imageUpdated: 0, exposurePriceUpdated: 0, missing: 0 });
+  if (!rowCount) return json_({ ok: true, matched: 0, productLinkUpdated: 0, exposurePriceUpdated: 0, stockStatusUpdated: 0, missing: 0 });
 
   const skuColumn = dbColumn_('SKU ID');
-  const imageColumn = dbColumn_('이미지');
-  const exposurePriceColumn = dbColumn_('쿠팡 노출가');
-  const productIdColumn = dbColumn_('노출상품ID');
   const optionIdColumn = dbColumn_('옵션ID');
+  const productLinkColumn = dbColumn_('제품링크');
+  const exposurePriceColumn = dbColumn_('쿠팡 노출가');
+  const stockStatusColumn = dbColumn_('재고현황');
   const skus = db.getRange(2, skuColumn + 1, rowCount, 1).getDisplayValues().flat();
-  const imageRange = db.getRange(2, imageColumn + 1, rowCount, 1);
-  const imageValues = imageRange.getValues();
-  const imageFormulas = imageRange.getFormulas();
-  const imageOutput = imageValues.map((row, index) => [imageFormulas[index][0] || row[0] || '']);
+  const optionIds = db.getRange(2, optionIdColumn + 1, rowCount, 1).getDisplayValues().flat();
+  const productLinkRange = db.getRange(2, productLinkColumn + 1, rowCount, 1);
+  const productLinkValues = productLinkRange.getValues();
   const priceRange = db.getRange(2, exposurePriceColumn + 1, rowCount, 1);
   const priceValues = priceRange.getValues();
-  const productIdRange = db.getRange(2, productIdColumn + 1, rowCount, 1);
-  const optionIdRange = db.getRange(2, optionIdColumn + 1, rowCount, 1);
-  const productIdValues = productIdRange.getDisplayValues();
-  const optionIdValues = optionIdRange.getDisplayValues();
-  const dbValues = db.getRange(2, 1, rowCount, PRODUCT_DB_HEADERS.length).getValues();
+  const stockStatusRange = db.getRange(2, stockStatusColumn + 1, rowCount, 1);
+  const stockStatusValues = stockStatusRange.getValues();
   const skuRows = {};
-  skus.forEach((sku, index) => { const key = String(sku || '').trim(); if (key) skuRows[key] = index; });
+  const optionRows = {};
+  skus.forEach((sku, index) => { const key = normalizeSkuId_(sku); if (key) skuRows[key] = index; });
+  optionIds.forEach((optionId, index) => { const key = normalizeSkuId_(optionId); if (key) optionRows[key] = index; });
 
   let matched = 0;
-  let imageUpdated = 0;
+  let productLinkUpdated = 0;
   let exposurePriceUpdated = 0;
-  let driveImagePreserved = 0;
-  let existingImagePreserved = 0;
-  let productIdUpdated = 0;
-  let optionIdUpdated = 0;
-  let matchedByProductId = 0;
+  let stockStatusUpdated = 0;
   let missing = 0;
   const handled = {};
-  const applyItem = (item, index) => {
-    if (index === undefined || index < 0) { missing++; return; }
-    const sku = String(item.sku || '').trim();
-    const handledKey = sku || ('row:' + index);
-    if (!handled[handledKey]) { handled[handledKey] = true; matched++; }
-
-    const productId = String(item.productId || '').trim();
-    const optionId = String(item.optionId || '').trim();
-    if (productId && String(productIdValues[index][0] || '').trim() !== productId) {
-      productIdValues[index][0] = productId;
-      productIdUpdated++;
+  (Array.isArray(items) ? items : []).forEach(item => {
+    const sku = normalizeSkuId_(item.sku);
+    const optionId = normalizeSkuId_(item.optionId);
+    const index = sku && skuRows[sku] !== undefined ? skuRows[sku]
+      : optionId && optionRows[optionId] !== undefined ? optionRows[optionId] : undefined;
+    if (index === undefined) { missing++; return; }
+    if (!handled[index]) { handled[index] = true; matched++; }
+    const productLink = String(item.productLink || '').trim();
+    if (productLink && String(productLinkValues[index][0] || '').trim() !== productLink) {
+      productLinkValues[index][0] = productLink;
+      productLinkUpdated++;
     }
-    if (optionId && String(optionIdValues[index][0] || '').trim() !== optionId) {
-      optionIdValues[index][0] = optionId;
-      optionIdUpdated++;
-    }
-
-    const imageUrl = String(item.imageUrl || '').trim();
-    if (/^https:\/\//i.test(imageUrl)) {
-      const currentFormula = String(imageFormulas[index][0] || '');
-      const currentImage = String(imageOutput[index][0] || '');
-      if (/drive\.google\.com/i.test(currentFormula)) {
-        imageOutput[index][0] = currentFormula;
-        driveImagePreserved++;
-      } else if (currentImage) {
-        // 검수가 끝나 이미 이미지가 있는 행은 이후 파일 업로드로 덮어쓰지 않습니다.
-        imageOutput[index][0] = currentImage;
-        existingImagePreserved++;
-      } else {
-        imageOutput[index][0] = '=IMAGE("' + imageUrl.replace(/"/g, '') + '",4,80,80)';
-        imageUpdated++;
-      }
-    } else if (imageFormulas[index][0]) {
-      imageOutput[index][0] = imageFormulas[index][0];
-    }
-
     const exposurePrice = number_(item.exposurePrice);
     if (exposurePrice > 0) {
       if (number_(priceValues[index][0]) !== exposurePrice) exposurePriceUpdated++;
       priceValues[index][0] = exposurePrice;
     }
-  };
-
-  const incoming = Array.isArray(items) ? items : [];
-  // SKU가 있는 행을 먼저 반영해 제품DB에 노출상품ID 묶음을 만든 뒤, SKU가 없는 옵션을 찾습니다.
-  incoming.filter(item => String(item.sku || '').trim()).forEach(item => {
-    const index = skuRows[String(item.sku || '').trim()];
-    applyItem(item, index);
-  });
-  incoming.filter(item => !String(item.sku || '').trim()).forEach(item => {
-    const productId = String(item.productId || '').trim();
-    if (!productId) { missing++; return; }
-    const candidates = [];
-    productIdValues.forEach((value, index) => {
-      if (String(value[0] || '').trim() !== productId) return;
-      if (String(item.optionId || '').trim() && String(optionIdValues[index][0] || '').trim() === String(item.optionId).trim()) {
-        candidates.push({ index: index, score: 10000 });
-        return;
-      }
-      const score = scorePendingSkuMatch_(String(item.name || ''), dbValues[index]);
-      candidates.push({ index: index, score: score });
-    });
-    candidates.sort((a, b) => b.score - a.score);
-    const best = candidates[0];
-    const second = candidates[1];
-    const uniqueBest = best && (best.score > 0 ? (!second || best.score > second.score) : candidates.length === 1);
-    if (!uniqueBest) { missing++; return; }
-    matchedByProductId++;
-    applyItem(item, best.index);
+    const stockStatus = String(item.stockStatus || '').trim();
+    if (stockStatus && String(stockStatusValues[index][0] || '').trim() !== stockStatus) {
+      stockStatusValues[index][0] = stockStatus;
+      stockStatusUpdated++;
+    }
   });
 
-  imageRange.setValues(imageOutput);
+  productLinkRange.setValues(productLinkValues);
   priceRange.setValues(priceValues).setNumberFormat('#,##0');
-  productIdRange.setValues(productIdValues).setNumberFormat('@');
-  optionIdRange.setValues(optionIdValues).setNumberFormat('@');
-  normalizeCatalogIdColumns_(db);
-  // 이미지·노출가 업로드에서는 제품DB 행 삭제나 정렬을 하지 않습니다.
-  // 현재상태를 포함한 수기 데이터와 사이트 등록 순서를 그대로 보호합니다.
-  const duplicatesRemoved = 0;
-  formatProductDb_(db);
-  return json_({ ok: true, matched: matched, imageUpdated: imageUpdated,
-    exposurePriceUpdated: exposurePriceUpdated, driveImagePreserved: driveImagePreserved,
-    existingImagePreserved: existingImagePreserved, missing: missing,
-    productIdUpdated: productIdUpdated, optionIdUpdated: optionIdUpdated, matchedByProductId: matchedByProductId,
-    duplicatesRemoved: duplicatesRemoved });
+  stockStatusRange.setValues(stockStatusValues);
+  // 이 업로드는 기존 행의 세 필드만 쓰며 행 추가·삭제·정렬을 하지 않습니다.
+  return json_({ ok: true, matched: matched, productLinkUpdated: productLinkUpdated,
+    exposurePriceUpdated: exposurePriceUpdated, stockStatusUpdated: stockStatusUpdated, missing: missing });
 }
 
 function importInboundSummary_(ss, db, data) {

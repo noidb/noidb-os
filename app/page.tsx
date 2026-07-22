@@ -911,12 +911,11 @@ export default function Home() {
     setMessage("전체 입력값을 기본값으로 초기화했습니다.");
   };
 
-  const importCoupangData = async (mode: "skuMaster" | "inboundHistory" | "poList" | "legacyProducts" | "verifiedCatalog", fileList: FileList | null) => {
+  const importCoupangData = async (mode: "skuMaster" | "inboundHistory" | "poList" | "coupangExtract", fileList: FileList | null) => {
     if (!fileList?.length) return;
     const label = mode === "skuMaster" ? "SKU 전체 목록"
       : mode === "inboundHistory" ? "입고상세내역"
-      : mode === "legacyProducts" ? "기존 상품정보"
-      : mode === "verifiedCatalog" ? "검증된 이미지·쿠팡 노출가"
+      : mode === "coupangExtract" ? "쿠팡 추출DB"
       : "발주 SKU 목록";
     setCoupangImportBusy(mode);
     setCoupangImportMessage(`${label}을 Google 상품DB에 반영하고 있습니다...`);
@@ -943,10 +942,8 @@ export default function Home() {
         setCoupangImportMessage(data.skipped
           ? `이미 반영한 동일한 입고 파일 ${data.files}개라서 중복 적용하지 않았습니다.`
           : `입고상세내역 ${data.files}개 반영 완료 · 실제 입고 ${Number(data.totalInbound || 0).toLocaleString()} · 누적입고 갱신 SKU ${Number(data.cumulativeInboundUpdated || 0).toLocaleString()} · 미입고 재계산 SKU ${Number(data.missingUpdated || 0).toLocaleString()}`);
-      } else if (mode === "legacyProducts") {
-        setCoupangImportMessage(`기존 상품정보 연결 완료 · SKU 매칭 ${Number(data.matched || 0).toLocaleString()} · 신규행 ${Number(data.inserted || 0).toLocaleString()} · 빈 정보 입력 ${Number(data.fieldsFilled || 0).toLocaleString()}칸 · 구 SKU 건너뜀 ${Number(data.retiredSkipped || 0).toLocaleString()} · 재추가된 구 SKU 정리 ${Number(data.removedRetired || 0).toLocaleString()} · 중복행 정리 ${Number(data.duplicatesRemoved || 0).toLocaleString()}`);
-      } else if (mode === "verifiedCatalog") {
-        setCoupangImportMessage(`이미지·쿠팡 노출가 연결 완료 · SKU 매칭 ${Number(data.matched || 0).toLocaleString()} · 노출상품ID 갱신 ${Number(data.productIdUpdated || 0).toLocaleString()} · 옵션ID 갱신 ${Number(data.optionIdUpdated || 0).toLocaleString()} · 노출상품ID로 옵션 연결 ${Number(data.matchedByProductId || 0).toLocaleString()} · 이미지 갱신 ${Number(data.imageUpdated || 0).toLocaleString()} · 같은 모델명 이미지 채움 ${Number(data.propagatedImages || 0).toLocaleString()} · 쿠팡 노출가 갱신 ${Number(data.exposurePriceUpdated || 0).toLocaleString()} · 모델명+노출상품ID 복원 ${Number(data.recoveredByModelProduct || 0).toLocaleString()} · 노출상품ID 단독복원 ${Number(data.recoveredByProduct || 0).toLocaleString()} · 미연결 ${Number(data.unmatched || 0).toLocaleString()} · 다음으로 ③ 신규 발주목록을 다시 올려 발주서 출력을 갱신하세요.`);
+      } else if (mode === "coupangExtract") {
+        setCoupangImportMessage(`쿠팡 추출DB 반영 완료 · 기존 행 매칭 ${Number(data.matched || 0).toLocaleString()} · 상품링크 갱신 ${Number(data.productLinkUpdated || 0).toLocaleString()} · 쿠팡 노출가 갱신 ${Number(data.exposurePriceUpdated || 0).toLocaleString()} · 재고현황 갱신 ${Number(data.stockStatusUpdated || 0).toLocaleString()} · 미연결 ${Number(data.missing || 0).toLocaleString()} · 제품DB 신규행 0 · 그 외 정보 수정 없음`);
       } else {
         setCoupangImportMessage(`발주 ${data.parsed?.toLocaleString?.() || data.parsed}행 반영 완료 · 최근발주일 ${Number(data.recentOrderDatesUpdated || 0).toLocaleString()}개 SKU 갱신 · 미입고 ${Number(data.missingUpdated || 0).toLocaleString()}개 SKU 재계산 · 합배송 ${data.shippingGroups || 0}묶음 · 발주서 출력 ${data.pickingRows || 0}행 · 쉽먼트전송 ${data.shipmentRows || 0}행 · 창고번호 미등록 ${data.missingWarehouse || 0}`);
       }
@@ -957,7 +954,7 @@ export default function Home() {
     }
   };
 
-  const dropCoupangFiles = (mode: "skuMaster" | "inboundHistory" | "poList" | "legacyProducts" | "verifiedCatalog", event: React.DragEvent<HTMLElement>) => {
+  const dropCoupangFiles = (mode: "skuMaster" | "inboundHistory" | "poList" | "coupangExtract", event: React.DragEvent<HTMLElement>) => {
     event.preventDefault();
     event.stopPropagation();
     if (coupangImportBusy || !event.dataTransfer.files.length) return;
@@ -2358,15 +2355,11 @@ export default function Home() {
               <span>파일명: PO_SKU_LIST</span>
               <input type="file" accept=".csv,.xlsx" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("poList", e.target.files); e.target.value = ""; }} />
             </label>
-            <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("legacyProducts", e)}>
-              <strong>④ 기존 상품정보 연결</strong>
-              <span>기존 상품관리.xlsx 선택</span>
-              <input type="file" accept=".xlsx" disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("legacyProducts", e.target.files); e.target.value = ""; }} />
-            </label>
-            <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("verifiedCatalog", e)}>
-              <strong>⑤ 이미지·쿠팡 노출가 연결</strong>
-              <span>이미지db_수정.xlsx와 쿠팡쇼핑몰 추출DB.xlsx를 함께 선택</span>
-              <input type="file" accept=".xlsx" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("verifiedCatalog", e.target.files); e.target.value = ""; }} />
+            <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("coupangExtract", e)}>
+              <strong>④ 쿠팡 추출DB 업데이트</strong>
+              <span>쿠팡쇼핑몰 추출DB.xlsx 한 파일만 선택</span>
+              <span>제품DB 행 추가 없음 · 기존 행의 상품링크/쿠팡 노출가/재고현황만 갱신</span>
+              <input type="file" accept=".xlsx" disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("coupangExtract", e.target.files); e.target.value = ""; }} />
             </label>
           </div>
           {coupangImportMessage && <p className={coupangImportMessage.startsWith("오류") ? "error" : "detailMessage"}>{coupangImportMessage}</p>}

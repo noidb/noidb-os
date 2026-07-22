@@ -219,137 +219,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, mode, parsed: items.length, excluded, ...result });
     }
 
-    if (mode === "legacyProducts") {
-      const products = new Map<string, Record<string, string>>();
-      for (const file of files) {
-        const { rows } = await xlsxRows(file);
-        for (const row of toObjects(rows)) {
-          const sku = String(row["SKU ID"] || "").trim();
-          if (!/^\d+$/.test(sku)) continue;
-          if (!("창고번호" in row) && !("모델SKU" in row)) continue;
-          const incoming = {
-            sku,
-            supplier: row["거래처"], gender: row["성별"], category: row["카테고리"],
-            model: row["모델명"], modelSku: row["모델SKU"], name: row["상품명"],
-            color: row["주얼리색상"], dimensions: row["치수"], cost: row["원가"],
-            salePrice: row["쿠팡 판매가"], supplyPrice: row["공급가"], status: row["발주가능상태"],
-            productLink: row["제품링크"], barcode: row["바코드"], warehouse: row["창고번호"],
-          };
-          const current = products.get(sku) || { sku };
-          Object.entries(incoming).forEach(([key, value]) => { if (String(value || "").trim()) current[key] = String(value).trim(); });
-          products.set(sku, current);
-        }
-      }
-      const items = [...products.values()];
-      const summary = { ok: true, mode, files: files.length, parsed: items.length };
-      if (dryRun) return NextResponse.json({ ...summary, sample: items.slice(0, 2) });
-      const result = await callWebhook({ action: "importLegacyProducts", items });
-      return NextResponse.json({ ...summary, ...result });
-    }
+    if (mode === "coupangExtract") {
+      if (files.length !== 1) throw new Error("쿠팡쇼핑몰 추출DB.xlsx 파일 하나만 선택해주세요.");
+      const { rows } = await xlsxRows(files[0]);
+      const objects = toObjects(rows);
+      const hasExtractColumns = objects.some(row =>
+        ("제품링크" in row || "상품링크" in row) && "쿠팡노출가격" in row
+      );
+      if (!hasExtractColumns) throw new Error("쿠팡쇼핑몰 추출DB 형식을 확인해주세요.");
 
-    if (mode === "verifiedCatalog") {
-      const fixedRows: TableRow[] = [];
-      const extractRows: TableRow[] = [];
-      for (const file of files) {
-        const { rows } = await xlsxRows(file);
-        const objects = toObjects(rows);
-        if (objects.some(row => "이미지링크" in row && "SKU" in row)) fixedRows.push(...objects);
-        if (objects.some(row => "쿠팡노출가격" in row && "옵션ID" in row)) extractRows.push(...objects);
-      }
-      if (!fixedRows.length || !extractRows.length) {
-        throw new Error("이미지db_수정.xlsx와 쿠팡쇼핑몰 추출DB.xlsx 두 파일을 함께 선택해주세요.");
-      }
-
-      const fixedBySku = new Map<string, { imageUrl: string; name: string; model: string; productId: string }>();
-      const modelImages = new Map<string, string>();
-      const modelProductSkus = new Map<string, Set<string>>();
-      const productSkus = new Map<string, Set<string>>();
-      const modelProductNameSkus = new Map<string, Set<string>>();
-      const productNameSkus = new Map<string, Set<string>>();
-      const addLookup = (map: Map<string, Set<string>>, key: string, sku: string) => {
-        if (!key) return;
-        if (!map.has(key)) map.set(key, new Set());
-        map.get(key)!.add(sku);
-      };
-      fixedRows.forEach(row => {
-        const model = cleanText(row["모델명"]);
-        const rawUrl = cleanText(row["이미지링크"]);
-        const imageUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl.replace(/^http:/i, "https:") : "";
-        if (model && imageUrl && !modelImages.has(model)) modelImages.set(model, imageUrl);
-      });
-
-      let propagatedImages = 0;
-      fixedRows.forEach(row => {
-        const sku = cleanText(row["SKU"]);
-        if (!/^\d+$/.test(sku)) return;
-        const model = cleanText(row["모델명"]);
-        const rawUrl = cleanText(row["이미지링크"]);
-        let imageUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl.replace(/^http:/i, "https:") : "";
-        if (!imageUrl && model && modelImages.has(model)) {
-          imageUrl = modelImages.get(model)!;
-          propagatedImages++;
-        }
-        const name = cleanText(row["상품명"]);
-        const productId = cleanText(row["노출상품ID"]);
-        fixedBySku.set(sku, { imageUrl, name, model, productId });
-        addLookup(modelProductSkus, model && productId ? `${model}\u0000${productId}` : "", sku);
-        addLookup(productSkus, productId, sku);
-        addLookup(modelProductNameSkus, model && productId && name ? `${model}\u0000${productId}\u0000${name}` : "", sku);
-        addLookup(productNameSkus, productId && name ? `${productId}\u0000${name}` : "", sku);
-      });
-
-      type CatalogItem = { sku: string; imageUrl: string; exposurePrice: number; productId: string; optionId: string; name: string; model: string };
-      const items = new Map<string, CatalogItem>();
-      fixedBySku.forEach((value, sku) => {
-        items.set(sku, { sku, imageUrl: value.imageUrl, exposurePrice: 0, productId: value.productId, optionId: "", name: value.name, model: value.model });
-      });
-      let directSku = 0;
-      let recoveredByModelProduct = 0;
-      let recoveredByProduct = 0;
-      let unmatched = 0;
-      let unresolvedSequence = 0;
-      extractRows.forEach(row => {
-        const rawSku = cleanText(row["SKU ID"]);
-        const model = cleanText(row["모델명"]);
-        const productId = cleanText(row["노출상품ID"]);
-        const optionId = cleanText(row["옵션ID"]);
-        const name = cleanText(row["상품명"] || row["노출상품명"] || row["옵션명"]);
-        const modelProductMatches = modelProductSkus.get(model && productId ? `${model}\u0000${productId}` : "");
-        const productMatches = productSkus.get(productId);
-        const modelProductNameMatches = modelProductNameSkus.get(model && productId && name ? `${model}\u0000${productId}\u0000${name}` : "");
-        const productNameMatches = productNameSkus.get(productId && name ? `${productId}\u0000${name}` : "");
-        let sku = "";
-        if (/^\d+$/.test(rawSku)) { sku = rawSku; directSku++; }
-        else if (modelProductNameMatches?.size === 1) { sku = [...modelProductNameMatches][0]; recoveredByModelProduct++; }
-        else if (productNameMatches?.size === 1) { sku = [...productNameMatches][0]; recoveredByProduct++; }
-        else if (modelProductMatches?.size === 1) { sku = [...modelProductMatches][0]; recoveredByModelProduct++; }
-        else if (productMatches?.size === 1) { sku = [...productMatches][0]; recoveredByProduct++; }
-        else {
-          unmatched++;
-          const key = `unresolved:${productId}:${optionId || unresolvedSequence++}`;
-          items.set(key, { sku: "", imageUrl: "", exposurePrice: 0, productId, optionId, name, model });
-          return;
-        }
-        const current = items.get(sku) || { sku, imageUrl: "", exposurePrice: 0, productId: "", optionId: "", name: "", model: "" };
-        current.productId = productId || current.productId;
-        current.optionId = optionId || current.optionId;
-        current.name = name || current.name;
-        current.model = model || current.model;
-        const fallbackUrl = cleanText(row["썸네일160"]);
-        if (!current.imageUrl && /^https?:\/\//i.test(fallbackUrl)) current.imageUrl = fallbackUrl.replace(/^http:/i, "https:");
-        const exposurePrice = parseNumber(row["쿠팡노출가격"]);
-        if (exposurePrice > 0) current.exposurePrice = exposurePrice;
-        items.set(sku, current);
-      });
-      const catalogItems = [...items.values()].filter(item => item.imageUrl || item.exposurePrice > 0 || item.productId || item.optionId);
-      const summary = {
-        ok: true, mode, files: files.length, parsed: catalogItems.length,
-        imageCandidates: catalogItems.filter(item => item.imageUrl).length,
-        priceCandidates: catalogItems.filter(item => item.exposurePrice > 0).length,
-        propagatedImages, directSku, recoveredByModelProduct, recoveredByProduct, unmatched,
-      };
-      if (dryRun) return NextResponse.json({ ...summary, sample: catalogItems.slice(0, 3) });
-      const result = await callWebhook({ action: "importVerifiedCatalog", items: catalogItems });
+      const items = objects.map(row => ({
+        sku: cleanText(row["SKU ID"] || row["SKU"]),
+        optionId: cleanText(row["옵션ID"]),
+        productLink: cleanText(row["상품링크"] || row["제품링크"]),
+        exposurePrice: parseNumber(row["쿠팡노출가격"] || row["쿠팡 노출가"]),
+        stockStatus: cleanText(row["재고현황"] || row["재고상태"] || row["재고 상태"]),
+      })).filter(item => item.sku || item.optionId);
+      const summary = { ok: true, mode, files: 1, parsed: items.length };
+      if (dryRun) return NextResponse.json({ ...summary, sample: items.slice(0, 3) });
+      const result = await callWebhook({ action: "importCoupangExtract", items });
       return NextResponse.json({ ...summary, ...result });
     }
 
