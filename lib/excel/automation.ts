@@ -39,35 +39,12 @@ export async function buildAutomationWorkbook(payload: ExportPayload) {
   const skus = buildSkuRows(payload);
 
   for (const sheet of [...workbook.worksheets]) {
-    if (!["상품입력", "제품DB"].includes(sheet.name)) {
+    if (sheet.name !== "제품DB") {
       workbook.removeWorksheet(sheet.id);
     }
   }
 
-  // 1) 상품입력 — current product only
-  const input = workbook.getWorksheet("상품입력");
-  if (!input) throw new Error("상품입력 시트가 없습니다.");
-  clearSheetFrom(input, 2);
-  input.getRow(1).values = [
-    "등록여부", "거래처", "성별", "카테고리", "모델명/품번", "상품명",
-    "색상목록", "사이즈목록", "원가(부가세포함)", "쿠팡 판매가", "치수", "창고번호",
-  ];
-  input.getRow(2).values = [
-    "등록",
-    supplier,
-    payload.product.gender,
-    payload.product.category,
-    payload.model,
-    payload.title,
-    payload.product.colors,
-    payload.product.sizes,
-    cost || "",
-    sale || "",
-    dimension,
-    payload.product.warehouse || "",
-  ];
-
-  // 2) 제품DB — 재고관리용 SKU rows
+  // 제품DB — 재고관리용 SKU rows
   const db = workbook.getWorksheet("제품DB");
   if (!db) throw new Error("제품DB 시트가 없습니다.");
   clearSheetFrom(db, 1);

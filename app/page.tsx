@@ -935,10 +935,10 @@ export default function Home() {
       }
       if (!response.ok || !data.ok) throw new Error(data.error || "가져오기 실패");
       if (mode === "skuMaster") {
-        const nonRocketText = ` · 업로드 S바코드 제외 ${Number(data.excluded || 0).toLocaleString()} · 비활성·기존 S바코드 정리 ${Number(data.removedNonRocket || 0).toLocaleString()} · 구 SKU 재추가 방지 ${Number(data.retiredSkipped || 0).toLocaleString()} · 중복행 정리 ${Number(data.duplicatesRemoved || 0).toLocaleString()}`;
+        const safetyText = ` · 제품DB 신규행 0 · 기존 SKU는 상품명·바코드·발주가능상태만 갱신 · 업로드 S바코드 제외 ${Number(data.excluded || 0).toLocaleString()} · 기준목록 S바코드 정리 ${Number(data.removedNonRocket || 0).toLocaleString()} · 구 SKU 재추가 방지 ${Number(data.retiredSkipped || 0).toLocaleString()}`;
         setCoupangImportMessage(data.baseline
-          ? `SKU 기준목록 ${data.parsed?.toLocaleString?.() || data.parsed}개 생성 완료 · 등록대기 자동연결 ${data.matched || 0} · 확인필요 ${data.review || 0}${nonRocketText}`
-          : `SKU 전체 목록 ${data.parsed?.toLocaleString?.() || data.parsed}개 반영 완료 · 새 SKU ${data.newSkus || 0} · 자동연결 ${data.matched || 0} · 확인필요 ${data.review || 0} · 신규행 ${data.inserted || 0} · 수정 ${data.updated || 0}${nonRocketText}`);
+          ? `SKU 기준목록 ${data.parsed?.toLocaleString?.() || data.parsed}개 생성 완료 · 최초 업로드는 승인대기 자동연결 없음${safetyText}`
+          : `SKU 전체 목록 ${data.parsed?.toLocaleString?.() || data.parsed}개 반영 완료 · 직전 업로드 이후 새 SKU ${data.newSkus || 0} · 승인대기 자동연결 ${data.matched || 0} · 확인필요 ${data.review || 0} · 수정 ${data.updated || 0}${safetyText}`);
       } else if (mode === "inboundHistory") {
         setCoupangImportMessage(data.skipped
           ? `이미 반영한 동일한 입고 파일 ${data.files}개라서 중복 적용하지 않았습니다.`
@@ -2345,6 +2345,7 @@ export default function Home() {
             <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("skuMaster", e)}>
               <strong>① 상품공급상태관리 다운로드</strong>
               <span>파일명: 상품공급상태관리 SKU 다운로드</span>
+              <span>제품DB 행 추가 없음 · 기존 SKU는 상품명/바코드/발주가능상태만 갱신</span>
               <input type="file" accept=".xlsx" disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("skuMaster", e.target.files); e.target.value = ""; }} />
             </label>
             <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("inboundHistory", e)}>

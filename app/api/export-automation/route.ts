@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "상품입력 자동화 파일 생성 실패" },
+      { error: error instanceof Error ? error.message : "상품DB 파일 생성 실패" },
       { status: 500 }
     );
   }
