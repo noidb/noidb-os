@@ -18,6 +18,19 @@ function cleanText(value: unknown) {
   return text.replace(/[\t ]+/g, " ").trim();
 }
 
+function normalizeFieldName(value: unknown) {
+  return cleanText(value).toLowerCase().replace(/[\s()[\]{}_.\-/:]/g, "");
+}
+
+function field(row: TableRow, ...aliases: string[]) {
+  const normalized = new Map(Object.entries(row).map(([key, value]) => [normalizeFieldName(key), value]));
+  for (const alias of aliases) {
+    const value = normalized.get(normalizeFieldName(alias));
+    if (value !== undefined) return cleanText(value);
+  }
+  return "";
+}
+
 function parseNumber(value: unknown) {
   const number = Number(String(value ?? "").replace(/[^0-9.\-]/g, ""));
   return Number.isFinite(number) ? number : 0;
@@ -248,22 +261,33 @@ export async function POST(req: NextRequest) {
       let totalOutbound = 0;
       for (const file of files) {
         const { rows, buffer } = await xlsxRows(file);
-        const totals = new Map<string, { sku: string; name: string; inbound: number; outbound: number; prices: { date: string; price: number }[]; lastDate: string }>();
+        const totals = new Map<string, {
+          po: string; expectedDate: string; sku: string; name: string;
+          inbound: number; outbound: number; prices: { date: string; price: number }[]; lastDate: string;
+        }>();
         for (const row of toObjects(rows)) {
-          const sku = row["SKU번호"] || row["SKU ID"];
+          const sku = field(row, "SKU번호", "SKU ID", "SKU");
           if (!sku) continue;
-          const current = totals.get(sku) || { sku, name: row["SKU명"] || row["SKU 이름"], inbound: 0, outbound: 0, prices: [], lastDate: "" };
-          const quantity = parseNumber(row["수량"] || row["입고수량"]);
-          const type = row["구분"];
-          const date = row["입고/반출시각"] || row["입고일"] || "";
-          if (type === "발주") current.inbound += quantity;
-          if (type === "반출") current.outbound += quantity;
-          if (type === "발주") {
-            const price = parseNumber(row["공급가액"] || row["공급가"]);
+          const po = field(row, "발주서 번호", "발주서번호", "발주번호", "발주서 NO", "발주서 No.", "PO 번호", "PO No");
+          const expectedDate = field(row, "입고예정일", "입고예정일자", "입고예정일시");
+          const key = [po, expectedDate, sku].join("|");
+          const current = totals.get(key) || {
+            po, expectedDate, sku, name: field(row, "SKU명", "SKU 이름", "상품명"),
+            inbound: 0, outbound: 0, prices: [], lastDate: "",
+          };
+          const quantity = parseNumber(field(row, "입고수량", "수량"));
+          const type = field(row, "구분");
+          const date = field(row, "입고/반출시각", "입고일", "입고일시");
+          const isOutbound = type.includes("반출");
+          const isInbound = !isOutbound && (!type || type.includes("발주") || type.includes("입고"));
+          if (isInbound) current.inbound += quantity;
+          if (isOutbound) current.outbound += quantity;
+          if (isInbound) {
+            const price = parseNumber(field(row, "공급가액", "공급가"));
             if (price > 0 && date) current.prices.push({ date, price });
           }
           if (date > current.lastDate) current.lastDate = date;
-          totals.set(sku, current);
+          totals.set(key, current);
         }
         const items = [...totals.values()].map(item => {
           const prices = item.prices.sort((a, b) => a.date.localeCompare(b.date));
@@ -273,7 +297,8 @@ export async function POST(req: NextRequest) {
           totalInbound += item.inbound;
           totalOutbound += item.outbound;
           return {
-            sku: item.sku, name: item.name, totalInbound: item.inbound, outbound: item.outbound,
+            po: item.po, expectedDate: item.expectedDate, sku: item.sku, name: item.name,
+            totalInbound: item.inbound, receivedQty: item.inbound, outbound: item.outbound,
             netInbound: item.inbound - item.outbound, lastDate: item.lastDate,
             previousSupplyDate: prices.length > 1 ? prices.at(-2)?.date || "" : "",
             previousSupplyPrice: previous,

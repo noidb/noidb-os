@@ -27,7 +27,7 @@ const COUPON_ISSUE_SHEET = '쿠폰발행';
 const QUOTE_QUEUE_SHEET = '견적서대기';
 const SKU_REPLACEMENT_SHEET = '_SKU교체이력';
 const PO_HISTORY_HEADERS = ['고유키','발주번호','SKU ID','물류센터','발주현황','상품명','바코드','입고예정일','발주일','발주수량','확정수량','입고수량','매입가','공급가','부가세','반영일'];
-const INBOUND_HISTORY_HEADERS = ['데이터세트','SKU ID','상품명','총입고','반출','순누적입고','최근입고일','이전공급가일','이전공급가','최근공급가일','최근공급가','반영일'];
+const INBOUND_HISTORY_HEADERS = ['데이터세트','발주번호','입고예정일','SKU ID','상품명','입고수량','반출','순입고','최근입고일','이전공급가일','이전공급가','최근공급가일','최근공급가','반영일'];
 const SKU_MASTER_HEADERS = ['SKU ID','상품명','바코드','발주가능상태','최초발견일','최근확인일'];
 const PO_PICKING_HEADERS = ['물류센터','발주서 번호','발주일시','입고예정일','창고번호','상품코드(SKU ID)','상품명','바코드','원가','매입가','발주수량','업체납품가능수량','거래처'];
 const PO_SHIPMENT_HEADERS = ['합배송묶음','발주서 NO','물류센터','입고예정일','상품코드(SKU ID)','상품명','발주수량','납품가능수량','입고수량','공급가','전송확인'];
@@ -1711,37 +1711,35 @@ function importInboundSummary_(ss, db, data) {
   syncHeaders_(history, INBOUND_HISTORY_HEADERS);
   history.hideSheet();
   const datasets = Array.isArray(data.datasets) ? data.datasets : [{ fingerprint: data.fingerprint, items: data.items || [] }];
-  const knownFingerprints = history.getLastRow() > 1
-    ? history.getRange(2, 1, history.getLastRow() - 1, 1).getDisplayValues().flat().map(value => String(value || '').trim()) : [];
   const now = new Date();
-  const incoming = [];
+  const latestByKey = {};
   let importedDatasets = 0;
-  let skippedDatasets = 0;
   datasets.forEach(dataset => {
     const fingerprint = String(dataset.fingerprint || '').trim();
     if (!fingerprint) return;
-    if (knownFingerprints.includes(fingerprint)) { skippedDatasets++; return; }
     importedDatasets++;
-    knownFingerprints.push(fingerprint);
     (Array.isArray(dataset.items) ? dataset.items : []).forEach(item => {
-      if (!String(item.sku || '').trim()) return;
-      incoming.push([
-        fingerprint, String(item.sku || ''), String(item.name || ''), number_(item.totalInbound), number_(item.outbound),
-        number_(item.netInbound), String(item.lastDate || ''), String(item.previousSupplyDate || ''), number_(item.previousSupplyPrice),
+      const po = String(item.po || '').trim();
+      const expectedDate = dateOnlyText_(item.expectedDate);
+      const sku = normalizeSkuId_(item.sku);
+      if (!sku) return;
+      const key = [po, expectedDate, sku].join('|');
+      latestByKey[key] = [
+        fingerprint, po, expectedDate, sku, String(item.name || ''), number_(item.receivedQty || item.totalInbound),
+        number_(item.outbound), number_(item.netInbound), String(item.lastDate || ''),
+        String(item.previousSupplyDate || ''), number_(item.previousSupplyPrice),
         String(item.latestSupplyDate || item.lastDate || ''), number_(item.latestSupplyPrice), now
-      ]);
+      ];
     });
   });
-  if (!importedDatasets) {
-    const tracking = applyInventoryTracking_(ss, db);
-    return json_({ ok: true, skipped: true, importedDatasets: 0, skippedDatasets: skippedDatasets,
-      cumulativeInboundUpdated: tracking.inboundUpdated, missingUpdated: tracking.missingUpdated });
-  }
-  if (incoming.length) history.getRange(history.getLastRow() + 1, 1, incoming.length, INBOUND_HISTORY_HEADERS.length).setValues(incoming);
+  const incoming = Object.keys(latestByKey).map(key => latestByKey[key]);
+  const previousRows = Math.max(0, history.getLastRow() - 1);
+  if (previousRows) history.getRange(2, 1, previousRows, Math.max(history.getLastColumn(), INBOUND_HISTORY_HEADERS.length)).clearContent();
+  if (incoming.length) history.getRange(2, 1, incoming.length, INBOUND_HISTORY_HEADERS.length).setValues(incoming);
 
   const tracking = applyInventoryTracking_(ss, db);
   return json_({ ok: true, skipped: false, imported: incoming.length, importedDatasets: importedDatasets,
-    skippedDatasets: skippedDatasets, cumulativeInboundUpdated: tracking.inboundUpdated,
+    skippedDatasets: 0, cumulativeInboundUpdated: tracking.inboundUpdated,
     missingUpdated: tracking.missingUpdated, unmatchedSkus: tracking.unmatchedSkus });
 }
 
@@ -1956,15 +1954,19 @@ function inboundTrackingTotals_(ss) {
   if (!history || history.getLastRow() < 2) return totals;
   const values = history.getRange(2, 1, history.getLastRow() - 1, INBOUND_HISTORY_HEADERS.length).getValues();
   values.forEach(row => {
-    const sku = normalizeSkuId_(row[1]);
+    const po = String(row[1] || '').trim();
+    const expectedDate = dateOnlyText_(row[2]);
+    const sku = normalizeSkuId_(row[3]);
     if (!sku) return;
-    const current = totals[sku] || { inbound: 0, outbound: 0, lastDate: '', prices: [] };
-    current.inbound += number_(row[3]);
-    current.outbound += number_(row[4]);
-    const inboundDate = dateOnlyText_(row[6]);
+    const current = totals[sku] || { inbound: 0, outbound: 0, lastDate: '', prices: [], byPurchaseKey: {} };
+    current.inbound += number_(row[5]);
+    current.outbound += number_(row[6]);
+    const purchaseKey = [po, expectedDate, sku].join('|');
+    current.byPurchaseKey[purchaseKey] = number_(current.byPurchaseKey[purchaseKey]) + number_(row[5]);
+    const inboundDate = dateOnlyText_(row[8]);
     if (inboundDate && inboundDate > current.lastDate) current.lastDate = inboundDate;
-    if (number_(row[8]) > 0) current.prices.push({ date: dateOnlyText_(row[7] || row[6]), price: number_(row[8]) });
-    if (number_(row[10]) > 0) current.prices.push({ date: dateOnlyText_(row[9] || row[6]), price: number_(row[10]) });
+    if (number_(row[10]) > 0) current.prices.push({ date: dateOnlyText_(row[9] || row[8]), price: number_(row[10]) });
+    if (number_(row[12]) > 0) current.prices.push({ date: dateOnlyText_(row[11] || row[8]), price: number_(row[12]) });
     totals[sku] = current;
   });
   Object.keys(totals).forEach(sku => {
@@ -1983,14 +1985,21 @@ function purchaseTrackingTotals_(ss, inboundTotals) {
   if (!history || history.getLastRow() < 2) return grouped;
   const rows = history.getRange(2, 1, history.getLastRow() - 1, PO_HISTORY_HEADERS.length).getValues();
   rows.forEach(row => {
+    const po = String(row[1] || '').trim();
     const sku = normalizeSkuId_(row[2]);
     if (!sku) return;
     const orderQty = number_(row[10]) || number_(row[9]);
     if (orderQty <= 0) return;
-    const item = grouped[sku] || { entries: [], recentOrderDate: '' };
+    const item = grouped[sku] || { entries: [], entryMap: {}, recentOrderDate: '' };
     const orderDate = dateOnlyText_(row[8]);
     const expectedDate = dateOnlyText_(row[7]) || purchaseDateOnly_(row[7]);
-    item.entries.push({ key: String(row[0] || ''), qty: orderQty, expectedDate: expectedDate, orderDate: orderDate });
+    const purchaseKey = [po, expectedDate, sku].join('|');
+    if (item.entryMap[purchaseKey] === undefined) {
+      item.entryMap[purchaseKey] = item.entries.length;
+      item.entries.push({ key: purchaseKey, qty: orderQty, expectedDate: expectedDate, orderDate: orderDate });
+    } else {
+      item.entries[item.entryMap[purchaseKey]].qty += orderQty;
+    }
     if (orderDate && orderDate > item.recentOrderDate) item.recentOrderDate = orderDate;
     grouped[sku] = item;
   });
@@ -1998,19 +2007,19 @@ function purchaseTrackingTotals_(ss, inboundTotals) {
     const item = grouped[sku];
     item.entries.sort((a, b) => purchaseDateNumber_(a.expectedDate) - purchaseDateNumber_(b.expectedDate)
       || purchaseDateNumber_(a.orderDate) - purchaseDateNumber_(b.orderDate) || a.key.localeCompare(b.key));
-    let actualInbound = number_(inboundTotals[sku] && inboundTotals[sku].net);
     const missingByDate = {};
     const dateOrder = [];
     item.entries.forEach(entry => {
-      const fulfilled = Math.min(entry.qty, actualInbound);
-      actualInbound -= fulfilled;
-      const missing = Math.max(0, entry.qty - fulfilled);
+      const received = number_(inboundTotals[sku] && inboundTotals[sku].byPurchaseKey[entry.key]);
+      const missing = Math.max(0, entry.qty - received);
       if (!missing) return;
       const date = entry.expectedDate || '입고일 미확인';
       if (missingByDate[date] === undefined) { missingByDate[date] = 0; dateOrder.push(date); }
       missingByDate[date] += missing;
     });
+    const missingTotal = dateOrder.reduce((sum, date) => sum + missingByDate[date], 0);
     item.missingText = dateOrder.map(date => date + ' · ' + missingByDate[date] + '개').join('\n');
+    if (dateOrder.length > 1) item.missingText += '\n합계 · ' + missingTotal + '개';
   });
   return grouped;
 }

@@ -941,7 +941,7 @@ export default function Home() {
       } else if (mode === "inboundHistory") {
         setCoupangImportMessage(data.skipped
           ? `이미 반영한 동일한 입고 파일 ${data.files}개라서 중복 적용하지 않았습니다.`
-          : `입고상세내역 ${data.files}개 반영 완료 · 실제 입고 ${Number(data.totalInbound || 0).toLocaleString()} · 누적입고 갱신 SKU ${Number(data.cumulativeInboundUpdated || 0).toLocaleString()} · 미입고 재계산 SKU ${Number(data.missingUpdated || 0).toLocaleString()}`);
+          : `입고상세내역 ${data.files}개 최신 정보 반영 완료 · 실제 입고 ${Number(data.totalInbound || 0).toLocaleString()} · 입고 갱신 SKU ${Number(data.cumulativeInboundUpdated || 0).toLocaleString()} · 미입고 재계산 SKU ${Number(data.missingUpdated || 0).toLocaleString()}`);
       } else if (mode === "coupangExtract") {
         setCoupangImportMessage(`쿠팡 추출DB 반영 완료 · 기존 행 매칭 ${Number(data.matched || 0).toLocaleString()} · 상품링크 갱신 ${Number(data.productLinkUpdated || 0).toLocaleString()} · 쿠팡 노출가 갱신 ${Number(data.exposurePriceUpdated || 0).toLocaleString()} · 재고현황 갱신 ${Number(data.stockStatusUpdated || 0).toLocaleString()} · 미연결 ${Number(data.missing || 0).toLocaleString()} · 제품DB 신규행 0 · 그 외 정보 수정 없음`);
       } else {
