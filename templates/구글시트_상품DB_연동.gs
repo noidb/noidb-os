@@ -1983,6 +1983,7 @@ function purchaseTrackingTotals_(ss, inboundTotals) {
   const history = ss.getSheetByName(PO_HISTORY_SHEET);
   const grouped = {};
   if (!history || history.getLastRow() < 2) return grouped;
+  const todayNumber = purchaseDateNumber_(dateOnlyText_(new Date()));
   const rows = history.getRange(2, 1, history.getLastRow() - 1, PO_HISTORY_HEADERS.length).getValues();
   rows.forEach(row => {
     const po = String(row[1] || '').trim();
@@ -2010,6 +2011,8 @@ function purchaseTrackingTotals_(ss, inboundTotals) {
     const missingByDate = {};
     const dateOrder = [];
     item.entries.forEach(entry => {
+      // 오늘 입고예정 건은 포장·배송 진행 중이므로, 어제 이전의 지연 건만 미입고로 봅니다.
+      if (purchaseDateNumber_(entry.expectedDate) >= todayNumber) return;
       const received = number_(inboundTotals[sku] && inboundTotals[sku].byPurchaseKey[entry.key]);
       const missing = Math.max(0, entry.qty - received);
       if (!missing) return;
