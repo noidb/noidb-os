@@ -22,6 +22,7 @@ const PO_HISTORY_SHEET = '_발주이력';
 const INBOUND_HISTORY_SHEET = '_입고요약';
 const SKU_MASTER_SHEET = '_SKU마스터';
 const PO_PICKING_SHEET = '발주서 출력';
+const VENDOR_ORDER_SHEET = '거래처발주';
 const PO_SHIPMENT_SHEET = '쉽먼트전송';
 const COUPON_ISSUE_SHEET = '쿠폰발행';
 const QUOTE_QUEUE_SHEET = '견적서대기';
@@ -29,7 +30,7 @@ const SKU_REPLACEMENT_SHEET = '_SKU교체이력';
 const PO_HISTORY_HEADERS = ['고유키','발주번호','SKU ID','물류센터','발주현황','상품명','바코드','입고예정일','발주일','발주수량','확정수량','입고수량','매입가','공급가','부가세','반영일'];
 const INBOUND_HISTORY_HEADERS = ['데이터세트','발주번호','입고예정일','SKU ID','상품명','입고수량','반출','순입고','최근입고일','이전공급가일','이전공급가','최근공급가일','최근공급가','반영일'];
 const SKU_MASTER_HEADERS = ['SKU ID','상품명','바코드','발주가능상태','최초발견일','최근확인일'];
-const PO_PICKING_HEADERS = ['물류센터','발주서 번호','발주일시','입고예정일','창고번호','상품코드(SKU ID)','상품명','바코드','원가','매입가','발주수량','업체납품가능수량','거래처'];
+const PO_PICKING_HEADERS = ['물류센터','발주서 번호','발주일시','입고예정일','창고번호','상품코드(SKU ID)','이미지','상품명','바코드','원가','매입가','발주수량','업체납품가능수량','거래처','제품링크'];
 const PO_SHIPMENT_HEADERS = ['합배송묶음','발주서 NO','물류센터','입고예정일','상품코드(SKU ID)','상품명','발주수량','납품가능수량','입고수량','공급가','전송확인'];
 const COUPON_ISSUE_HEADERS = ['입고예정일','상품코드(SKU ID)','상품명'];
 const QUOTE_QUEUE_HEADERS = ['모델명','성별','카테고리','SKU행수','저장일시','견적서정보'];
@@ -46,6 +47,7 @@ function setupProductDbSheets() {
   const inboundHistory = getOrCreateSheet_(ss, INBOUND_HISTORY_SHEET);
   const skuMaster = getOrCreateSheet_(ss, SKU_MASTER_SHEET);
   const poPicking = getOrCreateSheet_(ss, PO_PICKING_SHEET);
+  const vendorOrder = getOrCreateSheet_(ss, VENDOR_ORDER_SHEET);
   const poShipment = getOrCreateSheet_(ss, PO_SHIPMENT_SHEET);
   const couponIssue = getOrCreateSheet_(ss, COUPON_ISSUE_SHEET);
   const quoteQueue = getOrCreateSheet_(ss, QUOTE_QUEUE_SHEET);
@@ -55,6 +57,7 @@ function setupProductDbSheets() {
   syncHeaders_(inboundHistory, INBOUND_HISTORY_HEADERS);
   syncHeaders_(skuMaster, SKU_MASTER_HEADERS);
   syncHeaders_(poPicking, PO_PICKING_HEADERS);
+  vendorOrder.setHiddenGridlines(true);
   syncHeaders_(poShipment, PO_SHIPMENT_HEADERS);
   syncHeaders_(couponIssue, COUPON_ISSUE_HEADERS);
   syncHeaders_(quoteQueue, QUOTE_QUEUE_HEADERS);
@@ -70,7 +73,7 @@ function setupProductDbSheets() {
   normalizeTextColumn_(db, dbColumn_('상품명') + 1);
   normalizeTextColumn_(skuMaster, 2);
   normalizeTextColumn_(poHistory, 6);
-  normalizeTextColumn_(poPicking, 7);
+  normalizeTextColumn_(poPicking, 8);
   normalizeTextColumn_(poShipment, 6);
   normalizeQuoteQueuePayloads_(quoteQueue);
   normalizeStoredDrafts_();
@@ -1826,6 +1829,7 @@ function normalizeRecentInboundDates_(db) {
 }
 
 function purchaseDateOnly_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) return dateOnlyText_(value);
   const text = String(value || '').trim();
   const match = text.match(/\d{4}[\/.\-]\d{1,2}[\/.\-]\d{1,2}/);
   return match ? match[0].replace(/[.\-]/g, '/') : (text || '날짜미확인');
@@ -1951,11 +1955,13 @@ function purchaseProductMap_(db) {
   const skuValues = db.getRange(2, dbColumn_('SKU ID') + 1, rowCount, 1).getDisplayValues();
   const warehouseValues = db.getRange(2, dbColumn_('창고번호') + 1, rowCount, 1).getDisplayValues();
   const barcodeValues = db.getRange(2, dbColumn_('바코드') + 1, rowCount, 1).getDisplayValues();
+  const imageFormulas = db.getRange(2, dbColumn_('이미지') + 1, rowCount, 1).getFormulas();
   rows.forEach((row, index) => {
     const sku = String(skuValues[index][0] || '').trim();
     row[dbColumn_('SKU ID')] = sku;
     row[dbColumn_('창고번호')] = warehouseValues[index][0];
     row[dbColumn_('바코드')] = barcodeValues[index][0];
+    row.__imageFormula = String(imageFormulas[index][0] || '').trim();
     if (sku) productMap[sku] = row;
   });
   return productMap;
@@ -1988,10 +1994,13 @@ function refreshPurchasePrintProductLinks_(ss, db) {
     values[index][4] = warehouse || '미등록';
     (warehouse ? registeredCells : missingCells).push('E' + rowNumber);
     if (product) {
-      values[index][6] = productDisplayName_(product, displayRow[6]);
-      values[index][7] = String(product[dbColumn_('바코드')] || '');
-      values[index][8] = number_(product[dbColumn_('원가(부가세포함)')]);
-      values[index][12] = String(product[dbColumn_('거래처')] || '');
+      values[index][6] = product.__imageFormula || '';
+      values[index][7] = productDisplayName_(product, displayRow[7]);
+      values[index][8] = String(product[dbColumn_('바코드')] || '');
+      values[index][9] = number_(product[dbColumn_('원가(부가세포함)')]);
+      values[index][12] = '';
+      values[index][13] = String(product[dbColumn_('거래처')] || '');
+      values[index][14] = String(product[dbColumn_('제품링크')] || '');
       updated++;
     }
   });
@@ -2001,8 +2010,8 @@ function refreshPurchasePrintProductLinks_(ss, db) {
     const length = run.end - run.start + 1;
     const rows = values.slice(run.start, run.end + 1);
     sheet.getRange(startRow, 5, length, 1).setValues(rows.map(row => [row[4]]));
-    sheet.getRange(startRow, 7, length, 3).setValues(rows.map(row => row.slice(6, 9)));
-    sheet.getRange(startRow, 13, length, 1).setValues(rows.map(row => [row[12]]));
+    sheet.getRange(startRow, 7, length, 4).setValues(rows.map(row => row.slice(6, 10)));
+    sheet.getRange(startRow, 13, length, 3).setValues(rows.map(row => row.slice(12, 15)));
   });
   if (registeredCells.length) sheet.getRangeList(registeredCells).setBackground(null);
   if (missingCells.length) sheet.getRangeList(missingCells).setBackground('#f4cccc');
@@ -2157,8 +2166,10 @@ function createPurchasePrint_(ss, productMap, items) {
   const pickingGroupRows = [];
   const pickingTotalRows = [];
   const pickingDataRows = [];
+  const vendorOrderItems = [];
   const missingWarehouseRanges = [];
   let missingWarehouse = 0;
+  let missingImage = 0;
   const today = Number(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd'));
   const sortedGroupKeys = Object.keys(groups).sort((left, right) => {
     const leftDate = purchaseDateNumber_(groups[left].date);
@@ -2176,9 +2187,8 @@ function createPurchasePrint_(ss, productMap, items) {
     const group = groups[key];
     const groupLabel = group.date + ' · ' + group.center;
     pickingGroupRows.push(pickingValues.length + 3);
-    pickingValues.push(['합배송 묶음: ' + groupLabel,'','','','','','','','','','','','']);
+    pickingValues.push(['합배송 묶음: ' + groupLabel].concat(Array(PO_PICKING_HEADERS.length - 1).fill('')));
     let orderTotal = 0;
-    let confirmedTotal = 0;
     group.items.sort((a, b) => purchaseDateTimeNumber_(b.orderDate) - purchaseDateTimeNumber_(a.orderDate)
       || String(b.po || '').localeCompare(String(a.po || '')) || String(a.sku || '').localeCompare(String(b.sku || ''))).forEach(item => {
       const sku = String(item.sku || '').trim();
@@ -2186,30 +2196,43 @@ function createPurchasePrint_(ss, productMap, items) {
       const warehouse = product ? String(product[dbColumn_('창고번호')] || '') : '';
       if (!warehouse) missingWarehouse++;
       const orderQuantity = number_(item.orderQty);
-      const availableQuantity = number_(item.confirmedQty);
       orderTotal += orderQuantity;
-      confirmedTotal += availableQuantity;
       const sheetRow = pickingValues.length + 3;
       pickingDataRows.push(sheetRow);
       if (!warehouse) missingWarehouseRanges.push('E' + sheetRow);
+      const imageFormula = product ? String(product.__imageFormula || '') : '';
+      if (!imageFormula) missingImage++;
       pickingValues.push([
-        group.center,String(item.po || ''),String(item.orderDate || ''),group.date,warehouse || '미등록',sku,
-        productDisplayName_(product, item.name),String(item.barcode || (product ? product[dbColumn_('바코드')] : '') || ''),
-        product ? number_(product[dbColumn_('원가(부가세포함)')]) : 0,number_(item.purchasePrice),orderQuantity,availableQuantity,
-        product ? String(product[dbColumn_('거래처')] || '') : ''
+        group.center,String(item.po || ''),dateOnlyText_(item.orderDate),group.date,warehouse || '미등록',sku,
+        imageFormula,productDisplayName_(product, item.name),String(item.barcode || (product ? product[dbColumn_('바코드')] : '') || ''),
+        product ? number_(product[dbColumn_('원가(부가세포함)')]) : 0,number_(item.purchasePrice),orderQuantity,'',
+        product ? String(product[dbColumn_('거래처')] || '') : '',product ? String(product[dbColumn_('제품링크')] || '') : ''
       ]);
+      vendorOrderItems.push({
+        supplier: product ? String(product[dbColumn_('거래처')] || '').trim() : '',
+        orderDate: dateOnlyText_(item.orderDate),
+        imageFormula: imageFormula,
+        cost: product ? number_(product[dbColumn_('원가(부가세포함)')]) : 0,
+        pickingRow: sheetRow
+      });
     });
     pickingTotalRows.push(pickingValues.length + 3);
-    pickingValues.push([groupLabel + ' 합계','','','','','','','','','',orderTotal,confirmedTotal,'']);
+    const totalRow = Array(PO_PICKING_HEADERS.length).fill('');
+    totalRow[0] = groupLabel + ' 합계';
+    totalRow[11] = orderTotal;
+    pickingValues.push(totalRow);
   });
 
   if (pickingValues.length) {
     ensureSheetSize_(pickingSheet, pickingValues.length + 2, PO_PICKING_HEADERS.length);
     pickingSheet.getRange(3, 1, pickingValues.length, PO_PICKING_HEADERS.length).setValues(pickingValues);
     pickingSheet.setRowHeights(3, pickingValues.length, 28);
+    pickingDataRows.forEach(row => pickingSheet.setRowHeight(row, 86));
   }
   pickingGroupRows.forEach(row => {
-    pickingSheet.getRange(row, 1, 1, PO_PICKING_HEADERS.length).merge().setBackground('#d9eaf7').setFontWeight('bold').setFontSize(12);
+    // E:N(창고번호~거래처)만 선택·출력할 때 병합 셀이 범위를 강제로 넓히지 않도록 A:D만 병합합니다.
+    pickingSheet.getRange(row, 1, 1, 4).merge().setBackground('#d9eaf7').setFontWeight('bold').setFontSize(12);
+    pickingSheet.getRange(row, 5, 1, PO_PICKING_HEADERS.length - 4).setBackground('#d9eaf7');
     pickingSheet.setRowHeight(row, 28);
   });
   pickingTotalRows.forEach(row => {
@@ -2219,18 +2242,21 @@ function createPurchasePrint_(ss, productMap, items) {
   if (missingWarehouseRanges.length) pickingSheet.getRangeList(missingWarehouseRanges).setBackground('#f4cccc');
   pickingSheet.setFrozenRows(2);
   pickingSheet.setHiddenGridlines(true);
-  [95,105,125,95,85,115,330,120,80,80,75,115,95].forEach((width, index) => pickingSheet.setColumnWidth(index + 1, width));
+  [95,105,125,95,85,115,90,330,120,80,80,75,115,95,220].forEach((width, index) => pickingSheet.setColumnWidth(index + 1, width));
   if (pickingValues.length) {
     const printRange = pickingSheet.getRange(3, 1, pickingValues.length, PO_PICKING_HEADERS.length);
     printRange.setVerticalAlignment('middle').setWrap(true).setFontSize(9)
       .setBorder(true,true,true,true,true,true,'#b7b7b7',SpreadsheetApp.BorderStyle.SOLID);
-    pickingSheet.getRange(3, 1, pickingValues.length, 6).setHorizontalAlignment('center');
-    pickingSheet.getRange(3, 8, pickingValues.length, 6).setHorizontalAlignment('center');
-    pickingSheet.getRange(3, 7, pickingValues.length, 1).setHorizontalAlignment('left');
+    pickingSheet.getRange(3, 1, pickingValues.length, 7).setHorizontalAlignment('center');
+    pickingSheet.getRange(3, 9, pickingValues.length, 5).setHorizontalAlignment('center');
+    pickingSheet.getRange(3, 8, pickingValues.length, 1).setHorizontalAlignment('left');
+    pickingSheet.getRange(3, 14, pickingValues.length, 2).setHorizontalAlignment('left');
     pickingSheet.getRange(3, 6, pickingValues.length, 1).setNumberFormat('@');
-    pickingSheet.getRange(3, 8, pickingValues.length, 1).setNumberFormat('@');
-    pickingSheet.getRange(3, 9, pickingValues.length, 4).setNumberFormat('#,##0');
+    pickingSheet.getRange(3, 9, pickingValues.length, 1).setNumberFormat('@');
+    pickingSheet.getRange(3, 10, pickingValues.length, 4).setNumberFormat('#,##0');
   }
+
+  createVendorOrderSheet_(ss, vendorOrderItems);
 
   const shipmentSheet = getOrCreateSheet_(ss, PO_SHIPMENT_SHEET);
   shipmentSheet.getDataRange().breakApart();
@@ -2257,7 +2283,82 @@ function createPurchasePrint_(ss, productMap, items) {
   shipmentSheet.setFrozenRows(2);
   shipmentSheet.setHiddenGridlines(true);
   [150,100,90,95,105,330,75,90,75,75,65].forEach((width, index) => shipmentSheet.setColumnWidth(index + 1, width));
-  return { groups: Object.keys(groups).length, pickingRows: pickingDataRows.length, shipmentRows: shipmentValues.length, missingWarehouse: missingWarehouse, missingImage: 0 };
+  return { groups: Object.keys(groups).length, pickingRows: pickingDataRows.length, shipmentRows: shipmentValues.length, missingWarehouse: missingWarehouse, missingImage: missingImage };
+}
+
+/** 거래처별 카카오톡 전달용 표를 만들고, 납품가능수량 입력에 따라 추가발주수량을 자동 계산합니다. */
+function createVendorOrderSheet_(ss, items) {
+  const sheet = getOrCreateSheet_(ss, VENDOR_ORDER_SHEET);
+  sheet.getDataRange().breakApart();
+  sheet.clear();
+  sheet.setHiddenGridlines(true);
+  const headers = ['거래처','주문일','이미지','원가','추가발주수량'];
+  const groups = {};
+  (Array.isArray(items) ? items : []).forEach(item => {
+    const supplier = String(item.supplier || '').trim() || '거래처 미등록';
+    if (!groups[supplier]) groups[supplier] = [];
+    groups[supplier].push(item);
+  });
+  const values = [];
+  const titleRows = [];
+  const headerRows = [];
+  const dataRows = [];
+  Object.keys(groups).sort((a, b) => a.localeCompare(b)).forEach(supplier => {
+    titleRows.push(values.length + 1);
+    values.push([supplier + ' 발주'].concat(Array(headers.length - 1).fill('')));
+    headerRows.push(values.length + 1);
+    values.push(headers.slice());
+    groups[supplier].sort((a, b) => purchaseDateTimeNumber_(b.orderDate) - purchaseDateTimeNumber_(a.orderDate)
+      || a.pickingRow - b.pickingRow).forEach(item => {
+      dataRows.push(values.length + 1);
+      const sourceRow = Number(item.pickingRow);
+      values.push([
+        supplier,item.orderDate,item.imageFormula || '',number_(item.cost),
+        '=MAX(0,\'' + PO_PICKING_SHEET + '\'!L' + sourceRow + '-N(\'' + PO_PICKING_SHEET + '\'!M' + sourceRow + '))'
+      ]);
+    });
+    values.push(Array(headers.length).fill(''));
+  });
+  ensureSheetSize_(sheet, Math.max(1, values.length), headers.length);
+  if (values.length) sheet.getRange(1, 1, values.length, headers.length).setValues(values);
+  titleRows.forEach(row => {
+    sheet.getRange(row, 1, 1, headers.length).merge().setBackground('#262626').setFontColor('#ffffff')
+      .setFontWeight('bold').setFontSize(12).setHorizontalAlignment('left');
+    sheet.setRowHeight(row, 28);
+  });
+  headerRows.forEach(row => {
+    sheet.getRange(row, 1, 1, headers.length).setBackground('#dfcfad').setFontWeight('bold').setHorizontalAlignment('center')
+      .setBorder(true,true,true,true,true,true,'#b7b7b7',SpreadsheetApp.BorderStyle.SOLID);
+    sheet.setRowHeight(row, 28);
+  });
+  dataRows.forEach(row => {
+    sheet.getRange(row, 1, 1, headers.length).setVerticalAlignment('middle').setWrap(true)
+      .setBorder(true,true,true,true,true,true,'#b7b7b7',SpreadsheetApp.BorderStyle.SOLID);
+    sheet.getRange(row, 1, 1, 2).setHorizontalAlignment('center');
+    sheet.getRange(row, 3, 1, 1).setHorizontalAlignment('center');
+    sheet.getRange(row, 4, 1, 2).setHorizontalAlignment('center').setNumberFormat('#,##0');
+    sheet.setRowHeight(row, 86);
+  });
+  [110,135,90,90,125].forEach((width, index) => sheet.setColumnWidth(index + 1, width));
+  return { suppliers: Object.keys(groups).length, rows: dataRows.length };
+}
+
+/** 저장된 발주이력 중 오늘 이후 입고예정 건으로 발주서 출력 탭을 다시 만듭니다. */
+function rebuildPurchasePrintFromHistory() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const db = ss.getSheetByName('제품DB');
+  const history = ss.getSheetByName(PO_HISTORY_SHEET);
+  if (!db) throw new Error('제품DB 시트를 찾을 수 없습니다.');
+  const today = purchaseDateNumber_(dateOnlyText_(new Date()));
+  const rows = history && history.getLastRow() > 1
+    ? history.getRange(2, 1, history.getLastRow() - 1, PO_HISTORY_HEADERS.length).getValues() : [];
+  const items = rows.filter(row => purchaseDateNumber_(dateOnlyText_(row[7])) >= today).map(row => ({
+    po: row[1], sku: row[2], center: row[3], status: row[4], name: row[5], barcode: row[6],
+    expectedDate: row[7], orderDate: row[8], orderQty: row[9], confirmedQty: row[10], receivedQty: row[11],
+    purchasePrice: row[12], supplyPrice: row[13], tax: row[14]
+  }));
+  applyInventoryTracking_(ss, db);
+  return createPurchasePrint_(ss, purchaseProductMap_(db), items);
 }
 
 function importPurchaseOrders_(ss, db, items) {
