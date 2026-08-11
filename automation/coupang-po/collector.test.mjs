@@ -9,8 +9,27 @@ import { candidateFiles, expandCandidate } from "./collector.mjs";
 const configFor = (downloadDir) => ({
   downloadDir,
   lookbackHours: 72,
-  filePatterns: ["^PO_SKU_LIST.*\\.(csv|xlsx)$", "^발주서.*\\.xlsx$"],
+  modePatterns: {
+    skuMaster: ["^상품공급상태관리.*\\.xlsx$"],
+    inboundHistory: ["^Coupang_Stocked_Data_List.*\\.xlsx$"],
+    poList: ["^발주서(?:리스트)?.*\\.xlsx$"],
+  },
   archivePatterns: ["^발주서리스트.*\\.zip$"],
+});
+
+test("통합 버튼은 세 종류를 구분하고 중복 PO_SKU_LIST는 제외한다", async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "noidb-all-"));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  await Promise.all([
+    fs.writeFile(path.join(root, "상품공급상태관리 SKU 다운로드.xlsx"), "sku"),
+    fs.writeFile(path.join(root, "Coupang_Stocked_Data_List_20260812.xlsx"), "inbound"),
+    fs.writeFile(path.join(root, "발주서리스트_139142928.xlsx"), "po"),
+    fs.writeFile(path.join(root, "PO_SKU_LIST_20260812.xlsx"), "duplicate"),
+  ]);
+
+  const candidates = await candidateFiles(configFor(root));
+  assert.deepEqual(candidates.map((candidate) => candidate.mode).sort(), ["inboundHistory", "poList", "skuMaster"]);
+  assert.equal(candidates.some((candidate) => path.basename(candidate.filePath).startsWith("PO_SKU_LIST")), false);
 });
 
 test("날짜별 하위 폴더의 발주서 엑셀을 찾는다", async (context) => {

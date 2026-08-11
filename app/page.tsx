@@ -920,7 +920,7 @@ export default function Home() {
       : mode === "inboundHistory" ? "입고상세내역"
       : mode === "legacyProducts" ? "기존 상품정보"
       : mode === "verifiedCatalog" ? "검증된 이미지·쿠팡 노출가"
-      : "발주 SKU 목록";
+      : "발주서";
     setCoupangImportBusy(mode);
     setCoupangImportMessage(`${label}을 Google 상품DB에 반영하고 있습니다...`);
     try {
@@ -2344,7 +2344,8 @@ export default function Home() {
         </div>
         {dbStatus && <p className="note">{dbStatus}</p>}
         <details className="advancedPanel coupangDataPanel">
-          <summary>서플라이허브 데이터 업데이트</summary>
+          <summary>서플라이허브 수동 업로드 (비상용)</summary>
+          <p className="note">평소에는 서플라이허브 파일을 다운로드한 뒤 PC 바탕화면의 NOID-B Order Update 버튼만 누르면 자동 반영됩니다.</p>
           <div className="coupangImportGrid">
             <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("skuMaster", e)}>
               <strong>① 상품공급상태관리 다운로드</strong>
@@ -2358,9 +2359,9 @@ export default function Home() {
               <input type="file" accept=".xlsx" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("inboundHistory", e.target.files); e.target.value = ""; }} />
             </label>
             <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("poList", e)}>
-              <strong>③ 발주SKU 리스트 다운로드</strong>
-              <span>파일명: PO_SKU_LIST</span>
-              <input type="file" accept=".csv,.xlsx" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("poList", e.target.files); e.target.value = ""; }} />
+              <strong>③ 발주서 다운로드</strong>
+              <span>압축을 푼 발주서 엑셀을 선택 · PO_SKU_LIST는 필요 없음</span>
+              <input type="file" accept=".xlsx" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("poList", e.target.files); e.target.value = ""; }} />
             </label>
             <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("legacyProducts", e)}>
               <strong>④ 기존 상품정보 연결</strong>

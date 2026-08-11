@@ -13,6 +13,8 @@ export async function loadConfig() {
   const config = JSON.parse(await fs.readFile(sourcePath, "utf8"));
   config.downloadDir = process.env.NOIDB_COUPANG_DOWNLOAD_DIR || String(config.downloadDir || "").trim() || path.join(os.homedir(), "Downloads");
   config.importUrl = process.env.NOIDB_COUPANG_IMPORT_URL || config.importUrl;
+  config.hanjinOutputDir = process.env.NOIDB_HANJIN_OUTPUT_DIR || String(config.hanjinOutputDir || "").trim() || path.join(config.downloadDir, "한진택배업로드");
+  config.hanjinTemplatePath = process.env.NOIDB_HANJIN_TEMPLATE_PATH || String(config.hanjinTemplatePath || "").trim() || path.join(automationDir, "templates", "서식_쿠팡 (고정형).xlsx");
   return config;
 }
 
