@@ -1,5 +1,5 @@
 {
-  "downloadDir": "",
+  "downloadDir": "G:\\내 드라이브\\쿠팡데이터\\발주서리스트다운",
   "importUrl": "https://noidb-os.vercel.app/api/coupang-data",
   "scanIntervalSeconds": 30,
   "lookbackHours": 72,
