@@ -941,7 +941,7 @@ export default function Home() {
         const safetyText = ` · 제품DB 신규행 0 · 기존 SKU는 상품명·바코드·발주가능상태만 갱신 · 업로드 S바코드 제외 ${Number(data.excluded || 0).toLocaleString()} · 기준목록 S바코드 정리 ${Number(data.removedNonRocket || 0).toLocaleString()} · 구 SKU 재추가 방지 ${Number(data.retiredSkipped || 0).toLocaleString()}`;
         setCoupangImportMessage(data.baseline
           ? `SKU 기준목록 ${data.parsed?.toLocaleString?.() || data.parsed}개 생성 완료 · 최초 업로드는 승인대기 자동연결 없음${safetyText}`
-          : `SKU 전체 목록 ${data.parsed?.toLocaleString?.() || data.parsed}개 반영 완료 · 직전 업로드 이후 새 SKU ${data.newSkus || 0} · 승인대기 자동연결 ${data.matched || 0} · 확인필요 ${data.review || 0} · 수정 ${data.updated || 0}${safetyText}`);
+          : `SKU 전체 목록 ${data.parsed?.toLocaleString?.() || data.parsed}개 확인 완료 · 기존 SKU 수정 ${Number(data.existingUpdated || 0).toLocaleString()} · 신규 SKU 승인대기 자동연결 ${Number(data.matched || 0).toLocaleString()} · 확인필요 ${Number(data.review || 0).toLocaleString()}${safetyText}`);
       } else if (mode === "inboundHistory") {
         setCoupangImportMessage(data.skipped
           ? `이미 반영한 동일한 입고 파일 ${data.files}개라서 중복 적용하지 않았습니다.`

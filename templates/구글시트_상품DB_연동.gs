@@ -23,6 +23,7 @@ const INBOUND_HISTORY_SHEET = '_입고요약';
 const SKU_MASTER_SHEET = '_SKU마스터';
 const PO_PICKING_SHEET = '발주서 출력';
 const VENDOR_ORDER_SHEET = '거래처발주';
+const COUPANG_LIVE_SHEET = '실시간쿠팡재고';
 const PO_SHIPMENT_SHEET = '쉽먼트전송';
 const COUPON_ISSUE_SHEET = '쿠폰발행';
 const QUOTE_QUEUE_SHEET = '견적서대기';
@@ -35,12 +36,13 @@ const PO_SHIPMENT_HEADERS = ['합배송묶음','발주서 NO','물류센터','�
 const COUPON_ISSUE_HEADERS = ['입고예정일','상품코드(SKU ID)','상품명'];
 const QUOTE_QUEUE_HEADERS = ['모델명','성별','카테고리','SKU행수','저장일시','견적서정보'];
 const SKU_REPLACEMENT_HEADERS = ['처리일시','이전모델명','새모델명','이전 SKU ID','이전 바코드','창고번호','처리상태','연결묶음','기존행전체정보','새행연결전정보'];
+const COUPANG_LIVE_HEADERS = ['이미지','SKU','상품명','제품링크','재고량','판매가','클릭수','전체매출','노출상품ID','옵션ID','갱신일시'];
 
 function setupProductDbSheets() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const legacyPicking = ss.getSheetByName('발주피킹');
   if (legacyPicking && !ss.getSheetByName(PO_PICKING_SHEET)) legacyPicking.setName(PO_PICKING_SHEET);
-  try { ss.rename('NOID-B 상품DB'); } catch (error) { /* keep current name if rename is unavailable */ }
+  try { ss.rename('노이드비 상품DB'); } catch (error) { /* keep current name if rename is unavailable */ }
   const db = getOrCreateSheet_(ss, '제품DB');
   removeObsoleteProductInputSheet_(ss);
   const poHistory = getOrCreateSheet_(ss, PO_HISTORY_SHEET);
@@ -94,7 +96,7 @@ function setupProductDbSheets() {
   ensureWeeklyCouponTrigger_(ss);
   getImageFolder_();
   ss.getSheets().forEach(sheet => {
-    if (!['제품DB',PO_HISTORY_SHEET,INBOUND_HISTORY_SHEET,SKU_MASTER_SHEET,PO_PICKING_SHEET,PO_SHIPMENT_SHEET,COUPON_ISSUE_SHEET,QUOTE_QUEUE_SHEET,SKU_REPLACEMENT_SHEET].includes(sheet.getName())) ss.deleteSheet(sheet);
+    if (!['제품DB',PO_HISTORY_SHEET,INBOUND_HISTORY_SHEET,SKU_MASTER_SHEET,PO_PICKING_SHEET,PO_SHIPMENT_SHEET,COUPON_ISSUE_SHEET,QUOTE_QUEUE_SHEET,SKU_REPLACEMENT_SHEET,COUPANG_LIVE_SHEET].includes(sheet.getName())) ss.deleteSheet(sheet);
   });
   SpreadsheetApp.getUi().alert('상품DB 설정 완료\n구 SKU 정리: ' + retiredRemoved + '행\n교체이력 정보 복구: ' + replacementRepair.restoredFields + '칸\n사라진 기존행 복구: ' + replacementRepair.restoredRows + '행\n중복 정리: ' + duplicateRemoved + '행');
 }
@@ -113,6 +115,7 @@ function doPost(e) {
     if (data.action === 'quoteQueueClear') return clearQuoteQueue_(String(data.gender || ''), String(data.category || ''));
     if (data.action === 'quoteQueueDeleteModel') return deleteQuoteQueueModel_(String(data.model || ''));
     if (data.action === 'supplierList') return listSuppliers_();
+    if (data.action === 'replaceLiveCoupangInventory') return replaceLiveCoupangInventory_(data.items || []);
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const db = getOrCreateSheet_(ss, '제품DB');
@@ -195,7 +198,14 @@ function onEdit(e) {
   try {
     const range = e && e.range;
     if (!range) return;
-    if (range.getSheet().getName() !== '제품DB') return;
+    const editedSheet = range.getSheet();
+    if (editedSheet.getName() === PO_PICKING_SHEET) {
+      const touchesAvailableQuantity = range.getRow() <= editedSheet.getLastRow()
+        && range.getLastRow() >= 3 && range.getColumn() <= 13 && range.getLastColumn() >= 13;
+      if (touchesAvailableQuantity) refreshVendorOrderFromPicking_(editedSheet.getParent());
+      return;
+    }
+    if (editedSheet.getName() !== '제품DB') return;
     const watched = ['창고번호','SKU ID','상품명','바코드','원가(부가세포함)','거래처']
       .map(name => dbColumn_(name) + 1);
     const editedColumns = [];
@@ -1439,8 +1449,8 @@ function importSkuMaster_(ss, db, items) {
   rows.forEach((row, index) => {
     const sku = normalizeSkuId_(row[skuColumn]);
     if (!sku) return;
-    const current = skuMap[sku];
-    if (current === undefined || (!String(rows[current][modelSkuColumn] || '').trim() && String(row[modelSkuColumn] || '').trim())) skuMap[sku] = index;
+    // 이미 SKU가 있는 행은 그 위치를 유지한 채 세 필드만 갱신합니다.
+    if (skuMap[sku] === undefined) skuMap[sku] = index;
   });
   const pendingCandidateIndexes = [];
   const availablePendingCandidates = {};
@@ -1457,8 +1467,10 @@ function importSkuMaster_(ss, db, items) {
   const matchLog = [];
   const resolvedSkus = {};
   let updated = 0;
+  let existingUpdated = 0;
   let matched = 0;
   let review = 0;
+  let missingInProductDb = 0;
   let newSkus = 0;
   let retiredSkipped = 0;
   const skuAssignments = [];
@@ -1476,33 +1488,37 @@ function importSkuMaster_(ss, db, items) {
       return;
     }
     const existingIndex = skuMap[sku];
-    // 승인대기 행 자동연결은 최초 기준선 생성 후, 직전 업로드에 없던 신규 SKU만 허용합니다.
+    // 직전 기준목록에 없던 신규 SKU만 승인대기 기존 행과 상품명으로 비교합니다.
     const candidate = existingIndex === undefined && isNew && !bootstrap
       ? findPendingSkuMatch_(rows, itemName, pendingCandidateIndexes, availablePendingCandidates) : null;
     const targetIndex = existingIndex !== undefined ? existingIndex : (candidate && candidate.automatic ? candidate.index : undefined);
     if (targetIndex === undefined) {
+      missingInProductDb++;
       if (isNew && !bootstrap) review++;
-      matchLog.push(['이관 실패',sku,itemName,String(item.barcode || ''),candidate ? String(rows[candidate.index][modelSkuColumn] || '') : '',candidate ? String(rows[candidate.index][dbColumn_('모델명/품번')] || '') : '',candidate ? candidate.score : 0,now,
-        candidate ? (candidate.tied ? '동점 후보가 여러 개입니다. 제품DB는 수정하지 않았습니다.' : '자동연결 기준 미달로 제품DB는 수정하지 않았습니다.') : '신규 SKU에 맞는 승인대기 행을 찾지 못해 제품DB는 수정하지 않았습니다.']);
+      matchLog.push(['제품DB 미연결',sku,itemName,String(item.barcode || ''),candidate ? String(rows[candidate.index][modelSkuColumn] || '') : '',candidate ? String(rows[candidate.index][dbColumn_('모델명/품번')] || '') : '',candidate ? candidate.score : 0,now,
+        candidate ? (candidate.tied ? '동점 후보가 여러 개여서 연결하지 않았습니다.' : '상품명 자동연결 기준 미달로 제품DB를 수정하지 않았습니다.') : '같은 SKU와 승인대기 상품명 후보가 없어 제품DB를 수정하지 않았습니다.']);
       return;
-    }
-    if (candidate && candidate.automatic) {
-      availablePendingCandidates[targetIndex] = false;
-      matched++;
-      skuAssignments.push({ index: targetIndex, sku: sku });
-      matchLog.push(['자동연결',sku,itemName,String(item.barcode || ''),String(rows[targetIndex][modelSkuColumn] || ''),String(rows[targetIndex][dbColumn_('모델명/품번')] || ''),candidate.score,now,'신규 SKU를 기존 승인대기 행에 연결하고 허용된 4개 필드만 갱신']);
     }
     updated++;
     const row = rows[targetIndex];
-    row[skuColumn] = sku;
-    row[dbColumn_('상품명')] = itemName;
+    if (existingIndex !== undefined) {
+      existingUpdated++;
+      row[dbColumn_('상품명')] = itemName;
+    } else {
+      matched++;
+      availablePendingCandidates[targetIndex] = false;
+      row[skuColumn] = sku;
+      skuAssignments.push({ index: targetIndex, sku: sku });
+      matchLog.push(['승인대기 자동연결',sku,itemName,String(item.barcode || ''),String(row[modelSkuColumn] || ''),String(row[dbColumn_('모델명/품번')] || ''),candidate.score,now,
+        '기존 승인대기 행에 SKU ID·발주가능상태·바코드만 입력']);
+    }
     row[dbColumn_('바코드')] = String(item.barcode || '');
     row[dbColumn_('발주가능상태')] = String(item.status || '');
     skuMap[sku] = targetIndex;
     resolvedSkus[sku] = true;
   });
 
-  // 기존 SKU 행은 상품명·발주가능상태·바코드만 갱신합니다. SKU ID는 신규 자동연결 행에만 씁니다.
+  // 기존 SKU 행은 세 필드만 갱신하고, 신규 SKU는 승인대기 기존 행의 세 식별 필드만 채웁니다. 새 행은 만들지 않습니다.
   if (rows.length) {
     ['상품명','발주가능상태','바코드'].forEach(name => {
       const column = dbColumn_(name);
@@ -1523,6 +1539,8 @@ function importSkuMaster_(ss, db, items) {
   }
   return json_({ ok: true, inserted: 0, updated: updated, total: rows.length,
     baseline: bootstrap, newSkus: bootstrap ? 0 : newSkus, matched: matched, review: review,
+    existingUpdated: existingUpdated,
+    missingInProductDb: missingInProductDb,
     retiredSkipped: retiredSkipped,
     duplicatesRemoved: 0,
     removedNonRocket: originalMasterRows.length - masterRows.length,
@@ -2015,6 +2033,7 @@ function refreshPurchasePrintProductLinks_(ss, db) {
   });
   if (registeredCells.length) sheet.getRangeList(registeredCells).setBackground(null);
   if (missingCells.length) sheet.getRangeList(missingCells).setBackground('#f4cccc');
+  refreshVendorOrderFromPicking_(ss);
   return updated;
 }
 
@@ -2211,8 +2230,10 @@ function createPurchasePrint_(ss, productMap, items) {
       vendorOrderItems.push({
         supplier: product ? String(product[dbColumn_('거래처')] || '').trim() : '',
         orderDate: dateOnlyText_(item.orderDate),
+        sku: sku,
         imageFormula: imageFormula,
         cost: product ? number_(product[dbColumn_('원가(부가세포함)')]) : 0,
+        remainingQty: orderQuantity,
         pickingRow: sheetRow
       });
     });
@@ -2292,12 +2313,15 @@ function createVendorOrderSheet_(ss, items) {
   sheet.getDataRange().breakApart();
   sheet.clear();
   sheet.setHiddenGridlines(true);
-  const headers = ['거래처','주문일','이미지','원가','추가발주수량'];
+  const headers = ['발주일','SKU','이미지','원가','발주수량'];
   const groups = {};
   (Array.isArray(items) ? items : []).forEach(item => {
+    const remainingQty = Math.max(0, number_(item.remainingQty));
+    if (remainingQty <= 0) return;
     const supplier = String(item.supplier || '').trim() || '거래처 미등록';
     if (!groups[supplier]) groups[supplier] = [];
-    groups[supplier].push(item);
+    const normalized = Object.assign({}, item, { remainingQty: remainingQty });
+    groups[supplier].push(normalized);
   });
   const values = [];
   const titleRows = [];
@@ -2311,10 +2335,8 @@ function createVendorOrderSheet_(ss, items) {
     groups[supplier].sort((a, b) => purchaseDateTimeNumber_(b.orderDate) - purchaseDateTimeNumber_(a.orderDate)
       || a.pickingRow - b.pickingRow).forEach(item => {
       dataRows.push(values.length + 1);
-      const sourceRow = Number(item.pickingRow);
       values.push([
-        supplier,item.orderDate,item.imageFormula || '',number_(item.cost),
-        '=MAX(0,\'' + PO_PICKING_SHEET + '\'!L' + sourceRow + '-N(\'' + PO_PICKING_SHEET + '\'!M' + sourceRow + '))'
+        dateOnlyText_(item.orderDate),String(item.sku || ''),item.imageFormula || '',number_(item.cost),item.remainingQty
       ]);
     });
     values.push(Array(headers.length).fill(''));
@@ -2335,12 +2357,39 @@ function createVendorOrderSheet_(ss, items) {
     sheet.getRange(row, 1, 1, headers.length).setVerticalAlignment('middle').setWrap(true)
       .setBorder(true,true,true,true,true,true,'#b7b7b7',SpreadsheetApp.BorderStyle.SOLID);
     sheet.getRange(row, 1, 1, 2).setHorizontalAlignment('center');
+    sheet.getRange(row, 2, 1, 1).setNumberFormat('@');
     sheet.getRange(row, 3, 1, 1).setHorizontalAlignment('center');
     sheet.getRange(row, 4, 1, 2).setHorizontalAlignment('center').setNumberFormat('#,##0');
     sheet.setRowHeight(row, 86);
   });
-  [110,135,90,90,125].forEach((width, index) => sheet.setColumnWidth(index + 1, width));
+  [110,120,90,90,125].forEach((width, index) => sheet.setColumnWidth(index + 1, width));
   return { suppliers: Object.keys(groups).length, rows: dataRows.length };
+}
+
+/** 발주서 출력의 수기 납품가능수량을 읽어 거래처별 추가발주 목록을 즉시 다시 만듭니다. */
+function refreshVendorOrderFromPicking_(ss) {
+  const picking = ss.getSheetByName(PO_PICKING_SHEET);
+  if (!picking || picking.getLastRow() < 3) return createVendorOrderSheet_(ss, []);
+  const rowCount = picking.getLastRow() - 2;
+  const range = picking.getRange(3, 1, rowCount, PO_PICKING_HEADERS.length);
+  const values = range.getValues();
+  const displays = range.getDisplayValues();
+  const imageFormulas = picking.getRange(3, 7, rowCount, 1).getFormulas();
+  const items = [];
+  displays.forEach((row, index) => {
+    const sku = String(row[5] || '').trim();
+    if (!sku) return;
+    const orderQty = number_(values[index][11]);
+    const availableQty = number_(values[index][12]);
+    const remainingQty = Math.max(0, orderQty - availableQty);
+    if (remainingQty <= 0) return;
+    items.push({
+      supplier: String(row[13] || '').trim(), orderDate: values[index][2], sku: sku,
+      imageFormula: String(imageFormulas[index][0] || ''), cost: number_(values[index][9]),
+      remainingQty: remainingQty, pickingRow: index + 3
+    });
+  });
+  return createVendorOrderSheet_(ss, items);
 }
 
 /** 저장된 발주이력 중 오늘 이후 입고예정 건으로 발주서 출력 탭을 다시 만듭니다. */
@@ -2536,4 +2585,130 @@ function json_(value) {
 
 function getOrCreateSheet_(ss, name) {
   return ss.getSheetByName(name) || ss.insertSheet(name);
+}
+
+function setupLiveCoupangInventorySheet() {
+  const sheet = getOrCreateSheet_(SpreadsheetApp.getActiveSpreadsheet(), COUPANG_LIVE_SHEET);
+  formatLiveCoupangInventorySheet_(sheet, 0);
+}
+
+function replaceLiveCoupangInventory_(items) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = getOrCreateSheet_(ss, COUPANG_LIVE_SHEET);
+  const resolveSku = buildLiveCoupangSkuResolver_(ss.getSheetByName('제품DB'));
+  const normalized = (Array.isArray(items) ? items : []).slice(0, 5000).map(item => {
+    const productName = String(item.productName || '').trim();
+    const optionId = String(item.optionId || item.productId || '').trim();
+    return {
+      imageUrl: String(item.imageUrl || '').trim(),
+      sku: resolveSku(optionId, productName),
+      itemId: String(item.itemId || item.skuId || '').trim(),
+      productName: productName,
+      productLink: String(item.productLink || '').trim(),
+      inventory: Number(String(item.inventory ?? '').replace(/[^0-9.-]/g, '')) || 0,
+      salePrice: Number(String(item.salePrice ?? '').replace(/[^0-9.-]/g, '')) || 0,
+      clicks: Number(String(item.clicks ?? '').replace(/[^0-9.-]/g, '')) || 0,
+      sales: Number(String(item.sales ?? '').replace(/[^0-9.-]/g, '')) || 0,
+      exposedProductId: String(item.exposedProductId || '').trim(),
+      optionId: optionId
+    };
+  }).filter(item => item.optionId || item.productName);
+  const oldRows = Math.max(sheet.getLastRow() - 1, 0);
+  if (oldRows) sheet.getRange(2, 1, oldRows, COUPANG_LIVE_HEADERS.length).clearContent();
+  ensureSheetSize_(sheet, normalized.length + 1, COUPANG_LIVE_HEADERS.length);
+  sheet.getRange(1, 1, 1, COUPANG_LIVE_HEADERS.length).setValues([COUPANG_LIVE_HEADERS]);
+  if (normalized.length) {
+    const updatedAt = new Date();
+    const rows = normalized.map(item => ['',item.sku,item.productName,'',item.inventory,item.salePrice,item.clicks,item.sales,item.exposedProductId,item.optionId,updatedAt]);
+    sheet.getRange(2, 1, rows.length, COUPANG_LIVE_HEADERS.length).setValues(rows);
+    const imageFormulas = normalized.map(item => [item.imageUrl
+      ? '=IFERROR(IMAGE("' + item.imageUrl.replace(/"/g, '""') + '",4,64,64),"")'
+      : '']);
+    const linkFormulas = normalized.map(item => [item.productLink
+      ? '=HYPERLINK("' + item.productLink.replace(/"/g, '""') + '","쿠팡열기")'
+      : '']);
+    sheet.getRange(2, 1, imageFormulas.length, 1).setFormulas(imageFormulas);
+    sheet.getRange(2, 4, linkFormulas.length, 1).setFormulas(linkFormulas);
+  }
+  if (oldRows > normalized.length) {
+    sheet.getRange(normalized.length + 2, 1, oldRows - normalized.length, COUPANG_LIVE_HEADERS.length).clearContent();
+  }
+  formatLiveCoupangInventorySheet_(sheet, normalized.length);
+  return json_({ ok: true, sheet: COUPANG_LIVE_SHEET, rows: normalized.length, updatedAt: new Date().toISOString() });
+}
+
+function normalizeLiveSkuMatchText_(value) {
+  return String(value || '').toLowerCase()
+    .replace(/노이드비|noid-?b|여성용|남성용/g, '')
+    .replace(/[^0-9a-z가-힣]/g, '');
+}
+
+function buildLiveCoupangSkuResolver_(db) {
+  if (!db || db.getLastRow() < 2) return function() { return ''; };
+  const values = db.getRange(2, 5, db.getLastRow() - 1, 30).getDisplayValues(); // E:AH
+  const exact = {};
+  const records = [];
+  values.forEach(row => {
+    const sku = String(row[3] || '').trim();       // H SKU ID
+    const optionId = String(row[29] || '').trim(); // AH 옵션ID
+    const nameN = normalizeLiveSkuMatchText_(row[5]);
+    if (!sku) return;
+    if (optionId && !exact[optionId]) exact[optionId] = sku;
+    if (nameN.length >= 4) records.push({
+      sku: sku,
+      nameN: nameN,
+      colorN: normalizeLiveSkuMatchText_(row[6]),
+      sizeN: normalizeLiveSkuMatchText_(row[7]),
+      dimN: normalizeLiveSkuMatchText_(row[8])
+    });
+  });
+  const uniqueSku_ = function(rows) {
+    const list = [];
+    rows.forEach(row => { if (list.indexOf(row.sku) < 0) list.push(row.sku); });
+    return list.length === 1 ? list[0] : '';
+  };
+  return function(optionId, productName) {
+    if (optionId && exact[optionId]) return exact[optionId];
+    const titleN = normalizeLiveSkuMatchText_(productName);
+    let candidates = records.filter(row => titleN.indexOf(row.nameN) >= 0 || row.nameN.indexOf(titleN) >= 0);
+    if (!candidates.length) return '';
+    const maxLength = Math.max.apply(null, candidates.map(row => Math.min(titleN.length, row.nameN.length)));
+    candidates = candidates.filter(row => Math.min(titleN.length, row.nameN.length) === maxLength);
+    let sku = uniqueSku_(candidates);
+    if (sku) return sku;
+    const colorMatches = candidates.filter(row => row.colorN && titleN.indexOf(row.colorN) >= 0);
+    if (colorMatches.length) {
+      candidates = colorMatches;
+      sku = uniqueSku_(candidates);
+      if (sku) return sku;
+    }
+    const sizeMatches = candidates.filter(row =>
+      (row.sizeN && titleN.indexOf(row.sizeN) >= 0) || (row.dimN && titleN.indexOf(row.dimN) >= 0));
+    return sizeMatches.length ? uniqueSku_(sizeMatches) : '';
+  };
+}
+
+function formatLiveCoupangInventorySheet_(sheet, rowCount) {
+  ensureSheetSize_(sheet, Math.max(rowCount + 1, 2), COUPANG_LIVE_HEADERS.length);
+  sheet.getRange(1, 1, 1, COUPANG_LIVE_HEADERS.length).setValues([COUPANG_LIVE_HEADERS])
+    .setBackground('#242424').setFontColor('#ffffff').setFontWeight('bold')
+    .setHorizontalAlignment('center').setVerticalAlignment('middle');
+  sheet.setFrozenRows(1);
+  sheet.setHiddenGridlines(true);
+  [82,130,360,105,85,95,85,110,125,135,165].forEach((width, index) => sheet.setColumnWidth(index + 1, width));
+  if (sheet.getFilter()) sheet.getFilter().remove();
+  if (rowCount) {
+    const range = sheet.getRange(1, 1, rowCount + 1, COUPANG_LIVE_HEADERS.length);
+    range.createFilter();
+    sheet.getRange(2, 1, rowCount, COUPANG_LIVE_HEADERS.length).setVerticalAlignment('middle');
+    sheet.getRange(2, 1, rowCount, COUPANG_LIVE_HEADERS.length).setVerticalAlignment('middle');
+    sheet.getRange(2, 1, rowCount, 2).setHorizontalAlignment('center');
+    sheet.getRange(2, 3, rowCount, 1).setHorizontalAlignment('left');
+    sheet.getRange(2, 4, rowCount, 8).setHorizontalAlignment('center');
+    sheet.getRange(2, 5, rowCount, 4).setNumberFormat('#,##0');
+    sheet.getRange(2, 2, rowCount, 1).setNumberFormat('@');
+    sheet.getRange(2, 9, rowCount, 2).setNumberFormat('@');
+    sheet.getRange(2, 11, rowCount, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+    for (let row = 2; row <= rowCount + 1; row++) sheet.setRowHeight(row, 72);
+  }
 }
