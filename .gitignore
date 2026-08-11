@@ -9,7 +9,6 @@ test_*.xlsx
 *.tsbuildinfo
 .DS_Store
 Thumbs.db
-automation/coupang-po/.profile/
 automation/coupang-po/.state/
 automation/coupang-po/config.json
 automation/coupang-po/*.log

@@ -1,5 +1,7 @@
 @echo off
-chcp 65001 >nul
+title NOID-B Coupang Auto Collector
 cd /d "%~dp0"
-npm run coupang:auto
+call npm.cmd run coupang:auto
+echo.
+if errorlevel 1 echo ERROR: Please show this window to Codex.
 pause

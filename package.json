@@ -6,12 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "coupang:login": "node automation/coupang-po/portal.mjs login",
-    "coupang:inspect": "node automation/coupang-po/portal.mjs inspect",
-    "coupang:download": "node automation/coupang-po/portal.mjs download",
     "coupang:collect": "node automation/coupang-po/collector.mjs --once",
     "coupang:watch": "node automation/coupang-po/collector.mjs --watch",
-    "coupang:auto": "node automation/coupang-po/run-auto.mjs"
+    "coupang:auto": "node automation/coupang-po/collector.mjs --watch"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
@@ -25,7 +22,6 @@
     "@types/react": "18.3.20",
     "@types/react-dom": "18.3.6",
     "@types/wicg-file-system-access": "^2023.10.7",
-    "playwright-core": "^1.62.1",
     "typescript": "5.8.2"
   }
 }

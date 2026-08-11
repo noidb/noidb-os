@@ -1,5 +1,4 @@
 {
-  "portalUrl": "https://supplier.coupang.com/dashboard/KR",
   "downloadDir": "",
   "importUrl": "https://noidb-os.vercel.app/api/coupang-data",
   "scanIntervalSeconds": 30,
@@ -7,8 +6,5 @@
   "filePatterns": [
     "^PO_SKU_LIST.*\\.(csv|xlsx)$",
     "^발주서.*\\.xlsx$"
-  ],
-  "navigationTexts": ["발주관리", "발주"],
-  "downloadButtonTexts": ["PO SKU LIST", "PO_SKU_LIST", "엑셀 다운로드", "다운로드"],
-  "downloadTimeoutSeconds": 90
+  ]
 }
