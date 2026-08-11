@@ -1,5 +1,10 @@
 {
   "downloadDir": "G:\\내 드라이브\\쿠팡데이터\\발주서리스트다운",
+  "inputDirs": {
+    "skuMaster": "G:\\내 드라이브\\쿠팡데이터\\상품공급상태관리 다운로드",
+    "inboundHistory": "G:\\내 드라이브\\쿠팡데이터\\입고상세내역 다운로드",
+    "poList": "G:\\내 드라이브\\쿠팡데이터\\발주서리스트다운"
+  },
   "importUrl": "https://noidb-os.vercel.app/api/coupang-data",
   "scanIntervalSeconds": 30,
   "lookbackHours": 168,

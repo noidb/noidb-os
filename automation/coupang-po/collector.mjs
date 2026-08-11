@@ -44,20 +44,33 @@ async function walkFiles(directory) {
 }
 
 export async function candidateFiles(config) {
-  await fs.mkdir(config.downloadDir, { recursive: true });
   const modePatterns = Object.entries(config.modePatterns || {
     poList: config.filePatterns || ["^발주서(?:리스트)?.*\\.xlsx$"],
-  }).flatMap(([mode, patterns]) => patterns.map((pattern) => ({ mode, pattern: new RegExp(pattern, "i") })));
+  }).reduce((result, [mode, patterns]) => {
+    result[mode] = patterns.map((pattern) => new RegExp(pattern, "i"));
+    return result;
+  }, {});
   const archivePatterns = (config.archivePatterns || ["^발주서리스트.*\\.zip$"]).map((pattern) => new RegExp(pattern, "i"));
   const cutoff = Date.now() - Number(config.lookbackHours || 72) * 60 * 60 * 1000;
   const results = [];
-  for (const filePath of await walkFiles(config.downloadDir)) {
-    const name = path.basename(filePath);
-    const matchedMode = modePatterns.find(({ pattern }) => pattern.test(name));
-    const isArchive = archivePatterns.some((pattern) => pattern.test(name));
-    if (!matchedMode && !isArchive) continue;
-    const stat = await fs.stat(filePath);
-    if (stat.mtimeMs >= cutoff) results.push({ filePath, stat, isArchive, mode: isArchive ? "poList" : matchedMode.mode });
+  const inputDirs = config.inputDirs && Object.keys(config.inputDirs).length
+    ? config.inputDirs
+    : { all: config.downloadDir };
+  for (const [fixedMode, directory] of Object.entries(inputDirs)) {
+    await fs.mkdir(directory, { recursive: true });
+    for (const filePath of await walkFiles(directory)) {
+      const name = path.basename(filePath);
+      const archiveMatch = archivePatterns.some((pattern) => pattern.test(name));
+      const matchedMode = fixedMode === "all"
+        ? Object.keys(modePatterns).find((mode) => modePatterns[mode].some((pattern) => pattern.test(name)))
+          || (archiveMatch ? "poList" : "")
+        : fixedMode;
+      const matchesMode = matchedMode && modePatterns[matchedMode]?.some((pattern) => pattern.test(name));
+      const isArchive = matchedMode === "poList" && archiveMatch;
+      if (!matchesMode && !isArchive) continue;
+      const stat = await fs.stat(filePath);
+      if (stat.mtimeMs >= cutoff) results.push({ filePath, stat, isArchive, mode: matchedMode });
+    }
   }
   return results.sort((a, b) => a.stat.mtimeMs - b.stat.mtimeMs);
 }
@@ -129,7 +142,7 @@ export async function collectOnce(config, { dryRun = false } = {}) {
 
   if (dryRun) {
     pending.forEach((file) => log(`[시험 모드 · ${file.mode}] 업로드 예정: ${file.source}`));
-    await writeStatus({ ok: true, phase: "collect", uploaded: 0, skipped, pending: pending.length, downloadDir: config.downloadDir });
+    await writeStatus({ ok: true, phase: "collect", uploaded: 0, skipped, pending: pending.length, downloadDir: config.downloadDir, inputDirs: config.inputDirs || {} });
     return { uploaded: 0, skipped, found: pending.length + skipped, pending: pending.length, hanjinGenerated: 0 };
   }
 
@@ -165,6 +178,7 @@ export async function collectOnce(config, { dryRun = false } = {}) {
     uploaded: pending.length,
     skipped,
     downloadDir: config.downloadDir,
+    inputDirs: config.inputDirs || {},
     inserted: totals.inserted,
     updated: totals.updated,
     hanjinGenerated: hanjin.generated,

@@ -32,6 +32,25 @@ test("통합 버튼은 세 종류를 구분하고 중복 PO_SKU_LIST는 제외�
   assert.equal(candidates.some((candidate) => path.basename(candidate.filePath).startsWith("PO_SKU_LIST")), false);
 });
 
+test("종류별 다운로드 폴더를 각각 검사한다", async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "noidb-folders-"));
+  context.after(() => fs.rm(root, { recursive: true, force: true }));
+  const dirs = {
+    skuMaster: path.join(root, "상품공급상태관리 다운로드"),
+    inboundHistory: path.join(root, "입고상세내역 다운로드"),
+    poList: path.join(root, "발주서리스트다운"),
+  };
+  await Promise.all(Object.values(dirs).map((directory) => fs.mkdir(directory)));
+  await Promise.all([
+    fs.writeFile(path.join(dirs.skuMaster, "상품공급상태관리 SKU 다운로드.xlsx"), "sku"),
+    fs.writeFile(path.join(dirs.inboundHistory, "Coupang_Stocked_Data_List.xlsx"), "inbound"),
+    fs.writeFile(path.join(dirs.poList, "발주서리스트_139142928.xlsx"), "po"),
+  ]);
+  const config = { ...configFor(root), inputDirs: dirs };
+  const candidates = await candidateFiles(config);
+  assert.deepEqual(candidates.map((candidate) => candidate.mode).sort(), ["inboundHistory", "poList", "skuMaster"]);
+});
+
 test("날짜별 하위 폴더의 발주서 엑셀을 찾는다", async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "noidb-po-"));
   context.after(() => fs.rm(root, { recursive: true, force: true }));
