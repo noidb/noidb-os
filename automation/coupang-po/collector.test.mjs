@@ -10,7 +10,7 @@ const configFor = (downloadDir) => ({
   downloadDir,
   lookbackHours: 72,
   modePatterns: {
-    skuMaster: ["^상품공급상태관리.*\\.xlsx$"],
+    skuMaster: ["^상품공급상태관리.*\\.xlsx$", "^noidb.*_sku_download_.*\\.xlsx$"],
     inboundHistory: ["^Coupang_Stocked_Data_List.*\\.xlsx$"],
     poList: ["^발주서(?:리스트)?.*\\.xlsx$"],
   },
@@ -42,7 +42,7 @@ test("종류별 다운로드 폴더를 각각 검사한다", async (context) => 
   };
   await Promise.all(Object.values(dirs).map((directory) => fs.mkdir(directory)));
   await Promise.all([
-    fs.writeFile(path.join(dirs.skuMaster, "상품공급상태관리 SKU 다운로드.xlsx"), "sku"),
+    fs.writeFile(path.join(dirs.skuMaster, "noidb2017_sku_download_20260812040716.xlsx"), "sku"),
     fs.writeFile(path.join(dirs.inboundHistory, "Coupang_Stocked_Data_List.xlsx"), "inbound"),
     fs.writeFile(path.join(dirs.poList, "발주서리스트_139142928.xlsx"), "po"),
   ]);
