@@ -78,7 +78,8 @@ const MALE_RING_SIZES = "20호,22호,25호";
 const UNISEX_RING_SIZES = "9호,11호,14호,17호,20호,22호,25호";
 const MAX_PHOTOS = 10;
 const ACCEPTED = ["image/jpeg", "image/jpg", "image/png"];
-const DRAFT_STORAGE_KEY = "laura-product-draft";
+const DRAFT_STORAGE_KEY = "noidb-product-draft";
+const LAURA_DRAFT_STORAGE_KEY = "laura-product-draft";
 const LEGACY_DRAFT_STORAGE_KEY = ["noi", "db-product-draft"].join("");
 const DEFAULT_SUPPLIERS = [
   "프리스타일", "JK인터내셔널", "닝구네", "단종", "모건쥬얼리", "블루", "비에이블리",
@@ -310,11 +311,12 @@ export default function Home() {
     })();
 
     try {
-      const legacyRaw = localStorage.getItem(LEGACY_DRAFT_STORAGE_KEY);
+      const legacyRaw = localStorage.getItem(LAURA_DRAFT_STORAGE_KEY) || localStorage.getItem(LEGACY_DRAFT_STORAGE_KEY);
       const raw = localStorage.getItem(DRAFT_STORAGE_KEY) || legacyRaw;
       if (!raw) return;
       if (legacyRaw) {
         localStorage.setItem(DRAFT_STORAGE_KEY, raw);
+        localStorage.removeItem(LAURA_DRAFT_STORAGE_KEY);
         localStorage.removeItem(LEGACY_DRAFT_STORAGE_KEY);
       }
       const draft = JSON.parse(raw);
@@ -907,6 +909,7 @@ export default function Home() {
     setBatchStatus("");
     setDbSavedFiles([]);
     localStorage.removeItem(DRAFT_STORAGE_KEY);
+    localStorage.removeItem(LAURA_DRAFT_STORAGE_KEY);
     localStorage.removeItem(LEGACY_DRAFT_STORAGE_KEY);
     setMessage("전체 입력값을 기본값으로 초기화했습니다.");
   };
@@ -1372,6 +1375,7 @@ export default function Home() {
         }),
       });
       localStorage.removeItem(DRAFT_STORAGE_KEY);
+      localStorage.removeItem(LAURA_DRAFT_STORAGE_KEY);
       localStorage.removeItem(LEGACY_DRAFT_STORAGE_KEY);
       setDraftStatus(`${model}으로 임시저장되었습니다.`);
       setMessage(`${model}으로 임시저장되었습니다.`);
@@ -1729,8 +1733,8 @@ export default function Home() {
       <header className="hero">
         <div className="heroBrandArea">
           <div className="brandLockup">
-            <span className="lauraMark" aria-hidden="true">L</span>
-            <div><p className="lauraWordmark">LAURA OS</p><span>Seller Workspace</span></div>
+            <img className="noidbMark" src="/icon-192.png" alt="" aria-hidden="true" />
+            <div><p className="noidbWordmark">NOID-B OS</p><span>NOID-B AUTOMATION</span></div>
           </div>
           <h1>AI 상품등록 도우미</h1>
           <div className="heroUtilityActions">
@@ -2054,7 +2058,7 @@ export default function Home() {
           <div className="uploadPool">
             {uploadPool.map((item, index) => (
               <div className="uploadPoolItem" key={`${item.fileName}-${index}`} draggable
-                onDragStart={e => e.dataTransfer.setData("application/x-laura-pool-index", String(index))}>
+                onDragStart={e => e.dataTransfer.setData("application/x-noidb-pool-index", String(index))}>
                 <img src={item.dataUrl} alt={item.fileName} />
                 <span>{item.fileName}</span>
                 <button type="button" onClick={() => setUploadPool(prev => prev.filter((_, i) => i !== index))}>삭제</button>
@@ -2431,7 +2435,7 @@ function ImageSlot({
       onDragStart={e => {
         if (!value) return;
         e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("application/x-laura-slot-key", slotKey);
+        e.dataTransfer.setData("application/x-noidb-slot-key", slotKey);
       }}>
       <div className="imageSlotHeader">
         <h3>{title}</h3>
@@ -2445,12 +2449,12 @@ function ImageSlot({
         onDrop={e => {
           e.preventDefault();
           setDragging(false);
-          const poolIndex = e.dataTransfer.getData("application/x-laura-pool-index");
+          const poolIndex = e.dataTransfer.getData("application/x-noidb-pool-index");
           if (poolIndex !== "" && onPoolDrop) {
             onPoolDrop(Number(poolIndex));
             return;
           }
-          const sourceKey = e.dataTransfer.getData("application/x-laura-slot-key");
+          const sourceKey = e.dataTransfer.getData("application/x-noidb-slot-key");
           if (sourceKey && onSlotSwap) {
             onSlotSwap(sourceKey, slotKey);
             return;

@@ -1,7 +1,7 @@
 {
-  "name": "LAURA OS",
-  "short_name": "LAURA OS",
-  "description": "상품 · 이미지 · 재고 · 발주를 관리하는 Seller Workspace",
+  "name": "NOID-B OS",
+  "short_name": "NOID-B",
+  "description": "노이드비 상품 · 이미지 · 재고 · 발주 · 물류 자동화 시스템",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f4f1ec",

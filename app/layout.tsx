@@ -2,9 +2,9 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "LAURA OS",
-  description: "상품 · 이미지 · 재고 · 발주를 관리하는 Seller Workspace",
-  applicationName: "LAURA OS",
+  title: "NOID-B OS",
+  description: "노이드비 상품 · 이미지 · 재고 · 발주 · 물류 자동화 시스템",
+  applicationName: "NOID-B OS",
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
@@ -13,7 +13,7 @@ export const metadata: Metadata = {
     ],
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
   },
-  appleWebApp: { capable: true, title: "LAURA OS", statusBarStyle: "black-translucent" },
+  appleWebApp: { capable: true, title: "NOID-B OS", statusBarStyle: "black-translucent" },
 };
 
 export const viewport = {

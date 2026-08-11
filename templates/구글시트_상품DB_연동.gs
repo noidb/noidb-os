@@ -1,4 +1,4 @@
-const LAURA_WEBHOOK_SECRET = '여기에_임의의_긴_영문_비밀번호를_입력';
+const NOIDB_WEBHOOK_SECRET = '여기에_임의의_긴_영문_비밀번호를_입력';
 
 const PRODUCT_INPUT_HEADERS = [
   '등록여부','거래처','성별','카테고리','모델명/품번','상품명','색상목록','사이즈목록',
@@ -39,7 +39,7 @@ function setupProductDbSheets() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const legacyPicking = ss.getSheetByName('발주피킹');
   if (legacyPicking && !ss.getSheetByName(PO_PICKING_SHEET)) legacyPicking.setName(PO_PICKING_SHEET);
-  try { ss.rename('LAURA 상품DB'); } catch (error) { /* keep current name if rename is unavailable */ }
+  try { ss.rename('NOID-B 상품DB'); } catch (error) { /* keep current name if rename is unavailable */ }
   const db = getOrCreateSheet_(ss, '제품DB');
   removeObsoleteProductInputSheet_(ss);
   const poHistory = getOrCreateSheet_(ss, PO_HISTORY_SHEET);
@@ -99,7 +99,7 @@ function setupProductDbSheets() {
 function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents || '{}');
-    if (LAURA_WEBHOOK_SECRET && data.secret !== LAURA_WEBHOOK_SECRET) {
+    if (NOIDB_WEBHOOK_SECRET && data.secret !== NOIDB_WEBHOOK_SECRET) {
       return json_({ ok: false, error: 'unauthorized' });
     }
 
@@ -703,11 +703,11 @@ function getImageFolder_() {
   if (storedId) {
     try {
       const storedFolder = DriveApp.getFolderById(storedId);
-      if (storedFolder.getName() !== 'LAURA 상품DB 이미지') storedFolder.setName('LAURA 상품DB 이미지');
+      if (storedFolder.getName() !== 'NOID-B 상품DB 이미지') storedFolder.setName('NOID-B 상품DB 이미지');
       return storedFolder;
     } catch (error) { /* recreate below */ }
   }
-  const folder = DriveApp.createFolder('LAURA 상품DB 이미지');
+  const folder = DriveApp.createFolder('NOID-B 상품DB 이미지');
   props.setProperty('productDbImageFolderId', folder.getId());
   return folder;
 }
@@ -864,7 +864,7 @@ function restoreProductDbDefaultOrder() {
 }
 
 function onOpen() {
-  SpreadsheetApp.getUi().createMenu('LAURA')
+  SpreadsheetApp.getUi().createMenu('NOID-B')
     .addItem('제품DB 기본순서 복원', 'restoreProductDbDefaultOrder')
     .addToUi();
 }
