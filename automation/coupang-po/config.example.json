@@ -6,5 +6,8 @@
   "filePatterns": [
     "^PO_SKU_LIST.*\\.(csv|xlsx)$",
     "^발주서.*\\.xlsx$"
+  ],
+  "archivePatterns": [
+    "^발주서리스트.*\\.zip$"
   ]
 }
