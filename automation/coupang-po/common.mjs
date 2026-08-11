@@ -12,6 +12,12 @@ export async function loadConfig() {
   const sourcePath = await fs.access(configPath).then(() => configPath).catch(() => examplePath);
   const config = JSON.parse(await fs.readFile(sourcePath, "utf8"));
   config.downloadDir = process.env.NOIDB_COUPANG_DOWNLOAD_DIR || String(config.downloadDir || "").trim() || path.join(os.homedir(), "Downloads");
+  const coupangDataDir = path.dirname(config.downloadDir);
+  config.inputDirs = config.inputDirs && Object.keys(config.inputDirs).length ? config.inputDirs : {
+    skuMaster: path.join(coupangDataDir, "상품공급상태관리 다운로드"),
+    inboundHistory: path.join(coupangDataDir, "입고상세내역 다운로드"),
+    poList: config.downloadDir,
+  };
   config.importUrl = process.env.NOIDB_COUPANG_IMPORT_URL || config.importUrl;
   config.hanjinOutputDir = process.env.NOIDB_HANJIN_OUTPUT_DIR || String(config.hanjinOutputDir || "").trim() || path.join(config.downloadDir, "한진택배업로드");
   config.hanjinTemplatePath = process.env.NOIDB_HANJIN_TEMPLATE_PATH || String(config.hanjinTemplatePath || "").trim() || path.join(automationDir, "templates", "서식_쿠팡 (고정형).xlsx");
