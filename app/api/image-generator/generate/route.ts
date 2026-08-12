@@ -14,6 +14,21 @@ function parseDataUrl(dataUrl: string) {
 
 function promptFor(body: Record<string, unknown>) {
   const kind = String(body.kind || "");
+  if (kind === "quick-detail") {
+    const style = String(body.style || "clean");
+    const mood = style === "ivory"
+      ? "warm ivory luxury jewelry editorial, soft daylight and refined neutral styling"
+      : style === "modern"
+        ? "modern pale-gray luxury studio, crisp restrained lighting and contemporary styling"
+        : "bright clean white luxury jewelry studio, natural soft lighting";
+    return `Edit this square section from an existing NOID-B jewelry detail page into a genuinely new commercial photograph. Automatically determine whether it is a product-only photograph or a model wearing the product.
+
+If it is a product-only photograph: preserve the exact jewelry product identity, silhouette, engraving, grooves, facets, stone count and placement, clasp, thickness, proportions, metal and non-metal colors. Change the studio background, lighting, placement and camera viewpoint slightly so it is clearly a newly photographed composition. Keep the complete product visible and commercially realistic.
+
+If it contains a model: preserve the exact jewelry design, color, real-world size and wearing position. Replace the person with a different adult professional jewelry model and change the face, hairstyle, clothing, pose and background. Do not resemble the original person. Keep the jewelry unobstructed and sharply visible, with anatomically correct wearing and no extra jewelry.
+
+Visual direction: ${mood}. Keep a square 1:1 composition suitable for a Korean online jewelry shop. No text, logo, border, watermark or props that hide the product. Do not add, remove or redesign the jewelry. This must look like a new photo of the same product, not a filter or framed copy.`;
+  }
   const product = (body.product || {}) as Record<string, unknown>;
   const profile = categoryProfile(String(product.category || "귀걸이"));
   const dimensions = `actual product dimensions: width ${product.widthMm || "unknown"}mm, height ${product.heightMm || "unknown"}mm, thickness ${product.thicknessMm || "unknown"}mm`;

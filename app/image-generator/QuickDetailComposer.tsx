@@ -1,48 +1,81 @@
 "use client";
 
 import { ChangeEvent, useState } from "react";
-import { readImageFile, rebuildDetailPage, type QuickDetailStyle } from "@/lib/image-generator/quick-detail";
+import { composeQuickDetailPage, readImageFile, splitDetailPage, type QuickDetailSection, type QuickDetailStyle } from "@/lib/image-generator/quick-detail";
 import styles from "./styles.module.css";
 
+const HEADER_URL = "/노이드비-상단이미지.jpg";
 const STYLE_OPTIONS: Array<{ value: QuickDetailStyle; title: string; description: string }> = [
-  { value: "clean", title: "깔끔한 화이트", description: "원본 분위기를 유지하고 여백과 크기만 정돈합니다." },
-  { value: "ivory", title: "고급 아이보리", description: "따뜻한 배경과 카드 여백으로 부드럽게 구성합니다." },
-  { value: "modern", title: "모던 그레이", description: "연한 회색 배경과 절제된 간격으로 구성합니다." },
+  { value: "clean", title: "밝은 주얼리 화이트", description: "밝고 깨끗한 쇼핑몰 제품사진 분위기" },
+  { value: "ivory", title: "고급 아이보리", description: "따뜻하고 부드러운 고급 주얼리 분위기" },
+  { value: "modern", title: "모던 그레이", description: "차분하고 세련된 현대적인 분위기" },
 ];
 
+type Result = { dataUrl: string; sectionCount: number; width: number; height: number };
+
 export default function QuickDetailComposer() {
-  const [source, setSource] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [modelName, setModelName] = useState("");
   const [style, setStyle] = useState<QuickDetailStyle>("clean");
-  const [result, setResult] = useState<{ dataUrl: string; sectionCount: number; width: number; height: number } | null>(null);
+  const [originalSections, setOriginalSections] = useState<QuickDetailSection[]>([]);
+  const [editedSections, setEditedSections] = useState<QuickDetailSection[]>([]);
+  const [result, setResult] = useState<Result | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState("긴 상세이미지 한 장만 올려주세요.");
 
   async function chooseFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
+    setBusy(true);
     try {
-      setSource(await readImageFile(file));
+      const source = await readImageFile(file);
+      const sections = await splitDetailPage(source, HEADER_URL);
       setSourceName(file.name);
       setModelName(file.name.replace(/\.[^.]+$/, ""));
+      setOriginalSections(sections);
+      setEditedSections([]);
       setResult(null);
-      setMessage("이미지를 불러왔습니다. 스타일을 고르고 만들기만 누르세요.");
+      setProgress(0);
+      setMessage(`${sections.length}장의 사진을 찾았습니다. 만들기를 누르면 각 사진을 새로운 장면으로 바꿉니다.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "이미지를 불러오지 못했습니다.");
+    } finally {
+      setBusy(false);
+      event.target.value = "";
     }
   }
 
+  async function editSection(section: QuickDetailSection) {
+    const response = await fetch("/api/image-generator/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "quick-detail", style, references: [{ dataUrl: section.dataUrl, role: "detail-section" }] }),
+    });
+    const data = await response.json() as { imageDataUrl?: string; error?: string };
+    if (!response.ok || !data.imageDataUrl) throw new Error(data.error || "사진을 새로 만들지 못했습니다.");
+    return { ...section, dataUrl: data.imageDataUrl };
+  }
+
   async function create() {
-    if (!source) return setMessage("긴 상세이미지를 먼저 올려주세요.");
+    if (!originalSections.length) return setMessage("긴 상세이미지를 먼저 올려주세요.");
     setBusy(true);
-    setMessage("상세이미지를 자동으로 나누고 새 배치로 구성하고 있습니다.");
+    setResult(null);
+    const completed = [...editedSections];
     try {
-      const rebuilt = await rebuildDetailPage(source, "/노이드비-상단이미지.jpg", style);
-      setResult(rebuilt);
-      setMessage(`${rebuilt.sectionCount}개 구간을 자동 재구성했습니다. API 비용은 들지 않습니다.`);
+      for (let index = completed.length; index < originalSections.length; index += 1) {
+        setProgress(index);
+        setMessage(`${originalSections.length}장 중 ${index + 1}번째 사진을 새롭게 만들고 있습니다. 완성된 사진은 그대로 보관됩니다.`);
+        const edited = await editSection(originalSections[index]);
+        completed.push(edited);
+        setEditedSections([...completed]);
+      }
+      setProgress(originalSections.length);
+      const composed = await composeQuickDetailPage(HEADER_URL, completed);
+      setResult(composed);
+      setMessage("같은 제품을 사용한 새로운 상세페이지를 완성했습니다. 제품 모양을 꼭 확인해주세요.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "새 상세페이지를 만들지 못했습니다.");
+      setMessage(`${error instanceof Error ? error.message : "작업 중 문제가 생겼습니다."} 다시 누르면 ${completed.length + 1}번째부터 이어서 만듭니다.`);
     } finally {
       setBusy(false);
     }
@@ -50,14 +83,14 @@ export default function QuickDetailComposer() {
 
   return <section className={styles.quickPanel}>
     <div className={styles.quickIntro}>
-      <div><span>FAST DETAIL</span><h2>긴 상세이미지 한 장으로 바로 만들기</h2><p>사진을 하나씩 지정하지 않아도 자동으로 나누고, NOID-B 상단 이미지와 새로운 여백·배치로 다시 연결합니다.</p></div>
-      <strong>API 비용 없음 · 약 5초</strong>
+      <div><span>AI DETAIL REMAKE</span><h2>같은 제품으로 새로운 상세페이지 만들기</h2><p>제품은 그대로 유지하고 제품컷의 배경·각도·배치와 모델의 얼굴·헤어·의상·분위기를 새롭게 만듭니다.</p></div>
+      <strong>사진별 AI 편집</strong>
     </div>
     <div className={styles.quickSteps}>
-      <article><span>1</span><h3>상세이미지 올리기</h3><label className={styles.quickUpload}>{source ? "다른 이미지 선택" : "긴 상세이미지 선택"}<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} /></label>{sourceName && <small>{sourceName}</small>}<label className={styles.quickModel}>저장할 모델명<input value={modelName} onChange={event => setModelName(event.target.value)} placeholder="예: we0001" /></label></article>
-      <article><span>2</span><h3>분위기 선택</h3><div className={styles.styleChoices}>{STYLE_OPTIONS.map(option => <label key={option.value} className={style === option.value ? styles.selectedStyle : ""}><input type="radio" name="quick-style" value={option.value} checked={style === option.value} onChange={() => setStyle(option.value)} /><strong>{option.title}</strong><small>{option.description}</small></label>)}</div></article>
-      <article><span>3</span><h3>한 번에 만들기</h3><button className={styles.quickCreate} disabled={!source || busy} onClick={create}>{busy ? "새로 구성하는 중…" : "새 상세페이지 만들기"}</button><p>{message}</p>{result && <a className={styles.quickDownload} href={result.dataUrl} download={`${modelName.trim() || "NOID-B-상세페이지"}.jpg`}>완성 이미지 저장하기</a>}</article>
+      <article><span>1</span><h3>상세이미지 올리기</h3><label className={styles.quickUpload}>{sourceName ? "다른 이미지 선택" : "긴 상세이미지 선택"}<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} /></label>{sourceName && <small>{sourceName}</small>}<label className={styles.quickModel}>저장할 모델명<input value={modelName} onChange={event => setModelName(event.target.value)} placeholder="예: we0001-new" /></label></article>
+      <article><span>2</span><h3>새로운 분위기 선택</h3><div className={styles.styleChoices}>{STYLE_OPTIONS.map(option => <label key={option.value} className={style === option.value ? styles.selectedStyle : ""}><input type="radio" name="quick-style" value={option.value} checked={style === option.value} onChange={() => { setStyle(option.value); setEditedSections([]); setResult(null); setProgress(0); }} /><strong>{option.title}</strong><small>{option.description}</small></label>)}</div></article>
+      <article><span>3</span><h3>한 번에 새로 만들기</h3><button className={styles.quickCreate} disabled={!originalSections.length || busy} onClick={create}>{busy ? `${originalSections.length}장 중 ${Math.min(progress + 1, originalSections.length)}장 작업 중…` : editedSections.length ? "이어서 만들기" : "새 상세페이지 만들기"}</button><p>{message}</p>{originalSections.length > 0 && <small>예상 AI 편집: {originalSections.length}회 · 완료: {editedSections.length}장</small>}{result && <a className={styles.quickDownload} href={result.dataUrl} download={`${modelName.trim() || "NOID-B-새상세페이지"}.jpg`}>완성 이미지 저장하기</a>}</article>
     </div>
-    {result && <div className={styles.quickResult}><div><strong>완성 미리보기</strong><span>{result.width}×{result.height}px · {result.sectionCount}개 구간</span></div><a href={result.dataUrl} target="_blank" rel="noreferrer"><img src={result.dataUrl} alt="자동 재구성 상세페이지" /></a></div>}
+    {result && <div className={styles.quickResult}><div><strong>완성 미리보기</strong><span>{result.width}×{result.height}px · AI 편집 {result.sectionCount}장</span><small>제품 무늬·잠금장치·크기가 원본과 같은지 확대해서 확인해주세요.</small></div><a href={result.dataUrl} target="_blank" rel="noreferrer"><img src={result.dataUrl} alt="AI로 새롭게 만든 상세페이지" /></a></div>}
   </section>;
 }

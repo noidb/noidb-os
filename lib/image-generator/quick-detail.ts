@@ -1,5 +1,10 @@
 export type QuickDetailStyle = "clean" | "ivory" | "modern";
 
+export type QuickDetailSection = {
+  id: string;
+  dataUrl: string;
+};
+
 export type QuickDetailResult = {
   dataUrl: string;
   sectionCount: number;
@@ -25,75 +30,48 @@ export function readImageFile(file: File) {
   });
 }
 
-function styleValues(style: QuickDetailStyle) {
-  if (style === "ivory") return { page: "#F5F0E8", card: "#FFFDFC", gap: 30, inset: 34 };
-  if (style === "modern") return { page: "#ECEFF1", card: "#FFFFFF", gap: 24, inset: 28 };
-  return { page: "#FFFFFF", card: "#FFFFFF", gap: 18, inset: 20 };
-}
-
-export async function rebuildDetailPage(
-  sourceUrl: string,
-  headerUrl: string,
-  style: QuickDetailStyle,
-): Promise<QuickDetailResult> {
+export async function splitDetailPage(sourceUrl: string, headerUrl: string): Promise<QuickDetailSection[]> {
   const [source, header] = await Promise.all([loadImage(sourceUrl), loadImage(headerUrl)]);
-  const targetWidth = 780;
-  const sourceScale = targetWidth / source.naturalWidth;
-
-  // 기존 상세페이지에 같은 비율의 NOID-B 상단 이미지가 있으면 그 부분은 제외합니다.
   const expectedHeaderHeight = Math.round(source.naturalWidth * (header.naturalHeight / header.naturalWidth));
   const hasOldHeader = source.naturalHeight > source.naturalWidth * 2 && expectedHeaderHeight < source.naturalHeight * 0.25;
   const contentStart = hasOldHeader ? Math.min(expectedHeaderHeight, source.naturalHeight) : 0;
-  const sections: Array<{ y: number; height: number }> = [];
-  for (let y = contentStart; y < source.naturalHeight; y += source.naturalWidth) {
-    sections.push({ y, height: Math.min(source.naturalWidth, source.naturalHeight - y) });
-  }
-  if (!sections.length) sections.push({ y: 0, height: source.naturalHeight });
+  const sections: QuickDetailSection[] = [];
 
-  const values = styleValues(style);
+  for (let y = contentStart, index = 0; y < source.naturalHeight; y += source.naturalWidth, index += 1) {
+    const height = Math.min(source.naturalWidth, source.naturalHeight - y);
+    // 끝에 남은 아주 짧은 조각은 불완전한 사진일 가능성이 높아 제외합니다.
+    if (height < source.naturalWidth * 0.45) break;
+    const canvas = document.createElement("canvas");
+    canvas.width = 1024;
+    canvas.height = 1024;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("상세페이지 사진을 구분하지 못했습니다.");
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const outputHeight = Math.round(1024 * (height / source.naturalWidth));
+    ctx.drawImage(source, 0, y, source.naturalWidth, height, 0, Math.round((1024 - outputHeight) / 2), 1024, outputHeight);
+    sections.push({ id: `quick-${index + 1}`, dataUrl: canvas.toDataURL("image/jpeg", 0.92) });
+  }
+  if (!sections.length) throw new Error("상세페이지 안에서 변형할 사진을 찾지 못했습니다.");
+  return sections;
+}
+
+export async function composeQuickDetailPage(headerUrl: string, sections: QuickDetailSection[]): Promise<QuickDetailResult> {
+  const [header, ...images] = await Promise.all([loadImage(headerUrl), ...sections.map(section => loadImage(section.dataUrl))]);
+  const targetWidth = 780;
   const headerHeight = Math.round(header.naturalHeight * (targetWidth / header.naturalWidth));
-  const sectionHeights = sections.map((section, index) => {
-    const base = Math.round(section.height * sourceScale);
-    return index % 3 === 1 ? Math.round(base * 0.94) : base;
-  });
-  const totalHeight = headerHeight + values.gap + sectionHeights.reduce((sum, height) => sum + height + values.gap, 0);
+  const sectionHeight = targetWidth;
   const canvas = document.createElement("canvas");
   canvas.width = targetWidth;
-  canvas.height = totalHeight;
+  canvas.height = headerHeight + images.length * sectionHeight;
   const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("새 상세페이지를 만들지 못했습니다.");
-  ctx.fillStyle = values.page;
+  if (!ctx) throw new Error("새 상세페이지를 연결하지 못했습니다.");
+  ctx.fillStyle = "#FFFFFF";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(header, 0, 0, targetWidth, headerHeight);
-
-  let outputY = headerHeight + values.gap;
-  sections.forEach((section, index) => {
-    const cardInset = index % 3 === 1 ? values.inset : index % 3 === 2 ? Math.round(values.inset / 2) : 0;
-    const cardX = cardInset;
-    const cardWidth = targetWidth - cardInset * 2;
-    const cardHeight = sectionHeights[index];
-    ctx.fillStyle = values.card;
-    ctx.fillRect(cardX, outputY, cardWidth, cardHeight);
-
-    const sourceRatio = source.naturalWidth / section.height;
-    const targetRatio = cardWidth / cardHeight;
-    let sx = 0;
-    let sy = section.y;
-    let sw = source.naturalWidth;
-    let sh = section.height;
-    if (sourceRatio > targetRatio) {
-      sw = sh * targetRatio;
-      sx = (source.naturalWidth - sw) / 2;
-    } else if (sourceRatio < targetRatio) {
-      sh = sw / targetRatio;
-      sy = section.y + (section.height - sh) / 2;
-    }
-    ctx.drawImage(source, sx, sy, sw, sh, cardX, outputY, cardWidth, cardHeight);
-    outputY += cardHeight + values.gap;
-  });
-
+  images.forEach((image, index) => ctx.drawImage(image, 0, headerHeight + index * sectionHeight, targetWidth, sectionHeight));
   return {
-    dataUrl: canvas.toDataURL("image/jpeg", 0.91),
+    dataUrl: canvas.toDataURL("image/jpeg", 0.92),
     sectionCount: sections.length,
     width: targetWidth,
     height: canvas.height,
