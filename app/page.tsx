@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import {
   ensureReadWritePermission,
   loadDirectoryHandle,
@@ -1741,6 +1742,7 @@ export default function Home() {
           </div>
           <h1>AI 상품등록 도우미</h1>
           <div className="heroUtilityActions">
+            <Link className="imageGeneratorLink" href="/image-generator">이미지 자동생성</Link>
             <button className="draftLoadButton" type="button" onClick={() => {
               setShowDrafts(value => !value);
               if (!showDrafts) void refreshDrafts();

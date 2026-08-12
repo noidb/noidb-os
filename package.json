@@ -9,7 +9,8 @@
     "coupang:collect": "node automation/coupang-po/collector.mjs --once",
     "coupang:watch": "node automation/coupang-po/collector.mjs --watch",
     "coupang:auto": "node automation/coupang-po/collector.mjs --once",
-    "coupang:hanjin": "node automation/coupang-po/hanjin-generator.mjs --force"
+    "coupang:hanjin": "node automation/coupang-po/hanjin-generator.mjs --force",
+    "test:image-generator": "node scripts/test-image-generator.mjs"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
