@@ -91,10 +91,16 @@ export default function QuickDetailComposer() {
     setEditedSections(draft.editedSections);
     setFinalSections(draft.finalSections);
     setSectionActions(draft.sectionActions);
-    setResult(draft.result);
+    setResult(null);
     setScanSummary(draft.scanSummary);
     setProgress(draft.editedSections.length);
-    setMessage("임시저장한 작업을 불러왔습니다. 이어서 작업해주세요.");
+    setMessage("임시저장한 작업을 새 90px 여백과 꽉 찬 사진 규격으로 다시 정리하고 있습니다.");
+    if (draft.result && draft.finalSections.length) {
+      void composeQuickDetailPage(draft.headerUrl, draft.finalSections, draft.footerUrl || undefined).then(nextResult => {
+        setResult(nextResult);
+        setMessage("임시저장한 작업을 불러왔습니다. 사진을 꽉 채우고 90px 여백으로 다시 정리했습니다.");
+      });
+    }
   }
 
   async function removeDraft(id: string) {
@@ -112,7 +118,8 @@ export default function QuickDetailComposer() {
     if (!draft.result || !draft.finalSections.length) return false;
     const folder = zip.folder(folderName);
     if (!folder) return false;
-    folder.file(`${folderName}.jpg`, draft.result.dataUrl.split(",")[1], { base64: true });
+    const composed = await composeQuickDetailPage(draft.headerUrl, draft.finalSections, draft.footerUrl || undefined);
+    folder.file(`${folderName}.jpg`, composed.dataUrl.split(",")[1], { base64: true });
     for (let index = 0; index < draft.finalSections.length; index += 1) {
       const square = await resizeSectionTo1000(draft.finalSections[index].dataUrl);
       folder.file(`${folderName}-${String(index + 1).padStart(2, "0")}.jpg`, square.split(",")[1], { base64: true });
@@ -289,7 +296,7 @@ export default function QuickDetailComposer() {
     setFooterUrl("");
     setFooterName("");
     setResult(null);
-    setMessage("하단 이미지를 뺐습니다. 마지막 사진 아래 60px 흰 여백으로 끝납니다.");
+    setMessage("하단 이미지를 뺐습니다. 마지막 사진 아래 90px 흰 여백으로 끝납니다.");
   }
 
   function deleteSection(id: string) {
@@ -356,7 +363,7 @@ export default function QuickDetailComposer() {
       const composed = await composeQuickDetailPage(headerUrl, completed, footerUrl || undefined);
       setFinalSections(completed);
       setResult(composed);
-      setMessage("같은 제품을 사용한 새로운 상세페이지를 완성했습니다. 사진 사이는 60px 여백으로 연결했습니다. 제품 모양을 꼭 확인해주세요.");
+      setMessage("같은 제품을 사용한 새로운 상세페이지를 완성했습니다. 모든 사진은 가로 780px에 꽉 채우고 90px 여백으로 연결했습니다. 제품 모양을 꼭 확인해주세요.");
     } catch (error) {
       setMessage(`${error instanceof Error ? error.message : "작업 중 문제가 생겼습니다."} 다시 누르면 완료된 AI 사진 다음부터 이어서 만듭니다.`);
     } finally {
@@ -371,7 +378,8 @@ export default function QuickDetailComposer() {
     try {
       const zip = new JSZip();
       const baseName = modelName.trim() || "NOID-B-새상세페이지";
-      zip.file(`${baseName}.jpg`, result.dataUrl.split(",")[1], { base64: true });
+      const composed = await composeQuickDetailPage(headerUrl, finalSections, footerUrl || undefined);
+      zip.file(`${baseName}.jpg`, composed.dataUrl.split(",")[1], { base64: true });
       for (let index = 0; index < finalSections.length; index += 1) {
         const square = await resizeSectionTo1000(finalSections[index].dataUrl);
         zip.file(`${baseName}-${String(index + 1).padStart(2, "0")}.jpg`, square.split(",")[1], { base64: true });
@@ -396,8 +404,8 @@ export default function QuickDetailComposer() {
       <strong>사진별 AI 편집</strong>
     </div>
     <div className={styles.quickSteps} onDragEnter={dragDetailPage} onDragOver={dragDetailPage} onDragLeave={leaveDetailPage} onDrop={dropDetailPage}>
-      <article><span>1</span><h3>상세페이지 업로드</h3><label className={`${styles.quickUpload} ${draggingDetail ? styles.quickUploadDragging : ""}`}><strong>{sourceName ? "다른 상세페이지 업로드" : "상세페이지 업로드"}</strong><span>클릭해서 선택하거나 여기에 끌어다 놓으세요</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} /></label>{sourceName && <small>{sourceName}</small>}<div className={styles.headerUpload}><strong>상단 로고 이미지</strong><small>{headerName}</small><label>다른 브랜드 로고 올리기<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseHeader} /></label>{headerUrl !== HEADER_URL && <button type="button" onClick={useNoidbHeader}>NOID-B 기본 로고로 되돌리기</button>}</div><div className={styles.headerUpload}><strong>하단 로고·안내 이미지 (선택)</strong><small>{footerName || "올리지 않으면 60px 흰 여백으로 끝납니다."}</small><label>하단 이미지 올리기<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFooter} /></label>{footerUrl && <button type="button" onClick={removeFooter}>하단 이미지 빼기</button>}</div><label className={styles.quickModel}>저장할 모델명<input value={modelName} onChange={event => setModelName(event.target.value)} placeholder="예: we0001-new" /></label></article>
-      <article><span>2</span><h3>새로운 분위기 선택</h3><div className={styles.styleChoices}>{STYLE_OPTIONS.map(option => <label key={option.value} className={style === option.value ? styles.selectedStyle : ""}><input type="radio" name="quick-style" value={option.value} checked={style === option.value} onChange={() => { setStyle(option.value); setEditedSections([]); setResult(null); setProgress(0); }} /><strong>{option.title}</strong><small>{option.description}</small></label>)}</div><p className={styles.fixedGap}>사진 사이는 보기 편하게 60px 흰 여백으로 연결됩니다.</p></article>
+      <article><span>1</span><h3>상세페이지 업로드</h3><label className={`${styles.quickUpload} ${draggingDetail ? styles.quickUploadDragging : ""}`}><strong>{sourceName ? "다른 상세페이지 업로드" : "상세페이지 업로드"}</strong><span>클릭해서 선택하거나 여기에 끌어다 놓으세요</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} /></label>{sourceName && <small>{sourceName}</small>}<div className={styles.headerUpload}><strong>상단 로고 이미지</strong><small>{headerName}</small><label>다른 브랜드 로고 올리기<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseHeader} /></label>{headerUrl !== HEADER_URL && <button type="button" onClick={useNoidbHeader}>NOID-B 기본 로고로 되돌리기</button>}</div><div className={styles.headerUpload}><strong>하단 로고·안내 이미지 (선택)</strong><small>{footerName || "올리지 않으면 90px 흰 여백으로 끝납니다."}</small><label>하단 이미지 올리기<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFooter} /></label>{footerUrl && <button type="button" onClick={removeFooter}>하단 이미지 빼기</button>}</div><label className={styles.quickModel}>저장할 모델명<input value={modelName} onChange={event => setModelName(event.target.value)} placeholder="예: we0001-new" /></label></article>
+      <article><span>2</span><h3>새로운 분위기 선택</h3><div className={styles.styleChoices}>{STYLE_OPTIONS.map(option => <label key={option.value} className={style === option.value ? styles.selectedStyle : ""}><input type="radio" name="quick-style" value={option.value} checked={style === option.value} onChange={() => { setStyle(option.value); setEditedSections([]); setResult(null); setProgress(0); }} /><strong>{option.title}</strong><small>{option.description}</small></label>)}</div><p className={styles.fixedGap}>모든 사진은 가로 780px에 꽉 채우고, 사진 사이는 90px 흰 여백으로 연결됩니다. 작은 사진은 저장할 때 자동으로 고품질 업스케일됩니다.</p></article>
       <article><span>3</span><h3>한 번에 새로 만들기</h3><button className={styles.quickCreate} disabled={!originalSections.length || busy} onClick={create}>{busy ? `AI 편집 ${expectedEdits}장 중 ${Math.min(progress + 1, expectedEdits)}장 작업 중…` : completedEdits ? "이어서 만들기" : "새 상세페이지 만들기"}</button><p>{message}</p>{scanSummary && <div className={styles.scanSummary}><span>찾은 구간 <strong>{scanSummary.found}</strong></span><span>사용할 사진 <strong>{originalSections.length}</strong></span><span>자동 제외 <strong>{scanSummary.excluded}</strong></span></div>}{originalSections.length > 0 && <small>예상 AI 편집: {expectedEdits}회 · 완료: {completedEdits}장</small>}{result && <a className={styles.quickDownload} href={result.dataUrl} download={`${modelName.trim() || "NOID-B-새상세페이지"}.jpg`}>완성 이미지만 저장하기</a>}</article>
     </div>
     {originalSections.length > 0 && !result && <div className={styles.preEditReview}><div><h3>편집 전 사진 확인</h3><p>제품컷·착용컷 구분이 틀리면 먼저 바꿔주세요. 불필요한 사진은 삭제하고, AI 비용 없이 그대로 쓸 사진은 `편집 제외`를 누르세요.</p></div><div className={styles.reviewGrid}>{originalSections.map((section, index) => { const original = sectionActions[section.id] === "original"; return <article key={section.id}><img src={section.dataUrl} alt={`선별 사진 ${index + 1}`} /><button type="button" className={styles.kindToggle} onClick={() => toggleSectionKind(section.id)}>{section.kind === "wear" ? "착용컷 → 제품컷으로 변경" : "제품컷 → 착용컷으로 변경"}</button><strong>{index + 1}. {section.kind === "wear" ? "착용컷" : "제품컷"}</strong><small>{section.reason}</small><div><button type="button" className={original ? styles.reviewSelected : ""} onClick={() => toggleSectionEdit(section.id)}>{original ? "원본 사용 중" : "편집 제외"}</button><button type="button" className={styles.reviewDelete} onClick={() => deleteSection(section.id)}>삭제</button></div></article>; })}</div><p className={styles.reviewCost}>최종 사용 {originalSections.length}장 · 예상 AI 편집 <strong>{expectedEdits}회</strong> · 원본 사용 {originalSections.length - expectedEdits}장</p></div>}
