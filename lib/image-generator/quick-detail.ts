@@ -26,32 +26,36 @@ function findSquareContentCrop(image: HTMLImageElement): CropRect {
   if (!ctx) return { x: 0, y: 0, size: Math.min(image.naturalWidth, image.naturalHeight) };
   ctx.drawImage(image, 0, 0, sample.width, sample.height);
   const pixels = ctx.getImageData(0, 0, sample.width, sample.height).data;
-  const cornerPoints = [[0, 0], [sample.width - 1, 0], [0, sample.height - 1], [sample.width - 1, sample.height - 1]];
-  const background = cornerPoints.reduce((sum, [x, y]) => {
+  const isContent = (x: number, y: number) => {
     const offset = (y * sample.width + x) * 4;
-    return [sum[0] + pixels[offset], sum[1] + pixels[offset + 1], sum[2] + pixels[offset + 2]];
-  }, [0, 0, 0]).map(value => value / cornerPoints.length);
-  let minX = sample.width;
-  let minY = sample.height;
-  let maxX = -1;
-  let maxY = -1;
-  for (let y = 0; y < sample.height; y += 1) {
-    for (let x = 0; x < sample.width; x += 1) {
-      const offset = (y * sample.width + x) * 4;
-      const difference = Math.abs(pixels[offset] - background[0]) + Math.abs(pixels[offset + 1] - background[1]) + Math.abs(pixels[offset + 2] - background[2]);
-      if (difference < 18) continue;
-      minX = Math.min(minX, x);
-      minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x);
-      maxY = Math.max(maxY, y);
-    }
-  }
+    // JPG 압축 노이즈가 섞인 흰색 테두리도 배경으로 처리합니다.
+    return (255 - pixels[offset]) + (255 - pixels[offset + 1]) + (255 - pixels[offset + 2]) > 34;
+  };
+  const rowRatio = (y: number) => {
+    let count = 0;
+    for (let x = 0; x < sample.width; x += 1) if (isContent(x, y)) count += 1;
+    return count / sample.width;
+  };
+  const columnRatio = (x: number) => {
+    let count = 0;
+    for (let y = 0; y < sample.height; y += 1) if (isContent(x, y)) count += 1;
+    return count / sample.height;
+  };
+  const edgeThreshold = 0.025;
+  let minX = 0;
+  let minY = 0;
+  let maxX = sample.width - 1;
+  let maxY = sample.height - 1;
+  while (minX < maxX && columnRatio(minX) < edgeThreshold) minX += 1;
+  while (maxX > minX && columnRatio(maxX) < edgeThreshold) maxX -= 1;
+  while (minY < maxY && rowRatio(minY) < edgeThreshold) minY += 1;
+  while (maxY > minY && rowRatio(maxY) < edgeThreshold) maxY -= 1;
   if (maxX < minX || maxY < minY) return { x: 0, y: 0, size: Math.min(image.naturalWidth, image.naturalHeight) };
-  const padding = Math.max(2, Math.round(Math.max(maxX - minX, maxY - minY) * 0.035));
-  minX = Math.max(0, minX - padding);
-  minY = Math.max(0, minY - padding);
-  maxX = Math.min(sample.width - 1, maxX + padding);
-  maxY = Math.min(sample.height - 1, maxY + padding);
+  // 흰 프레임은 다시 넣지 않도록 사진 경계 안쪽 1px만 사용합니다.
+  minX = Math.min(maxX, minX + 1);
+  minY = Math.min(maxY, minY + 1);
+  maxX = Math.max(minX, maxX - 1);
+  maxY = Math.max(minY, maxY - 1);
   const desiredSize = Math.max(maxX - minX + 1, maxY - minY + 1);
   const centerX = (minX + maxX) / 2;
   const centerY = (minY + maxY) / 2;
