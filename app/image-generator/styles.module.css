@@ -39,6 +39,7 @@
 .styleChoices .selectedStyle{border-color:#60766a;background:#f1f5f2;box-shadow:0 0 0 1px #60766a}
 .quickCreate,.quickDownload{display:flex;width:100%;min-height:46px;align-items:center;justify-content:center;border:0;border-radius:10px;background:#252525;color:#fff;text-decoration:none;font-weight:800;cursor:pointer;padding:11px}
 .quickCreate:disabled{opacity:.45;cursor:not-allowed}
+.scanSummary{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin:10px 0}.scanSummary span{display:flex;flex-direction:column;align-items:center;gap:2px;padding:7px 3px;border-radius:7px;background:#f2f0ed;color:#756e68;font-size:10px}.scanSummary strong{font-size:15px;color:#3f4943}
 .quickDownload{background:#60766a;margin-top:9px}
 .quickResult{display:grid;grid-template-columns:180px 1fr;gap:18px;margin-top:20px;border-top:1px solid #dedbd6;padding-top:20px}
 .quickResult>div{display:flex;flex-direction:column;gap:5px}

@@ -27,7 +27,30 @@ export default function QuickDetailComposer() {
   const [result, setResult] = useState<Result | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [scanSummary, setScanSummary] = useState<{ found: number; kept: number; excluded: number } | null>(null);
   const [message, setMessage] = useState("긴 상세이미지 한 장만 올려주세요.");
+
+  async function selectUsableSections(sections: QuickDetailSection[]) {
+    const selected: QuickDetailSection[] = [];
+    for (let offset = 0; offset < sections.length; offset += 8) {
+      const batch = sections.slice(offset, offset + 8);
+      setMessage(`${sections.length}개 구간 중 제품컷과 착용컷을 자동으로 선별하고 있습니다.`);
+      const response = await fetch("/api/image-generator/quick-analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sections: batch }),
+      });
+      const data = await response.json() as { decisions?: Array<{ id: string; keep: boolean; kind: "product" | "wear" | "exclude"; reason: string }>; error?: string };
+      if (!response.ok || !data.decisions) throw new Error(data.error || "제품컷을 자동 선별하지 못했습니다.");
+      const decisions = new Map(data.decisions.map(decision => [decision.id, decision]));
+      batch.forEach(section => {
+        const decision = decisions.get(section.id);
+        if (decision?.keep && decision.kind !== "exclude") selected.push({ ...section, kind: decision.kind, reason: decision.reason });
+      });
+    }
+    if (!selected.length) throw new Error("사용할 수 있는 제품컷이나 착용컷을 찾지 못했습니다.");
+    return selected;
+  }
 
   async function chooseFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -35,7 +58,8 @@ export default function QuickDetailComposer() {
     setBusy(true);
     try {
       const source = await readImageFile(file);
-      const sections = await splitDetailPage(source, headerUrl);
+      const foundSections = await splitDetailPage(source, headerUrl);
+      const sections = await selectUsableSections(foundSections);
       setSource(source);
       setSourceName(file.name);
       setModelName(file.name.replace(/\.[^.]+$/, ""));
@@ -43,7 +67,8 @@ export default function QuickDetailComposer() {
       setEditedSections([]);
       setResult(null);
       setProgress(0);
-      setMessage(`${sections.length}장의 사진을 찾았습니다. 만들기를 누르면 각 사진을 새로운 장면으로 바꿉니다.`);
+      setScanSummary({ found: foundSections.length, kept: sections.length, excluded: foundSections.length - sections.length });
+      setMessage(`${foundSections.length}개 구간 중 제품·착용컷 ${sections.length}장만 남겼습니다. 설명·로고·패키지 ${foundSections.length - sections.length}개는 제외했습니다.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "이미지를 불러오지 못했습니다.");
     } finally {
@@ -64,9 +89,11 @@ export default function QuickDetailComposer() {
       setResult(null);
       setProgress(0);
       if (source) {
-        const sections = await splitDetailPage(source, nextHeader);
+        const foundSections = await splitDetailPage(source, nextHeader);
+        const sections = await selectUsableSections(foundSections);
         setOriginalSections(sections);
-        setMessage(`상단 로고를 바꿨습니다. ${sections.length}장의 사진을 새 브랜드 상세페이지로 만들 수 있습니다.`);
+        setScanSummary({ found: foundSections.length, kept: sections.length, excluded: foundSections.length - sections.length });
+        setMessage(`상단 로고를 바꿨습니다. 제품·착용컷 ${sections.length}장으로 새 브랜드 상세페이지를 만들 수 있습니다.`);
       } else {
         setMessage("상단 로고 이미지를 바꿨습니다. 이제 긴 상세이미지를 올려주세요.");
       }
@@ -86,7 +113,12 @@ export default function QuickDetailComposer() {
       setEditedSections([]);
       setResult(null);
       setProgress(0);
-      if (source) setOriginalSections(await splitDetailPage(source, HEADER_URL));
+      if (source) {
+        const foundSections = await splitDetailPage(source, HEADER_URL);
+        const sections = await selectUsableSections(foundSections);
+        setOriginalSections(sections);
+        setScanSummary({ found: foundSections.length, kept: sections.length, excluded: foundSections.length - sections.length });
+      }
       setMessage("NOID-B 기본 상단 이미지로 되돌렸습니다.");
     } finally {
       setBusy(false);
@@ -119,7 +151,7 @@ export default function QuickDetailComposer() {
     const response = await fetch("/api/image-generator/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "quick-detail", style, references: [{ dataUrl: section.dataUrl, role: "detail-section" }] }),
+      body: JSON.stringify({ kind: "quick-detail", style, sectionKind: section.kind, references: [{ dataUrl: section.dataUrl, role: section.kind || "detail-section" }] }),
     });
     const data = await response.json() as { imageDataUrl?: string; error?: string };
     if (!response.ok || !data.imageDataUrl) throw new Error(data.error || "사진을 새로 만들지 못했습니다.");
@@ -158,7 +190,7 @@ export default function QuickDetailComposer() {
     <div className={styles.quickSteps}>
       <article><span>1</span><h3>이미지 올리기</h3><label className={styles.quickUpload}>{sourceName ? "다른 상세이미지 선택" : "긴 상세이미지 선택"}<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} /></label>{sourceName && <small>{sourceName}</small>}<div className={styles.headerUpload}><strong>상단 로고 이미지</strong><small>{headerName}</small><label>다른 브랜드 로고 올리기<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseHeader} /></label>{headerUrl !== HEADER_URL && <button type="button" onClick={useNoidbHeader}>NOID-B 기본 로고로 되돌리기</button>}</div><div className={styles.headerUpload}><strong>하단 로고·안내 이미지 (선택)</strong><small>{footerName || "올리지 않으면 30px 흰 여백으로 끝납니다."}</small><label>하단 이미지 올리기<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFooter} /></label>{footerUrl && <button type="button" onClick={removeFooter}>하단 이미지 빼기</button>}</div><label className={styles.quickModel}>저장할 모델명<input value={modelName} onChange={event => setModelName(event.target.value)} placeholder="예: we0001-new" /></label></article>
       <article><span>2</span><h3>새로운 분위기 선택</h3><div className={styles.styleChoices}>{STYLE_OPTIONS.map(option => <label key={option.value} className={style === option.value ? styles.selectedStyle : ""}><input type="radio" name="quick-style" value={option.value} checked={style === option.value} onChange={() => { setStyle(option.value); setEditedSections([]); setResult(null); setProgress(0); }} /><strong>{option.title}</strong><small>{option.description}</small></label>)}</div></article>
-      <article><span>3</span><h3>한 번에 새로 만들기</h3><button className={styles.quickCreate} disabled={!originalSections.length || busy} onClick={create}>{busy ? `${originalSections.length}장 중 ${Math.min(progress + 1, originalSections.length)}장 작업 중…` : editedSections.length ? "이어서 만들기" : "새 상세페이지 만들기"}</button><p>{message}</p>{originalSections.length > 0 && <small>예상 AI 편집: {originalSections.length}회 · 완료: {editedSections.length}장</small>}{result && <a className={styles.quickDownload} href={result.dataUrl} download={`${modelName.trim() || "NOID-B-새상세페이지"}.jpg`}>완성 이미지 저장하기</a>}</article>
+      <article><span>3</span><h3>한 번에 새로 만들기</h3><button className={styles.quickCreate} disabled={!originalSections.length || busy} onClick={create}>{busy ? `${originalSections.length}장 중 ${Math.min(progress + 1, originalSections.length)}장 작업 중…` : editedSections.length ? "이어서 만들기" : "새 상세페이지 만들기"}</button><p>{message}</p>{scanSummary && <div className={styles.scanSummary}><span>찾은 구간 <strong>{scanSummary.found}</strong></span><span>사용할 사진 <strong>{scanSummary.kept}</strong></span><span>자동 제외 <strong>{scanSummary.excluded}</strong></span></div>}{originalSections.length > 0 && <small>예상 AI 편집: {originalSections.length}회 · 완료: {editedSections.length}장</small>}{result && <a className={styles.quickDownload} href={result.dataUrl} download={`${modelName.trim() || "NOID-B-새상세페이지"}.jpg`}>완성 이미지 저장하기</a>}</article>
     </div>
     {result && <div className={styles.quickResult}><div><strong>완성 미리보기</strong><span>{result.width}×{result.height}px · AI 편집 {result.sectionCount}장</span><small>제품 무늬·잠금장치·크기가 원본과 같은지 확대해서 확인해주세요.</small></div><a href={result.dataUrl} target="_blank" rel="noreferrer"><img src={result.dataUrl} alt="AI로 새롭게 만든 상세페이지" /></a></div>}
   </section>;
