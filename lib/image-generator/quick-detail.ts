@@ -14,6 +14,19 @@ export type QuickDetailResult = {
   height: number;
 };
 
+export async function resizeSectionTo1000(dataUrl: string) {
+  const image = await loadImage(dataUrl);
+  const canvas = document.createElement("canvas");
+  canvas.width = 1000;
+  canvas.height = 1000;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("개별 이미지를 1000px로 저장하지 못했습니다.");
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, 1000, 1000);
+  ctx.drawImage(image, 0, 0, 1000, 1000);
+  return canvas.toDataURL("image/jpeg", 0.93);
+}
+
 function loadImage(src: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
@@ -105,13 +118,13 @@ export async function composeQuickDetailPage(headerUrl: string, sections: QuickD
   const images = loaded.slice(1, 1 + sections.length);
   const footer = footerUrl ? loaded[loaded.length - 1] : undefined;
   const targetWidth = 780;
-  const imageGap = 30;
+  const imageGap = 60;
   const headerHeight = Math.round(header.naturalHeight * (targetWidth / header.naturalWidth));
   const footerHeight = footer ? Math.round(footer.naturalHeight * (targetWidth / footer.naturalWidth)) : 0;
   const sectionHeight = targetWidth;
   const canvas = document.createElement("canvas");
   canvas.width = targetWidth;
-  // 로고 아래, 사진 사이, 마지막 사진 아래까지 모두 30px 여백을 둡니다.
+  // 로고 아래, 사진 사이, 마지막 사진 아래까지 모두 60px 여백을 둡니다.
   const gapCount = images.length + 1 + (footer ? 1 : 0);
   canvas.height = headerHeight + images.length * sectionHeight + gapCount * imageGap + footerHeight;
   const ctx = canvas.getContext("2d");

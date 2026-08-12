@@ -211,7 +211,7 @@ export default function ImageGeneratorPage() {
   return <main className={styles.page}>
     <header className={styles.header}>
       <div>
-        <div className={styles.brandLockup}><div className={styles.noidbMark}>N</div><div><strong>NOID-B OS</strong><span>NOID-B AUTOMATION</span></div></div>
+        <div className={styles.brandLockup}><img className={styles.noidbMark} src="/icon-192.png" alt="" aria-hidden="true" /><div><strong>NOID-B OS</strong><span>NOID-B AUTOMATION</span></div></div>
         <h1>빠른 상세페이지</h1>
         <p>긴 상세이미지 한 장을 NOID-B 형식으로 간편하게 다시 구성합니다.</p>
       </div>

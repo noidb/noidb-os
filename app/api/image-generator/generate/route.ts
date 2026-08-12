@@ -16,18 +16,24 @@ function promptFor(body: Record<string, unknown>) {
   const kind = String(body.kind || "");
   if (kind === "quick-detail") {
     const style = String(body.style || "clean");
+    const sectionKind = String(body.sectionKind || "product");
     const mood = style === "ivory"
       ? "warm ivory luxury jewelry editorial, soft daylight and refined neutral styling"
       : style === "modern"
         ? "modern pale-gray luxury studio, crisp restrained lighting and contemporary styling"
         : "bright clean white luxury jewelry studio, natural soft lighting";
-    return `Edit this square section from an existing NOID-B jewelry detail page into a genuinely new commercial photograph. Automatically determine whether it is a product-only photograph or a model wearing the product.
+    const shared = `The single input image is the exact photograph to edit. Remove every visible Chinese, Korean or English character, caption, logo, brand mark, price, measurement graphic and watermark, reconstructing the surface naturally. The output must contain the same exact jewelry—not a similar or redesigned item.`;
+    if (sectionKind === "wear") return `${shared}
 
-If it is a product-only photograph: preserve the exact jewelry product identity, silhouette, engraving, grooves, facets, stone count and placement, clasp, thickness, proportions, metal and non-metal colors. Remove every visible Chinese, Korean or English character, caption, logo, brand mark, price, measurement graphic and watermark, reconstructing the surface naturally. Remove all original props and replace any gray, brown, colored or non-white background with a bright white-on-white studio setting. Change the lighting, placement and camera viewpoint slightly so it is clearly a newly photographed composition. Select only one or two subtle new props appropriate to this particular composition: sheer white curtain folds, a plain white ceramic plate, a closed white book with absolutely no visible text, an ivory pedestal, or softly folded white fabric. Vary the selected prop and arrangement from the input photograph. Props must remain secondary, must not overlap or hide any part of the product, and must not introduce strong colors. Reframe and enlarge the product naturally so the finished square is visually full with no embedded margins, screenshot frames, panels or letterboxing. Keep the complete product visible and commercially realistic.
+This is definitely a WEAR SHOT. Use only this uploaded wear photograph as the reference. Preserve the exact worn jewelry design, width, engraving, color, real-world size, finger or body location, orientation and wearing position. Make only modest changes to the surrounding scene: use a different adult professional model or hand, slightly different skin appearance, hairstyle when visible, clothing, pose and bright white-tone background. Never substitute a thin band, generic ring, different stone, different engraving or any other jewelry. Do not add extra jewelry. Reframe the model photograph to fill the complete square without embedded margins, screenshot frames, panels or letterboxing. Keep the jewelry unobstructed and sharply visible with anatomically correct wearing.
 
-If it contains a model: preserve the exact jewelry design, color, real-world size and wearing position. Remove every visible character, caption, logo, brand mark and watermark. Replace the person with a different adult professional jewelry model and change the face, hairstyle, clothing, pose and background. Do not resemble the original person. Use a clean bright white-tone background and reframe the model photograph to fill the complete square without embedded margins, screenshot frames, panels or letterboxing. Keep the jewelry unobstructed and sharply visible, with anatomically correct wearing and no extra jewelry.
+Visual direction: ${mood}. Keep a square 1:1 composition suitable for a Korean online jewelry shop. No text, logo, border, watermark or props that hide the product.`;
 
-Visual direction: ${mood}. Keep a square 1:1 composition suitable for a Korean online jewelry shop. No text, logo, border, watermark or props that hide the product. Do not add, remove or redesign the jewelry. This must look like a new photo of the same product, not a filter or framed copy.`;
+    return `${shared}
+
+This is definitely a PRODUCT-ONLY SHOT. Preserve the jewelry pixels and exact identity as aggressively as possible: silhouette, engraving, grooves, facets, stone count and placement, clasp, thickness, proportions, metal and non-metal colors. Do not rotate, bend, redraw, reinterpret or generate a new camera side of the product. Keep the same product-facing angle; change only the surrounding studio background, lighting, shadows, crop and placement. Remove all original props and replace any gray, brown, colored or non-white background with a bright white-on-white studio setting. Select only one or two subtle new props: sheer white curtain folds, a plain white ceramic plate, a closed white book with absolutely no visible text, an ivory pedestal, or softly folded white fabric. Props must stay behind or beside the product, never overlap it, and never introduce strong colors. Reframe and enlarge the unchanged product naturally so the square is visually full with no embedded margins, screenshot frames, panels or letterboxing.
+
+Visual direction: ${mood}. Keep a square 1:1 composition suitable for a Korean online jewelry shop. No text, logo, border or watermark. This must look like a new studio setting around the exact same product.`;
   }
   const product = (body.product || {}) as Record<string, unknown>;
   const profile = categoryProfile(String(product.category || "귀걸이"));
