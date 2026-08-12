@@ -9,6 +9,7 @@ import { saveGeneratorResults } from "@/lib/image-generator/storage";
 import type { ColorCode, GeneratedAsset, GeneratorSession, PhotoRole, ProductAnalysis, ReferencePhoto } from "@/lib/image-generator/types";
 import { ensureReadWritePermission, loadDirectoryHandle, saveDirectoryHandle, supportsDirectoryPicker } from "@/lib/product-db/idb";
 import { CATEGORY_PROFILES, categoryProfile } from "@/lib/image-generator/category-profiles";
+import QuickDetailComposer from "./QuickDetailComposer";
 import styles from "./styles.module.css";
 
 const DEFAULT_HEADER: ReferencePhoto = { id: "noidb-detail-header", name: "노이드비-상단이미지.jpg", role: "detail-reference", dataUrl: "/노이드비-상단이미지.jpg", primary: false };
@@ -208,7 +209,19 @@ export default function ImageGeneratorPage() {
   async function reset() { if (!window.confirm("현재 임시 작업을 지울까요? 저장한 상품DB 파일은 지워지지 않습니다.")) return; await clearGeneratorSession(); setSession(newSession()); setSavedFiles([]); }
 
   return <main className={styles.page}>
-    <header className={styles.header}><div><p className={styles.eyebrow}>NOID-B PRODUCT STUDIO</p><h1>이미지 자동생성</h1><p>기준 제품을 먼저 승인한 뒤 색상·착용컷을 만드는 독립 작업 화면입니다.</p></div><div className={styles.headerButtons}><Link href="/">상품등록으로 돌아가기</Link><button className={styles.ghost} onClick={reset}>새 작업</button></div></header>
+    <header className={styles.header}>
+      <div>
+        <div className={styles.brandLockup}><div className={styles.noidbMark}>N</div><div><strong>NOID-B OS</strong><span>NOID-B AUTOMATION</span></div></div>
+        <h1>빠른 상세페이지</h1>
+        <p>긴 상세이미지 한 장을 NOID-B 형식으로 간편하게 다시 구성합니다.</p>
+      </div>
+      <div className={styles.headerButtons}><Link href="/">상품등록으로 돌아가기</Link></div>
+    </header>
+    <QuickDetailComposer />
+
+    <details className={styles.precisionDetails}>
+      <summary>기존 정밀 이미지 생성 열기</summary>
+      <div className={styles.precisionBody}>
     <div className={styles.notice}>{busy && <span className={styles.spinner} />} {notice}</div>
 
     <section className={styles.panel}><div className={styles.sectionTitle}><div><span>1</span><h2>상품 정보</h2></div><p>예상 유료 이미지 생성 호출: <strong>{estimate.total}회</strong> · 옵션컷/상세페이지 조합은 API 비용 없음</p></div>
@@ -260,6 +273,8 @@ export default function ImageGeneratorPage() {
       {session.detailPage && <a href={session.detailPage} download={`${session.product.model || "detail"}.jpg`} className={styles.detailPreview}><img src={session.detailPage} alt="완성 상세페이지" /><span>상세페이지 확대 또는 다운로드</span></a>}
       {savedFiles.length > 0 && <details className={styles.saved}><summary>저장된 파일 {savedFiles.length}개 보기</summary>{savedFiles.map(file => <div key={file}>{file}</div>)}</details>}
     </section>
+      </div>
+    </details>
   </main>;
 }
 
