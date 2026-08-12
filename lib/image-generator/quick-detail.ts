@@ -56,20 +56,34 @@ export async function splitDetailPage(sourceUrl: string, headerUrl: string): Pro
   return sections;
 }
 
-export async function composeQuickDetailPage(headerUrl: string, sections: QuickDetailSection[]): Promise<QuickDetailResult> {
-  const [header, ...images] = await Promise.all([loadImage(headerUrl), ...sections.map(section => loadImage(section.dataUrl))]);
+export async function composeQuickDetailPage(headerUrl: string, sections: QuickDetailSection[], footerUrl?: string): Promise<QuickDetailResult> {
+  const loaded = await Promise.all([loadImage(headerUrl), ...sections.map(section => loadImage(section.dataUrl)), ...(footerUrl ? [loadImage(footerUrl)] : [])]);
+  const header = loaded[0];
+  const images = loaded.slice(1, 1 + sections.length);
+  const footer = footerUrl ? loaded[loaded.length - 1] : undefined;
   const targetWidth = 780;
+  const imageGap = 30;
   const headerHeight = Math.round(header.naturalHeight * (targetWidth / header.naturalWidth));
+  const footerHeight = footer ? Math.round(footer.naturalHeight * (targetWidth / footer.naturalWidth)) : 0;
   const sectionHeight = targetWidth;
   const canvas = document.createElement("canvas");
   canvas.width = targetWidth;
-  canvas.height = headerHeight + images.length * sectionHeight;
+  // 로고 아래, 사진 사이, 마지막 사진 아래까지 모두 30px 여백을 둡니다.
+  const gapCount = images.length + 1 + (footer ? 1 : 0);
+  canvas.height = headerHeight + images.length * sectionHeight + gapCount * imageGap + footerHeight;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("새 상세페이지를 연결하지 못했습니다.");
   ctx.fillStyle = "#FFFFFF";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(header, 0, 0, targetWidth, headerHeight);
-  images.forEach((image, index) => ctx.drawImage(image, 0, headerHeight + index * sectionHeight, targetWidth, sectionHeight));
+  images.forEach((image, index) => {
+    const y = headerHeight + imageGap + index * (sectionHeight + imageGap);
+    ctx.drawImage(image, 0, y, targetWidth, sectionHeight);
+  });
+  if (footer) {
+    const footerY = headerHeight + images.length * sectionHeight + (images.length + 1) * imageGap;
+    ctx.drawImage(footer, 0, footerY, targetWidth, footerHeight);
+  }
   return {
     dataUrl: canvas.toDataURL("image/jpeg", 0.92),
     sectionCount: sections.length,
