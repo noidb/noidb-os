@@ -27,6 +27,10 @@
 .quickSteps article>small{display:block;color:#837b74;font-size:11px;margin:8px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .quickModel{display:grid;gap:6px;margin-top:12px;font-size:12px;font-weight:700;color:#625d58}
 .quickModel input{width:100%;border:1px solid #d5cec7;border-radius:9px;padding:10px;background:#fff}
+.headerUpload{display:grid;gap:6px;margin-top:13px;padding:11px;border:1px solid #ddd6cf;border-radius:9px;background:#faf9f7}
+.headerUpload>strong{font-size:12px;color:#625d58}.headerUpload>small{font-size:11px;color:#837b74;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.headerUpload label,.headerUpload button{display:flex;align-items:center;justify-content:center;min-height:36px;border:1px solid #cfc0b0;border-radius:8px;background:#e5dace;color:#302d29;font-size:12px;font-weight:750;cursor:pointer;padding:7px;text-align:center}
+.headerUpload label input{display:none}.headerUpload button{background:#fff}
 .styleChoices{display:grid;gap:8px}
 .styleChoices label{display:grid;grid-template-columns:18px 1fr;column-gap:8px;border:1px solid #ded8d1;border-radius:9px;padding:10px;cursor:pointer}
 .styleChoices input{grid-row:1/3;margin:3px 0 0}
