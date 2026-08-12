@@ -8,6 +8,7 @@ import { allColorRule, COLOR_OPTIONS, colorLabel, estimateImageCalls, filenameFo
 import { saveGeneratorResults } from "@/lib/image-generator/storage";
 import type { ColorCode, GeneratedAsset, GeneratorSession, PhotoRole, ProductAnalysis, ReferencePhoto } from "@/lib/image-generator/types";
 import { ensureReadWritePermission, loadDirectoryHandle, saveDirectoryHandle, supportsDirectoryPicker } from "@/lib/product-db/idb";
+import { CATEGORY_PROFILES, categoryProfile } from "@/lib/image-generator/category-profiles";
 import styles from "./styles.module.css";
 
 const DEFAULT_HEADER: ReferencePhoto = { id: "noidb-detail-header", name: "노이드비-상단이미지.jpg", role: "detail-reference", dataUrl: "/노이드비-상단이미지.jpg", primary: false };
@@ -53,7 +54,8 @@ export default function ImageGeneratorPage() {
     return () => window.clearTimeout(timer);
   }, [session, ready]);
 
-  const rule = useMemo(() => allColorRule(session.product.colors), [session.product.colors]);
+  const profile = useMemo(() => categoryProfile(session.product.category), [session.product.category]);
+  const rule = useMemo(() => allColorRule(session.product.colors, session.product.category), [session.product.colors, session.product.category]);
   const estimate = useMemo(() => estimateImageCalls(session.product, session.assets, Boolean(session.modelTemplate)), [session]);
   const approvedBaseline = session.assets.find(asset => asset.kind === "baseline" && asset.approved);
   const approvedColors = session.assets.filter(asset => asset.kind === "color" && asset.approved);
@@ -211,7 +213,7 @@ export default function ImageGeneratorPage() {
 
     <section className={styles.panel}><div className={styles.sectionTitle}><div><span>1</span><h2>상품 정보</h2></div><p>예상 유료 이미지 생성 호출: <strong>{estimate.total}회</strong> · 옵션컷/상세페이지 조합은 API 비용 없음</p></div>
       <div className={styles.formGrid}>
-        <label>카테고리<input value={session.product.category} onChange={e => patchProduct({ category: e.target.value })} /></label>
+        <label>카테고리<select value={profile.label} onChange={e => patchProduct({ category: e.target.value })}>{CATEGORY_PROFILES.map(item => <option key={item.id} value={item.label}>{item.label}</option>)}</select></label>
         <label>모델명<input value={session.product.model} onChange={e => patchProduct({ model: e.target.value })} placeholder="예: we0001" /></label>
         <label>실제 촬영 제품 색상<select value={session.product.photographedColor} onChange={e => patchProduct({ photographedColor: e.target.value as ColorCode })}>{COLOR_OPTIONS.map(c => <option key={c.code} value={c.code}>{c.label} ({c.code})</option>)}</select></label>
         <label>대표 착용 색상<select value={session.product.wearColor} onChange={e => patchProduct({ wearColor: e.target.value as ColorCode })}>{session.product.colors.map(c => <option key={c} value={c}>{colorLabel(c)} ({c})</option>)}</select></label>
@@ -220,7 +222,7 @@ export default function ImageGeneratorPage() {
         <label>두께(mm)<input inputMode="decimal" value={session.product.thicknessMm} onChange={e => patchProduct({ thicknessMm: e.target.value })} /></label>
       </div>
       <div className={styles.colorChoices}><strong>생성할 색상 옵션</strong>{COLOR_OPTIONS.map(color => <label key={color.code}><input type="checkbox" checked={session.product.colors.includes(color.code)} onChange={e => { const colors = e.target.checked ? [...session.product.colors, color.code] : session.product.colors.filter(value => value !== color.code); if (!colors.length) return setNotice("색상은 한 가지 이상 선택해주세요."); patchProduct({ colors, wearColor: colors.includes(session.product.wearColor) ? session.product.wearColor : colors[0] }); }} />{color.label} ({color.code})</label>)}</div>
-      <p className={styles.rule}>{rule.message}</p>
+      <p className={styles.rule}>{rule.message} · {profile.label}는 색상마다 제품 {profile.unitsPerColor === 2 ? "한 쌍" : "1개"}를 사용합니다.</p>
     </section>
 
     <section className={styles.panel}><div className={styles.sectionTitle}><div><span>2</span><h2>제품 참고사진</h2></div><label className={styles.fileButton}>여러 장 올리기<input type="file" accept="image/*" multiple onChange={e => addPhotos(e)} /></label></div>

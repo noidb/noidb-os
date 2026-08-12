@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { categoryProfile } from "@/lib/image-generator/category-profiles";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -14,17 +15,19 @@ function parseDataUrl(dataUrl: string) {
 function promptFor(body: Record<string, unknown>) {
   const kind = String(body.kind || "");
   const product = (body.product || {}) as Record<string, unknown>;
+  const profile = categoryProfile(String(product.category || "귀걸이"));
   const dimensions = `actual product dimensions: width ${product.widthMm || "unknown"}mm, height ${product.heightMm || "unknown"}mm, thickness ${product.thicknessMm || "unknown"}mm`;
-  const invariant = `Preserve the exact real product silhouette, engraving, grooves, curves, proportions, stone count and placement, non-metal colors, thickness, front/back/side construction, clasp, left/right orientation, and pair count from the references. Never invent hidden details. No text, logo, watermark, border, or prop. Square studio product photography.`;
-  if (kind === "baseline") return `${invariant} Build one clean approval reference image of exactly one matching product pair on pure white background. Preserve the real photographed metal color. Natural controlled metal shine, crisp edges, no dust, fingerprints, glare, or distortion. ${dimensions}`;
-  if (kind === "color") return `${invariant} The first reference is the user-approved baseline. Derive the identical pair from it and change metal parts only to ${String(body.metal || body.color || "the requested metal color")}. Do not recolor stones, pearl, shell, enamel, leather, epoxy, or black decoration. Keep placement, camera angle, scale, form, and shadow identical. Pure #FFFFFF background, pair centered and occupying about 85-90%. ${dimensions}`;
+  const count = profile.unitsPerColor === 2 ? "exactly one matching pair" : "exactly one product";
+  const invariant = `Category: ${profile.label} (${profile.productNoun}). Preserve the exact real product silhouette, engraving, grooves, curves, proportions, stone count and placement, non-metal colors, thickness, front/back/side construction, clasp, orientation, and product count from the references. Never invent hidden details. No text, logo, watermark, border, or prop. Square studio product photography.`;
+  if (kind === "baseline") return `${invariant} Build one clean approval reference image showing ${count} on pure white background. ${profile.baselineGuide} Preserve the real photographed metal color. Natural controlled metal shine, crisp edges, no dust, fingerprints, glare, or distortion. ${dimensions}`;
+  if (kind === "color") return `${invariant} The first reference is the user-approved baseline. Derive the identical ${count} from it and change metal parts only to ${String(body.metal || body.color || "the requested metal color")}. Do not recolor stones, pearl, shell, enamel, leather, epoxy, or black decoration. Keep placement, camera angle, scale, form, and shadow identical. Pure #FFFFFF background, centered and occupying about 85-90%. ${profile.baselineGuide} ${dimensions}`;
   if (kind === "wear") {
     const variant = Number(body.variant || 1);
-    const framing = variant === 1 ? "full or mostly full face, elegant three-quarter angle" : variant === 2 ? "close emotional crop showing eye, lips, and ear" : "extreme close-up centered on ear and earring";
-    return `${invariant} The references contain an approved product color image and an approved reusable NOID-B professional female model template. Composite that exact product onto the same approved model. ${framing}. Hair and hands must not cover the product. One natural piercing only; no extra earring. Clasp must not pass through skin. Match the entered real-world product size and wear angle. Bright clean luxury jewelry-shop background. Do not use or imitate any customer's face, skin, hair, clothes, body, or background. ${dimensions}`;
+    const framing = profile.wearFrames[Math.max(0, Math.min(2, variant - 1))];
+    return `${invariant} The references contain an approved product color image and an approved reusable NOID-B ${profile.modelGender} model template. Composite that exact product onto the same approved model. Framing: ${framing}. ${profile.wearSafety} Match the entered real-world product size and wear angle. Bright clean luxury jewelry-shop background. Do not use or imitate any customer's face, skin, hair, clothes, body, or background. ${dimensions}`;
   }
-  if (kind === "model-template") return `Create a reusable, consistent NOID-B professional female jewelry model template, square 1024x1024, bright clean luxury studio background, elegant natural makeup and realistic skin. Three-quarter face angle with one ear fully visible, hair tucked away, no earrings, no jewelry, no text or logo. This is an approval template that will be reused across products.`;
-  if (kind === "detail") return `${invariant} Create a close detail view requested as ${String(body.detail || "front detail")}, using only confirmed reference structure. Pure white background. ${dimensions}`;
+  if (kind === "model-template") return `Create a reusable, consistent NOID-B professional ${profile.modelGender} jewelry model template suitable for ${profile.productNoun}, square 1024x1024, bright clean luxury studio background, natural realistic skin, no jewelry, no text or logo. Ensure the relevant wearing area is clearly visible. This is an approval template that will be reused across products.`;
+  if (kind === "detail") return `${invariant} Create a close detail view requested as ${String(body.detail || "front detail")}, using only confirmed reference structure. ${profile.detailGuide} Pure white background. ${dimensions}`;
   throw new Error("지원하지 않는 이미지 종류입니다.");
 }
 

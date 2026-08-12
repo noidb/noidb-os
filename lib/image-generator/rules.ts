@@ -1,4 +1,5 @@
 import type { ColorCode, GeneratorProduct, GeneratedAsset, PhotoRole } from "./types";
+import { categoryProfile } from "./category-profiles";
 
 export const COLOR_OPTIONS: { code: ColorCode; label: string; metal: string }[] = [
   { code: "RG", label: "로즈골드", metal: "warm rose-gold metal" },
@@ -22,15 +23,19 @@ export function colorLabel(code: ColorCode) {
   return COLOR_OPTIONS.find(item => item.code === code)?.label || code;
 }
 
-export function allColorRule(colors: ColorCode[]) {
+export function allColorRule(colors: ColorCode[], category = "귀걸이") {
   const unique = [...new Set(colors)];
+  const profile = categoryProfile(category);
   return {
     enabled: unique.length >= 2,
     colorCount: unique.length,
-    expectedProducts: unique.length * 2,
+    unitsPerColor: profile.unitsPerColor,
+    expectedProducts: unique.length * profile.unitsPerColor,
     message: unique.length < 2
       ? "선택한 색상이 1개이므로 전 컬러 옵션컷은 자동으로 생략됩니다."
-      : `${unique.length}컬러를 한 쌍씩 배치해 총 ${unique.length * 2}개 제품이 보이는 옵션컷 2장을 만듭니다.`,
+      : profile.unitsPerColor === 2
+        ? `${unique.length}컬러를 한 쌍씩 배치해 총 ${unique.length * 2}개 제품이 보이는 옵션컷 2장을 만듭니다.`
+        : `${unique.length}컬러를 1개씩 배치해 총 ${unique.length}개 제품이 보이는 옵션컷 2장을 만듭니다.`,
   };
 }
 
@@ -58,7 +63,7 @@ export function estimateImageCalls(product: GeneratorProduct, assets: GeneratedA
     wear,
     modelTemplate,
     total: baseline + colors + wear + modelTemplate,
-    freeCompositions: allColorRule(product.colors).enabled ? 3 : 1,
+    freeCompositions: allColorRule(product.colors, product.category).enabled ? 3 : 1,
   };
 }
 

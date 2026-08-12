@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
     if (photos.some(photo => (photo.dataUrl?.length || 0) > 3_000_000)) {
       return NextResponse.json({ error: "사진 용량이 너무 큽니다. 사진 크기를 줄인 뒤 다시 올려주세요." }, { status: 413 });
     }
-    const prompt = `당신은 주얼리 상품 촬영 검수자입니다. 사진에 없는 제품 특징을 추측하거나 창작하지 마세요.
+    const prompt = `당신은 주얼리 상품 촬영 검수자입니다. 카테고리는 ${String(body.product?.category || "귀걸이")}입니다. 사진에 없는 제품 특징을 추측하거나 창작하지 마세요.
 사진 역할과 사용자가 입력한 실제 크기를 함께 검토하고 아래 JSON 하나만 한국어로 답하세요.
 {
  "detectedType":"감지한 제품 유형", "detectedColor":"감지한 실제 색상", "estimatedSize":"입력값과 사진에서 확인한 크기",
