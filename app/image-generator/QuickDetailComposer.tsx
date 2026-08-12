@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useState } from "react";
 import JSZip from "jszip";
 import { composeQuickDetailPage, readImageFile, resizeSectionTo1000, splitDetailPage, type QuickDetailSection, type QuickDetailStyle } from "@/lib/image-generator/quick-detail";
 import { deleteQuickDraft, listQuickDrafts, MAX_QUICK_DRAFTS, saveQuickDraft, type QuickDetailDraft } from "@/lib/image-generator/quick-drafts";
@@ -20,6 +20,7 @@ export default function QuickDetailComposer() {
   const [drafts, setDrafts] = useState<QuickDetailDraft[]>([]);
   const [selectedDraftIds, setSelectedDraftIds] = useState<string[]>([]);
   const [draftsReady, setDraftsReady] = useState(false);
+  const [draggingDetail, setDraggingDetail] = useState(false);
   const [source, setSource] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [headerUrl, setHeaderUrl] = useState(HEADER_URL);
@@ -36,7 +37,7 @@ export default function QuickDetailComposer() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [scanSummary, setScanSummary] = useState<{ found: number; kept: number; excluded: number } | null>(null);
-  const [message, setMessage] = useState("긴 상세이미지 한 장만 올려주세요.");
+  const [message, setMessage] = useState("상세페이지를 업로드해주세요.");
   const expectedEdits = originalSections.filter(section => (sectionActions[section.id] || "edit") === "edit").length;
   const completedEdits = editedSections.filter(section => originalSections.some(original => original.id === section.id) && (sectionActions[section.id] || "edit") === "edit").length;
 
@@ -174,9 +175,11 @@ export default function QuickDetailComposer() {
     return selected;
   }
 
-  async function chooseFile(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  async function uploadDetailPage(file: File) {
+    if (!file.type.startsWith("image/")) {
+      setMessage("JPG, PNG 또는 WEBP 이미지 파일을 올려주세요.");
+      return;
+    }
     setBusy(true);
     try {
       setDraftId(`quick-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -193,8 +196,30 @@ export default function QuickDetailComposer() {
       setMessage(error instanceof Error ? error.message : "이미지를 불러오지 못했습니다.");
     } finally {
       setBusy(false);
-      event.target.value = "";
     }
+  }
+
+  async function chooseFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (file) await uploadDetailPage(file);
+    event.target.value = "";
+  }
+
+  async function dropDetailPage(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setDraggingDetail(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file && !busy) await uploadDetailPage(file);
+  }
+
+  function dragDetailPage(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    if (!busy) setDraggingDetail(true);
+  }
+
+  function leaveDetailPage(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setDraggingDetail(false);
   }
 
   async function chooseHeader(event: ChangeEvent<HTMLInputElement>) {
@@ -215,7 +240,7 @@ export default function QuickDetailComposer() {
         setScanSummary({ found: foundSections.length, kept: sections.length, excluded: foundSections.length - sections.length });
         setMessage(`상단 로고를 바꿨습니다. 제품·착용컷 ${sections.length}장으로 새 브랜드 상세페이지를 만들 수 있습니다.`);
       } else {
-        setMessage("상단 로고 이미지를 바꿨습니다. 이제 긴 상세이미지를 올려주세요.");
+        setMessage("상단 로고 이미지를 바꿨습니다. 이제 상세페이지를 업로드해주세요.");
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "상단 로고 이미지를 불러오지 못했습니다.");
@@ -304,7 +329,7 @@ export default function QuickDetailComposer() {
   }
 
   async function create() {
-    if (!originalSections.length) return setMessage("긴 상세이미지를 먼저 올려주세요.");
+    if (!originalSections.length) return setMessage("상세페이지를 먼저 업로드해주세요.");
     setBusy(true);
     setResult(null);
     const editedById = new Map(editedSections.map(section => [section.id, section]));
@@ -370,8 +395,8 @@ export default function QuickDetailComposer() {
       <div><span>AI DETAIL REMAKE</span><h2>같은 제품으로 새로운 상세페이지 만들기</h2><p>제품은 그대로 유지하고 제품컷은 흰 커튼·접시·책 등을 활용한 새로운 배경과 각도로, 모델컷은 새로운 얼굴·헤어·의상·분위기로 만듭니다.</p></div>
       <strong>사진별 AI 편집</strong>
     </div>
-    <div className={styles.quickSteps}>
-      <article><span>1</span><h3>이미지 올리기</h3><label className={styles.quickUpload}>{sourceName ? "다른 상세이미지 선택" : "긴 상세이미지 선택"}<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} /></label>{sourceName && <small>{sourceName}</small>}<div className={styles.headerUpload}><strong>상단 로고 이미지</strong><small>{headerName}</small><label>다른 브랜드 로고 올리기<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseHeader} /></label>{headerUrl !== HEADER_URL && <button type="button" onClick={useNoidbHeader}>NOID-B 기본 로고로 되돌리기</button>}</div><div className={styles.headerUpload}><strong>하단 로고·안내 이미지 (선택)</strong><small>{footerName || "올리지 않으면 60px 흰 여백으로 끝납니다."}</small><label>하단 이미지 올리기<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFooter} /></label>{footerUrl && <button type="button" onClick={removeFooter}>하단 이미지 빼기</button>}</div><label className={styles.quickModel}>저장할 모델명<input value={modelName} onChange={event => setModelName(event.target.value)} placeholder="예: we0001-new" /></label></article>
+    <div className={styles.quickSteps} onDragEnter={dragDetailPage} onDragOver={dragDetailPage} onDragLeave={leaveDetailPage} onDrop={dropDetailPage}>
+      <article><span>1</span><h3>상세페이지 업로드</h3><label className={`${styles.quickUpload} ${draggingDetail ? styles.quickUploadDragging : ""}`}><strong>{sourceName ? "다른 상세페이지 업로드" : "상세페이지 업로드"}</strong><span>클릭해서 선택하거나 여기에 끌어다 놓으세요</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} /></label>{sourceName && <small>{sourceName}</small>}<div className={styles.headerUpload}><strong>상단 로고 이미지</strong><small>{headerName}</small><label>다른 브랜드 로고 올리기<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseHeader} /></label>{headerUrl !== HEADER_URL && <button type="button" onClick={useNoidbHeader}>NOID-B 기본 로고로 되돌리기</button>}</div><div className={styles.headerUpload}><strong>하단 로고·안내 이미지 (선택)</strong><small>{footerName || "올리지 않으면 60px 흰 여백으로 끝납니다."}</small><label>하단 이미지 올리기<input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFooter} /></label>{footerUrl && <button type="button" onClick={removeFooter}>하단 이미지 빼기</button>}</div><label className={styles.quickModel}>저장할 모델명<input value={modelName} onChange={event => setModelName(event.target.value)} placeholder="예: we0001-new" /></label></article>
       <article><span>2</span><h3>새로운 분위기 선택</h3><div className={styles.styleChoices}>{STYLE_OPTIONS.map(option => <label key={option.value} className={style === option.value ? styles.selectedStyle : ""}><input type="radio" name="quick-style" value={option.value} checked={style === option.value} onChange={() => { setStyle(option.value); setEditedSections([]); setResult(null); setProgress(0); }} /><strong>{option.title}</strong><small>{option.description}</small></label>)}</div><p className={styles.fixedGap}>사진 사이는 보기 편하게 60px 흰 여백으로 연결됩니다.</p></article>
       <article><span>3</span><h3>한 번에 새로 만들기</h3><button className={styles.quickCreate} disabled={!originalSections.length || busy} onClick={create}>{busy ? `AI 편집 ${expectedEdits}장 중 ${Math.min(progress + 1, expectedEdits)}장 작업 중…` : completedEdits ? "이어서 만들기" : "새 상세페이지 만들기"}</button><p>{message}</p>{scanSummary && <div className={styles.scanSummary}><span>찾은 구간 <strong>{scanSummary.found}</strong></span><span>사용할 사진 <strong>{originalSections.length}</strong></span><span>자동 제외 <strong>{scanSummary.excluded}</strong></span></div>}{originalSections.length > 0 && <small>예상 AI 편집: {expectedEdits}회 · 완료: {completedEdits}장</small>}{result && <a className={styles.quickDownload} href={result.dataUrl} download={`${modelName.trim() || "NOID-B-새상세페이지"}.jpg`}>완성 이미지만 저장하기</a>}</article>
     </div>

@@ -22,7 +22,7 @@
 .quickSteps>article>span{display:grid;place-items:center;width:25px;height:25px;border-radius:50%;background:#60766a;color:#fff;font-size:12px;font-weight:800}
 .quickSteps h3{font-size:17px;margin:11px 0 14px;letter-spacing:-.025em}
 .quickSteps p{font-size:13px;color:#6f6a65;line-height:1.55;margin:12px 0}
-.quickUpload{display:flex;align-items:center;justify-content:center;min-height:76px;border:2px dashed #cfc5bb;border-radius:10px;background:#faf9f7;color:#4e4945;font-weight:750;cursor:pointer;text-align:center;padding:12px}
+.quickUpload{display:flex;flex-direction:column;gap:5px;align-items:center;justify-content:center;min-height:76px;border:2px dashed #cfc5bb;border-radius:10px;background:#faf9f7;color:#4e4945;font-weight:750;cursor:pointer;text-align:center;padding:12px}.quickUpload span{font-size:11px;color:#837b74;font-weight:500}.quickUploadDragging{border-color:#60766a;background:#edf3ef;box-shadow:0 0 0 3px #60766a22}
 .quickUpload input{display:none}
 .quickSteps article>small{display:block;color:#837b74;font-size:11px;margin:8px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .quickModel{display:grid;gap:6px;margin-top:12px;font-size:12px;font-weight:700;color:#625d58}
