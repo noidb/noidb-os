@@ -2206,7 +2206,11 @@ function createPurchasePrint_(ss, productMap, items) {
     const group = groups[key];
     const groupLabel = group.date + ' · ' + group.center;
     pickingGroupRows.push(pickingValues.length + 3);
-    pickingValues.push(['합배송 묶음: ' + groupLabel].concat(Array(PO_PICKING_HEADERS.length - 1).fill('')));
+    // 창고번호(E)~업체납품가능수량(M)만 선택해 출력해도 합배송 묶음이 포함되도록
+    // 상품명(H) 열에 묶음 제목을 둡니다.
+    const groupRow = Array(PO_PICKING_HEADERS.length).fill('');
+    groupRow[7] = '합배송 묶음: ' + groupLabel;
+    pickingValues.push(groupRow);
     let orderTotal = 0;
     group.items.sort((a, b) => purchaseDateTimeNumber_(b.orderDate) - purchaseDateTimeNumber_(a.orderDate)
       || String(b.po || '').localeCompare(String(a.po || '')) || String(a.sku || '').localeCompare(String(b.sku || ''))).forEach(item => {
@@ -2251,9 +2255,10 @@ function createPurchasePrint_(ss, productMap, items) {
     pickingDataRows.forEach(row => pickingSheet.setRowHeight(row, 86));
   }
   pickingGroupRows.forEach(row => {
-    // E:N(창고번호~거래처)만 선택·출력할 때 병합 셀이 범위를 강제로 넓히지 않도록 A:D만 병합합니다.
-    pickingSheet.getRange(row, 1, 1, 4).merge().setBackground('#d9eaf7').setFontWeight('bold').setFontSize(12);
-    pickingSheet.getRange(row, 5, 1, PO_PICKING_HEADERS.length - 4).setBackground('#d9eaf7');
+    // 합배송 제목은 상품명(H)에 두어 E:M 출력 범위 안에 포함시킵니다.
+    // 셀을 병합하지 않아 사용자가 원하는 범위만 자유롭게 선택할 수 있게 합니다.
+    pickingSheet.getRange(row, 1, 1, PO_PICKING_HEADERS.length).setBackground('#d9eaf7');
+    pickingSheet.getRange(row, 8).setFontWeight('bold').setFontSize(12);
     pickingSheet.setRowHeight(row, 28);
   });
   pickingTotalRows.forEach(row => {
