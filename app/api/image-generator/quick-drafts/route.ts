@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { del, get, list, put, type ListBlobResultBlob } from "@vercel/blob";
+import { BlobError, BlobPreconditionFailedError, del, get, head, list, put, type ListBlobResultBlob } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -18,6 +18,8 @@ type StoredManifest = {
   draft: unknown;
   assetPathnames: string[];
 };
+
+const SUMMARY_TEXT_LIMIT = 240;
 
 function jsonError(message: string, status: number) {
   return NextResponse.json({ ok: false, error: message }, { status });
@@ -82,10 +84,52 @@ function normalizeManifest(id: string, value: unknown): StoredManifest {
   const raw = asRecord(value);
   const summary = asRecord(raw.summary);
   const assetPathnames = readAssetPathnames(id, raw.assetPathnames);
+  const draft = asRecord(raw.draft);
+  if (String(draft.id || "") !== id) throw new Error("임시저장 작업 번호가 일치하지 않습니다.");
+  if (String(draft.schema || "") !== "noidb.quick-detail-draft" || Number(draft.version) !== 1) {
+    throw new Error("지원하지 않는 임시저장 형식입니다.");
+  }
+  const savedAt = String(draft.savedAt || "");
+  const savedTime = Date.parse(savedAt);
+  const now = Date.now();
+  if (!Number.isFinite(savedTime) || savedTime > now + 5 * 60 * 1000 || savedTime < now - 366 * 24 * 60 * 60 * 1000) {
+    throw new Error("임시저장 시간이 올바르지 않습니다.");
+  }
+  const serializedDraft = JSON.stringify(draft);
+  if (/data:image\//i.test(serializedDraft)) throw new Error("임시저장 정보에 이미지 원본이 직접 포함되어 있습니다.");
+  const referencedAssets = new Set<string>();
+  const collectAssetPaths = (current: unknown) => {
+    if (!current || typeof current !== "object") return;
+    if (Array.isArray(current)) return current.forEach(collectAssetPaths);
+    const record = current as JsonRecord;
+    if (record.kind === "asset" && typeof record.pathname === "string") referencedAssets.add(record.pathname);
+    Object.values(record).forEach(collectAssetPaths);
+  };
+  collectAssetPaths(draft);
+  if ([...referencedAssets].some(pathname => !assetPathnames.includes(pathname)) ||
+      assetPathnames.some(pathname => !referencedAssets.has(pathname))) {
+    throw new Error("임시저장 이미지 목록이 일치하지 않습니다.");
+  }
+  const readCount = (name: string) => {
+    const value = draft[name];
+    return Array.isArray(value) ? value.length : 0;
+  };
   return {
     version: 1,
-    summary: { ...summary, id },
-    draft: raw.draft ?? null,
+    summary: {
+      id,
+      savedAt,
+      modelName: String(draft.modelName || "").slice(0, SUMMARY_TEXT_LIMIT),
+      sourceName: String(draft.sourceName || "").slice(0, SUMMARY_TEXT_LIMIT),
+      originalCount: readCount("originalSections"),
+      editedCount: readCount("editedSections"),
+      finalCount: readCount("finalSections"),
+      complete: Boolean(draft.complete),
+      ...(typeof summary.previewPathname === "string" && referencedAssets.has(summary.previewPathname)
+        ? { previewPathname: summary.previewPathname }
+        : {}),
+    },
+    draft,
     assetPathnames,
   };
 }
@@ -235,6 +279,21 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: false, error: "아직 업로드되지 않은 이미지가 있습니다.", missingPathnames }, { status: 409 });
       }
 
+      const currentManifest = await readManifest(manifestPath(id));
+      let currentManifestEtag: string | undefined;
+      if (currentManifest) {
+        const currentSavedAt = Date.parse(String(currentManifest.summary.savedAt || ""));
+        const incomingSavedAt = Date.parse(String(manifest.summary.savedAt || ""));
+        if (Number.isFinite(currentSavedAt) && incomingSavedAt <= currentSavedAt) {
+          return NextResponse.json({
+            ok: false,
+            error: "다른 PC에 더 최신 임시저장이 있습니다. 목록을 새로고침해 최신 작업을 불러와주세요.",
+            latestSummary: currentManifest.summary,
+          }, { status: 409 });
+        }
+        currentManifestEtag = (await head(manifestPath(id))).etag;
+      }
+
       const serialized = JSON.stringify(manifest);
       if (Buffer.byteLength(serialized, "utf8") > MAX_MANIFEST_BYTES) {
         return jsonError("임시저장 정보가 너무 큽니다. 이미지가 작업정보에 직접 포함되지 않았는지 확인해주세요.", 413);
@@ -242,19 +301,27 @@ export async function POST(request: NextRequest) {
       await put(manifestPath(id), serialized, {
         access: "private",
         addRandomSuffix: false,
-        allowOverwrite: true,
+        ...(currentManifestEtag ? { ifMatch: currentManifestEtag } : { allowOverwrite: false }),
         contentType: "application/json; charset=utf-8",
         cacheControlMaxAge: 60,
       });
 
-      const referenced = new Set([manifestPath(id), ...manifest.assetPathnames]);
-      await deletePaths(existing.map(blob => blob.pathname).filter(pathname => !referenced.has(pathname)));
+      const latestManifest = await readManifest(manifestPath(id));
+      const referenced = new Set([manifestPath(id), ...(latestManifest?.assetPathnames || manifest.assetPathnames)]);
+      const currentBlobs = await listAll(draftPrefix(id));
+      await deletePaths(currentBlobs.map(blob => blob.pathname).filter(pathname => !referenced.has(pathname)));
       const drafts = await pruneOldDrafts();
       return NextResponse.json({ ok: true, summary: manifest.summary, drafts });
     }
 
     return jsonError("지원하지 않는 저장 요청입니다.", 400);
   } catch (error) {
+    if (error instanceof BlobPreconditionFailedError) {
+      return jsonError("다른 PC에서 같은 작업을 먼저 저장했습니다. 목록을 새로고침해 최신 작업을 불러와주세요.", 409);
+    }
+    if (error instanceof BlobError && /already exists|overwrite/i.test(error.message)) {
+      return jsonError("다른 PC에서 같은 작업을 먼저 저장했습니다. 목록을 새로고침해 최신 작업을 불러와주세요.", 409);
+    }
     return jsonError(error instanceof Error ? error.message : "클라우드 임시저장에 실패했습니다.", errorStatus(error));
   }
 }

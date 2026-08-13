@@ -39,8 +39,12 @@ export default function QuickDetailComposer() {
   const [cloudConfigured, setCloudConfigured] = useState(false);
   const [cloudStatus, setCloudStatus] = useState("연동번호를 입력하면 집·창고 PC에서 같은 임시저장을 볼 수 있습니다.");
   const [cloudBusy, setCloudBusy] = useState(false);
-  const cloudSavingRef = useRef(false);
   const cloudPendingRef = useRef<QuickDetailDraft | null>(null);
+  const cloudSavePromiseRef = useRef<Promise<void> | null>(null);
+  const cloudBulkUploadingRef = useRef(false);
+  const deletedDraftIdsRef = useRef(new Set<string>());
+  const localAutosaveTimerRef = useRef<number | null>(null);
+  const cloudAutosaveTimerRef = useRef<number | null>(null);
   const [draggingDetail, setDraggingDetail] = useState(false);
   const [source, setSource] = useState("");
   const [sourceName, setSourceName] = useState("");
@@ -86,6 +90,7 @@ export default function QuickDetailComposer() {
     if (!draftsReady || !originalSections.length) return;
     const timeout = window.setTimeout(() => {
       const id = draftId || `quick-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      if (deletedDraftIdsRef.current.has(id)) return;
       if (!draftId) setDraftId(id);
       const draft: QuickDetailDraft = {
         id,
@@ -108,12 +113,17 @@ export default function QuickDetailComposer() {
       };
       void saveQuickDraft(draft).then(items => setDrafts(items)).catch(() => undefined);
     }, 700);
-    return () => window.clearTimeout(timeout);
+    localAutosaveTimerRef.current = timeout;
+    return () => {
+      window.clearTimeout(timeout);
+      if (localAutosaveTimerRef.current === timeout) localAutosaveTimerRef.current = null;
+    };
   }, [draftsReady, draftId, source, sourceName, headerUrl, headerName, footerUrl, footerName, modelName, style, originalSections, editedSections, finalSections, sectionActions, result, scanSummary]);
 
   useEffect(() => {
     if (!cloudConfigured || !syncCode || !draftId || !originalSections.length) return;
     const timeout = window.setTimeout(() => {
+      if (deletedDraftIdsRef.current.has(draftId)) return;
       cloudPendingRef.current = {
         id: draftId,
         savedAt: new Date().toISOString(),
@@ -135,7 +145,11 @@ export default function QuickDetailComposer() {
       };
       void flushCloudSave();
     }, 4500);
-    return () => window.clearTimeout(timeout);
+    cloudAutosaveTimerRef.current = timeout;
+    return () => {
+      window.clearTimeout(timeout);
+      if (cloudAutosaveTimerRef.current === timeout) cloudAutosaveTimerRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloudConfigured, syncCode, draftId, source, sourceName, headerUrl, headerName, footerUrl, footerName, modelName, style, originalSections, editedSections, finalSections, sectionActions, result, scanSummary]);
 
@@ -153,9 +167,9 @@ export default function QuickDetailComposer() {
 
   async function connectCloud(codeValue = syncCodeInput, remember = true) {
     const code = codeValue.trim();
-    if (!code) {
+    if (code.length < 8) {
       setCloudConfigured(false);
-      setCloudStatus("집·창고 PC에서 함께 사용할 연동번호를 입력해주세요.");
+      setCloudStatus("연동번호는 안전하게 8자리 이상 입력해주세요.");
       return;
     }
     setCloudBusy(true);
@@ -180,34 +194,50 @@ export default function QuickDetailComposer() {
   }
 
   async function flushCloudSave() {
-    if (cloudSavingRef.current || !syncCode || !cloudConfigured) return;
-    cloudSavingRef.current = true;
-    try {
-      while (cloudPendingRef.current) {
-        const pending = cloudPendingRef.current;
-        cloudPendingRef.current = null;
-        setCloudStatus("클라우드에 사진을 안전하게 저장하고 있습니다…");
-        await saveCloudQuickDraft(pending, syncCode, {
-          onProgress: progress => {
-            if (progress.phase === "upload") setCloudStatus(`클라우드 사진 저장 ${progress.completed}/${progress.total}`);
-          },
-        });
+    if (cloudSavePromiseRef.current) return cloudSavePromiseRef.current;
+    if (!syncCode || !cloudConfigured || cloudBulkUploadingRef.current) return;
+    let failedPending: QuickDetailDraft | null = null;
+    const task = (async () => {
+      try {
+        while (cloudPendingRef.current) {
+          const pending = cloudPendingRef.current;
+          cloudPendingRef.current = null;
+          if (deletedDraftIdsRef.current.has(pending.id)) continue;
+          failedPending = pending;
+          setCloudStatus("클라우드에 사진을 안전하게 저장하고 있습니다…");
+          await saveCloudQuickDraft(pending, syncCode, {
+            onProgress: progress => {
+              if (progress.phase === "upload") setCloudStatus(`클라우드 사진 저장 ${progress.completed}/${progress.total}`);
+            },
+          });
+          failedPending = null;
+        }
+        await refreshCloudDrafts(syncCode);
+        setCloudStatus("클라우드 저장 완료 · 다른 PC에서도 이어서 할 수 있습니다.");
+      } catch (error) {
+        if (failedPending && !deletedDraftIdsRef.current.has(failedPending.id)) {
+          const newerPending = cloudPendingRef.current;
+          if (!newerPending || newerPending.savedAt < failedPending.savedAt) cloudPendingRef.current = failedPending;
+        }
+        setCloudStatus(`${error instanceof Error ? error.message : "클라우드 저장에 실패했습니다."} 현재 PC 임시저장은 안전하게 남아 있습니다. 잠시 후 다시 저장해주세요.`);
       }
-      await refreshCloudDrafts(syncCode);
-      setCloudStatus("클라우드 저장 완료 · 다른 PC에서도 이어서 할 수 있습니다.");
-    } catch (error) {
-      setCloudStatus(`${error instanceof Error ? error.message : "클라우드 저장에 실패했습니다."} 현재 PC 임시저장은 안전하게 남아 있습니다.`);
+    })();
+    cloudSavePromiseRef.current = task;
+    try {
+      await task;
     } finally {
-      cloudSavingRef.current = false;
-      if (cloudPendingRef.current) void flushCloudSave();
+      if (cloudSavePromiseRef.current === task) cloudSavePromiseRef.current = null;
     }
   }
 
   async function uploadAllLocalDrafts() {
     if (!cloudConfigured || !syncCode || !drafts.length) return;
     setCloudBusy(true);
+    cloudBulkUploadingRef.current = true;
     try {
+      if (cloudSavePromiseRef.current) await cloudSavePromiseRef.current;
       for (let index = 0; index < drafts.length; index += 1) {
+        if (deletedDraftIdsRef.current.has(drafts[index].id)) continue;
         setCloudStatus(`이 PC 임시저장 올리는 중 ${index + 1}/${drafts.length}`);
         await saveCloudQuickDraft(drafts[index], syncCode);
       }
@@ -216,11 +246,14 @@ export default function QuickDetailComposer() {
     } catch (error) {
       setCloudStatus(`${error instanceof Error ? error.message : "임시저장을 올리지 못했습니다."} 완료된 항목은 그대로 남아 있습니다.`);
     } finally {
+      cloudBulkUploadingRef.current = false;
       setCloudBusy(false);
+      if (cloudPendingRef.current) void flushCloudSave();
     }
   }
 
   function restoreDraft(draft: QuickDetailDraft) {
+    deletedDraftIdsRef.current.delete(draft.id);
     setDraftId(draft.id);
     setSource(draft.source);
     setSourceName(draft.sourceName);
@@ -237,11 +270,11 @@ export default function QuickDetailComposer() {
     setResult(null);
     setScanSummary(draft.scanSummary);
     setProgress(draft.editedSections.length);
-    setMessage("임시저장한 작업을 새 90px 여백과 꽉 찬 사진 규격으로 다시 정리하고 있습니다.");
+    setMessage("임시저장한 작업을 최대 80% 중앙 배치와 90px 여백 규격으로 다시 정리하고 있습니다.");
     if (draft.result && draft.finalSections.length) {
       void composeQuickDetailPage(draft.headerUrl, draft.finalSections, draft.footerUrl || undefined).then(nextResult => {
         setResult(nextResult);
-        setMessage("임시저장한 작업을 불러왔습니다. 사진을 꽉 채우고 90px 여백으로 다시 정리했습니다.");
+        setMessage("임시저장한 작업을 불러왔습니다. 사진을 최대 80%로 가운데 배치하고 90px 여백으로 다시 정리했습니다.");
       });
     }
   }
@@ -272,6 +305,13 @@ export default function QuickDetailComposer() {
   }
 
   async function removeDraft(id: string) {
+    deletedDraftIdsRef.current.add(id);
+    if (localAutosaveTimerRef.current !== null) window.clearTimeout(localAutosaveTimerRef.current);
+    if (cloudAutosaveTimerRef.current !== null) window.clearTimeout(cloudAutosaveTimerRef.current);
+    localAutosaveTimerRef.current = null;
+    cloudAutosaveTimerRef.current = null;
+    if (cloudPendingRef.current?.id === id) cloudPendingRef.current = null;
+    if (cloudSavePromiseRef.current) await cloudSavePromiseRef.current;
     await deleteQuickDraft(id);
     setDrafts(await listQuickDrafts());
     if (cloudConfigured && syncCode) {
@@ -284,7 +324,25 @@ export default function QuickDetailComposer() {
       }
     }
     setSelectedDraftIds(current => current.filter(item => item !== id));
-    if (draftId === id) setDraftId("");
+    if (draftId === id) {
+      setDraftId("");
+      setSource("");
+      setSourceName("");
+      setHeaderUrl(HEADER_URL);
+      setHeaderName("노이드비-상단이미지.jpg");
+      setFooterUrl("");
+      setFooterName("");
+      setModelName("");
+      setStyle("clean");
+      setOriginalSections([]);
+      setEditedSections([]);
+      setFinalSections([]);
+      setSectionActions({});
+      setResult(null);
+      setScanSummary(null);
+      setProgress(0);
+      setMessage("상세페이지를 업로드해주세요.");
+    }
   }
 
   function toggleDraftSelection(id: string) {
@@ -307,7 +365,8 @@ export default function QuickDetailComposer() {
   async function saveSelectedDrafts() {
     const chosen: QuickDetailDraft[] = [];
     for (const item of draftItems.filter(value => selectedDraftIds.includes(value.id))) {
-      if (item.localDraft?.result && item.localDraft.finalSections.length) {
+      const localIsCurrent = item.localDraft && (!item.cloudSummary || item.localDraft.savedAt >= item.cloudSummary.savedAt);
+      if (localIsCurrent && item.localDraft?.result && item.localDraft.finalSections.length) {
         chosen.push(item.localDraft);
         continue;
       }
@@ -603,8 +662,8 @@ export default function QuickDetailComposer() {
         <strong>집·창고 PC 임시저장 연동</strong>
         <p>{cloudStatus}</p>
       </div>
-      <label>연동번호<input type="password" value={syncCodeInput} onChange={event => setSyncCodeInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void connectCloud(); }} placeholder="두 PC에 같은 번호 입력" autoComplete="off" /></label>
-      <button type="button" disabled={cloudBusy || !syncCodeInput.trim()} onClick={() => void connectCloud()}>{cloudBusy ? "연결 중…" : cloudConfigured ? "목록 새로고침" : "연결하기"}</button>
+      <label>연동번호<input type="password" value={syncCodeInput} onChange={event => setSyncCodeInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void connectCloud(); }} placeholder="두 PC에 같은 8자리 이상 번호" autoComplete="off" /></label>
+      <button type="button" disabled={cloudBusy || syncCodeInput.trim().length < 8} onClick={() => void connectCloud()}>{cloudBusy ? "연결 중…" : cloudConfigured ? "목록 새로고침" : "연결하기"}</button>
       {cloudConfigured && drafts.length > 0 && <button type="button" className={styles.cloudUploadAll} disabled={cloudBusy} onClick={() => void uploadAllLocalDrafts()}>이 PC 임시저장 모두 올리기</button>}
     </section>
     {draftItems.length > 0 && <section className={styles.quickDrafts}>
