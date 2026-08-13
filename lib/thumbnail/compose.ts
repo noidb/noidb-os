@@ -97,7 +97,7 @@ function enhancePixels(
  */
 export async function composeWhiteThumbnail(
   sourceDataUrl: string,
-  fillRatio = 0.84,
+  fillRatio = 0.8,
   crop?: CropRect | null
 ): Promise<string> {
   const img = await loadImageElement(sourceDataUrl);
@@ -116,7 +116,7 @@ export async function composeWhiteThumbnail(
   const sw = crop ? Math.max(1, Math.round(crop.w * img.width)) : img.width;
   const sh = crop ? Math.max(1, Math.round(crop.h * img.height)) : img.height;
 
-  const maxSide = Math.round(size * Math.min(0.88, Math.max(0.8, fillRatio)));
+  const maxSide = Math.round(size * Math.min(0.8, Math.max(0.3, fillRatio)));
   const scale = Math.min(maxSide / sw, maxSide / sh);
   const drawW = Math.round(sw * scale);
   const drawH = Math.round(sh * scale);
@@ -150,7 +150,8 @@ export async function normalizeToJpg1000(sourceDataUrl: string): Promise<string>
   ctx.fillRect(0, 0, size, size);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
-  const scale = Math.min(size / img.width, size / img.height);
+  const maxSide = Math.round(size * 0.8);
+  const scale = Math.min(maxSide / img.width, maxSide / img.height);
   const dw = Math.round(img.width * scale);
   const dh = Math.round(img.height * scale);
   ctx.drawImage(img, Math.round((size - dw) / 2), Math.round((size - dh) / 2), dw, dh);
