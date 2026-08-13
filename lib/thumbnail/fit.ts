@@ -61,9 +61,9 @@ export async function fitToWhiteCanvas(
   ctx.fillStyle = "#FFFFFF";
   ctx.fillRect(0, 0, size, size);
 
-  const baseFill = 0.84;
+  const baseFill = 0.8;
   const scaleFactor = Math.max(0.3, Math.min(2.5, adjust.scale));
-  const maxSide = size * baseFill * scaleFactor;
+  const maxSide = size * Math.min(baseFill, baseFill * scaleFactor);
   const scale = Math.min(maxSide / img.width, maxSide / img.height);
   const drawW = Math.max(1, Math.round(img.width * scale));
   const drawH = Math.max(1, Math.round(img.height * scale));

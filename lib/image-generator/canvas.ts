@@ -25,7 +25,7 @@ export async function normalizeSquare(dataUrl: string) {
   if (!ctx) throw new Error("이미지 변환을 시작하지 못했습니다.");
   ctx.fillStyle = "#FFFFFF";
   ctx.fillRect(0, 0, 1000, 1000);
-  drawContained(ctx, image, 0, 0, 1000, 1000);
+  drawContained(ctx, image, 100, 100, 800, 800);
   return canvas.toDataURL("image/jpeg", 0.94);
 }
 
@@ -63,7 +63,10 @@ export async function composeAllColorCut(colorAssets: GeneratedAsset[], colors: 
 
 export async function composeDetailPage(headerDataUrl: string, assets: GeneratedAsset[]) {
   const images = await Promise.all([headerDataUrl, ...assets.map(asset => asset.dataUrl)].map(loadImage));
-  const heights = images.map(image => Math.round(image.naturalHeight * (780 / image.naturalWidth)));
+  const headerHeight = Math.round(images[0].naturalHeight * (780 / images[0].naturalWidth));
+  const contentWidth = Math.round(780 * 0.8);
+  const contentX = Math.round((780 - contentWidth) / 2);
+  const heights = [headerHeight, ...images.slice(1).map(image => Math.round(image.naturalHeight * (contentWidth / image.naturalWidth)))];
   const canvas = document.createElement("canvas");
   canvas.width = 780;
   canvas.height = heights.reduce((sum, value) => sum + value, 0);
@@ -73,7 +76,8 @@ export async function composeDetailPage(headerDataUrl: string, assets: Generated
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   let y = 0;
   images.forEach((image, index) => {
-    ctx.drawImage(image, 0, y, 780, heights[index]);
+    if (index === 0) ctx.drawImage(image, 0, y, 780, heights[index]);
+    else ctx.drawImage(image, contentX, y, contentWidth, heights[index]);
     y += heights[index];
   });
   return canvas.toDataURL("image/jpeg", 0.91);

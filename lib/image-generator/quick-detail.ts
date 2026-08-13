@@ -108,7 +108,9 @@ function drawFullSquare(ctx: CanvasRenderingContext2D, image: HTMLImageElement, 
       ctx.filter = "contrast(1.025) saturate(1.015)";
     }
   }
-  ctx.drawImage(source, sourceX, sourceY, sourceSize, sourceSize, x, y, size, size);
+  const productSize = Math.round(size * 0.8);
+  const inset = Math.round((size - productSize) / 2);
+  ctx.drawImage(source, sourceX, sourceY, sourceSize, sourceSize, x + inset, y + inset, productSize, productSize);
   ctx.restore();
 }
 
@@ -145,7 +147,7 @@ export function readImageFile(file: File) {
 
 export async function splitDetailPage(sourceUrl: string, headerUrl: string): Promise<QuickDetailSection[]> {
   const source = await loadImage(sourceUrl);
-  void headerUrl;
+  const header = await loadImage(headerUrl);
   const sections: QuickDetailSection[] = [];
   const scanCanvas = document.createElement("canvas");
   const scanWidth = Math.min(240, source.naturalWidth);
@@ -168,7 +170,34 @@ export async function splitDetailPage(sourceUrl: string, headerUrl: string): Pro
 
   const minWhiteBand = Math.max(3, Math.round(scanWidth * 0.012));
   const minSection = Math.round(scanWidth * 0.42);
-  const boundaries = [0];
+  // Remove an already embedded copy of the selected header. This prevents the
+  // small "SINCE 2017®" line at the bottom of the header from becoming its own
+  // product section and being inserted twice in the rebuilt detail page.
+  let contentStart = 0;
+  const expectedHeaderHeight = Math.min(source.naturalHeight, Math.round(source.naturalWidth * (header.naturalHeight / header.naturalWidth)));
+  if (expectedHeaderHeight > 0) {
+    const compareWidth = 80;
+    const compareHeight = Math.max(1, Math.round(compareWidth * (header.naturalHeight / header.naturalWidth)));
+    const sourceSample = document.createElement("canvas");
+    const headerSample = document.createElement("canvas");
+    sourceSample.width = headerSample.width = compareWidth;
+    sourceSample.height = headerSample.height = compareHeight;
+    const sourceContext = sourceSample.getContext("2d", { willReadFrequently: true });
+    const headerContext = headerSample.getContext("2d", { willReadFrequently: true });
+    if (sourceContext && headerContext) {
+      sourceContext.drawImage(source, 0, 0, source.naturalWidth, expectedHeaderHeight, 0, 0, compareWidth, compareHeight);
+      headerContext.drawImage(header, 0, 0, compareWidth, compareHeight);
+      const a = sourceContext.getImageData(0, 0, compareWidth, compareHeight).data;
+      const b = headerContext.getImageData(0, 0, compareWidth, compareHeight).data;
+      let difference = 0;
+      for (let index = 0; index < a.length; index += 4) {
+        difference += Math.abs(a[index] - b[index]) + Math.abs(a[index + 1] - b[index + 1]) + Math.abs(a[index + 2] - b[index + 2]);
+      }
+      const meanDifference = difference / (compareWidth * compareHeight * 3);
+      if (meanDifference < 28) contentStart = Math.round(expectedHeaderHeight * scanScale);
+    }
+  }
+  const boundaries = [contentStart];
   for (let start = 0; start < whiteRows.length;) {
     if (!whiteRows[start]) { start += 1; continue; }
     let end = start + 1;
@@ -184,7 +213,7 @@ export async function splitDetailPage(sourceUrl: string, headerUrl: string): Pro
   // 흰 여백 경계가 거의 없는 상세페이지는 기존의 가로 길이 단위로 안전하게 나눕니다.
   if (boundaries.length < 4) {
     boundaries.length = 0;
-    for (let y = 0; y < source.naturalHeight; y += source.naturalWidth) boundaries.push(Math.round(y * scanScale));
+    for (let y = contentStart / scanScale; y < source.naturalHeight; y += source.naturalWidth) boundaries.push(Math.round(y * scanScale));
     boundaries.push(scanCanvas.height);
   }
 
