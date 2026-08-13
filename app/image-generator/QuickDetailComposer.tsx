@@ -1,12 +1,24 @@
 "use client";
 
-import { ChangeEvent, DragEvent, useEffect, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
 import { composeQuickDetailPage, readImageFile, resizeSectionTo1000, splitDetailPage, type QuickDetailSection, type QuickDetailStyle } from "@/lib/image-generator/quick-detail";
 import { deleteQuickDraft, listQuickDrafts, MAX_QUICK_DRAFTS, saveQuickDraft, type QuickDetailDraft } from "@/lib/image-generator/quick-drafts";
+import {
+  deleteCloudQuickDraft,
+  getQuickDraftCloudStatus,
+  hydrateCloudQuickDraft,
+  listCloudQuickDrafts,
+  loadCloudQuickDraftPreview,
+  mergeCloudSummaries,
+  saveCloudQuickDraft,
+  type CloudQuickDraftSummary,
+  type QuickDraftCloudListItem,
+} from "@/lib/image-generator/quick-draft-cloud";
 import styles from "./styles.module.css";
 
 const HEADER_URL = "/노이드비-상단이미지.jpg";
+const SYNC_CODE_STORAGE_KEY = "noidb-quick-detail-sync-code";
 const STYLE_OPTIONS: Array<{ value: QuickDetailStyle; title: string; description: string }> = [
   { value: "clean", title: "밝은 주얼리 화이트", description: "밝고 깨끗한 쇼핑몰 제품사진 분위기" },
   { value: "ivory", title: "고급 아이보리", description: "따뜻하고 부드러운 고급 주얼리 분위기" },
@@ -20,6 +32,15 @@ export default function QuickDetailComposer() {
   const [drafts, setDrafts] = useState<QuickDetailDraft[]>([]);
   const [selectedDraftIds, setSelectedDraftIds] = useState<string[]>([]);
   const [draftsReady, setDraftsReady] = useState(false);
+  const [cloudDrafts, setCloudDrafts] = useState<CloudQuickDraftSummary[]>([]);
+  const [cloudPreviews, setCloudPreviews] = useState<Record<string, string>>({});
+  const [syncCode, setSyncCode] = useState("");
+  const [syncCodeInput, setSyncCodeInput] = useState("");
+  const [cloudConfigured, setCloudConfigured] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState("연동번호를 입력하면 집·창고 PC에서 같은 임시저장을 볼 수 있습니다.");
+  const [cloudBusy, setCloudBusy] = useState(false);
+  const cloudSavingRef = useRef(false);
+  const cloudPendingRef = useRef<QuickDetailDraft | null>(null);
   const [draggingDetail, setDraggingDetail] = useState(false);
   const [source, setSource] = useState("");
   const [sourceName, setSourceName] = useState("");
@@ -40,16 +61,29 @@ export default function QuickDetailComposer() {
   const [message, setMessage] = useState("상세페이지를 업로드해주세요.");
   const expectedEdits = originalSections.filter(section => (sectionActions[section.id] || "edit") === "edit").length;
   const completedEdits = editedSections.filter(section => originalSections.some(original => original.id === section.id) && (sectionActions[section.id] || "edit") === "edit").length;
+  const draftItems = useMemo(() => mergeCloudSummaries(drafts, cloudDrafts, MAX_QUICK_DRAFTS), [drafts, cloudDrafts]);
 
   useEffect(() => {
     void listQuickDrafts().then(items => {
       setDrafts(items);
       setDraftsReady(true);
     }).catch(() => setDraftsReady(true));
+    const storedCode = window.localStorage.getItem(SYNC_CODE_STORAGE_KEY) || "";
+    if (storedCode) {
+      setSyncCode(storedCode);
+      setSyncCodeInput(storedCode);
+    }
   }, []);
 
   useEffect(() => {
-    if (!draftsReady || !source || !originalSections.length) return;
+    if (!draftsReady || !syncCode) return;
+    void connectCloud(syncCode, false);
+    // 연동번호가 바뀔 때만 클라우드 목록을 다시 읽습니다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftsReady, syncCode]);
+
+  useEffect(() => {
+    if (!draftsReady || !originalSections.length) return;
     const timeout = window.setTimeout(() => {
       const id = draftId || `quick-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       if (!draftId) setDraftId(id);
@@ -77,6 +111,115 @@ export default function QuickDetailComposer() {
     return () => window.clearTimeout(timeout);
   }, [draftsReady, draftId, source, sourceName, headerUrl, headerName, footerUrl, footerName, modelName, style, originalSections, editedSections, finalSections, sectionActions, result, scanSummary]);
 
+  useEffect(() => {
+    if (!cloudConfigured || !syncCode || !draftId || !originalSections.length) return;
+    const timeout = window.setTimeout(() => {
+      cloudPendingRef.current = {
+        id: draftId,
+        savedAt: new Date().toISOString(),
+        modelName,
+        source,
+        sourceName,
+        headerUrl,
+        headerName,
+        footerUrl,
+        footerName,
+        style,
+        originalSections,
+        editedSections,
+        finalSections,
+        sectionActions,
+        result,
+        scanSummary,
+        preview: editedSections[0]?.dataUrl || originalSections[0]?.dataUrl || source,
+      };
+      void flushCloudSave();
+    }, 4500);
+    return () => window.clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cloudConfigured, syncCode, draftId, source, sourceName, headerUrl, headerName, footerUrl, footerName, modelName, style, originalSections, editedSections, finalSections, sectionActions, result, scanSummary]);
+
+  async function refreshCloudDrafts(code: string) {
+    const items = await listCloudQuickDrafts(code);
+    setCloudDrafts(items);
+    const previews = await Promise.all(items.map(async item => {
+      if (!item.previewPathname) return [item.id, ""] as const;
+      try { return [item.id, await loadCloudQuickDraftPreview(item, code)] as const; }
+      catch { return [item.id, ""] as const; }
+    }));
+    setCloudPreviews(Object.fromEntries(previews));
+    return items;
+  }
+
+  async function connectCloud(codeValue = syncCodeInput, remember = true) {
+    const code = codeValue.trim();
+    if (!code) {
+      setCloudConfigured(false);
+      setCloudStatus("집·창고 PC에서 함께 사용할 연동번호를 입력해주세요.");
+      return;
+    }
+    setCloudBusy(true);
+    setCloudStatus("클라우드 임시저장에 연결하고 있습니다…");
+    try {
+      const status = await getQuickDraftCloudStatus(code);
+      if (!status.configured) throw new Error(status.error || "클라우드 임시저장이 아직 설정되지 않았습니다.");
+      setSyncCode(code);
+      setSyncCodeInput(code);
+      setCloudConfigured(true);
+      if (remember) window.localStorage.setItem(SYNC_CODE_STORAGE_KEY, code);
+      const items = await refreshCloudDrafts(code);
+      setCloudStatus(`클라우드 연결 완료 · 공유 임시저장 ${items.length}개`);
+    } catch (error) {
+      setCloudConfigured(false);
+      setCloudDrafts([]);
+      setCloudPreviews({});
+      setCloudStatus(error instanceof Error ? error.message : "클라우드에 연결하지 못했습니다.");
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function flushCloudSave() {
+    if (cloudSavingRef.current || !syncCode || !cloudConfigured) return;
+    cloudSavingRef.current = true;
+    try {
+      while (cloudPendingRef.current) {
+        const pending = cloudPendingRef.current;
+        cloudPendingRef.current = null;
+        setCloudStatus("클라우드에 사진을 안전하게 저장하고 있습니다…");
+        await saveCloudQuickDraft(pending, syncCode, {
+          onProgress: progress => {
+            if (progress.phase === "upload") setCloudStatus(`클라우드 사진 저장 ${progress.completed}/${progress.total}`);
+          },
+        });
+      }
+      await refreshCloudDrafts(syncCode);
+      setCloudStatus("클라우드 저장 완료 · 다른 PC에서도 이어서 할 수 있습니다.");
+    } catch (error) {
+      setCloudStatus(`${error instanceof Error ? error.message : "클라우드 저장에 실패했습니다."} 현재 PC 임시저장은 안전하게 남아 있습니다.`);
+    } finally {
+      cloudSavingRef.current = false;
+      if (cloudPendingRef.current) void flushCloudSave();
+    }
+  }
+
+  async function uploadAllLocalDrafts() {
+    if (!cloudConfigured || !syncCode || !drafts.length) return;
+    setCloudBusy(true);
+    try {
+      for (let index = 0; index < drafts.length; index += 1) {
+        setCloudStatus(`이 PC 임시저장 올리는 중 ${index + 1}/${drafts.length}`);
+        await saveCloudQuickDraft(drafts[index], syncCode);
+      }
+      await refreshCloudDrafts(syncCode);
+      setCloudStatus(`이 PC 임시저장 ${drafts.length}개를 클라우드에 올렸습니다.`);
+    } catch (error) {
+      setCloudStatus(`${error instanceof Error ? error.message : "임시저장을 올리지 못했습니다."} 완료된 항목은 그대로 남아 있습니다.`);
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
   function restoreDraft(draft: QuickDetailDraft) {
     setDraftId(draft.id);
     setSource(draft.source);
@@ -103,9 +246,43 @@ export default function QuickDetailComposer() {
     }
   }
 
+  async function restoreDraftItem(item: QuickDraftCloudListItem) {
+    const localIsCurrent = item.localDraft && (!item.cloudSummary || item.localDraft.savedAt >= item.cloudSummary.savedAt);
+    if (localIsCurrent) {
+      restoreDraft(item.localDraft!);
+      return;
+    }
+    if (!item.cloudSummary || !syncCode) return;
+    setCloudBusy(true);
+    setCloudStatus("클라우드에서 작업 사진을 불러오고 있습니다…");
+    try {
+      const draft = await hydrateCloudQuickDraft(item.id, syncCode, {
+        recompose: composeQuickDetailPage,
+        onProgress: progress => setCloudStatus(`클라우드 사진 불러오기 ${progress.completed}/${progress.total}`),
+      });
+      await saveQuickDraft(draft);
+      setDrafts(await listQuickDrafts());
+      restoreDraft(draft);
+      setCloudStatus("클라우드 작업을 이 PC로 불러왔습니다.");
+    } catch (error) {
+      setCloudStatus(error instanceof Error ? error.message : "클라우드 작업을 불러오지 못했습니다.");
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
   async function removeDraft(id: string) {
     await deleteQuickDraft(id);
     setDrafts(await listQuickDrafts());
+    if (cloudConfigured && syncCode) {
+      try {
+        await deleteCloudQuickDraft(id, syncCode);
+        await refreshCloudDrafts(syncCode);
+        setCloudStatus("집·창고 PC 공용 임시저장에서 삭제했습니다.");
+      } catch (error) {
+        setCloudStatus(`${error instanceof Error ? error.message : "클라우드에서 삭제하지 못했습니다."} 이 PC에서는 삭제했습니다.`);
+      }
+    }
     setSelectedDraftIds(current => current.filter(item => item !== id));
     if (draftId === id) setDraftId("");
   }
@@ -128,7 +305,18 @@ export default function QuickDetailComposer() {
   }
 
   async function saveSelectedDrafts() {
-    const chosen = drafts.filter(draft => selectedDraftIds.includes(draft.id) && draft.result && draft.finalSections.length);
+    const chosen: QuickDetailDraft[] = [];
+    for (const item of draftItems.filter(value => selectedDraftIds.includes(value.id))) {
+      if (item.localDraft?.result && item.localDraft.finalSections.length) {
+        chosen.push(item.localDraft);
+        continue;
+      }
+      if (item.cloudSummary?.complete && syncCode) {
+        try {
+          chosen.push(await hydrateCloudQuickDraft(item.id, syncCode, { recompose: composeQuickDetailPage }));
+        } catch { /* 저장 가능한 작업만 모읍니다. */ }
+      }
+    }
     if (!chosen.length) return setMessage("완성된 임시저장을 한 개 이상 선택해주세요.");
     setBusy(true);
     try {
@@ -410,17 +598,30 @@ export default function QuickDetailComposer() {
     </div>
     {originalSections.length > 0 && !result && <div className={styles.preEditReview}><div><h3>편집 전 사진 확인</h3><p>제품컷·착용컷 구분이 틀리면 먼저 바꿔주세요. 불필요한 사진은 삭제하고, AI 비용 없이 그대로 쓸 사진은 `편집 제외`를 누르세요.</p></div><div className={styles.reviewGrid}>{originalSections.map((section, index) => { const original = sectionActions[section.id] === "original"; return <article key={section.id}><img src={section.dataUrl} alt={`선별 사진 ${index + 1}`} /><button type="button" className={styles.kindToggle} onClick={() => toggleSectionKind(section.id)}>{section.kind === "wear" ? "착용컷 → 제품컷으로 변경" : "제품컷 → 착용컷으로 변경"}</button><strong>{index + 1}. {section.kind === "wear" ? "착용컷" : "제품컷"}</strong><small>{section.reason}</small><div><button type="button" className={original ? styles.reviewSelected : ""} onClick={() => toggleSectionEdit(section.id)}>{original ? "원본 사용 중" : "편집 제외"}</button><button type="button" className={styles.reviewDelete} onClick={() => deleteSection(section.id)}>삭제</button></div></article>; })}</div><p className={styles.reviewCost}>최종 사용 {originalSections.length}장 · 예상 AI 편집 <strong>{expectedEdits}회</strong> · 원본 사용 {originalSections.length - expectedEdits}장</p></div>}
     {result && <div className={styles.quickResult}><div><strong>완성 미리보기</strong><span>{result.width}×{result.height}px · 최종 사용 {result.sectionCount}장</span><small>제품 무늬·잠금장치·크기가 원본과 같은지 확대해서 확인해주세요.</small><button className={styles.zipDownload} disabled={busy} onClick={saveZip}>상세페이지 + 개별사진 ZIP 저장</button></div><a href={result.dataUrl} target="_blank" rel="noreferrer"><img src={result.dataUrl} alt="AI로 새롭게 만든 상세페이지" /></a></div>}
-    {drafts.length > 0 && <section className={styles.quickDrafts}>
-      <div className={styles.draftToolbar}>
-        <div><h3>임시저장 목록 <span>{drafts.length}/{MAX_QUICK_DRAFTS}</span></h3><p>작업 중인 내용은 자동으로 저장됩니다. 완성된 작업을 선택하면 한꺼번에 저장할 수 있습니다.</p></div>
-        <div><label><input type="checkbox" checked={selectedDraftIds.length === drafts.length && drafts.length > 0} onChange={() => setSelectedDraftIds(selectedDraftIds.length === drafts.length ? [] : drafts.map(draft => draft.id))} /> 전체 선택</label><button type="button" disabled={busy || !selectedDraftIds.length} onClick={saveSelectedDrafts}>선택한 작업 일괄저장</button></div>
+    <section className={styles.cloudSync}>
+      <div>
+        <strong>집·창고 PC 임시저장 연동</strong>
+        <p>{cloudStatus}</p>
       </div>
-      <div className={styles.draftGrid}>{drafts.map(draft => <article key={draft.id} className={draft.id === draftId ? styles.currentDraft : ""}>
-        <label className={styles.draftCheck}><input type="checkbox" checked={selectedDraftIds.includes(draft.id)} onChange={() => toggleDraftSelection(draft.id)} /><span>선택</span></label>
-        <img src={draft.preview} alt={`${draft.modelName || "이름 없는 작업"} 미리보기`} />
-        <div><strong>{draft.modelName || "이름 없는 작업"}</strong><small>{new Date(draft.savedAt).toLocaleString("ko-KR")}</small><span>사진 {draft.originalSections.length}장 · AI 완료 {draft.editedSections.length}장{draft.result ? " · 완성" : ""}</span></div>
-        <footer><button type="button" onClick={() => restoreDraft(draft)}>이어서 작업</button><button type="button" onClick={() => void removeDraft(draft.id)}>삭제</button></footer>
-      </article>)}</div>
+      <label>연동번호<input type="password" value={syncCodeInput} onChange={event => setSyncCodeInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void connectCloud(); }} placeholder="두 PC에 같은 번호 입력" autoComplete="off" /></label>
+      <button type="button" disabled={cloudBusy || !syncCodeInput.trim()} onClick={() => void connectCloud()}>{cloudBusy ? "연결 중…" : cloudConfigured ? "목록 새로고침" : "연결하기"}</button>
+      {cloudConfigured && drafts.length > 0 && <button type="button" className={styles.cloudUploadAll} disabled={cloudBusy} onClick={() => void uploadAllLocalDrafts()}>이 PC 임시저장 모두 올리기</button>}
+    </section>
+    {draftItems.length > 0 && <section className={styles.quickDrafts}>
+      <div className={styles.draftToolbar}>
+        <div><h3>임시저장 목록 <span>{draftItems.length}/{MAX_QUICK_DRAFTS}</span></h3><p>현재 PC는 즉시 저장하고, 연결되면 집·창고 공용 목록에도 자동 저장합니다.</p></div>
+        <div><label><input type="checkbox" checked={selectedDraftIds.length === draftItems.length && draftItems.length > 0} onChange={() => setSelectedDraftIds(selectedDraftIds.length === draftItems.length ? [] : draftItems.map(draft => draft.id))} /> 전체 선택</label><button type="button" disabled={busy || cloudBusy || !selectedDraftIds.length} onClick={saveSelectedDrafts}>선택한 작업 일괄저장</button></div>
+      </div>
+      <div className={styles.draftGrid}>{draftItems.map(item => {
+        const preview = item.localDraft?.preview || cloudPreviews[item.id];
+        return <article key={item.id} className={item.id === draftId ? styles.currentDraft : ""}>
+          <label className={styles.draftCheck}><input type="checkbox" checked={selectedDraftIds.includes(item.id)} onChange={() => toggleDraftSelection(item.id)} /><span>선택</span></label>
+          {preview ? <img src={preview} alt={`${item.modelName || "이름 없는 작업"} 미리보기`} /> : <div className={styles.draftPlaceholder}>미리보기 불러오는 중</div>}
+          <span className={styles.draftLocation}>{item.location === "both" ? "집·창고 공용" : item.location === "cloud" ? "다른 PC 저장" : "현재 PC 저장"}</span>
+          <div><strong>{item.modelName || "이름 없는 작업"}</strong><small>{new Date(item.savedAt).toLocaleString("ko-KR")}</small><span>사진 {item.originalCount}장 · AI 완료 {item.editedCount}장{item.complete ? " · 완성" : ""}</span></div>
+          <footer><button type="button" disabled={cloudBusy} onClick={() => void restoreDraftItem(item)}>이어서 작업</button><button type="button" disabled={cloudBusy} onClick={() => void removeDraft(item.id)}>삭제</button></footer>
+        </article>;
+      })}</div>
     </section>}
   </section>;
 }

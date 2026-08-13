@@ -10,9 +10,10 @@
     "coupang:watch": "node automation/coupang-po/collector.mjs --watch",
     "coupang:auto": "node automation/coupang-po/collector.mjs --once",
     "coupang:hanjin": "node automation/coupang-po/hanjin-generator.mjs --force",
-    "test:image-generator": "node scripts/test-image-generator.mjs"
+    "test:image-generator": "node scripts/test-image-generator.mjs && node scripts/test-quick-draft-cloud.mjs"
   },
   "dependencies": {
+    "@vercel/blob": "^2.8.0",
     "exceljs": "^4.4.0",
     "jszip": "^3.10.1",
     "next": "14.2.31",
