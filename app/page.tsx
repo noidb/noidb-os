@@ -1729,8 +1729,8 @@ export default function Home() {
       <header className="hero">
         <div className="heroBrandArea">
           <div className="brandLockup">
-            <span className="lauraMark" aria-hidden="true">L</span>
-            <div><p className="lauraWordmark">LAURA OS</p><span>Seller Workspace</span></div>
+            <span className="brandMark" aria-hidden="true">N</span>
+            <div><p className="brandWordmark">NOID-B OS</p><span>Seller Workspace</span></div>
           </div>
           <h1>AI 상품등록 도우미</h1>
           <div className="heroUtilityActions">

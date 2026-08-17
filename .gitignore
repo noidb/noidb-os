@@ -5,6 +5,7 @@ out/
 .env
 .env.*
 .env.local
+!.env.example
 test_*.xlsx
 *.tsbuildinfo
 .DS_Store

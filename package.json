@@ -2,6 +2,7 @@
   "name": "laura-os",
   "version": "2.0.0",
   "private": true,
+  "description": "NOID-B OS",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
