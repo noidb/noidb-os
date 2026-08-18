@@ -70,8 +70,9 @@ Write-Host "임시 터널을 시작합니다 (계정 로그인 없는 Quick Tunn
 Write-Host ""
 
 $logFile = Join-Path $env:TEMP ("noidb-tunnel-" + (Get-Random) + ".log")
+$errLogFile = Join-Path $env:TEMP ("noidb-tunnel-err-" + (Get-Random) + ".log")
 $process = Start-Process -FilePath $cloudflaredPath -ArgumentList "tunnel", "--url", "http://localhost:3000" `
-    -RedirectStandardError $logFile -RedirectStandardOutput $logFile -PassThru -WindowStyle Hidden
+    -RedirectStandardOutput $logFile -RedirectStandardError $errLogFile -PassThru -WindowStyle Hidden
 
 Write-Host "터널 프로세스를 시작했습니다 (PID: $($process.Id)). 주소가 발급될 때까지 기다립니다..."
 
@@ -80,10 +81,12 @@ $attempts = 0
 while (-not $url -and $attempts -lt 30) {
     Start-Sleep -Seconds 1
     $attempts++
-    if (Test-Path $logFile) {
-        $content = Get-Content $logFile -Raw -ErrorAction SilentlyContinue
-        if ($content -match "https://[a-zA-Z0-9\-]+\.trycloudflare\.com") {
-            $url = $Matches[0]
+    foreach ($candidateLog in @($errLogFile, $logFile)) {
+        if (-not $url -and (Test-Path $candidateLog)) {
+            $content = Get-Content $candidateLog -Raw -ErrorAction SilentlyContinue
+            if ($content -match "https://[a-zA-Z0-9\-]+\.trycloudflare\.com") {
+                $url = $Matches[0]
+            }
         }
     }
 }
@@ -99,6 +102,7 @@ if ($url) {
     Write-Host "종료하려면 이 창에서 Ctrl+C를 누르세요 (기존 개발 서버는 종료되지 않습니다)."
 } else {
     Write-Host "[안내] 30초 안에 주소를 확인하지 못했습니다. 로그 파일을 확인해주세요:" -ForegroundColor Yellow
+    Write-Host "  $errLogFile"
     Write-Host "  $logFile"
     Write-Host "터널 프로세스(PID $($process.Id))는 계속 실행 중입니다 — 임의로 종료하지 않았습니다."
 }

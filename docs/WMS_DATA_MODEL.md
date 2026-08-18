@@ -73,6 +73,13 @@ WarehouseLocation
 이 두 흐름은 공통적으로 "요청 → 대기(pending) → 승인/거부 → 외부 반영"의 상태 전이를 가지며,
 `ScheduleChangeRequest`와 `VendorOrder`의 상태(enum)로 표현한다.
 
+## 6. 통합 피킹 / 쉽먼트별 포장·출력 (2026-08-18 확정, 구현은 Sprint 2)
+
+피킹은 쉽먼트별로 나누지 않고, 여러 쉽먼트의 SKU를 합쳐 구역→선반→BOX→모델→SKU 순서로 통합
+피킹한다(같은 BOX를 한 번만 여는 것이 목표). 포장과 출력만 쉽먼트별로 분리한다. 자세한 원칙과
+예시는 `docs/WMS_SPRINTS.md`의 Sprint 2 절 참고. 관련 타입: `Shipment.shipmentNumber`,
+`PickingItemShipmentAllocation`(`lib/wms/types.ts`).
+
 ## 6. 쉽먼트 및 문서 자동화
 
 - `Shipment`는 거래명세서 PDF, 라벨 PDF의 다운로드/출력 상태를 함께 추적한다.

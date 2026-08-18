@@ -366,6 +366,21 @@ export interface PickingItem {
   updatedAt: string;
 }
 
+/**
+ * 통합 피킹 중 하나의 PickingItem(찾은 수량)을 쉽먼트별 바구니/카트로 나눈 분배 기록.
+ * "총 7개 찾기 → 바구니1/SH-001→2개, 바구니3/SH-003→4개, 바구니5/SH-005→1개"의 각 줄에 해당한다.
+ * 다음 스프린트(쉽먼트별 포장/출력) 구현 전까지는 타입 정의만 존재한다.
+ */
+export interface PickingItemShipmentAllocation {
+  id: string;
+  pickingItemId: string;
+  shipmentNumber: string;
+  /** 분류 단계에서 담는 바구니 또는 카트 번호 */
+  basketNumber: string;
+  allocatedQuantity: number;
+  createdAt: string;
+}
+
 // ─────────────────────────────────────────────
 // 거래처 발주 (부족분 자동 연결)
 // ─────────────────────────────────────────────
@@ -406,9 +421,24 @@ export interface InboundRecord {
   createdAt: string;
 }
 
+/**
+ * 통합 피킹 / 쉽먼트별 포장·출력 운영 원칙 (2026-08-18 사용자 확정, 다음 스프린트 구현 대상).
+ * 이번 스프린트(서플라이어 허브 실제 발주 연동)에서는 구현하지 않고, 아래 Shipment.shipmentNumber와
+ * PickingItemShipmentAllocation 타입 정의로만 미리 반영해둔다.
+ *
+ * - 피킹은 쉽먼트별로 따로 하지 않는다. 여러 쉽먼트의 SKU를 합쳐 구역→선반→BOX→모델→SKU 순서로
+ *   통합 피킹한다. 목표는 전체 작업 중 같은 BOX를 한 번만 여는 것.
+ * - 피킹하면서 SKU마다 "총 찾을 수량"과 "쉽먼트별 분배 수량(바구니/카트 번호 + 쉽먼트 번호 + 수량)"을
+ *   함께 표시한다. 예: 총 7개 찾기 → 바구니1/SH-001→2개, 바구니3/SH-003→4개, 바구니5/SH-005→1개.
+ * - 포장과 출력만 쉽먼트별로 분리한다 (분류=쉽먼트별 바구니, 포장=쉽먼트별, 출력=쉽먼트별
+ *   피킹리스트·송장·상품 바코드·BOX 라벨·거래명세서 5종 세트).
+ */
+
 /** 쉽먼트(출고/입고 배송 단위). 거래명세서·라벨 PDF와 연결 */
 export interface Shipment {
   id: string;
+  /** 쉽먼트 고유키(불변). 서플라이어 허브가 이행 준비 단계에서 부여 — 신규 발주 캡처 시점엔 비어있을 수 있다. */
+  shipmentNumber: string;
   purchaseOrderId?: string;
   vendorOrderId?: string;
   status: ShipmentStatus;

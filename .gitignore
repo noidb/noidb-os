@@ -10,3 +10,7 @@ test_*.xlsx
 *.tsbuildinfo
 .DS_Store
 Thumbs.db
+
+# WMS 실제 발주서 원본 파일 (가격/전화번호 등 실제 데이터 포함 — 절대 커밋하지 않음)
+lib/wms/data/incoming-purchase-orders/*
+!lib/wms/data/incoming-purchase-orders/README.md
