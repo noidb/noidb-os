@@ -110,6 +110,12 @@ export function buildPickingWave(input: BuildWaveInput): BuildWaveResult {
     const category = catalogEntry?.category || undefined;
     const modelName = catalogEntry?.modelName || undefined;
     const imageUrl = catalogEntry?.imageUrl || undefined;
+    const optionLabel = catalogEntry?.optionLabel || undefined;
+    const vendorName = catalogEntry?.vendorName || undefined;
+    const catalogWarehouseNumber = catalogEntry?.warehouseNumber || undefined;
+    const catalogBoxNumber = catalogEntry?.boxNumber || undefined;
+    const catalogCurrentStock = catalogEntry?.currentStock || undefined;
+    const catalogBarcode = catalogEntry?.barcode || undefined;
 
     const exceptionBoxId = skuExceptionByProductCode.get(accum.productCode);
     const modelBoxId = modelName ? modelLocationByModelName.get(modelName) : undefined;
@@ -134,7 +140,9 @@ export function buildPickingWave(input: BuildWaveInput): BuildWaveResult {
       }
     }
 
-    const modelSortKey = `${category || "￿"}::${modelName || accum.productCode}::${accum.productCode}::${padQuantity(accum.totalQuantity)}`;
+    // 정렬: 카테고리 → 창고번호/BOX번호(제품DB 자유 텍스트, 위치 미등록이어도 참고 가능) → 모델명 → SKU
+    // (2026-08-19 사용자 확정). 값이 없으면 빈 문자열로 취급해 정렬 맨 앞쪽에 모인다.
+    const modelSortKey = `${category || "￿"}::${catalogWarehouseNumber || ""}::${catalogBoxNumber || ""}::${modelName || accum.productCode}::${accum.productCode}::${padQuantity(accum.totalQuantity)}`;
 
     const item: PickingWaveItem = {
       id: `${waveId}-${accum.productCode}`,
@@ -145,6 +153,12 @@ export function buildPickingWave(input: BuildWaveInput): BuildWaveResult {
       category,
       modelName,
       imageUrl,
+      optionLabel,
+      vendorName,
+      catalogWarehouseNumber,
+      catalogBoxNumber,
+      catalogCurrentStock,
+      catalogBarcode,
       totalQuantity: accum.totalQuantity,
       sources: accum.sources,
       locationStatus,
@@ -176,6 +190,7 @@ export function buildPickingWave(input: BuildWaveInput): BuildWaveResult {
   const baskets: BasketAssignment[] = sortedOrders.map(order => ({
     basketNumber: basketNumberByPo.get(order.purchaseOrderNumber)!,
     purchaseOrderNumber: order.purchaseOrderNumber,
+    fulfillmentCenter: order.fulfillmentCenter,
     waveId,
     status: "pending",
     createdAt: now,

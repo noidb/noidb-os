@@ -10,33 +10,57 @@ import {
   type WorkBatch,
 } from "@/lib/wms/picking-sample-data";
 import { useWmsPickingFlow } from "@/lib/wms/picking-flow-context";
-import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
+import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
 import type { SupplierHubPurchaseOrder } from "@/lib/wms/supplier-hub-orders";
+import type { ImportLatestResult } from "@/lib/wms/import-latest-purchase-orders";
+import { cleanDisplayProductName } from "@/lib/wms/display-name";
 
 function RealSupplierHubOrders() {
   const [orders, setOrders] = useState<SupplierHubPurchaseOrder[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<ImportLatestResult | null>(null);
+
+  async function loadOrders() {
+    try {
+      const response = await fetch("/api/wms/supplier-hub-orders", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) {
+        setError(data.error || "발주서를 불러오지 못했습니다.");
+        return;
+      }
+      setOrders(data.orders as SupplierHubPurchaseOrder[]);
+      setError(null);
+    } catch {
+      setError("발주서를 불러오지 못했습니다.");
+    }
+  }
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const response = await fetch("/api/wms/supplier-hub-orders", { cache: "no-store" });
-        const data = await response.json();
-        if (cancelled) return;
-        if (!response.ok) {
-          setError(data.error || "발주서를 불러오지 못했습니다.");
-          return;
-        }
-        setOrders(data.orders as SupplierHubPurchaseOrder[]);
-      } catch {
-        if (!cancelled) setError("발주서를 불러오지 못했습니다.");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    loadOrders();
   }, []);
+
+  async function handleImportLatest() {
+    setImporting(true);
+    setImportError(null);
+    try {
+      const response = await fetch("/api/wms/import-latest-purchase-orders", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) {
+        setImportError(data.error || "최신 발주서를 불러오지 못했습니다.");
+        return;
+      }
+      setImportResult(data as ImportLatestResult);
+      await loadOrders();
+    } catch {
+      setImportError("최신 발주서를 불러오지 못했습니다.");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  const newlyAddedSet = new Set(importResult?.addedPurchaseOrderNumbers ?? []);
 
   return (
     <div
@@ -54,6 +78,40 @@ function RealSupplierHubOrders() {
         (자동 실시간 조회가 아니라, 파일을 넣어둔 시점 기준입니다)
       </p>
 
+      <button
+        onClick={handleImportLatest}
+        disabled={importing}
+        style={{ ...wmsSecondaryButton, width: "100%", marginBottom: "10px", opacity: importing ? 0.6 : 1 }}
+      >
+        {importing ? "불러오는 중..." : "최신 발주서 불러오기"}
+      </button>
+
+      {importError && <p style={{ color: "#c0392b", fontSize: "12px", margin: "0 0 10px" }}>{importError}</p>}
+
+      {importResult && (
+        <div
+          style={{
+            background: wmsColors.surfaceBeige,
+            border: `1px solid ${wmsColors.border}`,
+            borderRadius: "10px",
+            padding: "10px 12px",
+            marginBottom: "12px",
+            fontSize: "12px",
+          }}
+        >
+          <div style={{ marginBottom: "4px" }}>
+            원본: {importResult.sourceFileName} · 신규 {importResult.addedPurchaseOrderNumbers.length}건 추가
+            {importResult.skippedDuplicatePurchaseOrderNumbers.length > 0 &&
+              ` · 중복 ${importResult.skippedDuplicatePurchaseOrderNumbers.length}건 건너뜀`}
+          </div>
+          <div style={{ display: "flex", gap: "14px", color: wmsColors.muted }}>
+            <span>총 발주서 {importResult.totalPurchaseOrders}건</span>
+            <span>총 SKU 종류 {importResult.totalSkuTypes}종</span>
+            <span>총 수량 {importResult.totalQuantity}개</span>
+          </div>
+        </div>
+      )}
+
       {error && <p style={{ color: "#c0392b", fontSize: "13px" }}>{error}</p>}
       {!error && orders === null && <p style={{ fontSize: "13px", color: wmsColors.muted }}>불러오는 중...</p>}
       {!error && orders !== null && orders.length === 0 && (
@@ -64,45 +122,67 @@ function RealSupplierHubOrders() {
 
       {orders && orders.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-          {orders.map(order => (
-            <div key={order.purchaseOrderNumber} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "12px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "4px", marginBottom: "8px" }}>
-                <strong style={{ fontSize: "14px" }}>발주서 {order.purchaseOrderNumber}</strong>
-                <span style={{ fontSize: "12px", color: wmsColors.muted }}>
-                  {order.fulfillmentCenter} · 입고예정일 {order.expectedDate} · {order.orderType}
-                </span>
+          {orders.map(order => {
+            const totalQuantity = order.items.reduce((sum, item) => sum + item.orderedQuantity, 0);
+            return (
+              <div key={order.purchaseOrderNumber} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "4px", marginBottom: "8px" }}>
+                  <strong style={{ fontSize: "13px" }}>
+                    발주서 {order.purchaseOrderNumber}
+                    {newlyAddedSet.has(order.purchaseOrderNumber) && (
+                      <span
+                        style={{
+                          marginLeft: "6px",
+                          fontSize: "10px",
+                          fontWeight: 800,
+                          color: wmsColors.greenDark,
+                          background: wmsColors.greenSoft,
+                          borderRadius: "999px",
+                          padding: "2px 7px",
+                        }}
+                      >
+                        신규
+                      </span>
+                    )}
+                  </strong>
+                  <span style={{ fontSize: "11px", color: wmsColors.muted }}>{order.orderType}</span>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "5px", marginBottom: "5px" }}>
+                  <HighlightTile label="물류센터" value={order.fulfillmentCenter} />
+                  <HighlightTile label="SKU 개수" value={`${order.items.length}종`} />
+                  <HighlightTile label="총수량" value={`${totalQuantity}개`} />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "5px", marginBottom: "10px" }}>
+                  <HighlightTile label="발주일" value={new Date(order.capturedAt).toLocaleDateString("ko-KR")} />
+                  <HighlightTile label="입고예정일" value={order.expectedDate} />
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                  {order.items.map(item => (
+                    <div
+                      key={`${order.purchaseOrderNumber}-${item.lineNo}`}
+                      style={{ display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "12px", padding: "4px 0", borderBottom: "1px solid #f2eee8" }}
+                    >
+                      <span style={{ whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.4 }}>{cleanDisplayProductName(item.productName)}</span>
+                      <span style={{ flexShrink: 0, fontWeight: 700 }}>{item.orderedQuantity}개</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
-                  <thead>
-                    <tr style={{ textAlign: "left", borderBottom: `1px solid ${wmsColors.border}` }}>
-                      <th>상품코드</th>
-                      <th>상품명</th>
-                      <th>바코드</th>
-                      <th>발주수량</th>
-                      <th>업체납품가능</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {order.items.map(item => (
-                      <tr key={`${order.purchaseOrderNumber}-${item.lineNo}`} style={{ borderBottom: "1px solid #eee" }}>
-                        <td>{item.productCode}</td>
-                        <td>{item.productName}</td>
-                        <td>{item.barcode}</td>
-                        <td>{item.orderedQuantity}</td>
-                        <td>{item.vendorConfirmedQuantity}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <p style={{ margin: "8px 0 0", fontSize: "11px", color: wmsColors.muted }}>
-                원본 파일: {order.sourceFileName} · 캡처 시각: {new Date(order.capturedAt).toLocaleString("ko-KR")}
-              </p>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
+    </div>
+  );
+}
+
+function HighlightTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ background: wmsColors.surfaceBeige, border: `1px solid ${wmsColors.border}`, borderRadius: "8px", padding: "6px 6px", minWidth: 0 }}>
+      <div style={{ fontSize: "10px", color: wmsColors.muted, marginBottom: "1px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</div>
+      <div style={{ fontSize: "13px", fontWeight: 800, color: wmsColors.greenDark, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</div>
     </div>
   );
 }

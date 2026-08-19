@@ -45,6 +45,18 @@ export interface PickingWaveItem {
   modelName?: string;
   /** 제품DB 조인 성공 시에만 존재. 없으면 화면에서 플레이스홀더를 보여준다. */
   imageUrl?: string;
+  /** 제품DB "옵션명" — 조인 성공 시에만 존재 */
+  optionLabel?: string;
+  /** 제품DB "거래처" — 조인 성공 시에만 존재. 없으면 화면에서 "거래처 미등록"으로 표시 */
+  vendorName?: string;
+  /** 제품DB "창고번호"(자유 텍스트, 새 BOX 체계와 별개) — 정렬 2순위로도 사용 */
+  catalogWarehouseNumber?: string;
+  /** 제품DB "BOX번호"(자유 텍스트, 새 BOX 체계와 별개) */
+  catalogBoxNumber?: string;
+  /** 제품DB "현재고"(자유 텍스트 컬럼) — stock-level.ts의 실시간 재고 조회와는 별개 */
+  catalogCurrentStock?: string;
+  /** 제품DB의 실제 쿠팡 Seller SKU Barcode(임의 생성 아님). barcode(발주서 원본)와 별개로 둔다 */
+  catalogBarcode?: string;
   /** 발주서 합산 총 수량 */
   totalQuantity: number;
   sources: PickingWaveSourceRef[];
@@ -74,6 +86,8 @@ export interface PickingWaveItem {
 export interface PickingWave {
   /** "WAVE-20260818-1" 형태 */
   id: string;
+  /** 사용자가 직접 붙이는 표시용 이름 (선택, 없으면 화면에서 id를 그대로 보여준다) */
+  displayName?: string;
   status: PickingWaveStatus;
   sourcePurchaseOrderNumbers: string[];
   /** 완료 처리된 그룹 id (모델 모드: "model:xxx", 위치 모드: "box:xxx") — 재접속해도 유지 */
@@ -88,6 +102,9 @@ export interface PickingWave {
 export interface BasketAssignment {
   basketNumber: string;
   purchaseOrderNumber: string;
+  /** 이 발주서의 물류센터 — 화면에 바구니명 대신 물류센터명을 표시하기 위해 저장해둔다 (2026-08-19).
+   *  바구니 번호/분배 로직 자체는 그대로 유지되고, 이 필드는 표시 전용이다. */
+  fulfillmentCenter: string;
   /** 나중에 쉽먼트 번호가 생기면 이 필드만 갱신한다 (웨이브 재생성 불필요) */
   shipmentNumber?: string;
   waveId: string;

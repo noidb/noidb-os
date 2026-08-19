@@ -22,12 +22,17 @@ export interface ProductCatalogItem {
   boxNumber: string;
   /** 아직 제품DB에 없는 컬럼(나중 추가 예정) — 없으면 항상 "" */
   currentStock: string;
+  /** 아직 제품DB에 없는 컬럼(나중 추가 예정) — 없으면 항상 "" (거래처별 부족분 발주서 그룹핑에 사용) */
+  vendorName: string;
+  /** 실제 쿠팡 Seller SKU Barcode. 임의 생성하지 않고 이 컬럼 값만 사용한다 — 없으면 "" */
+  barcode: string;
 }
 
-const PRODUCT_DB_SHEET_NAME = "제품DB";
+/** product-catalog-write.ts(제품DB 직접 수정)에서도 같은 시트/헤더 매핑을 재사용한다. */
+export const PRODUCT_DB_SHEET_NAME = "제품DB";
 
 /** 정규화된 필드 → 시트 헤더 후보(우선순위 순). 첫 번째로 존재하는 헤더의 값을 쓴다. */
-const FIELD_HEADER_CANDIDATES: Record<Exclude<keyof ProductCatalogItem, "skuId" | "imageUrl">, string[]> = {
+export const FIELD_HEADER_CANDIDATES: Record<Exclude<keyof ProductCatalogItem, "skuId" | "imageUrl">, string[]> = {
   modelName: ["모델명/품번"],
   category: ["카테고리"],
   productName: ["상품명"],
@@ -35,10 +40,12 @@ const FIELD_HEADER_CANDIDATES: Record<Exclude<keyof ProductCatalogItem, "skuId" 
   warehouseNumber: ["창고번호"],
   boxNumber: ["BOX번호", "박스번호"],
   currentStock: ["현재고", "재고수량"],
+  vendorName: ["거래처", "거래처명", "매입처"],
+  barcode: ["쿠팡 바코드", "Seller SKU Barcode", "쿠팡바코드", "바코드"],
 };
 
 /** 숫자/문자/쉼표 형식이 달라도 같은 SKU ID로 비교할 수 있게 정규화한다. */
-function normalizeSkuId(value: string | undefined): string {
+export function normalizeSkuId(value: string | undefined): string {
   return String(value ?? "").trim().replace(/^'/, "").replace(/[\s,]/g, "").replace(/\.0+$/, "");
 }
 
@@ -77,6 +84,8 @@ export async function fetchProductCatalog(): Promise<{ configured: boolean; item
       warehouseNumber: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.warehouseNumber),
       boxNumber: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.boxNumber),
       currentStock: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.currentStock),
+      vendorName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.vendorName),
+      barcode: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.barcode),
     }))
     .filter(item => item.skuId);
   return { configured: true, items };

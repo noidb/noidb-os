@@ -1,4 +1,5 @@
 import type { PickingWaveItem } from "./types";
+import { cleanDisplayProductName } from "../display-name";
 
 /**
  * 통합 피킹 화면의 그룹/정렬 기준을 화면 코드와 분리하는 모듈.
@@ -42,11 +43,14 @@ export function resolveGroup(
   }
 
   // model 모드이거나, location 모드인데 그 아이템만 위치 미등록인 경우 → 모델 그룹으로 처리한다.
+  // 그룹 묶음 자체는 내부적으로 모델명 기준을 유지하지만(같은 모델의 옵션들을 하나로 묶어야 하므로),
+  // 화면에 보여주는 라벨은 모델코드 대신 상품명(표시용 정리 적용)을 쓴다 (2026-08-19 사용자 확정
+  // — "모델명처럼 보이는 값" 대신 실제 상품명이 보여야 함).
   const modelKey = item.modelName || item.productCode;
   return {
     groupId: `model:${modelKey}`,
     groupKind: "model",
-    groupLabel: item.modelName || item.productName,
+    groupLabel: cleanDisplayProductName(item.productName),
     sectionId: item.category || UNCATEGORIZED_LABEL,
     sectionLabel: item.category || UNCATEGORIZED_LABEL,
     sortKey: item.modelSortKey,

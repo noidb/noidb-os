@@ -7,7 +7,17 @@ import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import { buildPickingWave, generateWaveId } from "@/lib/wms/picking-wave/build-wave";
 import type { SupplierHubPurchaseOrder } from "@/lib/wms/supplier-hub-orders";
 import type { PickingWave } from "@/lib/wms/picking-wave/types";
-import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
+import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
+import {
+  buildScheduleChangeRecommendations,
+  type ScheduleChangeRecommendation,
+  type ScheduleRecommendationPriority,
+} from "@/lib/wms/schedule-recommendation";
+import {
+  getScheduleRecommendationDecisions,
+  setScheduleRecommendationDecision,
+  type ScheduleRecommendationDecision,
+} from "@/lib/wms/schedule-recommendation-decisions";
 
 /**
  * 통합 피킹(웨이브) 생성 화면. 실제 발주(서플라이어 허브 스냅샷)를 선택해 하나의 웨이브로 합친다.
@@ -26,6 +36,19 @@ export default function WmsPickingWavesPage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
+  const [editingWaveId, setEditingWaveId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editSelectedOrders, setEditSelectedOrders] = useState<Set<string>>(new Set());
+  const [editCompositionLocked, setEditCompositionLocked] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  async function refreshWaves() {
+    const list = await waveRepository.listWaves();
+    setExistingWaves(list);
+    return list;
+  }
+
   useEffect(() => {
     (async () => {
       try {
@@ -42,12 +65,30 @@ export default function WmsPickingWavesPage() {
         setOrdersError("발주서를 불러오지 못했습니다.");
       }
     })();
-    waveRepository.listWaves().then(setExistingWaves);
+    refreshWaves();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waveRepository]);
 
   const selectedOrders = useMemo(
     () => (orders ?? []).filter(order => selected.has(order.purchaseOrderNumber)),
     [orders, selected]
+  );
+
+  const duplicateInProgressWave = useMemo(() => {
+    if (selectedOrders.length === 0) return null;
+    const selectedSet = new Set(selectedOrders.map(order => order.purchaseOrderNumber));
+    return (
+      existingWaves.find(wave => {
+        if (wave.status !== "in_progress") return false;
+        if (wave.sourcePurchaseOrderNumbers.length !== selectedSet.size) return false;
+        return wave.sourcePurchaseOrderNumbers.every(po => selectedSet.has(po));
+      }) || null
+    );
+  }, [existingWaves, selectedOrders]);
+
+  const scheduleRecommendations = useMemo(
+    () => buildScheduleChangeRecommendations(orders ?? []),
+    [orders]
   );
 
   const [previewCatalogConfigured, setPreviewCatalogConfigured] = useState(true);
@@ -151,6 +192,105 @@ export default function WmsPickingWavesPage() {
     }
   }
 
+  async function openEditWave(wave: PickingWave) {
+    setEditingWaveId(wave.id);
+    setEditName(wave.displayName || "");
+    setEditSelectedOrders(new Set(wave.sourcePurchaseOrderNumbers));
+    setEditError(null);
+    const waveItems = await waveRepository.listItems(wave.id);
+    setEditCompositionLocked(waveItems.some(item => item.status !== "pending"));
+  }
+
+  function closeEditWave() {
+    setEditingWaveId(null);
+    setEditError(null);
+  }
+
+  function toggleEditOrder(poNumber: string) {
+    setEditSelectedOrders(prev => {
+      const next = new Set(prev);
+      if (next.has(poNumber)) next.delete(poNumber);
+      else next.add(poNumber);
+      return next;
+    });
+  }
+
+  async function saveEditWave() {
+    if (!editingWaveId) return;
+    const targetWave = existingWaves.find(wave => wave.id === editingWaveId);
+    if (!targetWave) return;
+
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      const now = new Date().toISOString();
+      const originalSet = new Set(targetWave.sourcePurchaseOrderNumbers);
+      const compositionChanged =
+        !editCompositionLocked &&
+        (editSelectedOrders.size !== originalSet.size || [...editSelectedOrders].some(po => !originalSet.has(po)));
+
+      if (compositionChanged) {
+        if (editSelectedOrders.size === 0) {
+          setEditError("연결된 발주서를 최소 1건 이상 선택해주세요.");
+          setEditSaving(false);
+          return;
+        }
+        const newSelectedOrders = (orders ?? []).filter(order => editSelectedOrders.has(order.purchaseOrderNumber));
+        const [catalogRes, zones, shelves, boxes, modelLocations, skuExceptions] = await Promise.all([
+          fetch("/api/wms/product-catalog", { cache: "no-store" }).then(res => res.json()),
+          warehouseRepository.listZones(),
+          warehouseRepository.listShelves(),
+          warehouseRepository.listBoxes(),
+          warehouseRepository.listModelLocations(),
+          warehouseRepository.listSkuExceptions(),
+        ]);
+
+        const { items: newItems, baskets: newBaskets } = buildPickingWave({
+          waveId: editingWaveId,
+          orders: newSelectedOrders,
+          catalog: { configured: Boolean(catalogRes.configured), items: catalogRes.items || [] },
+          warehouse: { zones, shelves, boxes, modelLocations, skuExceptions },
+          now,
+        });
+
+        const [oldItems, oldBaskets] = await Promise.all([
+          waveRepository.listItems(editingWaveId),
+          waveRepository.listBaskets(editingWaveId),
+        ]);
+        await Promise.all(oldItems.map(item => waveRepository.deleteItem(item.id)));
+        await Promise.all(oldBaskets.map(basket => waveRepository.deleteBasket(editingWaveId, basket.basketNumber)));
+        await Promise.all(newItems.map(item => waveRepository.saveItem(item)));
+        await Promise.all(newBaskets.map(basket => waveRepository.saveBasket(basket)));
+
+        await waveRepository.saveWave({
+          ...targetWave,
+          displayName: editName.trim() || undefined,
+          sourcePurchaseOrderNumbers: newSelectedOrders.map(order => order.purchaseOrderNumber),
+          completedGroupIds: [],
+          updatedAt: now,
+        });
+      } else {
+        await waveRepository.saveWave({ ...targetWave, displayName: editName.trim() || undefined, updatedAt: now });
+      }
+
+      await refreshWaves();
+      setEditingWaveId(null);
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "웨이브 수정 중 오류가 발생했습니다.");
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  async function handleDeleteWave(wave: PickingWave) {
+    const confirmed = window.confirm(
+      `${wave.displayName || wave.id} 웨이브를 삭제할까요?\n연결된 발주서 원본과 다른 웨이브에는 영향이 없습니다. 이 작업은 되돌릴 수 없습니다.`
+    );
+    if (!confirmed) return;
+    await waveRepository.deleteWave(wave.id);
+    await refreshWaves();
+  }
+
   return (
     <main
       style={{
@@ -206,6 +346,10 @@ export default function WmsPickingWavesPage() {
         </div>
       )}
 
+      {scheduleRecommendations.length > 0 && (
+        <ScheduleRecommendationCard recommendations={scheduleRecommendations} />
+      )}
+
       {previewSummary && (
         <div
           style={{
@@ -241,6 +385,16 @@ export default function WmsPickingWavesPage() {
         </div>
       )}
 
+      {duplicateInProgressWave && (
+        <p style={{ fontSize: "12px", color: wmsColors.warn, background: wmsColors.warnSoft, borderRadius: "8px", padding: "8px 10px", marginBottom: "10px" }}>
+          동일한 발주 조합의 진행중 웨이브가 이미 있습니다:{" "}
+          <a href={`/wms/picking/waves/${duplicateInProgressWave.id}`} style={{ color: wmsColors.warn, fontWeight: 700 }}>
+            {duplicateInProgressWave.displayName || duplicateInProgressWave.id}
+          </a>
+          . 그래도 새로 만들 수는 있지만, 먼저 기존 웨이브를 이어서 진행하는 걸 권장합니다.
+        </p>
+      )}
+
       {createError && <p style={{ color: "#c0392b", fontSize: "13px" }}>{createError}</p>}
 
       <button
@@ -255,26 +409,236 @@ export default function WmsPickingWavesPage() {
         <div style={{ marginTop: "24px" }}>
           <h2 style={{ fontSize: "14px", margin: "0 0 8px" }}>기존 웨이브</h2>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {existingWaves.map(wave => (
-              <a
-                key={wave.id}
-                href={`/wms/picking/waves/${wave.id}`}
-                style={{
-                  ...wmsGhostButton,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  textDecoration: "none",
-                }}
-              >
-                <span>{wave.id}</span>
-                <span style={{ fontSize: "12px" }}>{wave.status === "completed" ? "완료" : "진행중"}</span>
-              </a>
-            ))}
+            {existingWaves.map(wave => {
+              const isEditing = editingWaveId === wave.id;
+              return (
+                <div key={wave.id} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "10px 12px", background: "#ffffff" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
+                    <a href={`/wms/picking/waves/${wave.id}`} style={{ color: wmsColors.ink, textDecoration: "none", fontWeight: 700, fontSize: "13px", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {wave.displayName || wave.id}
+                    </a>
+                    <span style={{ fontSize: "11px", color: wmsColors.muted, flexShrink: 0 }}>
+                      {wave.status === "completed" ? "완료" : "진행중"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: "11px", color: wmsColors.muted, margin: "2px 0 8px" }}>
+                    {wave.id} · 발주서 {wave.sourcePurchaseOrderNumbers.length}건
+                  </div>
+
+                  {!isEditing ? (
+                    <div style={{ display: "flex", gap: "6px" }}>
+                      <button onClick={() => openEditWave(wave)} style={{ ...wmsSecondaryButton, minHeight: "30px", fontSize: "11px", flex: 1 }}>
+                        수정
+                      </button>
+                      <button onClick={() => handleDeleteWave(wave)} style={{ ...wmsGhostButton, minHeight: "30px", fontSize: "11px", flex: 1, color: "#c0392b" }}>
+                        삭제
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ borderTop: `1px dashed ${wmsColors.border}`, paddingTop: "8px" }}>
+                      <label style={{ display: "block", fontSize: "11px", color: wmsColors.muted, marginBottom: "4px" }}>
+                        표시 이름
+                      </label>
+                      <input
+                        value={editName}
+                        onChange={e => setEditName(e.target.value)}
+                        placeholder={wave.id}
+                        style={{ width: "100%", fontSize: "12px", padding: "6px 8px", borderRadius: "6px", border: `1px solid ${wmsColors.border}`, marginBottom: "8px" }}
+                      />
+
+                      <div style={{ fontSize: "11px", color: wmsColors.muted, marginBottom: "4px" }}>
+                        연결된 발주서
+                        {editCompositionLocked && " (이미 피킹이 진행되어 조합 변경 불가 — 확인만 가능)"}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginBottom: "8px" }}>
+                        {(orders ?? [])
+                          .filter(order => wave.sourcePurchaseOrderNumbers.includes(order.purchaseOrderNumber) || !editCompositionLocked)
+                          .map(order => (
+                            <label key={order.purchaseOrderNumber} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px" }}>
+                              <input
+                                type="checkbox"
+                                disabled={editCompositionLocked}
+                                checked={editSelectedOrders.has(order.purchaseOrderNumber)}
+                                onChange={() => toggleEditOrder(order.purchaseOrderNumber)}
+                              />
+                              {order.purchaseOrderNumber} · {order.fulfillmentCenter}
+                            </label>
+                          ))}
+                      </div>
+
+                      {editError && <p style={{ color: "#c0392b", fontSize: "11px", marginBottom: "6px" }}>{editError}</p>}
+
+                      <div style={{ display: "flex", gap: "6px" }}>
+                        <button onClick={closeEditWave} style={{ ...wmsGhostButton, minHeight: "30px", fontSize: "11px", flex: 1 }}>
+                          취소
+                        </button>
+                        <button
+                          onClick={saveEditWave}
+                          disabled={editSaving}
+                          style={{ ...wmsPrimaryButton, minHeight: "30px", fontSize: "11px", flex: 1, opacity: editSaving ? 0.6 : 1 }}
+                        >
+                          {editSaving ? "저장 중..." : "저장"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
     </main>
+  );
+}
+
+const PRIORITY_LABEL: Record<ScheduleRecommendationPriority, string> = {
+  high: "높음",
+  medium: "중간",
+  low: "낮음",
+};
+
+const PRIORITY_COLOR: Record<ScheduleRecommendationPriority, { bg: string; text: string }> = {
+  high: { bg: wmsColors.greenSoft, text: wmsColors.greenDark },
+  medium: { bg: wmsColors.surfaceBeige, text: wmsColors.ink },
+  low: { bg: "#ffffff", text: wmsColors.muted },
+};
+
+const DECISION_LABEL: Record<ScheduleRecommendationDecision, string> = {
+  changed: "변경 완료",
+  not_changed: "이번에는 변경 안 함",
+  later: "나중에 확인",
+};
+
+/**
+ * 입고예정일/물류센터 변경 "추천"만 보여주는 화면(카드). 추천을 눌러도 아무 것도 자동으로
+ * 바뀌지 않는다 — 실제 변경은 사용자가 쿠팡 서플라이허브에서 직접 진행한다
+ * (2026-08-19 사용자 확정, 자동 요청·자동 제출·Supplier Hub 변경 요청은 이번 스프린트 범위 밖).
+ * 사용자가 어떤 선택을 하든(또는 아무 선택도 안 하든) 아래 통합 피킹 생성은 계속 진행할 수 있다.
+ */
+function ScheduleRecommendationCard({ recommendations }: { recommendations: ScheduleChangeRecommendation[] }) {
+  const [decisions, setDecisions] = useState<Record<string, ScheduleRecommendationDecision>>({});
+
+  useEffect(() => {
+    setDecisions(getScheduleRecommendationDecisions());
+  }, []);
+
+  function decide(id: string, decision: ScheduleRecommendationDecision) {
+    setDecisions(setScheduleRecommendationDecision(id, decision));
+  }
+
+  return (
+    <div
+      style={{
+        border: `1px solid ${wmsColors.border}`,
+        borderRadius: "12px",
+        padding: "14px",
+        marginBottom: "16px",
+        background: "#ffffff",
+      }}
+    >
+      <h2 style={{ margin: "0 0 4px", fontSize: "14px" }}>물류비 절감 추천</h2>
+      <p style={{ margin: "0 0 12px", fontSize: "11px", color: wmsColors.muted }}>
+        같은 SKU·거래처·물류센터·권역, 하루 이내 입고예정일을 기준으로 합배송 가능성을 분석한
+        추천입니다. 자동으로 변경되지 않습니다 — 쿠팡에서 직접 변경할지, 이번엔 그대로 진행할지,
+        나중에 다시 확인할지 아래에서 선택해주세요. 어떤 선택을 하든 통합 피킹은 계속 진행할 수
+        있습니다.
+      </p>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+        {recommendations.map(rec => {
+          const color = PRIORITY_COLOR[rec.priority];
+          const decision = decisions[rec.id];
+          return (
+            <div
+              key={rec.id}
+              style={{
+                border: `1px solid ${wmsColors.border}`,
+                borderRadius: "10px",
+                padding: "12px",
+                background: wmsColors.surfaceBeige,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                <strong style={{ fontSize: "13px" }}>
+                  발주서 {rec.targetPurchaseOrderNumber} → {rec.anchorPurchaseOrderNumber}에 맞춰 변경
+                </strong>
+                <span
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    padding: "2px 8px",
+                    borderRadius: "999px",
+                    background: color.bg,
+                    color: color.text,
+                  }}
+                >
+                  우선순위 {PRIORITY_LABEL[rec.priority]}
+                </span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "8px" }}>
+                <div style={{ background: "#ffffff", borderRadius: "8px", padding: "8px", fontSize: "11px" }}>
+                  <div style={{ color: wmsColors.muted, marginBottom: "2px" }}>현재 (발주서 {rec.targetPurchaseOrderNumber})</div>
+                  <div>{rec.current.fulfillmentCenter}</div>
+                  <div>입고예정일 {rec.current.expectedDate}</div>
+                </div>
+                <div style={{ background: "#ffffff", borderRadius: "8px", padding: "8px", fontSize: "11px" }}>
+                  <div style={{ color: wmsColors.muted, marginBottom: "2px" }}>추천 (발주서 {rec.anchorPurchaseOrderNumber} 기준)</div>
+                  <div>{rec.recommended.fulfillmentCenter}</div>
+                  <div>입고예정일 {rec.recommended.expectedDate}</div>
+                </div>
+              </div>
+
+              <p style={{ margin: "0 0 4px", fontSize: "11px", color: wmsColors.ink }}>변경 이유: {rec.reason}</p>
+
+              <div style={{ margin: "0 0 4px", fontSize: "11px", color: wmsColors.ink }}>
+                같이 출고 가능한 SKU ({rec.sharedSkus.length}종):{" "}
+                {rec.sharedSkus.map(sku => sku.productName).join(", ")}
+              </div>
+
+              <div style={{ display: "flex", gap: "12px", fontSize: "11px", color: wmsColors.muted, marginBottom: "8px" }}>
+                <span>예상 합배송 수량 {rec.combinedShipQuantity}개</span>
+                <span>예상 절감: {rec.savingsNote}</span>
+              </div>
+
+              {decision && (
+                <p style={{ margin: "0 0 8px", fontSize: "11px", fontWeight: 700, color: wmsColors.greenDark }}>
+                  선택됨: {DECISION_LABEL[decision]}
+                </p>
+              )}
+
+              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                <button
+                  onClick={() => window.alert("쿠팡 서플라이허브(윙)에 직접 로그인해서 입고예정일/물류센터를 변경해주세요. 이 버튼은 자동으로 이동하거나 변경하지 않습니다.")}
+                  style={{ ...wmsGhostButton, minHeight: "36px", padding: "0 10px", fontSize: "11px", flex: "none" }}
+                >
+                  직접 변경하러 가기
+                </button>
+                <button
+                  onClick={() => decide(rec.id, "changed")}
+                  style={{ ...wmsSecondaryButton, minHeight: "36px", padding: "0 10px", fontSize: "11px", flex: "none" }}
+                >
+                  변경 완료
+                </button>
+                <button
+                  onClick={() => decide(rec.id, "not_changed")}
+                  style={{ ...wmsGhostButton, minHeight: "36px", padding: "0 10px", fontSize: "11px", flex: "none" }}
+                >
+                  이번에는 변경 안 함
+                </button>
+                <button
+                  onClick={() => decide(rec.id, "later")}
+                  style={{ ...wmsGhostButton, minHeight: "36px", padding: "0 10px", fontSize: "11px", flex: "none" }}
+                >
+                  나중에 확인
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

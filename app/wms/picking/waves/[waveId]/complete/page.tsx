@@ -2,8 +2,11 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
+import { buildBasketDisplayNames } from "@/lib/wms/picking-wave/basket-display";
 import type { BasketAssignment, PickingWave, PickingWaveItem } from "@/lib/wms/picking-wave/types";
-import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
+import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
+import PoConfirmSection from "./PoConfirmSection";
+import HanjinUploadSection from "./HanjinUploadSection";
 
 export default function WmsPickingWaveCompletePage({ params }: { params: { waveId: string } }) {
   const waveRepository = usePickingWaveRepository();
@@ -52,6 +55,7 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   const unlocatedCount = items.filter(item => item.locationStatus === "unlocated").length;
 
   // 바구니(발주서) 완료 여부: 그 발주서를 포함하는 모든 아이템이 처리되었는지로 판단한다.
+  const basketDisplayNames = buildBasketDisplayNames(baskets);
   const basketStatuses = baskets.map(basket => {
     const relatedItems = items.filter(item => item.sources.some(source => source.basketNumber === basket.basketNumber));
     const done = relatedItems.length > 0 && relatedItems.every(item => item.status !== "pending");
@@ -92,7 +96,8 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
               }}
             >
               <span>
-                바구니 {basket.basketNumber} / 발주서 {basket.purchaseOrderNumber}
+                <strong>{basketDisplayNames[basket.basketNumber] || `바구니 ${basket.basketNumber}`}</strong>
+                <span style={{ color: wmsColors.muted, fontSize: "11px" }}> (발주서 {basket.purchaseOrderNumber})</span>
                 {basket.shipmentNumber ? ` / 쉽먼트 ${basket.shipmentNumber}` : ""}
               </span>
               <span style={{ fontWeight: 700, color: basket.done ? wmsColors.greenDark : wmsColors.muted }}>
@@ -103,8 +108,28 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
         </div>
       </div>
 
-      <a href="/wms/picking/waves" style={{ display: "block", textDecoration: "none", marginTop: "24px" }}>
-        <button style={{ ...wmsPrimaryButton, width: "100%" }}>목록으로</button>
+      <div style={{ marginTop: "20px" }}>
+        <h2 style={{ fontSize: "14px", margin: "0 0 8px" }}>발주확정 서류 생성</h2>
+        <p style={{ fontSize: "11px", color: wmsColors.muted, margin: "0 0 10px" }}>
+          발주서별로 실제 찾은 수량을 확인하고, 필요하면 확정수량을 직접 고친 뒤 서류를 생성하세요.
+          원본 PO_FOR_CONFIRM 파일을 찾지 못하면 안내 메시지가 뜹니다 (lib/wms/data/po-for-confirm
+          폴더에 넣어야 합니다). 외부 Supplier Hub에는 자동 업로드하지 않습니다 — 파일만 만들어집니다.
+        </p>
+        {wave.sourcePurchaseOrderNumbers.map(poNumber => (
+          <PoConfirmSection key={poNumber} purchaseOrderNumber={poNumber} items={items} />
+        ))}
+      </div>
+
+      <HanjinUploadSection baskets={baskets} />
+
+      {shortageQuantity > 0 && (
+        <a href={`/wms/picking/waves/${wave.id}/vendor-orders`} style={{ display: "block", textDecoration: "none", marginTop: "20px" }}>
+          <button style={{ ...wmsPrimaryButton, width: "100%" }}>거래처별 부족분 발주서 보기 ({shortageQuantity}개)</button>
+        </a>
+      )}
+
+      <a href="/wms/picking/waves" style={{ display: "block", textDecoration: "none", marginTop: "10px" }}>
+        <button style={{ ...wmsGhostButton, width: "100%" }}>목록으로</button>
       </a>
     </main>
   );

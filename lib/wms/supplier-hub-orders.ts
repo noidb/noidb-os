@@ -113,6 +113,23 @@ function parseWorksheet(sheet: ExcelJS.Worksheet, sourceFileName: string, captur
 }
 
 /**
+ * 엑셀 파일 바이너리(버퍼)를 발주서 1건으로 파싱한다. 파일 시스템에 이미 저장된 파일뿐 아니라,
+ * ZIP에서 방금 압축 해제한 버퍼(디스크에 쓰기 전)에도 쓸 수 있도록 분리해둔 함수 —
+ * lib/wms/import-latest-purchase-orders.ts(최신 발주 불러오기)가 중복 여부를 먼저 확인할 때 사용한다.
+ */
+export async function parseSupplierHubPurchaseOrderBuffer(
+  buffer: ExcelJS.Buffer | Buffer,
+  sourceFileName: string,
+  capturedAt: string
+): Promise<SupplierHubPurchaseOrder | null> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer as ExcelJS.Buffer);
+  const sheet = workbook.worksheets[0];
+  if (!sheet) return null;
+  return parseWorksheet(sheet, sourceFileName, capturedAt);
+}
+
+/**
  * incoming-purchase-orders 폴더의 모든 .xlsx 파일을 읽기 전용으로 파싱해 반환한다.
  * 폴더가 없거나 비어 있으면 빈 배열을 반환한다. 이 함수는 파일을 절대 수정/삭제하지 않는다.
  */
@@ -136,4 +153,9 @@ export async function loadSupplierHubPurchaseOrders(): Promise<SupplierHubPurcha
   }
 
   return orders.sort((a, b) => a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber));
+}
+
+/** incoming-purchase-orders 폴더 절대경로 — 최신 발주 불러오기 기능이 새 파일을 쓸 때 재사용한다. */
+export function getIncomingPurchaseOrdersDir(): string {
+  return INCOMING_DIR;
 }

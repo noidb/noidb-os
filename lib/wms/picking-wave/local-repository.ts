@@ -52,6 +52,12 @@ export class LocalPickingWaveRepository implements PickingWaveRepository {
     writeList(KEYS.waves, list);
   }
 
+  async deleteWave(waveId: string): Promise<void> {
+    writeList(KEYS.waves, readList<PickingWave>(KEYS.waves).filter(wave => wave.id !== waveId));
+    writeList(KEYS.items, readList<PickingWaveItem>(KEYS.items).filter(item => item.waveId !== waveId));
+    writeList(KEYS.baskets, readList<BasketAssignment>(KEYS.baskets).filter(basket => basket.waveId !== waveId));
+  }
+
   async listItems(waveId: string): Promise<PickingWaveItem[]> {
     return readList<PickingWaveItem>(KEYS.items).filter(item => item.waveId === waveId);
   }
@@ -62,6 +68,10 @@ export class LocalPickingWaveRepository implements PickingWaveRepository {
     if (index >= 0) list[index] = item;
     else list.push(item);
     writeList(KEYS.items, list);
+  }
+
+  async deleteItem(itemId: string): Promise<void> {
+    writeList(KEYS.items, readList<PickingWaveItem>(KEYS.items).filter(item => item.id !== itemId));
   }
 
   async listBaskets(waveId: string): Promise<BasketAssignment[]> {
@@ -76,5 +86,12 @@ export class LocalPickingWaveRepository implements PickingWaveRepository {
     if (index >= 0) list[index] = basket;
     else list.push(basket);
     writeList(KEYS.baskets, list);
+  }
+
+  async deleteBasket(waveId: string, basketNumber: string): Promise<void> {
+    writeList(
+      KEYS.baskets,
+      readList<BasketAssignment>(KEYS.baskets).filter(basket => !(basket.waveId === waveId && basket.basketNumber === basketNumber))
+    );
   }
 }

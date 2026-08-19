@@ -1,6 +1,6 @@
 {
   "name": "NOID-B OS",
-  "short_name": "NOID-B OS",
+  "short_name": "NOID-B",
   "description": "상품 · 이미지 · 재고 · 발주를 관리하는 Seller Workspace",
   "start_url": "/",
   "display": "standalone",

@@ -14,3 +14,21 @@ Thumbs.db
 # WMS 실제 발주서 원본 파일 (가격/전화번호 등 실제 데이터 포함 — 절대 커밋하지 않음)
 lib/wms/data/incoming-purchase-orders/*
 !lib/wms/data/incoming-purchase-orders/README.md
+
+# WMS 발주확정용 원본 파일 (매입가/공급가 등 실제 데이터 포함 — 절대 커밋하지 않음)
+lib/wms/data/po-for-confirm/*
+!lib/wms/data/po-for-confirm/README.md
+
+# WMS 한진택배 업로드 서식 원본 (전화번호/주소 등 실제 데이터 포함 — 절대 커밋하지 않음)
+lib/wms/data/hanjin-template/*
+!lib/wms/data/hanjin-template/README.md
+
+# Google 서비스 계정 키 (JSON) — 실수로 커밋되는 것을 방지 (2026-08-19)
+# 서비스 계정 키는 항상 프로젝트 밖(예: 문서\NOIDB Secrets)에 보관하고, 이 저장소에는 절대 두지 않습니다.
+*service-account*.json
+*serviceaccount*.json
+credentials.json
+credentials/
+secrets/
+# Google Cloud 콘솔이 기본으로 내려주는 "<project-id>-<12자리 hex>.json" 형식의 키 파일명 패턴
+*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].json
