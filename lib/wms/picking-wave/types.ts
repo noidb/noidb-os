@@ -11,7 +11,15 @@
  * 출력만 쉽먼트별로 분리한다(다음 스프린트).
  */
 
-export type PickingWaveStatus = "in_progress" | "completed";
+/**
+ * 2026-08-19 2차 실사용 테스트 반영 — 웨이브 수정과 Supplier Hub용 발주확정을 명확히 분리한다.
+ * 흐름: in_progress(피킹 진행) → completed(피킹 완료, 여러 번 재수정 가능) →
+ * result_confirmed(사용자가 찾은수량/부족수량을 확인 완료 — "피킹 결과 최종 확인") →
+ * order_confirmed(최종 발주확정 — 이후 일반 피킹 수정 잠금). "피킹 내용 수정"은 별도 저장 상태가
+ * 아니라 completed/result_confirmed 상태에서 화면이 편집 모드로 전환되는 것뿐이며,
+ * order_confirmed 전까지는 몇 번이든 다시 completed로 돌아와 수정할 수 있다.
+ */
+export type PickingWaveStatus = "in_progress" | "completed" | "result_confirmed" | "order_confirmed";
 export type PickingWaveItemStatus = "pending" | "full" | "partial" | "notfound";
 
 /** 아이템 합산 전, 발주서(=현재는 바구니 1:1)별 원본 요청 수량 */
@@ -43,6 +51,10 @@ export interface PickingWaveItem {
   category?: string;
   /** 제품DB 조인 성공 시에만 존재 — 모델 모드 2차 그룹 기준 */
   modelName?: string;
+  /** 제품DB "모델SKU"(F열, 옵션별 고유값) — 조인 성공 시에만 존재. SKU ID가 나중에 바뀌어도
+   *  이 값으로 같은 상품을 다시 찾을 수 있게 저장해둔다(2026-08-20 신규, 제품DB 새로고침 재매칭용).
+   *  2026-08-20 이전에 생성된 웨이브 아이템에는 없을 수 있다 — 그런 경우 SKU ID로만 재매칭한다. */
+  modelSku?: string;
   /** 제품DB 조인 성공 시에만 존재. 없으면 화면에서 플레이스홀더를 보여준다. */
   imageUrl?: string;
   /** 제품DB "옵션명" — 조인 성공 시에만 존재 */
@@ -97,6 +109,10 @@ export interface PickingWave {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  /** "피킹 결과 최종 확인" 버튼을 누른 시각 */
+  resultConfirmedAt?: string;
+  /** "최종 발주확정" 버튼을 누른 시각 — 있으면 order_confirmed */
+  orderConfirmedAt?: string;
 }
 
 export interface BasketAssignment {

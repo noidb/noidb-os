@@ -6,6 +6,9 @@ import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 
 interface Props {
   baskets: BasketAssignment[];
+  /** 생성이 성공적으로 끝난 뒤 호출된다 — 다음 단계 잠금 해제 등 상위 화면이 진행 상태를 알아야
+   *  할 때만 쓴다(2026-08-19 5차 실사용 테스트 신규, 선택 항목이라 기존 사용처는 그대로 동작). */
+  onGenerated?: () => void;
 }
 
 /**
@@ -14,7 +17,7 @@ interface Props {
  * 목적지 정보가 없어 건너뛴 것을 그대로 알려준다 — 누락된 값을 임의로 채우지 않는다
  * (2026-08-19 신규). 외부 한진/Supplier Hub에는 자동 업로드하지 않는다.
  */
-export default function HanjinUploadSection({ baskets }: Props) {
+export default function HanjinUploadSection({ baskets, onGenerated }: Props) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
@@ -64,6 +67,7 @@ export default function HanjinUploadSection({ baskets }: Props) {
       if (skippedPresent) message += ` · 이미 있어서 건너뜀: ${skippedPresent}`;
       if (skippedMissing) message += ` · 목적지 정보 없어 건너뜀: ${skippedMissing}`;
       setResultMessage(message);
+      onGenerated?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "한진택배 업로드파일 생성 중 오류가 발생했습니다.");
     } finally {
@@ -74,8 +78,7 @@ export default function HanjinUploadSection({ baskets }: Props) {
   if (requests.length === 0) return null;
 
   return (
-    <div style={{ marginTop: "20px", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "12px" }}>
-      <h2 style={{ fontSize: "14px", margin: "0 0 8px" }}>운송장 출력용 업로드파일 생성 (한진택배)</h2>
+    <div>
       <p style={{ fontSize: "11px", color: wmsColors.muted, margin: "0 0 10px" }}>
         아래 발주서/물류센터 조합으로 생성됩니다. 원본 한진 서식은 수정하지 않고 새 행만 추가한
         사본을 만듭니다. 외부 시스템에는 자동 업로드하지 않습니다 — 파일만 다운로드됩니다.

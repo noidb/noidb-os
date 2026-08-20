@@ -1729,7 +1729,7 @@ export default function Home() {
       <header className="hero">
         <div className="heroBrandArea">
           <div className="brandLockup">
-            <span className="brandMark" aria-hidden="true">N</span>
+            <img className="brandMark" src="/icons/noidb-icon-192-v3.png" alt="" aria-hidden="true" />
             <div><p className="brandWordmark">NOID-B OS</p><span>Seller Workspace</span></div>
           </div>
           <h1>AI 상품등록 도우미</h1>

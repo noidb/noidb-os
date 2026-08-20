@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
+import ExcelJS from "exceljs";
 import { SaxesParser, type SaxesTagPlain } from "saxes";
 
 /**
@@ -239,4 +240,135 @@ export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[]): 
     skippedMissingDestination,
     sourceFileName: path.basename(template.filePath),
   };
+}
+
+/**
+ * 한진택배가 송장번호를 채워 돌려준 "송장입력된 쉽먼트" 파일을 읽는다 (2026-08-19 5차 실사용
+ * 테스트 신규 — 발주확정 다음 단계 흐름의 2단계, 6차 실사용 테스트에서 3단계와 완전히 분리).
+ * 실제 샘플 구조 기준: 시트 "상품목록", A=발주번호(PO ID) B=물류센터(FC) C=입고유형(Transport
+ * Type) D=입고예정일(EDD) E=상품번호(SKU ID) F=상품바코드(SKU Barcode) G=상품이름(SKU Name)
+ * H=확정수량(Confirmed Qty) I=송장번호(Invoice Number) J=납품수량(Shipped Qty). SKU별로 행이
+ * 반복된다.
+ *
+ * 6차 실사용 테스트 반영 — 근본 원인 수정: 이전에는 1단계(한진택배 송장출력용 업로드파일 생성)와
+ * 3단계(Supplier Hub 쉽먼트 생성 업로드파일 생성)가 둘 다 같은 HanjinUploadSection/
+ * buildHanjinUploadFile을 그대로 재사용해서, 실제로는 똑같은 "한진택배 서식_쿠팡(고정형)" 파일
+ * (로켓입고*발주번호 행만 있고 송장번호는 아예 없음)을 두 번 만드는 구조였다 — 목적과 템플릿이
+ * 전혀 다른데도 같은 결과물이 나왔다. 이제 3단계는 이 파일(2단계에서 업로드한 실제 원본)의
+ * 실제 행 데이터를 그대로 읽어, 현재 웨이브의 (발주번호,물류센터)와 일치하면서 송장번호가 실제로
+ * 채워진 행만 새 "상품목록" 시트로 다시 만든다 — 1단계 파일과는 템플릿·컬럼·용도가 완전히
+ * 다르고, 매칭 실패(송장번호 없음) 행은 절대 포함하지 않는다.
+ */
+const TRACKING_SHEET_NAME = "상품목록";
+const TRACKING_HEADERS = [
+  "발주번호(PO ID)",
+  "물류센터(FC)",
+  "입고유형(Transport Type)",
+  "입고예정일(EDD)",
+  "상품번호(SKU ID)",
+  "상품바코드(SKU Barcode)",
+  "상품이름(SKU Name)",
+  "확정수량(Confirmed Qty)",
+  "송장번호(Invoice Number)",
+  "납품수량(Shipped Qty)",
+];
+
+export interface ParsedTrackingRow {
+  purchaseOrderNumber: string;
+  fulfillmentCenter: string;
+  transportType: string;
+  expectedDate: string;
+  skuId: string;
+  barcode: string;
+  productName: string;
+  confirmedQuantity: string;
+  trackingNumber: string;
+  shippedQuantity: string;
+}
+
+export function trackingKey(purchaseOrderNumber: string, fulfillmentCenter: string): string {
+  return `${purchaseOrderNumber}::${fulfillmentCenter}`;
+}
+
+/** SKU별 행 전체를 그대로 읽는다 — 3단계 재생성(전체 컬럼 필요)과 2단계 매칭 미리보기(요약)가
+ *  같은 파싱 결과를 공유한다(중복 파싱 로직 제거). */
+export async function parseTrackingRowsFromBuffer(buffer: Buffer): Promise<ParsedTrackingRow[]> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+  const sheet = workbook.getWorksheet(TRACKING_SHEET_NAME);
+  const rows: ParsedTrackingRow[] = [];
+  if (!sheet) return rows;
+
+  const cell = (row: number, col: number) => String(sheet.getCell(row, col).value ?? "").trim();
+  for (let row = 2; row <= sheet.rowCount; row++) {
+    const poNumber = cell(row, 1);
+    if (!poNumber) continue;
+    rows.push({
+      purchaseOrderNumber: poNumber,
+      fulfillmentCenter: cell(row, 2),
+      transportType: cell(row, 3),
+      expectedDate: cell(row, 4),
+      skuId: cell(row, 5),
+      barcode: cell(row, 6),
+      productName: cell(row, 7),
+      confirmedQuantity: cell(row, 8),
+      trackingNumber: cell(row, 9),
+      shippedQuantity: cell(row, 10),
+    });
+  }
+  return rows;
+}
+
+/** (발주번호,물류센터) → 송장번호(첫 번째로 찾은 값) 요약 맵 — 2단계 매칭 미리보기 전용. */
+export function buildTrackingMapFromRows(rows: ParsedTrackingRow[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    if (!row.trackingNumber) continue;
+    const key = trackingKey(row.purchaseOrderNumber, row.fulfillmentCenter);
+    if (!map.has(key)) map.set(key, row.trackingNumber);
+  }
+  return map;
+}
+
+export interface BuildShipmentUploadResult {
+  buffer: Buffer;
+  includedCount: number;
+  excludedUnmatchedCount: number;
+}
+
+/**
+ * 3단계 전용 — 2단계에서 업로드한 원본의 실제 행 데이터 중, 현재 웨이브의 (발주번호,물류센터)와
+ * 일치하고 송장번호가 실제로 채워진 행만 골라 새 "상품목록" 시트(원본과 같은 실제 헤더)로
+ * 만든다. 1단계 한진 업로드 서식(K/AB~AF 고정 컬럼)과는 완전히 다른 파일이다. 송장번호가 없는
+ * (매칭 실패) 행은 절대 포함하지 않는다 — 임의로 채우거나 끼워 넣지 않는다.
+ */
+export async function buildShipmentCreationUploadFile(
+  allRows: ParsedTrackingRow[],
+  targets: { purchaseOrderNumber: string; fulfillmentCenter: string }[]
+): Promise<BuildShipmentUploadResult> {
+  const targetKeys = new Set(targets.map(t => trackingKey(t.purchaseOrderNumber, t.fulfillmentCenter)));
+  const inTarget = allRows.filter(row => targetKeys.has(trackingKey(row.purchaseOrderNumber, row.fulfillmentCenter)));
+  const included = inTarget.filter(row => row.trackingNumber);
+  const excludedUnmatchedCount = inTarget.length - included.length;
+
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet(TRACKING_SHEET_NAME);
+  sheet.addRow(TRACKING_HEADERS);
+  for (const row of included) {
+    sheet.addRow([
+      row.purchaseOrderNumber,
+      row.fulfillmentCenter,
+      row.transportType,
+      row.expectedDate,
+      row.skuId,
+      row.barcode,
+      row.productName,
+      row.confirmedQuantity,
+      row.trackingNumber,
+      row.shippedQuantity,
+    ]);
+  }
+
+  const buffer = (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
+  return { buffer, includedCount: included.length, excludedUnmatchedCount };
 }

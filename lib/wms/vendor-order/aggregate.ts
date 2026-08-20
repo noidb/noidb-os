@@ -1,4 +1,5 @@
 import type { PickingWaveItem } from "../picking-wave/types";
+import { resolveDisplayOption } from "../display-name";
 import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraft, type VendorOrderDraftLine } from "./types";
 
 /**
@@ -38,7 +39,8 @@ export function buildVendorOrderDraftsFromWaveItems(
       vendorName,
       skuId: item.productCode,
       modelName: item.modelName || item.productName,
-      optionLabel: item.optionLabel || "",
+      category: item.category || "",
+      optionLabel: resolveDisplayOption(item.productName, item.optionLabel),
       productName: item.productName,
       imageUrl: item.imageUrl || "",
       barcode: item.catalogBarcode || "",

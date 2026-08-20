@@ -1,5 +1,7 @@
 import type { PickingWaveItem } from "./types";
 import { cleanDisplayProductName } from "../display-name";
+import { resolveWarehouseCategoryBucket, warehouseCategorySortIndex } from "../category-order";
+import type { LiveCatalogLookup } from "./live-catalog";
 
 /**
  * 통합 피킹 화면의 그룹/정렬 기준을 화면 코드와 분리하는 모듈.
@@ -25,10 +27,17 @@ export interface PickingGroup {
   sortKey: string;
 }
 
-const UNCATEGORIZED_LABEL = "미분류";
+/**
+ * SKU(상품코드) → 제품DB 최신 카테고리 값. 웨이브 생성 시점에 저장된 item.category 대신
+ * liveCatalogByProductCode(LiveCatalogLookup)의 최신 값으로 창고 버킷을 계산한다 — 구글시트에서
+ * 카테고리를 나중에 고쳐도, "제품DB 새로고침"으로 이 맵을 다시 불러와 넘기기만 하면 바로
+ * 반영된다(2026-08-19 사용자 확정, 계산 결과를 어디에도 캐시하지 않음).
+ */
+export type { LiveCatalogLookup } from "./live-catalog";
 
 export function resolveGroup(
   item: PickingWaveItem,
+  liveCatalogByProductCode?: LiveCatalogLookup,
   mode: PickingGroupingMode = PICKING_GROUPING_MODE
 ): PickingGroup {
   if (mode === "location" && item.locationStatus === "located" && item.boxId && item.shelfId) {
@@ -47,13 +56,21 @@ export function resolveGroup(
   // 화면에 보여주는 라벨은 모델코드 대신 상품명(표시용 정리 적용)을 쓴다 (2026-08-19 사용자 확정
   // — "모델명처럼 보이는 값" 대신 실제 상품명이 보여야 함).
   const modelKey = item.modelName || item.productCode;
+  const liveEntry = liveCatalogByProductCode?.get(item.productCode);
+  const effectiveCategory = liveEntry ? liveEntry.category : item.category;
+  const bucket = resolveWarehouseCategoryBucket(effectiveCategory);
+  const bucketPriority = String(warehouseCategorySortIndex(bucket)).padStart(2, "0");
+  // 창고번호/BOX번호는 대부분 비어있어(2026-08-19 확인) 실제 위치 순서로 쓰지 못한다 —
+  // 기존 순서(창고번호 → 모델명 → SKU → 수량)를 그대로 유지하고 버킷 우선순위만 맨 앞에 둔다.
+  const sortKey = `${bucketPriority}::${item.catalogWarehouseNumber || ""}::${item.catalogBoxNumber || ""}::${modelKey}::${item.productCode}::${String(Math.max(0, Math.round(item.totalQuantity))).padStart(6, "0")}`;
+
   return {
     groupId: `model:${modelKey}`,
     groupKind: "model",
     groupLabel: cleanDisplayProductName(item.productName),
-    sectionId: item.category || UNCATEGORIZED_LABEL,
-    sectionLabel: item.category || UNCATEGORIZED_LABEL,
-    sortKey: item.modelSortKey,
+    sectionId: bucket,
+    sectionLabel: bucket,
+    sortKey,
   };
 }
 

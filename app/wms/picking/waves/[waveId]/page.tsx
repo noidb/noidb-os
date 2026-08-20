@@ -1,15 +1,33 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { useRouter } from "next/navigation";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import { resolveGroup, type PickingGroup } from "@/lib/wms/picking-wave/grouping";
+import { fetchLiveCatalogLookup, resolveLiveFields, type LiveCatalogLookup } from "@/lib/wms/picking-wave/live-catalog";
 import { proposeShortageAllocation, sumFulfilledQuantity } from "@/lib/wms/picking-wave/allocate";
 import { buildBasketDisplayNames } from "@/lib/wms/picking-wave/basket-display";
+import { UNASSIGNED_VENDOR_NAME } from "@/lib/wms/vendor-order/types";
 import type { PickingWave, PickingWaveItem, PickingAllocationResult } from "@/lib/wms/picking-wave/types";
-import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsWarnButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
-import { cleanDisplayProductName } from "@/lib/wms/display-name";
+import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsWarnButton, wmsGhostButton, wmsBronzeButton, wmsSageButton, wmsGreenDarkButton } from "@/lib/wms/ui-tokens";
 import ProductInfoEditSheet from "./ProductInfoEditSheet";
+import WmsExitNav from "../WmsExitNav";
+import RefreshCatalogButton from "../RefreshCatalogButton";
+import ImageDiagnosticsPanel from "./ImageDiagnosticsPanel";
+import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
+import { openProductLinkPreview } from "@/lib/wms/product-link-preview";
+import { ExternalLinkIcon } from "../../../icons";
+
+interface CatalogRefreshSummary {
+  catalogCount: number;
+  waveItemCount: number;
+  matchedCount: number;
+  imageUpdatedCount: number;
+  skuIdUpdatedCount: number;
+  unmatchedCount: number;
+  unmatchedModelSkus: string[];
+  noImageCount: number;
+}
 
 interface SectionGroup {
   sectionId: string;
@@ -18,14 +36,18 @@ interface SectionGroup {
 }
 
 /** 섹션(카테고리) → 그룹(모델) → 아이템 순서로 정렬해 구성한다. 컴포넌트 상태와 분리된 순수 함수로
- *  둬서, 자동 다음 그룹 이동 시 stale한 useMemo 결과 대신 최신 items로 바로 계산할 수 있게 한다. */
-function buildSections(items: PickingWaveItem[]): SectionGroup[] {
-  const sorted = [...items].sort((a, b) => resolveGroup(a).sortKey.localeCompare(resolveGroup(b).sortKey));
+ *  둬서, 자동 다음 그룹 이동 시 stale한 useMemo 결과 대신 최신 items로 바로 계산할 수 있게 한다.
+ *  liveCatalogByProductCode를 넘기면 웨이브 생성 시점 카테고리 대신 최신 제품DB 카테고리로
+ *  창고 동선 순서를 계산한다(2026-08-19 사용자 확정 — 구글시트 카테고리 수정이 새로고침 시 반영). */
+function buildSections(items: PickingWaveItem[], liveCatalogByProductCode?: LiveCatalogLookup): SectionGroup[] {
+  const sorted = [...items].sort((a, b) =>
+    resolveGroup(a, liveCatalogByProductCode).sortKey.localeCompare(resolveGroup(b, liveCatalogByProductCode).sortKey)
+  );
   const sectionOrder: string[] = [];
   const sectionMap = new Map<string, SectionGroup>();
 
   for (const item of sorted) {
-    const group = resolveGroup(item);
+    const group = resolveGroup(item, liveCatalogByProductCode);
     let section = sectionMap.get(group.sectionId);
     if (!section) {
       section = { sectionId: group.sectionId, sectionLabel: group.sectionLabel, groups: [] };
@@ -56,6 +78,11 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   const [basketDisplayNames, setBasketDisplayNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [liveCatalogByProductCode, setLiveCatalogByProductCode] = useState<LiveCatalogLookup>(new Map());
+  const [catalogRefreshing, setCatalogRefreshing] = useState(false);
+  const [catalogRefreshError, setCatalogRefreshError] = useState<string | null>(null);
+  const [catalogRefreshSummary, setCatalogRefreshSummary] = useState<CatalogRefreshSummary | null>(null);
+  const [showCatalogRefreshDetail, setShowCatalogRefreshDetail] = useState(false);
 
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [selectedProductCode, setSelectedProductCode] = useState<string | null>(null);
@@ -64,31 +91,108 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   const [partialTotalValue, setPartialTotalValue] = useState("");
   const [allocationDraft, setAllocationDraft] = useState<PickingAllocationResult[] | null>(null);
   const [showProductInfoSheet, setShowProductInfoSheet] = useState(false);
+  const [checklistMode, setChecklistMode] = useState(false);
+  const [checkedProductCodes, setCheckedProductCodes] = useState<Set<string>>(new Set());
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+  /** 하단 일괄처리 영역(미처리 SKU만 선택 + 선택 전량찾음/전량없음)의 DOM — 일괄처리 직후
+   *  화면 위치가 튀는 문제를 고치기 위해, 처리 직전/직후 이 영역의 뷰포트 내 위치를 비교해
+   *  같은 자리로 스크롤을 보정하는 기준점으로 쓴다 (2026-08-20 신규). */
+  const bulkAreaRef = useRef<HTMLDivElement>(null);
 
   async function reload() {
-    const [loadedWave, loadedItems, loadedBaskets] = await Promise.all([
-      waveRepository.getWave(params.waveId),
-      waveRepository.listItems(params.waveId),
-      waveRepository.listBaskets(params.waveId),
-    ]);
-    if (!loadedWave) {
-      setLoadError("해당 통합 피킹 작업을 찾을 수 없습니다.");
+    try {
+      const [loadedWave, loadedItems, loadedBaskets] = await Promise.all([
+        waveRepository.getWave(params.waveId),
+        waveRepository.listItems(params.waveId),
+        waveRepository.listBaskets(params.waveId),
+      ]);
+      if (!loadedWave) {
+        setLoadError("웨이브 정보를 찾을 수 없습니다.");
+        return;
+      }
+      setWave(loadedWave);
+      setItems(loadedItems);
+      setBasketDisplayNames(buildBasketDisplayNames(loadedBaskets));
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "웨이브 정보를 찾을 수 없습니다.");
+    } finally {
       setLoading(false);
-      return;
     }
-    setWave(loadedWave);
-    setItems(loadedItems);
-    setBasketDisplayNames(buildBasketDisplayNames(loadedBaskets));
-    setLoading(false);
+  }
+
+  /** 제품DB(카테고리/옵션명/대표이미지/거래처/창고번호/BOX번호/쿠팡바코드)를 최신값으로 다시
+   *  불러온다 — "제품DB 새로고침" 버튼과 최초 로드 시 사용. 피킹 수량이나 웨이브 진행상태는
+   *  전혀 건드리지 않는다 (2026-08-19 2차 실사용 테스트 반영 — 이전에는 카테고리만 새로고침됐다).
+   *
+   * 2026-08-20 보완 — 조회 실패 시 빈 카탈로그로 기존 화면을 덮어쓰지 않고 오류만 표시한다
+   * (fetchLiveCatalogLookup은 실패 시 빈 Map을 돌려주는데, 실제 제품DB가 2,500개 이상이라
+   * 빈 Map은 사실상 항상 조회 실패로 봐도 안전하다). 매칭 결과를 집계해 요약을 보여주고, SKU ID로만
+   * 매칭됐는데 그 항목에 모델SKU가 있으면 웨이브 아이템에 모델SKU만 백필해둔다 — 피킹 상태·수량은
+   * 전혀 건드리지 않고, 다음 새로고침부터 이 웨이브도 모델SKU 우선 매칭을 쓸 수 있게 하기 위함이다. */
+  async function refreshProductCatalog() {
+    if (catalogRefreshing) return; // 중복 클릭 방지
+    setCatalogRefreshing(true);
+    setCatalogRefreshError(null);
+    try {
+      const freshCatalog = await fetchLiveCatalogLookup();
+      if (freshCatalog.size === 0) {
+        setCatalogRefreshError("제품DB를 불러오지 못했습니다. 다시 시도해주세요.");
+        return;
+      }
+
+      let matchedCount = 0;
+      let imageUpdatedCount = 0;
+      let skuIdUpdatedCount = 0;
+      let noImageCount = 0;
+      const unmatchedModelSkus: string[] = [];
+      const backfillUpdates: PickingWaveItem[] = [];
+
+      for (const item of items) {
+        const live = resolveLiveFields(item, freshCatalog);
+        if (live.matchedBy !== "none") {
+          matchedCount += 1;
+          if (live.matchedBy === "skuId" && live.liveModelSku && item.modelSku !== live.liveModelSku) {
+            backfillUpdates.push({ ...item, modelSku: live.liveModelSku, updatedAt: new Date().toISOString() });
+          }
+        } else {
+          unmatchedModelSkus.push(item.modelSku || item.productCode);
+        }
+        if (live.imageUrl && live.imageUrl !== item.imageUrl) imageUpdatedCount += 1;
+        if (live.liveSkuId && live.liveSkuId !== item.productCode) skuIdUpdatedCount += 1;
+        if (!live.imageUrl) noImageCount += 1;
+      }
+
+      if (backfillUpdates.length > 0) {
+        await Promise.all(backfillUpdates.map(updated => waveRepository.saveItem(updated)));
+        setItems(prev => prev.map(existing => backfillUpdates.find(u => u.id === existing.id) || existing));
+      }
+
+      setLiveCatalogByProductCode(freshCatalog);
+      setCatalogRefreshSummary({
+        catalogCount: new Set(freshCatalog.values()).size,
+        waveItemCount: items.length,
+        matchedCount,
+        imageUpdatedCount,
+        skuIdUpdatedCount,
+        unmatchedCount: unmatchedModelSkus.length,
+        unmatchedModelSkus,
+        noImageCount,
+      });
+    } catch (error) {
+      setCatalogRefreshError(error instanceof Error ? error.message : "제품DB를 불러오지 못했습니다. 다시 시도해주세요.");
+    } finally {
+      setCatalogRefreshing(false);
+    }
   }
 
   useEffect(() => {
     reload();
+    refreshProductCatalog();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.waveId]);
 
-  // 섹션(카테고리) → 그룹(모델) → 아이템 순서로 정렬해 구성한다.
-  const sections: SectionGroup[] = useMemo(() => buildSections(items), [items]);
+  // 섹션(카테고리) → 그룹(모델) → 아이템 순서로 정렬해 구성한다. 최신 제품DB 카테고리 기준.
+  const sections: SectionGroup[] = useMemo(() => buildSections(items, liveCatalogByProductCode), [items, liveCatalogByProductCode]);
 
   const allGroups = useMemo(() => sections.flatMap(section => section.groups), [sections]);
   const totalGroups = allGroups.length;
@@ -107,8 +211,8 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
 
   async function afterDecision(updated: PickingWaveItem, nextItems: PickingWaveItem[]) {
     if (!wave) return;
-    const group = resolveGroup(updated);
-    const groupItems = nextItems.filter(item => resolveGroup(item).groupId === group.groupId);
+    const group = resolveGroup(updated, liveCatalogByProductCode);
+    const groupItems = nextItems.filter(item => resolveGroup(item, liveCatalogByProductCode).groupId === group.groupId);
     const nextPending = groupItems.find(item => item.status === "pending");
 
     if (nextPending) {
@@ -122,7 +226,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
     if (wave.completedGroupIds.includes(group.groupId)) return;
 
     const nextCompletedGroupIds = [...wave.completedGroupIds, group.groupId];
-    const allGroupsNow = buildSections(nextItems).flatMap(section => section.groups);
+    const allGroupsNow = buildSections(nextItems, liveCatalogByProductCode).flatMap(section => section.groups);
     const nextGroup = allGroupsNow.find(g => !nextCompletedGroupIds.includes(g.group.groupId));
 
     if (nextGroup) {
@@ -145,6 +249,90 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
     await waveRepository.saveWave(completedWave);
     setWave(completedWave);
     router.push(`/wms/picking/waves/${wave.id}/complete`);
+  }
+
+  /** 체크리스트에서 선택한 SKU만 한 번에 처리하는 공통 로직 (2026-08-19 3차 실사용 테스트 반영 —
+   *  "선택 전량찾음"/"선택 전량없음" 둘 다 이 함수를 재사용한다). 체크 해제된 상품은 절대 건드리지
+   *  않고, 기존 수량에 누적하지 않는다 — 항상 최종값(전량 또는 0)으로 확정한다. */
+  async function applyBulkStatus(found: "full" | "notfound") {
+    if (!wave || checkedProductCodes.size === 0) return;
+    const bulkAreaEl = bulkAreaRef.current;
+    const anchorBefore = bulkAreaEl?.getBoundingClientRect().top;
+    let navigatingAway = false;
+    setBulkProcessing(true);
+    try {
+      const now = new Date().toISOString();
+      const nextItems = items.map(item => {
+        if (!checkedProductCodes.has(item.productCode)) return item;
+        const fulfilled = found === "full" ? item.totalQuantity : 0;
+        const allocations: PickingAllocationResult[] = item.sources.map(source => ({
+          purchaseOrderNumber: source.purchaseOrderNumber,
+          basketNumber: source.basketNumber,
+          requestedQuantity: source.requestedQuantity,
+          fulfilledQuantity: found === "full" ? source.requestedQuantity : 0,
+          shortageQuantity: found === "full" ? 0 : source.requestedQuantity,
+        }));
+        return { ...item, status: found, pickedQuantity: fulfilled, shortageQuantity: item.totalQuantity - fulfilled, allocations, updatedAt: now };
+      });
+
+      await Promise.all(
+        nextItems.filter(item => checkedProductCodes.has(item.productCode)).map(item => waveRepository.saveItem(item))
+      );
+      setItems(nextItems);
+
+      const allGroupsNow = buildSections(nextItems, liveCatalogByProductCode).flatMap(section => section.groups);
+      const nextCompletedGroupIds = allGroupsNow.filter(g => g.items.every(it => it.status !== "pending")).map(g => g.group.groupId);
+      const allDone = nextCompletedGroupIds.length === allGroupsNow.length;
+      const updatedWave: PickingWave = {
+        ...wave,
+        completedGroupIds: nextCompletedGroupIds,
+        status: allDone ? "completed" : wave.status,
+        completedAt: allDone ? now : wave.completedAt,
+        updatedAt: now,
+      };
+      await waveRepository.saveWave(updatedWave);
+      setWave(updatedWave);
+      setCheckedProductCodes(new Set());
+
+      if (allDone) {
+        navigatingAway = true;
+        router.push(`/wms/picking/waves/${wave.id}/complete`);
+      }
+    } finally {
+      setBulkProcessing(false);
+    }
+
+    // 웨이브가 전부 끝나 완료 화면으로 이동하는 경우가 아니면(= 같은 체크리스트 화면에 머무는
+    // 일반적인 경우), 처리 직전 저장해둔 하단 일괄처리 영역의 뷰포트 위치로 스크롤을 보정한다.
+    // requestAnimationFrame으로 재렌더링/레이아웃이 끝난 뒤 위치를 다시 재서 차이만큼만 보정하므로
+    // 목록 위쪽 텍스트 줄바꿈 등 사소한 높이 변화가 있어도 항상 같은 화면 위치를 유지한다.
+    if (!navigatingAway && bulkAreaEl && anchorBefore !== undefined) {
+      requestAnimationFrame(() => {
+        const anchorAfter = bulkAreaEl.getBoundingClientRect().top;
+        const delta = anchorAfter - anchorBefore;
+        if (delta !== 0) window.scrollBy({ top: delta, left: 0, behavior: "auto" });
+      });
+    }
+  }
+
+  function handleBulkFull() {
+    return applyBulkStatus("full");
+  }
+
+  function handleBulkNotFound() {
+    if (checkedProductCodes.size === 0) return;
+    const confirmed = window.confirm(`선택한 ${checkedProductCodes.size}개 상품을 전량 없음으로 처리할까요?`);
+    if (!confirmed) return;
+    return applyBulkStatus("notfound");
+  }
+
+  function toggleChecked(productCode: string) {
+    setCheckedProductCodes(prev => {
+      const next = new Set(prev);
+      if (next.has(productCode)) next.delete(productCode);
+      else next.add(productCode);
+      return next;
+    });
   }
 
   function handleFull(item: PickingWaveItem) {
@@ -236,11 +424,9 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   if (loadError || !wave) {
     return (
       <main style={pageStyle}>
+        <WmsExitNav />
         <h1 style={{ fontSize: "18px" }}>통합 피킹</h1>
-        <p style={{ color: "#c0392b" }}>{loadError}</p>
-        <a href="/wms/picking/waves" style={{ color: wmsColors.green, fontWeight: 700 }}>
-          목록으로
-        </a>
+        <p style={{ color: "#c0392b", fontWeight: 700 }}>{loadError || "웨이브 정보를 찾을 수 없습니다."}</p>
       </main>
     );
   }
@@ -249,15 +435,96 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   if (!selectedBucket) {
     return (
       <main style={pageStyle}>
+        <WmsExitNav />
         <h1 style={{ fontSize: "18px", margin: "0 0 2px" }}>통합 피킹</h1>
         <p style={{ color: wmsColors.muted, fontSize: "13px", margin: "0 0 4px" }}>
           {wave.id} · 발주서 {wave.sourcePurchaseOrderNumbers.length}건
         </p>
-        <p style={{ color: wmsColors.green, fontSize: "13px", fontWeight: 700, margin: "0 0 16px" }}>
-          전체 그룹 진행률 {doneGroupCount} / {totalGroups}
-        </p>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 0 10px" }}>
+          <p style={{ color: wmsColors.green, fontSize: "13px", fontWeight: 700, margin: 0 }}>
+            전체 그룹 진행률 {doneGroupCount} / {totalGroups}
+          </p>
+          <RefreshCatalogButton
+            onClick={refreshProductCatalog}
+            loading={catalogRefreshing}
+            error={Boolean(catalogRefreshError)}
+            label={
+              catalogRefreshing
+                ? "새로고침 중..."
+                : catalogRefreshError
+                  ? "제품DB 새로고침 실패 · 다시 시도"
+                  : catalogRefreshSummary
+                    ? "제품DB 최신 정보 반영 완료"
+                    : "제품DB 새로고침"
+            }
+          />
+        </div>
 
-        {sections.map(section => (
+        {catalogRefreshError && (
+          <p style={{ fontSize: "11px", color: "#c0392b", margin: "0 0 10px" }}>{catalogRefreshError}</p>
+        )}
+
+        {catalogRefreshSummary && !catalogRefreshError && (
+          <div
+            style={{
+              border: `1px solid ${wmsColors.border}`,
+              borderRadius: "10px",
+              padding: "10px 12px",
+              marginBottom: "12px",
+              background: wmsColors.surfaceBeige,
+              fontSize: "12px",
+            }}
+          >
+            <div style={{ fontWeight: 800, marginBottom: "6px" }}>제품DB 최신 정보 반영 완료</div>
+            <ul style={{ margin: 0, paddingLeft: "16px", lineHeight: 1.7 }}>
+              <li>제품DB 조회: {catalogRefreshSummary.catalogCount.toLocaleString()}개</li>
+              <li>웨이브 매칭: {catalogRefreshSummary.matchedCount}개</li>
+              <li>이미지 URL 갱신: {catalogRefreshSummary.imageUpdatedCount}개 (URL이 바뀐 개수 — 실제 로드 성공 여부는 별도)</li>
+              <li>SKU ID 갱신: {catalogRefreshSummary.skuIdUpdatedCount}개</li>
+              <li>미매칭: {catalogRefreshSummary.unmatchedCount}개</li>
+              <li>이미지 미등록: {catalogRefreshSummary.noImageCount}개</li>
+            </ul>
+            {catalogRefreshSummary.unmatchedModelSkus.length > 0 && (
+              <button
+                onClick={() => setShowCatalogRefreshDetail(prev => !prev)}
+                style={{ ...wmsGhostButton, minHeight: "28px", fontSize: "11px", padding: "0 10px", marginTop: "6px" }}
+              >
+                {showCatalogRefreshDetail ? "미매칭 목록 숨기기" : "미매칭 목록 보기"}
+              </button>
+            )}
+            {showCatalogRefreshDetail && catalogRefreshSummary.unmatchedModelSkus.length > 0 && (
+              <div style={{ marginTop: "6px", fontSize: "11px", color: wmsColors.muted }}>
+                {catalogRefreshSummary.unmatchedModelSkus.join(", ")}
+              </div>
+            )}
+          </div>
+        )}
+
+        <button
+          onClick={() => {
+            setChecklistMode(prev => !prev);
+            setCheckedProductCodes(new Set());
+          }}
+          style={{ ...wmsSecondaryButton, width: "100%", marginBottom: "16px" }}
+        >
+          {checklistMode ? "그룹별로 보기" : "전체 목록으로 보기 (체크박스로 한 번에 처리)"}
+        </button>
+
+        {checklistMode ? (
+          <ChecklistView
+            key={wave.id}
+            allItems={items}
+            checkedProductCodes={checkedProductCodes}
+            onToggle={toggleChecked}
+            onSetChecked={setCheckedProductCodes}
+            onBulkFull={handleBulkFull}
+            onBulkNotFound={handleBulkNotFound}
+            bulkProcessing={bulkProcessing}
+            liveCatalogByProductCode={liveCatalogByProductCode}
+            bulkAreaRef={bulkAreaRef}
+          />
+        ) : (
+        sections.map(section => (
           <div key={section.sectionId} style={{ marginBottom: "20px" }}>
             <h2 style={{ fontSize: "13px", color: wmsColors.muted, margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>
               {section.sectionLabel}
@@ -288,7 +555,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
-                      <ItemThumbnail imageUrl={groupItems[0]?.imageUrl} size={40} />
+                      <ItemThumbnail imageUrl={resolveLiveFields(groupItems[0], liveCatalogByProductCode).imageUrl} size={40} />
                       <span style={{ fontWeight: 800, fontSize: "16px", textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {group.groupLabel}
                       </span>
@@ -302,7 +569,9 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
               })}
             </div>
           </div>
-        ))}
+        )))}
+
+        <PickingListBottomBar wave={wave} items={items} />
       </main>
     );
   }
@@ -325,15 +594,23 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
           {selectedBucket.items.map(item => {
             const isDone = item.status !== "pending";
+            const live = resolveLiveFields(item, liveCatalogByProductCode);
             return (
-              <button
+              <div
                 key={item.productCode}
+                role="button"
+                tabIndex={0}
                 onClick={() => setSelectedProductCode(item.productCode)}
+                onKeyDown={event => {
+                  if (event.key === "Enter" || event.key === " ") setSelectedProductCode(item.productCode);
+                }}
                 style={{
                   ...wmsSecondaryButton,
                   height: "auto",
-                  minHeight: "60px",
+                  minHeight: "64px",
                   width: "100%",
+                  minWidth: 0,
+                  boxSizing: "border-box",
                   display: "flex",
                   justifyContent: "space-between",
                   alignItems: "center",
@@ -344,19 +621,22 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
                   border: isDone ? `2px solid ${wmsColors.green}` : `1px solid ${wmsColors.border}`,
                 }}
               >
-                <ItemThumbnail imageUrl={item.imageUrl} size={44} />
+                <ProductLinkThumbnailButton imageUrl={live.imageUrl} productLink={live.productLink} size={48} />
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: "13px", whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.3 }}>
-                    {cleanDisplayProductName(item.productName)}
+                  <div style={{ fontWeight: 700, fontSize: "14px", whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.3 }}>
+                    {live.name}
                   </div>
-                  <div style={{ fontSize: "12px", fontWeight: 700, color: wmsColors.greenDark }}>{item.optionLabel || "옵션 없음"}</div>
-                  <div style={{ fontSize: "10px", color: wmsColors.muted }}>SKU {item.productCode}</div>
+                  <div style={{ fontSize: "13px", fontWeight: 700, color: wmsColors.greenDark, whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.3 }}>
+                    {live.optionLabel || "옵션 없음"}
+                  </div>
+                  <div style={{ fontSize: "11px", color: wmsColors.muted }}>SKU {item.productCode}</div>
                 </div>
-                <div style={{ fontSize: "13px", fontWeight: 700, flexShrink: 0 }}>
+                <ProductLinkIconButton productLink={live.productLink} />
+                <div style={{ fontSize: "14px", fontWeight: 700, flexShrink: 0 }}>
                   {item.pickedQuantity} / {item.totalQuantity}개
                   {isDone && <div style={{ fontSize: "10px", color: wmsColors.greenDark, textAlign: "right" }}>완료</div>}
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>
@@ -433,8 +713,13 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
 
   // 화면: 아이템(SKU) 상세 — 스크롤 없이 한 화면 안에서 버튼까지 보이도록 구성
   // (2026-08-19 사용자 확정). 위치/거래처/창고번호 등 상세 정보는 "상품 정보 수정" 시트로 이동.
+  // 2026-08-20: live를 이 함수 스코프에서 한 번만 계산해 상세 화면과 "상품 정보 수정" 시트
+  // (ProductInfoEditSheet)가 완전히 같은 최신 제품DB 값을 쓰도록 한다 — 화면마다 별도로
+  // resolveLiveFields를 다시 계산하지 않는다.
+  const selectedItemLive = resolveLiveFields(selectedItem, liveCatalogByProductCode);
+
   return (
-    <main style={{ ...pageStyle, display: "flex", flexDirection: "column", height: "100vh", paddingBottom: "12px" }}>
+    <main style={{ ...pageStyle, display: "flex", flexDirection: "column", height: "100vh", paddingBottom: "calc(12px + env(safe-area-inset-bottom))" }}>
       <button onClick={() => setSelectedProductCode(null)} style={{ ...wmsGhostButton, marginBottom: "8px", flexShrink: 0 }}>
         ← 그룹 안 목록으로
       </button>
@@ -444,42 +729,26 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
           onClick={() => setShowProductInfoSheet(true)}
           style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "center" }}
         >
-          {selectedItem.imageUrl ? (
-            <img
-              src={selectedItem.imageUrl}
-              alt={selectedItem.productName}
-              style={{ borderRadius: "12px", width: "100%", maxWidth: "180px", maxHeight: "34vh", height: "auto", objectFit: "cover", margin: "0 auto" }}
-            />
-          ) : (
-            <div
-              style={{
-                width: "140px",
-                height: "140px",
-                margin: "0 auto",
-                borderRadius: "12px",
-                background: wmsColors.surfaceBeige,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: wmsColors.muted,
-                fontSize: "12px",
-              }}
-            >
-              이미지 없음
-            </div>
-          )}
+          <DetailImage imageUrl={selectedItemLive.imageUrl} alt={selectedItem.productName} />
         </button>
 
         <button
           onClick={() => setShowProductInfoSheet(true)}
           style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "center", width: "100%" }}
         >
-          <h2 style={{ margin: "10px 0 2px", fontSize: "16px", color: wmsColors.ink }}>{cleanDisplayProductName(selectedItem.productName)}</h2>
-          <p style={{ margin: "0 0 2px", color: wmsColors.greenDark, fontSize: "13px", fontWeight: 700 }}>
-            옵션 {selectedItem.optionLabel || "옵션 없음"}
+          <h2 style={{ margin: "10px 0 2px", fontSize: "18px", color: wmsColors.ink }}>{selectedItemLive.name}</h2>
+          <p style={{ margin: "0 0 2px", color: wmsColors.greenDark, fontSize: "15px", fontWeight: 700, whiteSpace: "normal", wordBreak: "keep-all" }}>
+            옵션 {selectedItemLive.optionLabel || "옵션 없음"}
           </p>
-          <p style={{ margin: 0, color: wmsColors.muted, fontSize: "12px" }}>SKU {selectedItem.productCode}</p>
+          <p style={{ margin: 0, color: wmsColors.muted, fontSize: "13px" }}>
+            SKU {selectedItem.productCode}
+            {selectedItemLive.liveSkuId && selectedItemLive.liveSkuId !== selectedItem.productCode && (
+              <span style={{ color: wmsColors.greenDark, fontWeight: 700 }}> (최신 SKU ID: {selectedItemLive.liveSkuId})</span>
+            )}
+          </p>
         </button>
+
+        <ImageDiagnosticsPanel item={selectedItem} live={selectedItemLive} />
 
         <div style={{ display: "flex", justifyContent: "center", gap: "16px", margin: "10px 0" }}>
           <InfoTile label="총 찾을 수량" value={selectedItem.totalQuantity} />
@@ -541,6 +810,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       {showProductInfoSheet && (
         <ProductInfoEditSheet
           item={selectedItem}
+          live={selectedItemLive}
           onClose={() => setShowProductInfoSheet(false)}
           onSaved={patch => handleProductInfoSaved(selectedItem, patch)}
         />
@@ -552,7 +822,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
 const pageStyle: CSSProperties = {
   maxWidth: WMS_MOBILE_WIDTH,
   margin: "0 auto",
-  padding: "16px",
+  padding: "12px 12px calc(12px + env(safe-area-inset-bottom))",
   fontFamily: "sans-serif",
   background: wmsColors.background,
   color: wmsColors.ink,
@@ -565,14 +835,291 @@ const summaryGridStyle: CSSProperties = {
   gap: "10px",
 };
 
-function ItemThumbnail({ imageUrl, size }: { imageUrl?: string; size: number }) {
-  if (imageUrl) {
+/**
+ * 전체 SKU를 그룹 이동 없이 한 화면에서 체크박스로 처리하는 목록 (2026-08-19 신규).
+ * 창고 동선 순서(카테고리 버킷)로 정렬한다. 체크박스와 "상품 상세로 들어가기" 동작이 섞이지
+ * 않도록, 이 화면에서는 상세 진입 없이 체크만 하고 [선택 상품 전량찾음]으로만 처리한다.
+ */
+function ChecklistView({
+  allItems,
+  checkedProductCodes,
+  onToggle,
+  onSetChecked,
+  onBulkFull,
+  onBulkNotFound,
+  bulkProcessing,
+  liveCatalogByProductCode,
+  bulkAreaRef,
+}: {
+  allItems: PickingWaveItem[];
+  checkedProductCodes: Set<string>;
+  onToggle: (productCode: string) => void;
+  onSetChecked: (next: Set<string>) => void;
+  onBulkFull: () => void;
+  onBulkNotFound: () => void;
+  bulkProcessing: boolean;
+  liveCatalogByProductCode: LiveCatalogLookup;
+  bulkAreaRef: RefObject<HTMLDivElement>;
+}) {
+  const sortedItems = [...allItems].sort((a, b) =>
+    resolveGroup(a, liveCatalogByProductCode).sortKey.localeCompare(resolveGroup(b, liveCatalogByProductCode).sortKey)
+  );
+
+  function selectAll() {
+    onSetChecked(new Set(allItems.map(item => item.productCode)));
+  }
+  function deselectAll() {
+    onSetChecked(new Set());
+  }
+  /** 현재 화면에 보이는 전체 SKU 기준으로 체크 상태만 뒤집는다 — 찾은 수량/상태는 전혀 건드리지 않는다
+   *  (2026-08-19 3차 실사용 테스트 반영). */
+  function invertSelection() {
+    const next = new Set(allItems.filter(item => !checkedProductCodes.has(item.productCode)).map(item => item.productCode));
+    onSetChecked(next);
+  }
+  /** 최종 피킹 상태가 아직 정해지지 않은(status==="pending") SKU만 선택한다 — 찾은수량이
+   *  0이어도 이미 "못찾음"으로 처리 완료된 SKU는 제외한다 (2026-08-19 4차 실사용 테스트 반영,
+   *  기존 PickingWaveItemStatus를 그대로 재사용). 기존 선택은 모두 해제하고 새로 선택한다. */
+  function selectUnprocessed() {
+    onSetChecked(new Set(allItems.filter(item => item.status === "pending").map(item => item.productCode)));
+  }
+
+  return (
+    <div>
+      {/* 버튼 역할별 색상 구분 (2026-08-19 5차 실사용 테스트 반영, AI 상품등록 화면 팔레트 재사용):
+       *  전체선택=블루그레이, 전체해제=웜베이지, 반전선택=오커·브라운.
+       *  "미처리 SKU만 선택"은 6차 실사용 테스트에서 목록 맨 아래 일괄처리 버튼 바로 위로
+       *  옮겼다 — 상단에는 이제 중복 없이 이 3개만 남는다. */}
+      <div style={{ display: "flex", gap: "6px", marginBottom: "8px", flexWrap: "wrap" }}>
+        <button onClick={selectAll} style={{ ...wmsPrimaryButton, flex: 1, minWidth: "88px", minHeight: "40px", fontSize: "12px" }}>
+          전체선택
+        </button>
+        <button onClick={deselectAll} style={{ ...wmsSecondaryButton, flex: 1, minWidth: "88px", minHeight: "40px", fontSize: "12px" }}>
+          전체해제
+        </button>
+        <button onClick={invertSelection} style={{ ...wmsBronzeButton, flex: 1, minWidth: "88px", minHeight: "40px", fontSize: "12px" }}>
+          반전선택
+        </button>
+      </div>
+      <p style={{ fontSize: "12px", color: wmsColors.muted, margin: "0 0 10px" }}>선택된 상품 {checkedProductCodes.size}개</p>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "14px" }}>
+        {sortedItems.map(item => {
+          const checked = checkedProductCodes.has(item.productCode);
+          const isDone = item.status !== "pending";
+          const live = resolveLiveFields(item, liveCatalogByProductCode);
+          return (
+            <div
+              key={item.productCode}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                border: `1px solid ${wmsColors.border}`,
+                borderRadius: "10px",
+                padding: "8px 10px",
+                background: isDone ? wmsColors.greenSoft : "#ffffff",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => onToggle(item.productCode)}
+                style={{ width: "22px", height: "22px", flexShrink: 0, cursor: "pointer" }}
+              />
+              <ProductLinkThumbnailButton imageUrl={live.imageUrl} productLink={live.productLink} size={44} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: "13px", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {live.name}
+                </div>
+                <div style={{ fontSize: "12px", fontWeight: 700, color: wmsColors.greenDark, whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.3 }}>
+                  {live.optionLabel || "옵션 없음"}
+                </div>
+                <div style={{ fontSize: "10px", color: wmsColors.muted }}>SKU {item.productCode}</div>
+              </div>
+              <ProductLinkIconButton productLink={live.productLink} />
+              <div style={{ fontSize: "13px", fontWeight: 700, flexShrink: 0 }}>
+                {item.pickedQuantity} / {item.totalQuantity}개
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* "미처리 SKU만 선택"은 일괄처리 버튼 바로 위, 전체 너비로 배치한다(2026-08-19 6차
+       *  실사용 테스트 반영) — 상단 선택 영역과 중복되지 않도록 여기 한 곳에만 둔다.
+       *  이 영역 전체에 ref를 달아 일괄처리 직후 스크롤 위치를 이 자리 기준으로 복원한다
+       *  (2026-08-20 신규, WmsPickingWaveDetailPage.applyBulkStatus 참고). */}
+      <div ref={bulkAreaRef}>
+        <button
+          onClick={selectUnprocessed}
+          style={{ ...wmsSageButton, width: "100%", minHeight: "44px", fontSize: "13px", marginBottom: "8px" }}
+        >
+          미처리 SKU만 선택
+        </button>
+
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button
+            onClick={onBulkFull}
+            disabled={checkedProductCodes.size === 0 || bulkProcessing}
+            style={{ ...wmsGreenDarkButton, flex: 1, minHeight: "48px", opacity: checkedProductCodes.size === 0 || bulkProcessing ? 0.5 : 1 }}
+          >
+            {bulkProcessing ? "처리 중..." : `선택 전량찾음 (${checkedProductCodes.size}개)`}
+          </button>
+          <button
+            onClick={onBulkNotFound}
+            disabled={checkedProductCodes.size === 0 || bulkProcessing}
+            style={{ ...wmsWarnButton, flex: 1, minHeight: "48px", opacity: checkedProductCodes.size === 0 || bulkProcessing ? 0.5 : 1 }}
+          >
+            {bulkProcessing ? "처리 중..." : `선택 전량없음 (${checkedProductCodes.size}개)`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 피킹 목록 실제 맨 아래에 두는 다음 단계 작업 영역 (2026-08-19 2차 실사용 테스트 반영).
+ * 목록을 끝까지 내려도 다음 업무 단계(부족분 거래처 발주서/발주확정)로 이동할 방법이 없다는
+ * 문제를 해결한다. 발주확정/피킹결과확인의 실제 상태변경 로직은 완료 웨이브 화면(complete/page.tsx)에
+ * 이미 있으므로 여기서 다시 만들지 않고, 그 화면으로 이동하는 실제 버튼만 둔다(재사용 우선).
+ */
+function PickingListBottomBar({ wave, items }: { wave: PickingWave; items: PickingWaveItem[] }) {
+  const remainingCount = items.filter(item => item.status === "pending").length;
+  const shortageItems = items.filter(item => item.shortageQuantity > 0);
+  const shortageQuantity = shortageItems.reduce((sum, item) => sum + item.shortageQuantity, 0);
+  const shortageVendorCount = new Set(shortageItems.map(item => item.vendorName || UNASSIGNED_VENDOR_NAME)).size;
+  const completeHref = `/wms/picking/waves/${wave.id}/complete`;
+  const vendorOrdersHref = `/wms/picking/waves/${wave.id}/vendor-orders`;
+
+  const barStyle: CSSProperties = {
+    marginTop: "20px",
+    border: `1px solid ${wmsColors.border}`,
+    borderRadius: "12px",
+    padding: "14px",
+    background: wmsColors.surfaceBeige,
+  };
+
+  if (wave.status === "in_progress" && remainingCount > 0) {
+    return (
+      <div style={barStyle}>
+        <p style={{ margin: "0 0 8px", fontSize: "13px", fontWeight: 700, color: wmsColors.ink }}>
+          남은 미처리 SKU {remainingCount}개
+        </p>
+        <button disabled style={{ ...wmsPrimaryButton, width: "100%", opacity: 0.4 }}>
+          발주확정
+        </button>
+        <p style={{ margin: "8px 0 0", fontSize: "11px", color: wmsColors.muted }}>
+          모든 SKU를 처리한 후 발주확정할 수 있습니다.
+        </p>
+        {shortageQuantity > 0 && (
+          <a href={vendorOrdersHref} style={{ display: "block", textDecoration: "none", marginTop: "10px" }}>
+            <button style={{ ...wmsSecondaryButton, width: "100%" }}>
+              부족분 거래처 발주서 확인 (지금까지 {shortageVendorCount}건 · {shortageQuantity}개, 미리보기)
+            </button>
+          </a>
+        )}
+      </div>
+    );
+  }
+
+  if (wave.status === "in_progress" || wave.status === "completed") {
+    return (
+      <div style={barStyle}>
+        <p style={{ margin: "0 0 8px", fontSize: "13px", fontWeight: 700, color: wmsColors.ink }}>
+          피킹 완료 — 예상 부족수량 {shortageQuantity}개
+        </p>
+        <a href={completeHref} style={{ textDecoration: "none" }}>
+          <button style={{ ...wmsPrimaryButton, width: "100%" }}>피킹 결과 최종 확인하러 가기</button>
+        </a>
+      </div>
+    );
+  }
+
+  // result_confirmed | order_confirmed
+  return (
+    <div style={barStyle}>
+      {shortageQuantity > 0 ? (
+        <>
+          <p style={{ margin: "0 0 8px", fontSize: "12px", color: wmsColors.ink }}>
+            부족 거래처 {shortageVendorCount}건 · 부족 SKU {shortageItems.length}개 · 총 부족수량 {shortageQuantity}개
+          </p>
+          <a href={vendorOrdersHref} style={{ textDecoration: "none" }}>
+            <button style={{ ...wmsPrimaryButton, width: "100%", marginBottom: "8px" }}>부족분 거래처 발주서 생성/확인</button>
+          </a>
+        </>
+      ) : (
+        <p style={{ margin: "0 0 8px", fontSize: "13px", fontWeight: 700, color: wmsColors.greenDark }}>현재 부족분이 없습니다.</p>
+      )}
+      {wave.status === "result_confirmed" ? (
+        <a href={completeHref} style={{ textDecoration: "none" }}>
+          <button style={{ ...wmsSecondaryButton, width: "100%" }}>발주확정하러 가기</button>
+        </a>
+      ) : (
+        <p style={{ margin: 0, fontSize: "12px", fontWeight: 700, color: wmsColors.greenDark, textAlign: "center" }}>발주확정 완료됨</p>
+      )}
+    </div>
+  );
+}
+
+/** 아이템 상세 화면의 큰 대표이미지 — ItemThumbnail과 같은 onError → placeholder 전환 규칙을 쓴다. */
+function DetailImage({ imageUrl, alt }: { imageUrl?: string; alt: string }) {
+  const displaySrc = getWmsDisplayImageUrl(imageUrl);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [displaySrc]);
+
+  if (displaySrc && !failed) {
     return (
       <img
-        src={imageUrl}
+        src={displaySrc}
+        alt={alt}
+        onError={() => setFailed(true)}
+        style={{ borderRadius: "12px", width: "100%", maxWidth: "220px", maxHeight: "38vh", height: "auto", objectFit: "cover", margin: "0 auto" }}
+      />
+    );
+  }
+  return (
+    <div
+      style={{
+        width: "160px",
+        height: "160px",
+        margin: "0 auto",
+        borderRadius: "12px",
+        background: wmsColors.surfaceBeige,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: wmsColors.muted,
+        fontSize: "12px",
+      }}
+    >
+      {displaySrc && failed ? "이미지 불러오기 실패" : "이미지 없음"}
+    </div>
+  );
+}
+
+/** 이미지 URL이 있어도 실제 로드가 실패하면(끊긴 링크, 접근 불가 등) 깨진 아이콘을 그대로
+ *  보여주지 않고 "이미지 없음" placeholder로 전환한다 — onError는 1회만 반영하고 같은 URL로
+ *  다시 재시도하지 않는다(2026-08-20 신규). imageUrl이 바뀌면(제품DB 새로고침 등) 실패 상태를
+ *  초기화해 새 URL은 다시 시도한다. */
+function ItemThumbnail({ imageUrl, size }: { imageUrl?: string; size: number }) {
+  const displaySrc = getWmsDisplayImageUrl(imageUrl);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [displaySrc]);
+
+  if (displaySrc && !failed) {
+    return (
+      <img
+        src={displaySrc}
         alt=""
         width={size}
         height={size}
+        onError={() => setFailed(true)}
         style={{ width: `${size}px`, height: `${size}px`, borderRadius: "8px", objectFit: "cover", flexShrink: 0, background: wmsColors.surfaceBeige }}
       />
     );
@@ -593,10 +1140,77 @@ function ItemThumbnail({ imageUrl, size }: { imageUrl?: string; size: number }) 
         flexShrink: 0,
       }}
     >
-      이미지
-      <br />
-      없음
+      {displaySrc && failed ? (
+        <>
+          이미지
+          <br />
+          실패
+        </>
+      ) : (
+        <>
+          이미지
+          <br />
+          없음
+        </>
+      )}
     </div>
+  );
+}
+
+/** 상품 이미지를 눌러 실제 제품링크를 여는 버튼(2026-08-20 신규). 체크박스/행 클릭과
+ *  이벤트가 섞이지 않도록 stopPropagation을 쓴다. 링크가 없으면 클릭을 비활성화한다 —
+ *  임의 쿠팡 URL을 만들어내지 않는다. */
+function ProductLinkThumbnailButton({ imageUrl, productLink, size }: { imageUrl?: string; productLink?: string; size: number }) {
+  if (!productLink) {
+    return (
+      <div style={{ position: "relative", flexShrink: 0 }} title="제품링크 미등록">
+        <ItemThumbnail imageUrl={imageUrl} size={size} />
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={event => {
+        event.stopPropagation();
+        openProductLinkPreview(productLink);
+      }}
+      title="제품링크 열기"
+      style={{ background: "none", border: "none", padding: 0, margin: 0, cursor: "pointer", flexShrink: 0, lineHeight: 0 }}
+    >
+      <ItemThumbnail imageUrl={imageUrl} size={size} />
+    </button>
+  );
+}
+
+/** 이미지 클릭을 모르는 사용자를 위한 별도 "제품링크" 아이콘 버튼(2026-08-20 신규). */
+function ProductLinkIconButton({ productLink }: { productLink?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={event => {
+        event.stopPropagation();
+        if (productLink) openProductLinkPreview(productLink);
+      }}
+      disabled={!productLink}
+      title={productLink ? "제품링크 열기" : "제품링크 미등록"}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "30px",
+        height: "30px",
+        flexShrink: 0,
+        borderRadius: "8px",
+        border: `1px solid ${wmsColors.border}`,
+        background: productLink ? "#ffffff" : wmsColors.surfaceBeige,
+        color: productLink ? wmsColors.slateDark : wmsColors.muted,
+        cursor: productLink ? "pointer" : "not-allowed",
+        opacity: productLink ? 1 : 0.5,
+      }}
+    >
+      <ExternalLinkIcon size={14} />
+    </button>
   );
 }
 

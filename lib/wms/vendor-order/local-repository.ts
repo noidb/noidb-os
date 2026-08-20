@@ -58,4 +58,12 @@ export class LocalVendorOrderRepository implements VendorOrderRepository {
     const list = readList<VendorOrderDraftLine>(KEYS.lines).filter(item => item.id !== lineId);
     writeList(KEYS.lines, list);
   }
+
+  async listAllDrafts(): Promise<VendorOrderDraft[]> {
+    return readList<VendorOrderDraft>(KEYS.drafts);
+  }
+
+  async listAllLines(): Promise<VendorOrderDraftLine[]> {
+    return readList<VendorOrderDraftLine>(KEYS.lines);
+  }
 }

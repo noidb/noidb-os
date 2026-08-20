@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { compressImageDataUrl } from "@/lib/image/compress";
 import { wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
+import GoogleDriveConnectionPanel from "@/app/wms/GoogleDriveConnectionPanel";
 
 interface Props {
   skuId: string;
@@ -13,9 +14,12 @@ interface Props {
 
 /**
  * 대표이미지를 카메라로 바로 촬영하거나 사진 보관함에서 골라 교체하는 바텀시트.
- * 저장 시 구글드라이브(lib/wms/google-drive.ts, drive.file 스코프)에 업로드해 URL만 받아온다 —
- * 원본 사진을 시트 셀에 base64로 직접 넣지 않는다. 제품DB 셀에 실제로 반영하는 것은
- * 이 컴포넌트가 아니라 호출한 쪽(ProductInfoEditSheet)의 "저장" 확인 단계다.
+ * 저장 시 구글드라이브(lib/wms/google-drive-user.ts, 사용자 OAuth · drive.file 스코프)에
+ * 업로드해 URL만 받아온다 — 원본 사진을 시트 셀에 base64로 직접 넣지 않는다. 제품DB 셀에
+ * 실제로 반영하는 것은 이 컴포넌트가 아니라 호출한 쪽(ProductInfoEditSheet 등)의 저장 단계다.
+ *
+ * 2026-08-20부터: 업로드 전에 Google Drive 연결 상태를 보여주고, 연결이 안 되어 있으면
+ * 저장 버튼을 막는다(서비스 계정 저장공간 부족 문제를 사용자 OAuth로 대체).
  */
 export default function ImageEditSheet({ skuId, currentImageUrl, onClose, onSaved }: Props) {
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -23,6 +27,7 @@ export default function ImageEditSheet({ skuId, currentImageUrl, onClose, onSave
   const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [driveConnected, setDriveConnected] = useState(false);
 
   function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -64,9 +69,11 @@ export default function ImageEditSheet({ skuId, currentImageUrl, onClose, onSave
     >
       <div
         onClick={e => e.stopPropagation()}
-        style={{ background: "#ffffff", borderRadius: "16px 16px 0 0", padding: "20px", width: "100%", maxWidth: "420px", margin: "0 auto" }}
+        style={{ background: "#ffffff", borderRadius: "16px 16px 0 0", padding: "20px 20px calc(20px + env(safe-area-inset-bottom))", width: "100%", maxWidth: "420px", margin: "0 auto", boxSizing: "border-box" }}
       >
         <h3 style={{ margin: "0 0 12px", fontSize: "15px" }}>대표이미지 교체 — SKU {skuId}</h3>
+
+        <GoogleDriveConnectionPanel compact onStatusChange={setDriveConnected} />
 
         <div style={{ textAlign: "center", marginBottom: "14px" }}>
           {previewDataUrl ? (
@@ -102,8 +109,12 @@ export default function ImageEditSheet({ skuId, currentImageUrl, onClose, onSave
               <button onClick={() => setPreviewDataUrl(null)} style={{ ...wmsGhostButton, flex: 1 }} disabled={uploading}>
                 다시 선택
               </button>
-              <button onClick={handleSave} style={{ ...wmsPrimaryButton, flex: 2, opacity: uploading ? 0.6 : 1 }} disabled={uploading}>
-                {uploading ? "업로드 중..." : "이 사진으로 저장"}
+              <button
+                onClick={handleSave}
+                style={{ ...wmsPrimaryButton, flex: 2, opacity: uploading || !driveConnected ? 0.6 : 1 }}
+                disabled={uploading || !driveConnected}
+              >
+                {uploading ? "업로드 중..." : !driveConnected ? "Drive 연결 필요" : "이 사진으로 저장"}
               </button>
             </div>
           </div>

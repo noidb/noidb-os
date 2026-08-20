@@ -1,5 +1,5 @@
 @font-face{font-family:"Pretendard Variable";font-style:normal;font-weight:45 920;font-display:swap;src:url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/variable/woff2/PretendardVariable.woff2") format("woff2-variations")}
-*{box-sizing:border-box}html,body{margin:0;padding:0;background:#f5f6f8;color:#171717;font-family:"Pretendard Variable",Pretendard,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",sans-serif;overflow-x:hidden}button,input,select{font:inherit}.shell{max-width:1120px;width:100%;margin:0 auto;padding:28px 18px 60px}.hero{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:22px}.eyebrow{font-weight:800;letter-spacing:.08em;margin:0 0 8px}.hero h1{font-size:34px;margin:0 0 8px}.sub{margin:0;color:#6b7280}.pill{background:#111827;color:#fff;border-radius:999px;padding:9px 12px;font-size:13px;white-space:nowrap}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.card{background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:20px;box-shadow:0 3px 12px rgba(0,0,0,.04)}.full{grid-column:1/-1}.card h2{margin:0 0 16px;font-size:19px}.upload{height:auto;min-height:410px;border:2px dashed #cbd5e1;border-radius:15px;display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer;overflow:hidden;background:#fafafa}.upload input{display:none}.upload div{display:flex;flex-direction:column;gap:8px;color:#6b7280}.upload strong{color:#111827}.upload img{width:100%;height:100%;max-height:480px;object-fit:contain}.formGrid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.field{display:flex;flex-direction:column;gap:6px}.field span{font-size:13px;font-weight:700}.field input,.field select{width:100%;padding:12px;border:1px solid #d1d5db;border-radius:10px;background:#fff}.results{display:grid;gap:10px}.result{border:1px solid #e5e7eb;border-radius:12px;padding:14px;background:#fafafa}.result span{display:block;font-size:12px;color:#6b7280;margin-bottom:6px}.result strong{line-height:1.55}.good{color:#15803d}.warn{color:#c2410c}.actions{display:flex;gap:10px;margin-top:16px}.actions button{border:0;border-radius:10px;padding:13px 17px;font-weight:800;cursor:pointer}.dark{background:#111827;color:#fff}.green{background:#16a34a;color:#fff}.saved{color:#15803d;font-weight:700}.steps{display:flex;flex-wrap:wrap;gap:8px}.steps span{background:#f3f4f6;padding:9px 11px;border-radius:10px;font-weight:700}.note{color:#6b7280;margin-bottom:0}@media(max-width:760px){.shell{padding:18px 12px 40px}.hero{flex-direction:column}.hero h1{font-size:27px}.grid{grid-template-columns:1fr}.full{grid-column:auto}.formGrid{grid-template-columns:1fr}.upload{min-height:300px}.actions{flex-direction:column}.actions button{width:100%}}
+*{box-sizing:border-box}html,body{margin:0;padding:0;background:#f5f6f8;color:#171717;font-family:"Pretendard Variable",Pretendard,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",sans-serif;overflow-x:hidden}button,input,select{font:inherit}.shell{max-width:1120px;width:100%;margin:0 auto;padding:calc(28px + env(safe-area-inset-top)) 18px calc(60px + env(safe-area-inset-bottom));box-sizing:border-box}.hero{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:22px}.eyebrow{font-weight:800;letter-spacing:.08em;margin:0 0 8px}.hero h1{font-size:34px;margin:0 0 8px}.sub{margin:0;color:#6b7280}.pill{background:#111827;color:#fff;border-radius:999px;padding:9px 12px;font-size:13px;white-space:nowrap}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.card{background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:20px;box-shadow:0 3px 12px rgba(0,0,0,.04)}.full{grid-column:1/-1}.card h2{margin:0 0 16px;font-size:19px}.upload{height:auto;min-height:410px;border:2px dashed #cbd5e1;border-radius:15px;display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer;overflow:hidden;background:#fafafa}.upload input{display:none}.upload div{display:flex;flex-direction:column;gap:8px;color:#6b7280}.upload strong{color:#111827}.upload img{width:100%;height:100%;max-height:480px;object-fit:contain}.formGrid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.field{display:flex;flex-direction:column;gap:6px}.field span{font-size:13px;font-weight:700}.field input,.field select{width:100%;padding:12px;border:1px solid #d1d5db;border-radius:10px;background:#fff}.results{display:grid;gap:10px}.result{border:1px solid #e5e7eb;border-radius:12px;padding:14px;background:#fafafa}.result span{display:block;font-size:12px;color:#6b7280;margin-bottom:6px}.result strong{line-height:1.55}.good{color:#15803d}.warn{color:#c2410c}.actions{display:flex;gap:10px;margin-top:16px}.actions button{border:0;border-radius:10px;padding:13px 17px;font-weight:800;cursor:pointer}.dark{background:#111827;color:#fff}.green{background:#16a34a;color:#fff}.saved{color:#15803d;font-weight:700}.steps{display:flex;flex-wrap:wrap;gap:8px}.steps span{background:#f3f4f6;padding:9px 11px;border-radius:10px;font-weight:700}.note{color:#6b7280;margin-bottom:0}@media(max-width:760px){.shell{padding:18px 12px 40px}.hero{flex-direction:column}.hero h1{font-size:27px}.grid{grid-template-columns:1fr}.full{grid-column:auto}.formGrid{grid-template-columns:1fr}.upload{min-height:300px}.actions{flex-direction:column}.actions button{width:100%}}
 .aiButton{width:100%;margin-top:12px;border:0;border-radius:11px;padding:14px;font-weight:800;background:#1f3a4d;color:#fff;cursor:pointer}
 .aiButton:disabled{opacity:.65;cursor:wait}
 .message{color:#15803d;font-weight:700;line-height:1.5}
@@ -310,7 +310,7 @@ button{font-weight:680!important}.eyebrow{font-weight:650;letter-spacing:.055em}
 .imageSlot,.thumbnailCard,.shotCard{border-radius:12px}
 .heroBrandArea{display:flex;flex-direction:column;align-items:flex-start}
 .brandLockup{display:flex;align-items:center;gap:12px;margin-bottom:18px}
-.brandMark{width:48px;height:48px;border-radius:12px;background:#252525;color:#f2eee7;display:grid;place-items:center;font-size:28px;font-weight:720;line-height:1;letter-spacing:-.06em;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+.brandMark{width:48px;height:48px;border-radius:12px;background:#252525;color:#f2eee7;display:block;object-fit:cover;flex:0 0 auto;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
 .brandLockup>div{display:flex;flex-direction:column;gap:1px}.brandWordmark{margin:0;font-size:21px;font-weight:740;letter-spacing:.055em;color:#252525}.brandLockup>div span{font-size:11px;text-transform:uppercase;letter-spacing:.13em;color:#77716a}
 @media(max-width:760px){.brandMark{width:42px;height:42px;border-radius:10px;font-size:24px}.brandWordmark{font-size:19px}.brandLockup{margin-bottom:14px}}
 
@@ -384,7 +384,7 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 
 /* Compact, readable phone layout */
 @media(max-width:760px){
-  .shell{padding:16px 10px 34px}
+  .shell{padding:calc(16px + env(safe-area-inset-top)) 10px calc(34px + env(safe-area-inset-bottom))}
   .card{padding:16px 14px}
   .hero{margin-bottom:18px}
   .brandLockup{margin-bottom:12px}
@@ -397,3 +397,15 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
   .imagePoolUpload{padding:15px 10px}
   .resetImagesButton{min-height:42px;font-size:13px;padding:8px 11px}
 }
+
+/* WMS 입력창 포커스 링 (2026-08-19 5차 실사용 테스트 — WMS를 AI 상품등록 화면과 같은 시각
+   언어로 통일). 새 클래스만 추가했고, 기존 AI 상품등록 화면 선택자(.field input 등)는 전혀
+   건드리지 않았다 — 값은 .field input:focus(333행)가 실제로 쓰는 값을 그대로 재사용했다. */
+.wms-input:focus{outline:0;border-color:var(--brand-slate);box-shadow:0 0 0 3px rgba(83,109,120,.12)}
+.wms-work-center-menu{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media(max-width:760px){.wms-work-center-menu{grid-template-columns:1fr}}
+
+/* 상품 검색 추가 바텀시트 헤더 — 공간이 부족한 폭에서 "제품DB 다시 불러오기"를
+   "DB 새로고침"으로 짧게 표시(2026-08-20 실기기 추가 확인 3번). */
+.wms-refresh-label-short{display:none}
+@media(max-width:359px){.wms-refresh-label-full{display:none}.wms-refresh-label-short{display:inline}}

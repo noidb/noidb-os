@@ -12,6 +12,7 @@ import {
   wmsSecondaryButton,
   wmsWarnButton,
   wmsGhostButton,
+  wmsOuterCard,
 } from "@/lib/wms/ui-tokens";
 
 /**
@@ -317,7 +318,7 @@ export default function WmsPickingPage() {
         </span>
       </div>
 
-      <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "16px", padding: "16px", textAlign: "center", marginTop: "10px" }}>
+      <div style={{ ...wmsOuterCard, padding: "16px", textAlign: "center", marginTop: "10px" }}>
         <img
           src={option.imageDataUri}
           alt={option.optionLabel}
@@ -403,7 +404,7 @@ export default function WmsPickingPage() {
 const pageStyle: CSSProperties = {
   maxWidth: WMS_MOBILE_WIDTH,
   margin: "0 auto",
-  padding: "16px",
+  padding: "16px 16px calc(16px + env(safe-area-inset-bottom))",
   fontFamily: "sans-serif",
   background: wmsColors.background,
   color: wmsColors.ink,

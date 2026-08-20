@@ -7,6 +7,7 @@ import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import { buildPickingWave, generateWaveId } from "@/lib/wms/picking-wave/build-wave";
 import type { SupplierHubPurchaseOrder } from "@/lib/wms/supplier-hub-orders";
 import type { PickingWave } from "@/lib/wms/picking-wave/types";
+import { PICKING_WAVE_STATUS_LABEL } from "@/lib/wms/picking-wave/status-label";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
 import {
   buildScheduleChangeRecommendations,
@@ -296,14 +297,14 @@ export default function WmsPickingWavesPage() {
       style={{
         maxWidth: WMS_MOBILE_WIDTH,
         margin: "0 auto",
-        padding: "16px",
+        padding: "12px 12px calc(12px + env(safe-area-inset-bottom))",
         fontFamily: "sans-serif",
         background: wmsColors.background,
         color: wmsColors.ink,
         minHeight: "100vh",
       }}
     >
-      <h1 style={{ fontSize: "20px", margin: "0 0 4px" }}>통합 피킹 작업 생성</h1>
+      <h1 style={{ fontSize: "22px", margin: "0 0 4px" }}>통합 피킹 작업 생성</h1>
       <p style={{ fontSize: "13px", color: wmsColors.muted, margin: "0 0 16px" }}>
         실제 발주 여러 건의 SKU를 합쳐 카테고리 → 모델명 → SKU 순서로 통합 피킹합니다. (창고 위치가 등록되면
         구역 → 선반 → BOX 순서로 자동 전환됩니다)
@@ -412,13 +413,13 @@ export default function WmsPickingWavesPage() {
             {existingWaves.map(wave => {
               const isEditing = editingWaveId === wave.id;
               return (
-                <div key={wave.id} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "10px 12px", background: "#ffffff" }}>
+                <div key={wave.id} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "10px 12px", background: "#ffffff" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
                     <a href={`/wms/picking/waves/${wave.id}`} style={{ color: wmsColors.ink, textDecoration: "none", fontWeight: 700, fontSize: "13px", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {wave.displayName || wave.id}
                     </a>
                     <span style={{ fontSize: "11px", color: wmsColors.muted, flexShrink: 0 }}>
-                      {wave.status === "completed" ? "완료" : "진행중"}
+                      {PICKING_WAVE_STATUS_LABEL[wave.status]}
                     </span>
                   </div>
                   <div style={{ fontSize: "11px", color: wmsColors.muted, margin: "2px 0 8px" }}>
@@ -644,7 +645,7 @@ function ScheduleRecommendationCard({ recommendations }: { recommendations: Sche
 
 function SummaryTile({ label, value, highlight }: { label: string; value: number; highlight?: boolean }) {
   return (
-    <div style={{ background: "#ffffff", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "10px" }}>
+    <div style={{ background: "#ffffff", border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "10px" }}>
       <div style={{ fontSize: "18px", fontWeight: 800, color: highlight && value > 0 ? wmsColors.warn : wmsColors.ink }}>{value}</div>
       <div style={{ fontSize: "11px", color: wmsColors.muted, marginTop: "2px" }}>{label}</div>
     </div>

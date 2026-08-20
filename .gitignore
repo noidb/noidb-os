@@ -23,6 +23,10 @@ lib/wms/data/po-for-confirm/*
 lib/wms/data/hanjin-template/*
 !lib/wms/data/hanjin-template/README.md
 
+# WMS 제품DB 실제 수정 전 백업 (원가/공급가 등 실제 데이터 포함 — 절대 커밋하지 않음, 2026-08-20)
+lib/wms/data/product-db-backups/*
+!lib/wms/data/product-db-backups/README.md
+
 # Google 서비스 계정 키 (JSON) — 실수로 커밋되는 것을 방지 (2026-08-19)
 # 서비스 계정 키는 항상 프로젝트 밖(예: 문서\NOIDB Secrets)에 보관하고, 이 저장소에는 절대 두지 않습니다.
 *service-account*.json
@@ -30,5 +34,7 @@ lib/wms/data/hanjin-template/*
 credentials.json
 credentials/
 secrets/
+# 로컬 전용 Google Drive OAuth refresh token 저장 파일 (2026-08-20) — 절대 커밋하지 않음
+.secrets/
 # Google Cloud 콘솔이 기본으로 내려주는 "<project-id>-<12자리 hex>.json" 형식의 키 파일명 패턴
 *-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].json

@@ -8,11 +8,12 @@ export function buildKakaoOrderText(vendorName: string, lines: VendorOrderDraftL
   const today = new Date().toLocaleDateString("ko-KR");
   const totalQuantity = lines.reduce((sum, line) => sum + line.shortageQuantity, 0);
 
+  // 표시 우선순위: SKU → 옵션명 → 수량 → 참고용 바코드(작게). 모델명은 화면/공유 결과물 모두에서
+  // 뺀다 — 거래처가 실제로 확인하는 값은 SKU와 옵션이다 (2026-08-19 2차 실사용 테스트 반영).
   const itemLines = lines.map((line, index) => {
-    const optionText = line.optionLabel ? ` (${line.optionLabel})` : "";
     const memoText = line.memo ? ` — ${line.memo}` : "";
-    const barcodeText = line.barcode ? ` [바코드 ${line.barcode}]` : ` [쿠팡 바코드 미등록]`;
-    return `${index + 1}. ${line.modelName || line.productName}${optionText} × ${line.shortageQuantity}개${barcodeText}${memoText}`;
+    const barcodeText = line.barcode ? ` (참고 바코드 ${line.barcode})` : ` (참고 바코드 미등록)`;
+    return `${index + 1}. SKU ${line.skuId} · ${line.optionLabel || "옵션 없음"} × ${line.shortageQuantity}개${barcodeText}${memoText}`;
   });
 
   return [

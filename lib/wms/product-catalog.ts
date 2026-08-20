@@ -1,4 +1,6 @@
 import { fetchSheetRows, isWmsGoogleSheetsConfigured, rowsToObjects } from "./google-sheets";
+import { normalizeSkuId } from "./sku-normalize";
+export { normalizeSkuId, normalizeModelSkuKey } from "./sku-normalize";
 
 /**
  * "제품DB" 시트만 읽어 상품코드(SKU ID) 기준으로 모델명/카테고리/상품명/옵션명/대표이미지/창고번호/
@@ -11,6 +13,10 @@ import { fetchSheetRows, isWmsGoogleSheetsConfigured, rowsToObjects } from "./go
  */
 export interface ProductCatalogItem {
   skuId: string;
+  /** 제품DB "모델SKU"(F열, 예: "we0001-GO") — 옵션(색상 등)별로 고유하다. "모델명/품번"(E열,
+   *  예: "we0001")과 다르다 — 그건 여러 옵션이 공유하므로 SKU 단위 재매칭 키로 쓰면 안 된다.
+   *  없으면 "" (2026-08-20 신규 — 제품DB 새로고침 시 SKU ID가 바뀐 상품도 모델SKU로 다시 찾기 위함). */
+  modelSku: string;
   modelName: string;
   category: string;
   productName: string;
@@ -26,6 +32,9 @@ export interface ProductCatalogItem {
   vendorName: string;
   /** 실제 쿠팡 Seller SKU Barcode. 임의 생성하지 않고 이 컬럼 값만 사용한다 — 없으면 "" */
   barcode: string;
+  /** 제품DB "제품링크"(실제 쿠팡 상품 URL) — 없으면 "". SKU로 URL을 임의 생성하지 않고 이
+   *  컬럼 값만 그대로 쓴다 (2026-08-19 5차 실사용 테스트 신규 — 거래처 발주서 카드 링크 버튼용). */
+  productLink: string;
 }
 
 /** product-catalog-write.ts(제품DB 직접 수정)에서도 같은 시트/헤더 매핑을 재사용한다. */
@@ -33,6 +42,7 @@ export const PRODUCT_DB_SHEET_NAME = "제품DB";
 
 /** 정규화된 필드 → 시트 헤더 후보(우선순위 순). 첫 번째로 존재하는 헤더의 값을 쓴다. */
 export const FIELD_HEADER_CANDIDATES: Record<Exclude<keyof ProductCatalogItem, "skuId" | "imageUrl">, string[]> = {
+  modelSku: ["모델SKU"],
   modelName: ["모델명/품번"],
   category: ["카테고리"],
   productName: ["상품명"],
@@ -42,12 +52,8 @@ export const FIELD_HEADER_CANDIDATES: Record<Exclude<keyof ProductCatalogItem, "
   currentStock: ["현재고", "재고수량"],
   vendorName: ["거래처", "거래처명", "매입처"],
   barcode: ["쿠팡 바코드", "Seller SKU Barcode", "쿠팡바코드", "바코드"],
+  productLink: ["제품링크", "상품링크", "쿠팡 URL", "URL", "링크"],
 };
-
-/** 숫자/문자/쉼표 형식이 달라도 같은 SKU ID로 비교할 수 있게 정규화한다. */
-export function normalizeSkuId(value: string | undefined): string {
-  return String(value ?? "").trim().replace(/^'/, "").replace(/[\s,]/g, "").replace(/\.0+$/, "");
-}
 
 /** 제품DB '이미지' 열의 =IMAGE("url",...) 수식에서 실제 이미지 URL만 추출한다. */
 function extractImageUrl(rawCell: string | undefined): string {
@@ -76,6 +82,7 @@ export async function fetchProductCatalog(): Promise<{ configured: boolean; item
   const items = rowsToObjects(rows)
     .map((row): ProductCatalogItem => ({
       skuId: normalizeSkuId(row["SKU ID"]),
+      modelSku: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.modelSku),
       modelName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.modelName),
       category: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.category),
       productName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productName),
@@ -86,6 +93,7 @@ export async function fetchProductCatalog(): Promise<{ configured: boolean; item
       currentStock: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.currentStock),
       vendorName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.vendorName),
       barcode: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.barcode),
+      productLink: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productLink),
     }))
     .filter(item => item.skuId);
   return { configured: true, items };

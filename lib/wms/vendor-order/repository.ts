@@ -12,4 +12,10 @@ export interface VendorOrderRepository {
   listLines(waveId: string): Promise<VendorOrderDraftLine[]>;
   saveLine(line: VendorOrderDraftLine): Promise<void>;
   deleteLine(lineId: string): Promise<void>;
+
+  /** 웨이브 구분 없이 전체 거래처 발주서 초안을 돌려준다 — 거래처 발주관리/입고처리 화면처럼
+   *  여러 웨이브를 가로질러 조회해야 하는 화면에서만 쓴다 (2026-08-19 4차 실사용 테스트 신규). */
+  listAllDrafts(): Promise<VendorOrderDraft[]>;
+  /** 웨이브 구분 없이 전체 거래처 발주서 라인을 돌려준다. */
+  listAllLines(): Promise<VendorOrderDraftLine[]>;
 }

@@ -1,16 +1,19 @@
 import { getWmsGoogleAccessToken } from "./google-service-account";
 
 /**
- * NOID WMS 전용 Google Drive 업로드 클라이언트 (2026-08-19 신규 — 상품 상세 화면의
- * "사진 촬영/썸네일 교체" 기능용). 같은 서비스 계정에 drive.file 스코프를 추가로 요청해서 쓴다
- * — 이 스코프는 "이 앱이 만든 파일"에만 접근 가능한 최소 권한이라, 사용자의 기존 구글드라이브
- * 파일에는 전혀 접근할 수 없다.
+ * @deprecated 2026-08-20부터 사용 안 함 — 이 파일의 서비스 계정 업로드 방식은 더 이상 어떤
+ * API 라우트에서도 호출되지 않는다. 실제 Drive API로 확인한 결과 서비스 계정은
+ * storageQuota.limit이 항상 "0"이라("Service Accounts do not have storage quota")
+ * 개인 "내 드라이브"에 파일을 소유할 수 없어 업로드가 실패했다(2026-08-19 실사용 테스트에서
+ * 확인된 오류의 근본 원인).
  *
- * 기존 상품등록 기능이 쓰는 Apps Script(templates/구글시트_상품DB_연동.gs)의 이미지 업로드와는
- * 완전히 별개의 경로다 — 그 Apps Script는 여기서 수정하지 않는다.
+ * 대체 경로: lib/wms/google-drive-oauth.ts(사용자 OAuth 인증) + lib/wms/google-drive-user.ts
+ * (사용자 OAuth로 실제 업로드) — 사용자 본인 계정(noidb2017@gmail.com)의 저장 용량을 쓴다.
+ * app/api/wms/product-image/upload/route.ts는 이제 이 파일이 아니라 google-drive-user.ts를
+ * 호출한다.
  *
- * 필요 사전 준비: Google Cloud 콘솔에서 "Google Drive API"가 사용 설정되어 있어야 한다
- * (Sheets API를 켰던 것과 같은 방식). 켜지지 않았으면 업로드 시 안내 에러가 뜬다.
+ * 이 파일은 과거 동작을 참고할 수 있도록 즉시 삭제하지 않고 남겨둔다(사용자 지시,
+ * 2026-08-20). 다른 어떤 파일도 이 파일을 import하지 않는 것이 확인되면 이후 정리 대상이다.
  */
 
 const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";

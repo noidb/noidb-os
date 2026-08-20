@@ -1,0 +1,407 @@
+import path from "node:path";
+import { promises as fs } from "node:fs";
+import ExcelJS from "exceljs";
+import { fetchSheetRows, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
+import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
+
+/**
+ * 쿠팡 "상품공급상태관리 다운로드" 파일을 제품DB(구글시트)와 매칭해 승인된 신상품의
+ * SKU ID/현재상태를 반영하는 전용 모듈 (2026-08-20 신규).
+ *
+ * 2026-08-19 실사용 데이터로 확인한 사실 — 실제로 이 폴더에 저장되는 파일
+ * ("noidb2017_sku_download_*.xlsx")에는 판매자상품코드/옵션 판매자상품코드/모델SKU와
+ * 동일한 의미의 열이 존재하지 않는다(실제 헤더: SKU ID, 요청, 상품명, 바코드, 발주가능상태,
+ * 담당 BM, 발주담당자, 치수류, MOQ, 중량, Box 바코드, Pallet 정보). 그래서 아래 CANDIDATE_KEY_HEADERS
+ * 중 실제로 존재하는 열이 없으면 자동 매칭 건수는 항상 0건이 된다 — 상품명+색상 같은 프록시로
+ * 임의 대체하지 않는다(사용자 지시, 2026-08-20). 나중에 쿠팡이 이 리포트에 실제 매칭키 열을
+ * 추가하면 이 목록에 헤더명만 추가하면 자동으로 동작한다.
+ */
+
+const SUPPLY_STATUS_FOLDER = "G:\\내 드라이브\\쿠팡데이터\\상품공급상태관리 다운로드";
+const PENDING_STATUS_VALUE = "기존상품승인대기";
+
+/** 2026-08-19 제품DB 실사용 데이터로 검증된 승인완료 상태값 — SKU ID가 채워진 행들이 전부
+ *  이 값을 쓰고 있음을 확인했다(예: wn11327 6개 옵션, we0001 3개 옵션). "승인완료"/"판매중" 등
+ *  은 이 시트에서 실제로 쓰인 적이 없어 후보에서 제외했다. verifyApprovedStatusValue()가 매
+ *  실행마다 이 값이 여전히 유효한지 실데이터로 재확인한다 — 더 이상 맞지 않으면 예외를 던진다. */
+const APPROVED_STATUS_CANDIDATE = "완료";
+
+const CANDIDATE_KEY_HEADERS = ["옵션 판매자상품코드", "판매자상품코드", "모델SKU", "모델 SKU", "Vendor Item ID", "Option Item Name"];
+
+/** 헤더명 → { "승인/공급 가능"으로 볼 값들 }. 실제 발견되는 첫 번째 헤더만 쓴다. */
+const APPROVAL_HEADER_APPROVED_VALUES: [string, string[]][] = [
+  ["승인상태", ["승인완료"]],
+  ["공급상태", ["공급가능", "정상공급"]],
+  ["발주가능상태", ["정상"]],
+];
+
+const SKU_ID_HEADERS = ["SKU ID", "Vendor Item ID", "쿠팡 SKU ID"];
+
+export class ApprovedStatusNotFoundError extends Error {
+  constructor() {
+    super("승인 완료 상태값을 확인할 수 없습니다. 제품DB '현재상태' 열에서 실제 사용 중인 승인완료 코드값을 찾지 못했습니다.");
+    this.name = "ApprovedStatusNotFoundError";
+  }
+}
+
+export class SupplyStatusFileNotFoundError extends Error {
+  constructor() {
+    super(`${SUPPLY_STATUS_FOLDER} 폴더에서 사용할 수 있는 엑셀 파일을 찾지 못했습니다.`);
+    this.name = "SupplyStatusFileNotFoundError";
+  }
+}
+
+export class ProductDbHeaderMissingError extends Error {
+  constructor(missing: string[]) {
+    super(`제품DB 시트에서 필요한 헤더를 찾지 못했습니다: ${missing.join(", ")}`);
+    this.name = "ProductDbHeaderMissingError";
+  }
+}
+
+function norm(v: unknown): string {
+  return String(v ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function findHeaderIndex(headers: string[], candidates: string[]): { index: number; header: string } | null {
+  for (const candidate of candidates) {
+    const idx = headers.findIndex(h => h === candidate);
+    if (idx >= 1) return { index: idx, header: candidate };
+  }
+  return null;
+}
+
+export interface LatestSupplyStatusFile {
+  filePath: string;
+  fileName: string;
+  mtime: string;
+}
+
+/** 대상 폴더에서 ~$ 임시파일·숨김파일을 제외하고 수정일이 가장 최근인 xlsx 1개를 고른다. */
+export async function findLatestSupplyStatusFile(): Promise<LatestSupplyStatusFile | null> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(SUPPLY_STATUS_FOLDER);
+  } catch {
+    return null;
+  }
+  const candidates: { filePath: string; fileName: string; mtime: Date }[] = [];
+  for (const name of entries) {
+    if (name.startsWith("~$") || name.startsWith(".")) continue;
+    if (!name.toLowerCase().endsWith(".xlsx")) continue;
+    const filePath = path.join(SUPPLY_STATUS_FOLDER, name);
+    const stat = await fs.stat(filePath);
+    if (!stat.isFile()) continue;
+    candidates.push({ filePath, fileName: name, mtime: stat.mtime });
+  }
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+  const best = candidates[0];
+  return { filePath: best.filePath, fileName: best.fileName, mtime: best.mtime.toISOString() };
+}
+
+interface DownloadRow {
+  matchKey: string;
+  skuId: string;
+  approvalRaw: string;
+  approved: boolean;
+}
+
+interface ParsedSupplyStatusFile {
+  matchKeyColumnHeader: string | null;
+  approvalColumnHeader: string | null;
+  skuIdColumnHeader: string | null;
+  rows: DownloadRow[];
+}
+
+async function parseSupplyStatusFile(filePath: string): Promise<ParsedSupplyStatusFile> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(filePath);
+  const sheet = wb.worksheets[0];
+  const headerRow = sheet.getRow(1);
+  const headers: string[] = [];
+  headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+    headers[colNumber] = String(cell.value ?? "").trim();
+  });
+
+  const matchKeyCol = findHeaderIndex(headers, CANDIDATE_KEY_HEADERS);
+  const skuIdCol = findHeaderIndex(headers, SKU_ID_HEADERS);
+  let approvalCol: { index: number; header: string } | null = null;
+  let approvedValues: string[] = [];
+  for (const [headerName, values] of APPROVAL_HEADER_APPROVED_VALUES) {
+    const found = findHeaderIndex(headers, [headerName]);
+    if (found) {
+      approvalCol = found;
+      approvedValues = values;
+      break;
+    }
+  }
+
+  const rows: DownloadRow[] = [];
+  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const skuId = skuIdCol ? String(row.getCell(skuIdCol.index).value ?? "").trim() : "";
+    const matchKey = matchKeyCol ? String(row.getCell(matchKeyCol.index).value ?? "").trim() : "";
+    const approvalRaw = approvalCol ? String(row.getCell(approvalCol.index).value ?? "").trim() : "";
+    const approved = approvalCol ? approvedValues.includes(approvalRaw) : false;
+    if (!matchKey && !skuId) return;
+    rows.push({ matchKey, skuId, approvalRaw, approved });
+  });
+
+  return {
+    matchKeyColumnHeader: matchKeyCol?.header ?? null,
+    approvalColumnHeader: approvalCol?.header ?? null,
+    skuIdColumnHeader: skuIdCol?.header ?? null,
+    rows,
+  };
+}
+
+interface ProductDbHeaderIndex {
+  status: number;
+  modelSku: number;
+  skuId: number;
+  productName: number;
+  color: number;
+}
+
+function resolveProductDbHeaderIndex(headers: string[]): ProductDbHeaderIndex {
+  const idx = {
+    status: headers.indexOf("현재상태"),
+    modelSku: headers.indexOf("모델SKU"),
+    skuId: headers.indexOf("SKU ID"),
+    productName: headers.indexOf("상품명"),
+    color: headers.indexOf("색상"),
+  };
+  const missing = Object.entries({ 현재상태: idx.status, 모델SKU: idx.modelSku, "SKU ID": idx.skuId })
+    .filter(([, v]) => v < 0)
+    .map(([k]) => k);
+  if (missing.length > 0) throw new ProductDbHeaderMissingError(missing);
+  return idx;
+}
+
+function verifyApprovedStatusValue(productDbDataRows: string[][], idx: ProductDbHeaderIndex): string {
+  const usedWithSkuId = productDbDataRows.some(
+    row => String(row[idx.status] ?? "").trim() === APPROVED_STATUS_CANDIDATE && String(row[idx.skuId] ?? "").trim() !== ""
+  );
+  if (!usedWithSkuId) throw new ApprovedStatusNotFoundError();
+  return APPROVED_STATUS_CANDIDATE;
+}
+
+export interface MatchedRow {
+  sheetRowNumber: number;
+  modelSku: string;
+  productName: string;
+  currentStatus: string;
+  currentSkuId: string;
+  downloadSkuId: string | null;
+  matchCandidateCount: number;
+  conflict: boolean;
+  alreadySame: boolean;
+  eligible: boolean;
+  reasons: string[];
+}
+
+export interface SupplyStatusPreview {
+  fileFound: true;
+  fileName: string;
+  fileMtime: string;
+  matchKeyColumnHeader: string | null;
+  approvalColumnHeader: string | null;
+  approvedStatusValue: string;
+  pendingCount: number;
+  exactMatchCount: number;
+  eligibleCount: number;
+  duplicateCount: number;
+  unmatchedCount: number;
+  conflictCount: number;
+  alreadySameCount: number;
+  rows: MatchedRow[];
+}
+
+export type SupplyStatusPreviewOrNotFound = SupplyStatusPreview | { fileFound: false };
+
+interface InternalMatchResult {
+  preview: SupplyStatusPreview;
+  headerIndex: ProductDbHeaderIndex;
+}
+
+async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
+  const fileInfo = await findLatestSupplyStatusFile();
+  if (!fileInfo) return null;
+
+  const parsed = await parseSupplyStatusFile(fileInfo.filePath);
+
+  const sheetRows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" });
+  const headers = sheetRows[0].map(h => String(h ?? "").trim());
+  const idx = resolveProductDbHeaderIndex(headers);
+  const dataRows = sheetRows.slice(1);
+
+  const approvedStatusValue = verifyApprovedStatusValue(dataRows, idx);
+
+  const pendingRows = dataRows
+    .map((row, i) => ({ row, sheetRowNumber: i + 2 }))
+    .filter(({ row }) => String(row[idx.status] ?? "").trim() === PENDING_STATUS_VALUE);
+
+  const byKey = new Map<string, DownloadRow[]>();
+  if (parsed.matchKeyColumnHeader) {
+    for (const r of parsed.rows) {
+      if (!r.matchKey) continue;
+      const key = norm(r.matchKey);
+      const list = byKey.get(key) || [];
+      list.push(r);
+      byKey.set(key, list);
+    }
+  }
+
+  const matchedRows: MatchedRow[] = [];
+  for (const { row, sheetRowNumber } of pendingRows) {
+    const modelSku = String(row[idx.modelSku] ?? "").trim();
+    const reasons: string[] = [];
+    let eligible = false;
+    let downloadSkuId: string | null = null;
+    let alreadySame = false;
+    let conflict = false;
+    let matchCandidateCount = 0;
+
+    if (!parsed.matchKeyColumnHeader) {
+      reasons.push("다운로드 파일에 모델SKU와 비교할 열(옵션 판매자상품코드/판매자상품코드 등)이 없습니다.");
+    } else if (!modelSku) {
+      reasons.push("제품DB 모델SKU가 비어 있습니다.");
+    } else {
+      const candidates = byKey.get(norm(modelSku)) || [];
+      matchCandidateCount = candidates.length;
+      if (candidates.length === 0) {
+        reasons.push("다운로드 파일에서 일치하는 행을 찾지 못했습니다.");
+      } else if (candidates.length > 1) {
+        reasons.push(`다운로드 파일에서 ${candidates.length}개 행이 발견되어 중복입니다.`);
+      } else {
+        const match = candidates[0];
+        if (!match.approved) {
+          reasons.push(`다운로드 승인/공급 상태가 승인완료가 아닙니다(실제: "${match.approvalRaw || "-"}").`);
+        } else if (!match.skuId) {
+          reasons.push("다운로드 SKU ID가 비어 있습니다.");
+        } else {
+          const currentSkuId = String(row[idx.skuId] ?? "").trim();
+          downloadSkuId = match.skuId;
+          if (currentSkuId === "") {
+            eligible = true;
+          } else if (currentSkuId === match.skuId) {
+            alreadySame = true;
+            eligible = true;
+          } else {
+            conflict = true;
+            reasons.push(`기존 SKU ID("${currentSkuId}")와 다운로드 SKU ID("${match.skuId}")가 달라 충돌입니다 — 덮어쓰지 않았습니다.`);
+          }
+        }
+      }
+    }
+
+    matchedRows.push({
+      sheetRowNumber,
+      modelSku,
+      productName: String(row[idx.productName] ?? "").trim(),
+      currentStatus: String(row[idx.status] ?? "").trim(),
+      currentSkuId: String(row[idx.skuId] ?? "").trim(),
+      downloadSkuId,
+      matchCandidateCount,
+      conflict,
+      alreadySame,
+      eligible,
+      reasons,
+    });
+  }
+
+  // 다운로드 SKU ID가 서로 다른 대상에 중복 배정되면 전부 제외한다(안전 우선).
+  const skuIdUsage = new Map<string, number>();
+  for (const r of matchedRows) {
+    if (r.eligible && r.downloadSkuId && !r.alreadySame) {
+      skuIdUsage.set(r.downloadSkuId, (skuIdUsage.get(r.downloadSkuId) || 0) + 1);
+    }
+  }
+  for (const r of matchedRows) {
+    if (r.eligible && r.downloadSkuId && !r.alreadySame && (skuIdUsage.get(r.downloadSkuId) || 0) > 1) {
+      r.eligible = false;
+      r.conflict = true;
+      r.reasons.push("다운로드 SKU ID가 다른 대상과 중복 배정되어 제외했습니다.");
+    }
+  }
+
+  const preview: SupplyStatusPreview = {
+    fileFound: true,
+    fileName: fileInfo.fileName,
+    fileMtime: fileInfo.mtime,
+    matchKeyColumnHeader: parsed.matchKeyColumnHeader,
+    approvalColumnHeader: parsed.approvalColumnHeader,
+    approvedStatusValue,
+    pendingCount: pendingRows.length,
+    exactMatchCount: matchedRows.filter(r => r.matchCandidateCount === 1).length,
+    eligibleCount: matchedRows.filter(r => r.eligible).length,
+    duplicateCount: matchedRows.filter(r => r.matchCandidateCount > 1).length,
+    unmatchedCount: matchedRows.filter(r => r.matchCandidateCount === 0 && parsed.matchKeyColumnHeader !== null).length,
+    conflictCount: matchedRows.filter(r => r.conflict).length,
+    alreadySameCount: matchedRows.filter(r => r.alreadySame).length,
+    rows: matchedRows,
+  };
+
+  return { preview, headerIndex: idx };
+}
+
+export async function buildSupplyStatusPreview(): Promise<SupplyStatusPreviewOrNotFound> {
+  const result = await computeSupplyStatusMatch();
+  if (!result) return { fileFound: false };
+  return result.preview;
+}
+
+export interface SupplyStatusApplyResult {
+  applied: boolean;
+  preview: SupplyStatusPreview;
+  backupPath?: string;
+  writtenCount: number;
+  statusOnlyCount: number;
+}
+
+/** 미리보기를 서버에서 다시 계산해(클라이언트 캐시를 신뢰하지 않음) 안전 조건을 만족하는
+ *  행만 실제로 쓴다. 대상이 0건이면 Google Sheets에 아무 요청도 보내지 않는다. */
+export async function applySupplyStatusUpdate(): Promise<SupplyStatusApplyResult | { fileFound: false }> {
+  const result = await computeSupplyStatusMatch();
+  if (!result) return { fileFound: false };
+  const { preview, headerIndex } = result;
+
+  const toWrite = preview.rows.filter(r => r.eligible);
+  if (toWrite.length === 0) {
+    return { applied: false, preview, writtenCount: 0, statusOnlyCount: 0 };
+  }
+
+  const backupDir = path.join(process.cwd(), "lib", "wms", "data", "product-db-backups");
+  await fs.mkdir(backupDir, { recursive: true });
+  const timestamp = new Date().toISOString();
+  const backupEntries = toWrite.map(r => ({
+    sheetRowNumber: r.sheetRowNumber,
+    modelSku: r.modelSku,
+    beforeStatus: r.currentStatus,
+    afterStatus: preview.approvedStatusValue,
+    beforeSkuId: r.currentSkuId,
+    afterSkuId: r.downloadSkuId,
+  }));
+  const backupFileName = `supply-status-apply_${timestamp.replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_")}.json`;
+  const backupPath = path.join(backupDir, backupFileName);
+  await fs.writeFile(
+    backupPath,
+    JSON.stringify({ downloadFileName: preview.fileName, appliedAt: timestamp, entries: backupEntries }, null, 2),
+    "utf8"
+  );
+
+  const cellUpdates: SheetCellUpdate[] = [];
+  let statusOnlyCount = 0;
+  for (const r of toWrite) {
+    cellUpdates.push({ row: r.sheetRowNumber, col: headerIndex.status + 1, value: preview.approvedStatusValue });
+    if (!r.alreadySame && r.downloadSkuId) {
+      cellUpdates.push({ row: r.sheetRowNumber, col: headerIndex.skuId + 1, value: r.downloadSkuId });
+    } else {
+      statusOnlyCount += 1;
+    }
+  }
+
+  await updateSheetCells(PRODUCT_DB_SHEET_NAME, cellUpdates);
+
+  return { applied: true, preview, backupPath, writtenCount: toWrite.length, statusOnlyCount };
+}

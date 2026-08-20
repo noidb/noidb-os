@@ -1,5 +1,6 @@
 import type { SupplierHubPurchaseOrder } from "../supplier-hub-orders";
 import type { ProductCatalogItem } from "../product-catalog";
+import { normalizeSkuId } from "../sku-normalize";
 import type { ModelLocation, Shelf, SkuLocation, WarehouseBox, WarehouseZone } from "../types";
 import type { BasketAssignment, PickingWave, PickingWaveItem, PickingWaveSourceRef } from "./types";
 
@@ -106,9 +107,13 @@ export function buildPickingWave(input: BuildWaveInput): BuildWaveResult {
 
   // 2) 위치/카테고리/모델명 해석 + 정렬 키 계산
   const items: PickingWaveItem[] = [...accumByProductCode.values()].map(accum => {
-    const catalogEntry = catalogBySkuId.get(accum.productCode);
+    // SKU ID 표기 형식이 발주서 원본과 제품DB 시트에서 미세하게 다를 수 있어(예: 숫자 vs 텍스트,
+    // 끝자리 ".0") 정규화 후 비교한다(2026-08-20 — 웨이브 생성 시점 조인 실패로 이미지/모델정보가
+    // 처음부터 비어버리는 문제를 방지).
+    const catalogEntry = catalogBySkuId.get(normalizeSkuId(accum.productCode));
     const category = catalogEntry?.category || undefined;
     const modelName = catalogEntry?.modelName || undefined;
+    const modelSku = catalogEntry?.modelSku || undefined;
     const imageUrl = catalogEntry?.imageUrl || undefined;
     const optionLabel = catalogEntry?.optionLabel || undefined;
     const vendorName = catalogEntry?.vendorName || undefined;
@@ -152,6 +157,7 @@ export function buildPickingWave(input: BuildWaveInput): BuildWaveResult {
       barcode: accum.barcode,
       category,
       modelName,
+      modelSku,
       imageUrl,
       optionLabel,
       vendorName,

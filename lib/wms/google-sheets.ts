@@ -11,7 +11,11 @@ import { getWmsGoogleAccessToken, isWmsGoogleConfigured, WmsGoogleNotConfiguredE
  * targeted로 쓰는 updateSheetCells 함수가 추가되었습니다 — 이 함수는 사용자가 화면에서 직접
  * 트리거할 때만 호출되며, 시트 전체를 덮어쓰거나 임의의 범위를 자동으로 수정하지 않습니다.
  * 자세한 사용처는 lib/wms/product-catalog-write.ts 참고. 인증 토큰 발급은
- * lib/wms/google-service-account.ts로 분리되어 lib/wms/google-drive.ts(이미지 업로드)와 공유한다.
+ * lib/wms/google-service-account.ts가 전담한다.
+ *
+ * 2026-08-20부터: 이 서비스 계정은 Sheets 전용이다. 이미지 업로드는 서비스 계정의 Drive 저장
+ * 할당량이 0이라 별도로 사용자 OAuth(lib/wms/google-drive-oauth.ts)로 옮겼다 — 더 이상
+ * 이 모듈과 스코프를 공유하지 않는다.
  *
  * 설정 방법: docs/GOOGLE_SHEETS_SETUP.md 참고.
  */

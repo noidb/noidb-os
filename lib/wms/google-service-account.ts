@@ -1,17 +1,18 @@
 import { createSign } from "node:crypto";
 
 /**
- * NOID WMS 서비스 계정 OAuth 토큰 발급 공용 모듈. google-sheets.ts(시트 읽기/쓰기)와
- * google-drive.ts(이미지 업로드)가 함께 쓴다 — 같은 서비스 계정, 스코프 2개를 한 토큰에 담아
- * 발급받는다(스프레드시트 + drive.file). drive.file 스코프는 "이 앱이 만든 파일"만 접근 가능한
- * 최소 권한이라 사용자의 다른 구글드라이브 파일에는 접근할 수 없다.
+ * NOID WMS 서비스 계정 OAuth 토큰 발급 공용 모듈. google-sheets.ts(제품DB 시트 읽기/쓰기) 전용이다.
+ *
+ * 2026-08-20부터: 이미지 업로드는 더 이상 이 서비스 계정을 쓰지 않는다 — 서비스 계정은
+ * Drive 저장 할당량이 0이라("Service Accounts do not have storage quota") 개인 계정의
+ * "내 드라이브"에 파일을 직접 소유할 수 없다는 사실이 실제 Drive API 조회로 확인됐다.
+ * 이미지 업로드는 lib/wms/google-drive-oauth.ts + google-drive-user.ts(사용자 OAuth,
+ * drive.file 스코프)로 분리했다 — 사용자 본인 계정의 저장 용량을 쓴다.
+ * 이 모듈의 스코프는 이제 spreadsheets 하나뿐이다.
  */
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
-const SCOPES = [
-  "https://www.googleapis.com/auth/spreadsheets",
-  "https://www.googleapis.com/auth/drive.file",
-].join(" ");
+const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"].join(" ");
 
 export class WmsGoogleNotConfiguredError extends Error {
   constructor() {

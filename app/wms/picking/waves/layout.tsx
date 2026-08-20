@@ -1,22 +1,16 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { WarehouseRepositoryProvider } from "@/lib/warehouse/context";
-import { PickingWaveRepositoryProvider } from "@/lib/wms/picking-wave/context";
-import { VendorOrderRepositoryProvider } from "@/lib/wms/vendor-order/context";
 
 /**
- * /wms/picking/waves/* 전용 레이아웃. 통합 피킹 화면이 창고 위치 데이터(WarehouseRepository)와
- * 웨이브 저장소(PickingWaveRepository), 거래처별 부족분 발주서 저장소(VendorOrderRepository)를
- * 함께 쓰므로 여기서 감싼다. 기존 /wms/layout.tsx(피킹 흐름 컨텍스트), /wms/picking/page.tsx(샘플
- * 피킹)는 건드리지 않는다 — 이 레이아웃은 그 안쪽에서 한 번 더 감싸는 형태로 동작한다.
+ * /wms/picking/waves/* 전용 레이아웃.
+ *
+ * 2026-08-19: WarehouseRepositoryProvider/PickingWaveRepositoryProvider/VendorOrderRepositoryProvider는
+ * 상위 app/wms/layout.tsx로 이동했다(작업센터 첫 화면 배너에서도 같은 저장소가 필요해졌기 때문).
+ * 저장소 클래스(Local*Repository)는 상태를 메모리에 캐시하지 않고 매 호출마다 localStorage를
+ * 직접 읽고 쓰는 완전한 stateless 래퍼라 중첩 자체는 안전했지만, 상위에서 이미 제공하므로 여기서
+ * 다시 감싸는 것은 불필요한 중복이라 제거했다. 데이터 접근 방식은 동일하게 유지된다.
  */
 export default function PickingWavesLayout({ children }: { children: ReactNode }) {
-  return (
-    <WarehouseRepositoryProvider>
-      <PickingWaveRepositoryProvider>
-        <VendorOrderRepositoryProvider>{children}</VendorOrderRepositoryProvider>
-      </PickingWaveRepositoryProvider>
-    </WarehouseRepositoryProvider>
-  );
+  return <>{children}</>;
 }
