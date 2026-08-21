@@ -14,7 +14,7 @@ export async function GET() {
   const refreshToken = configured ? await getStoredRefreshToken() : null;
   const connected = Boolean(refreshToken);
   const connectedAt = connected ? await getConnectedAt() : null;
-  const folderId = connected ? (process.env.GOOGLE_DRIVE_UPLOAD_FOLDER_ID?.trim() || (await getStoredFolderId())) : null;
+  const folderId = connected ? (process.env.GOOGLE_DRIVE_IMAGE_DB_FOLDER_ID?.trim() || (await getStoredFolderId())) : null;
 
   return NextResponse.json({
     configured,
