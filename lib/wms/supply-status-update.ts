@@ -121,7 +121,6 @@ interface DownloadRow {
   matchKey: string;
   skuId: string;
   productName: string;
-  color: string;
   barcode: string;
   approvalRaw: string;
   approved: boolean;
@@ -221,6 +220,7 @@ export interface MatchedRow {
   sheetRowNumber: number;
   modelSku: string;
   productName: string;
+  color: string;
   currentStatus: string;
   currentSkuId: string;
   downloadSkuId: string | null;
