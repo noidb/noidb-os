@@ -1,6 +1,12 @@
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import ExcelJS from "exceljs";
+import {
+  downloadDriveFile,
+  isDriveReaderConfigured,
+  listDriveFilesFromEnv,
+  shouldRequireDriveReader,
+} from "./google-drive-reader";
 
 /**
  * 쿠팡 서플라이허브에서 다운로드한 "PO_FOR_CONFIRM(발주번호).xlsx" 원본 파일을 그대로 열어서,
@@ -128,10 +134,11 @@ export class PoConfirmSelfCheckFailedError extends Error {
   }
 }
 
-export type PoConfirmTemplateSource = "primary" | "project" | "legacy-drive";
+export type PoConfirmTemplateSource = "google-drive" | "primary" | "project" | "legacy-drive";
 
 interface FoundFile {
-  filePath: string;
+  filePath?: string;
+  driveFileId?: string;
   fileName: string;
   source: PoConfirmTemplateSource;
 }
@@ -154,6 +161,14 @@ async function listXlsxFiles(dir: string): Promise<string[]> {
  *  기본 폴더 → 프로젝트 폴더 → 레거시 드라이브 폴더 순서로 전부 검색해 합친다. */
 async function findAllMatchesForPo(poNumber: string): Promise<FoundFile[]> {
   const trimmed = poNumber.trim();
+  if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
+    const files = await listDriveFilesFromEnv("GOOGLE_DRIVE_PO_FOR_CONFIRM_FOLDER_ID");
+    return files
+      .filter(file => !file.name.startsWith("~$") && !file.name.startsWith(".") && file.name.toLowerCase().endsWith(".xlsx"))
+      .filter(file => extractPoNumberFromFileName(file.name) === trimmed)
+      .map(file => ({ driveFileId: file.id, fileName: file.name, source: "google-drive" as const }));
+  }
+
   const searchDirs: { dir: string; source: PoConfirmTemplateSource }[] = [
     { dir: getPrimaryPoConfirmDir(), source: "primary" },
     { dir: PO_CONFIRM_DIR, source: "project" },
@@ -171,6 +186,19 @@ async function findAllMatchesForPo(poNumber: string): Promise<FoundFile[]> {
     }
   }
   return matches;
+}
+
+async function loadFoundWorkbook(match: FoundFile): Promise<ExcelJS.Workbook> {
+  const workbook = new ExcelJS.Workbook();
+  if (match.driveFileId) {
+    const buffer = await downloadDriveFile(match.driveFileId);
+    await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+  } else if (match.filePath) {
+    await workbook.xlsx.readFile(match.filePath);
+  } else {
+    throw new Error("발주확정 원본 위치가 없습니다.");
+  }
+  return workbook;
 }
 
 async function resolveSingleMatch(poNumber: string): Promise<FoundFile> {
@@ -206,7 +234,9 @@ export interface PoFolderStatusEntry {
  * 아무것도 쓰지 않는다.
  */
 export async function checkPoConfirmFolderStatus(poNumbers: string[]): Promise<{ primaryDir: string; entries: PoFolderStatusEntry[] }> {
-  const primaryDir = getPrimaryPoConfirmDir();
+  const primaryDir = isDriveReaderConfigured() || shouldRequireDriveReader()
+    ? "Google Drive / 발주서업로드양식"
+    : getPrimaryPoConfirmDir();
   const entries: PoFolderStatusEntry[] = [];
 
   for (const poNumber of poNumbers) {
@@ -222,8 +252,7 @@ export async function checkPoConfirmFolderStatus(poNumbers: string[]): Promise<{
 
     const match = matches[0];
     try {
-      const workbook = new ExcelJS.Workbook();
-      await workbook.xlsx.readFile(match.filePath);
+      const workbook = await loadFoundWorkbook(match);
       const innerPoNumber = extractPoNumberFromWorkbook(workbook);
       if (innerPoNumber !== poNumber.trim()) {
         entries.push({
@@ -248,6 +277,14 @@ export async function checkPoConfirmFolderStatus(poNumbers: string[]): Promise<{
 
 /** 검색 대상 폴더 자체가 없는지(예: G: 드라이브 자체가 연결 안 됨) 미리 확인한다 — 있으면 true. */
 export async function isPoConfirmFolderAccessible(): Promise<boolean> {
+  if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
+    try {
+      await listDriveFilesFromEnv("GOOGLE_DRIVE_PO_FOR_CONFIRM_FOLDER_ID");
+      return true;
+    } catch {
+      return false;
+    }
+  }
   try {
     const info = await stat(getPrimaryPoConfirmDir());
     return info.isDirectory();
@@ -377,22 +414,20 @@ function applyConfirmedQuantities(
 export async function buildConfirmedOrderFile(poNumber: string, confirmedQuantities: ConfirmedQuantityInput[]): Promise<BuildConfirmedOrderResult> {
   const match = await resolveSingleMatch(poNumber);
 
-  const workbook = new ExcelJS.Workbook();
   try {
-    await workbook.xlsx.readFile(match.filePath);
+    const workbook = await loadFoundWorkbook(match);
+    const innerPoNumber = extractPoNumberFromWorkbook(workbook);
+    if (innerPoNumber !== poNumber.trim()) {
+      throw new PoConfirmMismatchError(poNumber, innerPoNumber);
+    }
+
+    const { matchedSkuIds, unmatchedSkuIds, shortageRowCount, reasonAppliedCount } = applyConfirmedQuantities(workbook, poNumber, confirmedQuantities);
+    const buffer = await workbook.xlsx.writeBuffer();
+    return { buffer, matchedSkuCount: matchedSkuIds.size, unmatchedSkuIds, sourceFileName: match.fileName, shortageRowCount, reasonAppliedCount };
   } catch (error) {
+    if (error instanceof PoConfirmMismatchError || error instanceof PoConfirmQuantityExceededError || error instanceof PoConfirmColumnNotFoundError || error instanceof PoConfirmSelfCheckFailedError) throw error;
     throw new PoConfirmFileReadError(poNumber, error instanceof Error ? error.message : "알 수 없는 오류");
   }
-
-  const innerPoNumber = extractPoNumberFromWorkbook(workbook);
-  if (innerPoNumber !== poNumber.trim()) {
-    throw new PoConfirmMismatchError(poNumber, innerPoNumber);
-  }
-
-  const { matchedSkuIds, unmatchedSkuIds, shortageRowCount, reasonAppliedCount } = applyConfirmedQuantities(workbook, poNumber, confirmedQuantities);
-  const buffer = await workbook.xlsx.writeBuffer();
-
-  return { buffer, matchedSkuCount: matchedSkuIds.size, unmatchedSkuIds, sourceFileName: match.fileName, shortageRowCount, reasonAppliedCount };
 }
 
 /**

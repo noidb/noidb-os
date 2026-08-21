@@ -3,6 +3,12 @@ import path from "node:path";
 import JSZip from "jszip";
 import ExcelJS from "exceljs";
 import { SaxesParser, type SaxesTagPlain } from "saxes";
+import {
+  downloadDriveFile,
+  isDriveReaderConfigured,
+  listDriveFilesFromEnv,
+  shouldRequireDriveReader,
+} from "./google-drive-reader";
 
 /**
  * 한진택배 "쿠팡(고정형)" 업로드 서식 파일을 읽고, 새 출고 행을 추가한 사본을 만든다.
@@ -58,10 +64,17 @@ interface ParsedTemplate {
   destinationsByCenter: Map<string, HanjinDestination>;
   existingPoNumbers: Set<string>;
   maxRowIndex: number;
-  filePath: string;
+  sourceFileName: string;
 }
 
-async function findLatestTemplateFile(): Promise<string> {
+async function findLatestTemplateFile(): Promise<{ sourceFileName: string; buffer: Buffer }> {
+  if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
+    const files = await listDriveFilesFromEnv("GOOGLE_DRIVE_HANJIN_SHIPMENT_FOLDER_ID");
+    const latest = files.find(file => file.name.startsWith("한진택배") && file.name.toLowerCase().endsWith(".xlsx"));
+    if (!latest) throw new HanjinTemplateNotFoundError();
+    return { sourceFileName: latest.name, buffer: await downloadDriveFile(latest.id) };
+  }
+
   let fileNames: string[];
   try {
     fileNames = (await readdir(HANJIN_TEMPLATE_DIR)).filter(name => name.startsWith("한진택배") && name.toLowerCase().endsWith(".xlsx"));
@@ -76,7 +89,8 @@ async function findLatestTemplateFile(): Promise<string> {
     const fileStat = await stat(filePath);
     if (!latest || fileStat.mtimeMs > latest.mtimeMs) latest = { name, mtimeMs: fileStat.mtimeMs };
   }
-  return path.join(HANJIN_TEMPLATE_DIR, latest!.name);
+  const filePath = path.join(HANJIN_TEMPLATE_DIR, latest!.name);
+  return { sourceFileName: latest!.name, buffer: await readFile(filePath) };
 }
 
 function splitCellRef(ref: string): { col: string; row: number } | null {
@@ -152,14 +166,13 @@ function parseSheetXml(sheetXml: string): { destinationsByCenter: Map<string, Ha
 }
 
 async function loadTemplate(): Promise<ParsedTemplate> {
-  const filePath = await findLatestTemplateFile();
-  const raw = await readFile(filePath);
-  const zip = await JSZip.loadAsync(raw);
+  const source = await findLatestTemplateFile();
+  const zip = await JSZip.loadAsync(source.buffer);
   const sheetEntry = zip.file(SHEET_PATH);
   if (!sheetEntry) throw new Error(`원본 파일에서 ${SHEET_PATH}를 찾을 수 없습니다. 파일 구조를 확인해주세요.`);
   const sheetXml = await sheetEntry.async("string");
   const { destinationsByCenter, existingPoNumbers, maxRowIndex } = parseSheetXml(sheetXml);
-  return { zip, sheetXml, destinationsByCenter, existingPoNumbers, maxRowIndex, filePath };
+  return { zip, sheetXml, destinationsByCenter, existingPoNumbers, maxRowIndex, sourceFileName: source.sourceFileName };
 }
 
 function escapeXml(value: string): string {
@@ -238,7 +251,7 @@ export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[]): 
     addedPurchaseOrderNumbers,
     skippedAlreadyPresent,
     skippedMissingDestination,
-    sourceFileName: path.basename(template.filePath),
+    sourceFileName: template.sourceFileName,
   };
 }
 

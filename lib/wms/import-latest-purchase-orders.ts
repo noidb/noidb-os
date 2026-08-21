@@ -4,8 +4,14 @@ import JSZip from "jszip";
 import {
   getIncomingPurchaseOrdersDir,
   loadSupplierHubPurchaseOrders,
+  loadSupplierHubPurchaseOrdersFromDriveFiles,
   parseSupplierHubPurchaseOrderBuffer,
 } from "./supplier-hub-orders";
+import {
+  isDriveReaderConfigured,
+  listDriveFilesFromEnv,
+  shouldRequireDriveReader,
+} from "./google-drive-reader";
 
 /**
  * "최신 발주서 불러오기" 기능. 쿠팡 서플라이허브에서 다운로드해 구글드라이브에 쌓아두는
@@ -76,6 +82,45 @@ async function extractXlsxBuffers(filePath: string): Promise<{ name: string; buf
  * 반영 후 전체 발주서 기준 요약(총 발주서 수/총 SKU 종류/총 수량)을 반환한다.
  */
 export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> {
+  if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
+    const files = (await listDriveFilesFromEnv("GOOGLE_DRIVE_COUPANG_PURCHASE_ORDER_FOLDER_ID"))
+      .filter(file => /\.(zip|xlsx)$/i.test(file.name))
+      .sort((a, b) => b.modifiedTime.localeCompare(a.modifiedTime));
+    const latest = files[0];
+    if (!latest) throw new Error("Google Drive 발주서리스트 폴더에서 ZIP/xlsx 파일을 찾지 못했습니다.");
+
+    const [latestOrders, previousOrders] = await Promise.all([
+      loadSupplierHubPurchaseOrdersFromDriveFiles([latest]),
+      loadSupplierHubPurchaseOrdersFromDriveFiles(files.slice(1)),
+    ]);
+    const previousPoNumbers = new Set(previousOrders.map(order => order.purchaseOrderNumber));
+    const addedPurchaseOrderNumbers = latestOrders
+      .map(order => order.purchaseOrderNumber)
+      .filter(poNumber => !previousPoNumbers.has(poNumber));
+    const skippedDuplicatePurchaseOrderNumbers = latestOrders
+      .map(order => order.purchaseOrderNumber)
+      .filter(poNumber => previousPoNumbers.has(poNumber));
+    const finalByPo = new Map(previousOrders.map(order => [order.purchaseOrderNumber, order]));
+    for (const order of latestOrders) finalByPo.set(order.purchaseOrderNumber, order);
+    const finalOrders = [...finalByPo.values()];
+    const skuCodes = new Set<string>();
+    let totalQuantity = 0;
+    for (const order of finalOrders) {
+      for (const item of order.items) {
+        skuCodes.add(item.productCode);
+        totalQuantity += item.orderedQuantity;
+      }
+    }
+    return {
+      sourceFileName: latest.name,
+      addedPurchaseOrderNumbers,
+      skippedDuplicatePurchaseOrderNumbers,
+      totalPurchaseOrders: finalOrders.length,
+      totalSkuTypes: skuCodes.size,
+      totalQuantity,
+    };
+  }
+
   const latest = await findLatestSourceFile();
   if (!latest) {
     throw new Error(`${SOURCE_DIR} 폴더에서 발주서리스트 ZIP/xlsx 파일을 찾지 못했습니다.`);

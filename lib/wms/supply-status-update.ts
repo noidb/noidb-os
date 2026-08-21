@@ -3,6 +3,12 @@ import { promises as fs } from "node:fs";
 import ExcelJS from "exceljs";
 import { fetchSheetRows, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
 import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
+import {
+  downloadDriveFile,
+  isDriveReaderConfigured,
+  listDriveFilesFromEnv,
+  shouldRequireDriveReader,
+} from "./google-drive-reader";
 
 /**
  * 쿠팡 "상품공급상태관리 다운로드" 파일을 제품DB(구글시트)와 매칭해 승인된 신상품의
@@ -71,13 +77,25 @@ function findHeaderIndex(headers: string[], candidates: string[]): { index: numb
 }
 
 export interface LatestSupplyStatusFile {
-  filePath: string;
+  filePath?: string;
+  buffer?: Buffer;
   fileName: string;
   mtime: string;
 }
 
 /** 대상 폴더에서 ~$ 임시파일·숨김파일을 제외하고 수정일이 가장 최근인 xlsx 1개를 고른다. */
 export async function findLatestSupplyStatusFile(): Promise<LatestSupplyStatusFile | null> {
+  if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
+    const files = await listDriveFilesFromEnv("GOOGLE_DRIVE_COUPANG_SUPPLY_STATUS_FOLDER_ID");
+    const latest = files.find(file => !file.name.startsWith("~$") && !file.name.startsWith(".") && file.name.toLowerCase().endsWith(".xlsx"));
+    if (!latest) return null;
+    return {
+      buffer: await downloadDriveFile(latest.id),
+      fileName: latest.name,
+      mtime: latest.modifiedTime,
+    };
+  }
+
   let entries: string[];
   try {
     entries = await fs.readdir(SUPPLY_STATUS_FOLDER);
@@ -113,9 +131,11 @@ interface ParsedSupplyStatusFile {
   rows: DownloadRow[];
 }
 
-async function parseSupplyStatusFile(filePath: string): Promise<ParsedSupplyStatusFile> {
+async function parseSupplyStatusFile(fileInfo: LatestSupplyStatusFile): Promise<ParsedSupplyStatusFile> {
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(filePath);
+  if (fileInfo.buffer) await wb.xlsx.load(fileInfo.buffer as unknown as ExcelJS.Buffer);
+  else if (fileInfo.filePath) await wb.xlsx.readFile(fileInfo.filePath);
+  else throw new Error("상품공급상태 파일 데이터가 없습니다.");
   const sheet = wb.worksheets[0];
   const headerRow = sheet.getRow(1);
   const headers: string[] = [];
@@ -228,7 +248,7 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
   const fileInfo = await findLatestSupplyStatusFile();
   if (!fileInfo) return null;
 
-  const parsed = await parseSupplyStatusFile(fileInfo.filePath);
+  const parsed = await parseSupplyStatusFile(fileInfo);
 
   const sheetRows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" });
   const headers = sheetRows[0].map(h => String(h ?? "").trim());
@@ -371,8 +391,6 @@ export async function applySupplyStatusUpdate(): Promise<SupplyStatusApplyResult
     return { applied: false, preview, writtenCount: 0, statusOnlyCount: 0 };
   }
 
-  const backupDir = path.join(process.cwd(), "lib", "wms", "data", "product-db-backups");
-  await fs.mkdir(backupDir, { recursive: true });
   const timestamp = new Date().toISOString();
   const backupEntries = toWrite.map(r => ({
     sheetRowNumber: r.sheetRowNumber,
@@ -382,13 +400,18 @@ export async function applySupplyStatusUpdate(): Promise<SupplyStatusApplyResult
     beforeSkuId: r.currentSkuId,
     afterSkuId: r.downloadSkuId,
   }));
-  const backupFileName = `supply-status-apply_${timestamp.replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_")}.json`;
-  const backupPath = path.join(backupDir, backupFileName);
-  await fs.writeFile(
-    backupPath,
-    JSON.stringify({ downloadFileName: preview.fileName, appliedAt: timestamp, entries: backupEntries }, null, 2),
-    "utf8"
-  );
+  let backupPath: string | undefined;
+  if (!shouldRequireDriveReader()) {
+    const backupDir = path.join(process.cwd(), "lib", "wms", "data", "product-db-backups");
+    await fs.mkdir(backupDir, { recursive: true });
+    const backupFileName = `supply-status-apply_${timestamp.replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_")}.json`;
+    backupPath = path.join(backupDir, backupFileName);
+    await fs.writeFile(
+      backupPath,
+      JSON.stringify({ downloadFileName: preview.fileName, appliedAt: timestamp, entries: backupEntries }, null, 2),
+      "utf8"
+    );
+  }
 
   const cellUpdates: SheetCellUpdate[] = [];
   let statusOnlyCount = 0;

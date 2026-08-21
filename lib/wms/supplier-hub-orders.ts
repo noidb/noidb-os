@@ -1,6 +1,14 @@
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import ExcelJS from "exceljs";
+import JSZip from "jszip";
+import {
+  downloadDriveFile,
+  isDriveReaderConfigured,
+  listDriveFilesFromEnv,
+  shouldRequireDriveReader,
+  type DriveFileInfo,
+} from "./google-drive-reader";
 
 /**
  * 쿠팡 서플라이허브에서 다운로드한 "발주서리스트_*.xlsx" 원본 파일을 읽기 전용으로 파싱하는 모듈.
@@ -134,6 +142,13 @@ export async function parseSupplierHubPurchaseOrderBuffer(
  * 폴더가 없거나 비어 있으면 빈 배열을 반환한다. 이 함수는 파일을 절대 수정/삭제하지 않는다.
  */
 export async function loadSupplierHubPurchaseOrders(): Promise<SupplierHubPurchaseOrder[]> {
+  if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
+    const files = (await listDriveFilesFromEnv("GOOGLE_DRIVE_COUPANG_PURCHASE_ORDER_FOLDER_ID"))
+      .filter(file => /\.(zip|xlsx)$/i.test(file.name))
+      .sort((a, b) => a.modifiedTime.localeCompare(b.modifiedTime));
+    return loadSupplierHubPurchaseOrdersFromDriveFiles(files);
+  }
+
   let fileNames: string[];
   try {
     fileNames = (await readdir(INCOMING_DIR)).filter(name => name.toLowerCase().endsWith(".xlsx"));
@@ -153,6 +168,29 @@ export async function loadSupplierHubPurchaseOrders(): Promise<SupplierHubPurcha
   }
 
   return orders.sort((a, b) => a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber));
+}
+
+export async function loadSupplierHubPurchaseOrdersFromDriveFiles(files: DriveFileInfo[]): Promise<SupplierHubPurchaseOrder[]> {
+  const byPoNumber = new Map<string, SupplierHubPurchaseOrder>();
+  for (const file of files) {
+      const raw = await downloadDriveFile(file.id);
+      const inputs: { name: string; buffer: Buffer }[] = [];
+      if (file.name.toLowerCase().endsWith(".zip")) {
+        const zip = await JSZip.loadAsync(raw);
+        for (const [name, entry] of Object.entries(zip.files)) {
+          if (!entry.dir && name.toLowerCase().endsWith(".xlsx")) {
+            inputs.push({ name, buffer: await entry.async("nodebuffer") });
+          }
+        }
+      } else {
+        inputs.push({ name: file.name, buffer: raw });
+      }
+      for (const input of inputs) {
+        const order = await parseSupplierHubPurchaseOrderBuffer(input.buffer, input.name, file.modifiedTime);
+        if (order?.purchaseOrderNumber) byPoNumber.set(order.purchaseOrderNumber, order);
+      }
+  }
+  return [...byPoNumber.values()].sort((a, b) => a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber));
 }
 
 /** incoming-purchase-orders 폴더 절대경로 — 최신 발주 불러오기 기능이 새 파일을 쓸 때 재사용한다. */
