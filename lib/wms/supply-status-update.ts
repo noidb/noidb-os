@@ -24,7 +24,7 @@ import {
  */
 
 const SUPPLY_STATUS_FOLDER = "G:\\내 드라이브\\쿠팡데이터\\상품공급상태관리 다운로드";
-const PENDING_STATUS_VALUE = "기존상품승인대기";
+const PENDING_STATUS_VALUES = new Set(["기존상품승인대기", "신상승인대기"]);
 
 /** 2026-08-19 제품DB 실사용 데이터로 검증된 승인완료 상태값 — SKU ID가 채워진 행들이 전부
  *  이 값을 쓰고 있음을 확인했다(예: wn11327 6개 옵션, we0001 3개 옵션). "승인완료"/"판매중" 등
@@ -120,6 +120,9 @@ export async function findLatestSupplyStatusFile(): Promise<LatestSupplyStatusFi
 interface DownloadRow {
   matchKey: string;
   skuId: string;
+  productName: string;
+  color: string;
+  barcode: string;
   approvalRaw: string;
   approved: boolean;
 }
@@ -145,6 +148,8 @@ async function parseSupplyStatusFile(fileInfo: LatestSupplyStatusFile): Promise<
 
   const matchKeyCol = findHeaderIndex(headers, CANDIDATE_KEY_HEADERS);
   const skuIdCol = findHeaderIndex(headers, SKU_ID_HEADERS);
+  const productNameCol = findHeaderIndex(headers, ["상품명"]);
+  const barcodeCol = findHeaderIndex(headers, ["바코드", "쿠팡 바코드", "쿠팡바코드"]);
   let approvalCol: { index: number; header: string } | null = null;
   let approvedValues: string[] = [];
   for (const [headerName, values] of APPROVAL_HEADER_APPROVED_VALUES) {
@@ -161,10 +166,12 @@ async function parseSupplyStatusFile(fileInfo: LatestSupplyStatusFile): Promise<
     if (rowNumber === 1) return;
     const skuId = skuIdCol ? String(row.getCell(skuIdCol.index).value ?? "").trim() : "";
     const matchKey = matchKeyCol ? String(row.getCell(matchKeyCol.index).value ?? "").trim() : "";
+    const productName = productNameCol ? String(row.getCell(productNameCol.index).value ?? "").trim() : "";
+    const barcode = barcodeCol ? String(row.getCell(barcodeCol.index).value ?? "").trim() : "";
     const approvalRaw = approvalCol ? String(row.getCell(approvalCol.index).value ?? "").trim() : "";
     const approved = approvalCol ? approvedValues.includes(approvalRaw) : false;
     if (!matchKey && !skuId) return;
-    rows.push({ matchKey, skuId, approvalRaw, approved });
+    rows.push({ matchKey, skuId, productName, barcode, approvalRaw, approved });
   });
 
   return {
@@ -181,6 +188,8 @@ interface ProductDbHeaderIndex {
   skuId: number;
   productName: number;
   color: number;
+  barcode: number;
+  orderAvailability: number;
 }
 
 function resolveProductDbHeaderIndex(headers: string[]): ProductDbHeaderIndex {
@@ -190,8 +199,10 @@ function resolveProductDbHeaderIndex(headers: string[]): ProductDbHeaderIndex {
     skuId: headers.indexOf("SKU ID"),
     productName: headers.indexOf("상품명"),
     color: headers.indexOf("색상"),
+    barcode: ["쿠팡 바코드", "Seller SKU Barcode", "쿠팡바코드", "바코드"].map(h => headers.indexOf(h)).find(i => i >= 0) ?? -1,
+    orderAvailability: headers.indexOf("발주가능상태"),
   };
-  const missing = Object.entries({ 현재상태: idx.status, 모델SKU: idx.modelSku, "SKU ID": idx.skuId })
+  const missing = Object.entries({ 현재상태: idx.status, 모델SKU: idx.modelSku, "SKU ID": idx.skuId, 상품명: idx.productName, 색상: idx.color, 바코드: idx.barcode, 발주가능상태: idx.orderAvailability })
     .filter(([, v]) => v < 0)
     .map(([k]) => k);
   if (missing.length > 0) throw new ProductDbHeaderMissingError(missing);
@@ -213,11 +224,32 @@ export interface MatchedRow {
   currentStatus: string;
   currentSkuId: string;
   downloadSkuId: string | null;
+  downloadBarcode: string | null;
+  downloadOrderAvailability: string | null;
   matchCandidateCount: number;
   conflict: boolean;
   alreadySame: boolean;
   eligible: boolean;
   reasons: string[];
+}
+
+function normProductText(value: unknown): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/노이드비/g, "")
+    .replace(/free|프리/g, "")
+    .replace(/[^0-9a-z가-힣]/g, "");
+}
+
+/** 모델SKU가 없는 쿠팡 다운로드 양식은 상품명+색상이 모두 포함된 승인완료 행만 후보로 삼는다. */
+function findProductNameColorCandidates(rows: DownloadRow[], productName: string, color: string): DownloadRow[] {
+  const productKey = normProductText(productName);
+  const colorKey = normProductText(color);
+  if (!productKey || !colorKey) return [];
+  return rows.filter(row => {
+    const downloadName = normProductText(row.productName);
+    return row.approved && downloadName.includes(productKey) && downloadName.includes(colorKey);
+  });
 }
 
 export interface SupplyStatusPreview {
@@ -259,7 +291,7 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
 
   const pendingRows = dataRows
     .map((row, i) => ({ row, sheetRowNumber: i + 2 }))
-    .filter(({ row }) => String(row[idx.status] ?? "").trim() === PENDING_STATUS_VALUE);
+    .filter(({ row }) => PENDING_STATUS_VALUES.has(String(row[idx.status] ?? "").trim()));
 
   const byKey = new Map<string, DownloadRow[]>();
   if (parsed.matchKeyColumnHeader) {
@@ -278,16 +310,22 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
     const reasons: string[] = [];
     let eligible = false;
     let downloadSkuId: string | null = null;
+    let downloadBarcode: string | null = null;
+    let downloadOrderAvailability: string | null = null;
     let alreadySame = false;
     let conflict = false;
     let matchCandidateCount = 0;
 
-    if (!parsed.matchKeyColumnHeader) {
-      reasons.push("다운로드 파일에 모델SKU와 비교할 열(옵션 판매자상품코드/판매자상품코드 등)이 없습니다.");
-    } else if (!modelSku) {
+    if (!modelSku) {
       reasons.push("제품DB 모델SKU가 비어 있습니다.");
     } else {
-      const candidates = byKey.get(norm(modelSku)) || [];
+      const candidates = parsed.matchKeyColumnHeader
+        ? (byKey.get(norm(modelSku)) || [])
+        : findProductNameColorCandidates(
+            parsed.rows,
+            String(row[idx.productName] ?? "").trim(),
+            String(row[idx.color] ?? "").trim()
+          );
       matchCandidateCount = candidates.length;
       if (candidates.length === 0) {
         reasons.push("다운로드 파일에서 일치하는 행을 찾지 못했습니다.");
@@ -302,6 +340,8 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
         } else {
           const currentSkuId = String(row[idx.skuId] ?? "").trim();
           downloadSkuId = match.skuId;
+          downloadBarcode = match.barcode || null;
+          downloadOrderAvailability = match.approvalRaw || null;
           if (currentSkuId === "") {
             eligible = true;
           } else if (currentSkuId === match.skuId) {
@@ -319,9 +359,12 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
       sheetRowNumber,
       modelSku,
       productName: String(row[idx.productName] ?? "").trim(),
+      color: String(row[idx.color] ?? "").trim(),
       currentStatus: String(row[idx.status] ?? "").trim(),
       currentSkuId: String(row[idx.skuId] ?? "").trim(),
       downloadSkuId,
+      downloadBarcode,
+      downloadOrderAvailability,
       matchCandidateCount,
       conflict,
       alreadySame,
@@ -356,7 +399,7 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
     exactMatchCount: matchedRows.filter(r => r.matchCandidateCount === 1).length,
     eligibleCount: matchedRows.filter(r => r.eligible).length,
     duplicateCount: matchedRows.filter(r => r.matchCandidateCount > 1).length,
-    unmatchedCount: matchedRows.filter(r => r.matchCandidateCount === 0 && parsed.matchKeyColumnHeader !== null).length,
+    unmatchedCount: matchedRows.filter(r => r.matchCandidateCount === 0).length,
     conflictCount: matchedRows.filter(r => r.conflict).length,
     alreadySameCount: matchedRows.filter(r => r.alreadySame).length,
     rows: matchedRows,
@@ -399,6 +442,8 @@ export async function applySupplyStatusUpdate(): Promise<SupplyStatusApplyResult
     afterStatus: preview.approvedStatusValue,
     beforeSkuId: r.currentSkuId,
     afterSkuId: r.downloadSkuId,
+    afterBarcode: r.downloadBarcode,
+    afterOrderAvailability: r.downloadOrderAvailability,
   }));
   let backupPath: string | undefined;
   if (!shouldRequireDriveReader()) {
@@ -421,6 +466,12 @@ export async function applySupplyStatusUpdate(): Promise<SupplyStatusApplyResult
       cellUpdates.push({ row: r.sheetRowNumber, col: headerIndex.skuId + 1, value: r.downloadSkuId });
     } else {
       statusOnlyCount += 1;
+    }
+    if (r.downloadBarcode) {
+      cellUpdates.push({ row: r.sheetRowNumber, col: headerIndex.barcode + 1, value: r.downloadBarcode });
+    }
+    if (r.downloadOrderAvailability) {
+      cellUpdates.push({ row: r.sheetRowNumber, col: headerIndex.orderAvailability + 1, value: r.downloadOrderAvailability });
     }
   }
 

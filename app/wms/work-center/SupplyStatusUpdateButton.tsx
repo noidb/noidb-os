@@ -44,7 +44,7 @@ export default function SupplyStatusUpdateButton() {
 
       if (preview.pendingCount === 0) {
         setState("idle");
-        setMessage(`현재 "기존상품승인대기" 상태인 상품이 없습니다. (파일: ${preview.fileName})`);
+        setMessage(`현재 "기존상품승인대기/신상승인대기" 상태인 상품이 없습니다. (파일: ${preview.fileName})`);
         return;
       }
 
@@ -54,7 +54,7 @@ export default function SupplyStatusUpdateButton() {
           `승인대기 ${preview.pendingCount}개를 확인했지만 실제로 반영할 수 있는 항목이 없습니다` +
             (preview.matchKeyColumnHeader
               ? ` (미매칭 ${preview.unmatchedCount}, 중복 ${preview.duplicateCount}, 충돌 ${preview.conflictCount}).`
-              : " — 다운로드 파일에 모델SKU와 비교할 열(옵션 판매자상품코드/판매자상품코드 등)이 없습니다.")
+              : ` (미매칭 ${preview.unmatchedCount}, 중복 ${preview.duplicateCount}, 충돌 ${preview.conflictCount}).`)
         );
         setResult({ applied: false, preview, writtenCount: 0, statusOnlyCount: 0 });
         return;
@@ -62,7 +62,7 @@ export default function SupplyStatusUpdateButton() {
 
       const confirmed = window.confirm(
         `최신 상품공급상태관리 파일(${preview.fileName})을 기준으로\n` +
-          `승인 완료 ${preview.eligibleCount}개 상품의 SKU ID와 현재상태를 업데이트합니다.\n\n` +
+          `승인 완료 ${preview.eligibleCount}개 상품의 SKU ID·바코드·발주가능상태·현재상태를 업데이트합니다.\n\n` +
           `(미매칭 ${preview.unmatchedCount}건, 중복 ${preview.duplicateCount}건, 충돌 ${preview.conflictCount}건은 건드리지 않습니다)`
       );
       if (!confirmed) {
@@ -121,6 +121,7 @@ export default function SupplyStatusUpdateButton() {
             <li>확인한 승인대기 상품: {result.preview.pendingCount}개</li>
             <li>SKU ID 입력: {result.writtenCount - result.statusOnlyCount}개</li>
             <li>현재상태 변경: {result.writtenCount}개</li>
+            <li>바코드·발주가능상태 갱신: {result.writtenCount}개</li>
             <li>이미 동일한 SKU ID: {result.statusOnlyCount}개</li>
             <li>미매칭: {result.preview.unmatchedCount}개</li>
             <li>충돌: {result.preview.conflictCount}개</li>
