@@ -10,7 +10,10 @@ import { getStoredRefreshToken, saveRefreshTokenLocally } from "./google-drive-o
 
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
-export const DRIVE_OAUTH_SCOPE = "https://www.googleapis.com/auth/drive.file";
+// The image generator saves into an existing user-owned folder selected by ID.
+// drive.file cannot see an arbitrary pre-existing folder unless it was opened
+// through Google Picker, so this internal app needs Drive access for that folder.
+export const DRIVE_OAUTH_SCOPE = "https://www.googleapis.com/auth/drive";
 
 export class DriveOAuthNotConfiguredError extends Error {
   constructor() {

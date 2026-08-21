@@ -6,6 +6,7 @@ import { basicQualityChecks, composeAllColorCut, composeDetailPage, normalizeSqu
 import { clearGeneratorSession, loadGeneratorSession, saveGeneratorSession } from "@/lib/image-generator/idb";
 import { allColorRule, COLOR_OPTIONS, colorLabel, estimateImageCalls, filenameFor, initialProduct, PHOTO_ROLES } from "@/lib/image-generator/rules";
 import { saveGeneratorResults } from "@/lib/image-generator/storage";
+import { saveGeneratorResultsToDrive } from "@/lib/image-generator/cloud-storage";
 import type { ColorCode, GeneratedAsset, GeneratorSession, PhotoRole, ProductAnalysis, ReferencePhoto } from "@/lib/image-generator/types";
 import { ensureReadWritePermission, loadDirectoryHandle, saveDirectoryHandle, supportsDirectoryPicker } from "@/lib/product-db/idb";
 import { CATEGORY_PROFILES, categoryProfile } from "@/lib/image-generator/category-profiles";
@@ -194,7 +195,20 @@ export default function ImageGeneratorPage() {
     const requiredWear = [1, 2, 3].every(variant => session.assets.some(asset => asset.kind === "wear" && asset.variant === variant && asset.approved));
     const requiredAll = !rule.enabled || [1, 2].every(variant => session.assets.some(asset => asset.kind === "all-colors" && asset.variant === variant && asset.approved));
     if (!requiredColors || !requiredWear || !requiredAll || !session.detailPage) return setNotice("필수 이미지를 모두 승인하고 상세페이지를 만든 뒤 저장해주세요.");
-    setBusy("save");
+    setBusy("drive-save");
+    try {
+      const saved = await saveGeneratorResultsToDrive(session, (done, total) => setNotice(`Google Drive 저장 중 ${done}/${total}…`));
+      setSavedFiles(saved); setNotice(`${saved.length}개 파일을 Google Drive 상품이미지DB에 저장했습니다.`);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Google Drive에 저장하지 못했습니다."); }
+    finally { setBusy(""); }
+  }
+
+  async function saveAllLocally() {
+    const requiredColors = session.product.colors.every(color => approvedColors.some(asset => asset.color === color));
+    const requiredWear = [1, 2, 3].every(variant => session.assets.some(asset => asset.kind === "wear" && asset.variant === variant && asset.approved));
+    const requiredAll = !rule.enabled || [1, 2].every(variant => session.assets.some(asset => asset.kind === "all-colors" && asset.variant === variant && asset.approved));
+    if (!requiredColors || !requiredWear || !requiredAll || !session.detailPage) return setNotice("필수 이미지를 모두 승인하고 상세페이지를 만든 뒤 저장해주세요.");
+    setBusy("local-save");
     try {
       let handle = await loadDirectoryHandle();
       if (!handle || !(await ensureReadWritePermission(handle))) {
@@ -269,7 +283,7 @@ export default function ImageGeneratorPage() {
     <section className={styles.panel}><div className={styles.sectionTitle}><div><span>8</span><h2>상세페이지 순서와 저장</h2></div></div>
       <div className={styles.uploadRow}><label className={styles.fileButton}>노이드비 상단이미지 올리기<input type="file" accept="image/*" onChange={uploadHeader} /></label><button onClick={applyDefaultOrder}>기본 순서로 정렬</button><span>{session.headerImage ? session.headerImage.name : "상단 고정 이미지가 필요합니다."}</span></div>
       <div className={styles.orderList}>{orderedAssets.map(asset => <div key={asset.id} draggable onDragStart={() => setDragged(asset.id)} onDragOver={e => e.preventDefault()} onDrop={e => reorderDrop(e, asset.id)}><span>↕</span><img src={asset.dataUrl} alt="" /><strong>{asset.label}</strong><small>{asset.filename}</small></div>)}</div>
-      <div className={styles.actionRow}><button className={styles.primaryButton} disabled={Boolean(busy)} onClick={makeDetailPage}>780px 상세페이지 만들기</button><button className={styles.saveButton} disabled={Boolean(busy)} onClick={saveAll}>승인 및 전체 저장</button></div>
+      <div className={styles.actionRow}><button className={styles.primaryButton} disabled={Boolean(busy)} onClick={makeDetailPage}>780px 상세페이지 만들기</button><button className={styles.saveButton} disabled={Boolean(busy)} onClick={saveAll}>승인 및 Google Drive 저장</button><button disabled={Boolean(busy)} onClick={saveAllLocally}>이 PC 폴더에도 저장</button></div>
       {session.detailPage && <a href={session.detailPage} download={`${session.product.model || "detail"}.jpg`} className={styles.detailPreview}><img src={session.detailPage} alt="완성 상세페이지" /><span>상세페이지 확대 또는 다운로드</span></a>}
       {savedFiles.length > 0 && <details className={styles.saved}><summary>저장된 파일 {savedFiles.length}개 보기</summary>{savedFiles.map(file => <div key={file}>{file}</div>)}</details>}
     </section>
