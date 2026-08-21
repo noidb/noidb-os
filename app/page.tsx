@@ -79,6 +79,7 @@ const MALE_RING_SIZES = "20호,22호,25호";
 const UNISEX_RING_SIZES = "9호,11호,14호,17호,20호,22호,25호";
 const MAX_PHOTOS = 10;
 const ACCEPTED = ["image/jpeg", "image/jpg", "image/png"];
+const DEFAULT_DETAIL_HEADER = "/노이드비-상단이미지.jpg";
 const DRAFT_STORAGE_KEY = "laura-product-draft";
 const LEGACY_DRAFT_STORAGE_KEY = ["noi", "db-product-draft"].join("");
 const DEFAULT_SUPPLIERS = [
@@ -256,6 +257,8 @@ export default function Home() {
   const [lightbox, setLightbox] = useState("");
 
   const [detailImages, setDetailImages] = useState<DetailImage[]>([]);
+  const [detailHeader, setDetailHeader] = useState<SlotImage | null>(null);
+  const [detailFooter, setDetailFooter] = useState<SlotImage | null>(null);
   const [detailPreview, setDetailPreview] = useState("");
   const [detailMessage, setDetailMessage] = useState("");
   const [dragDetailIndex, setDragDetailIndex] = useState<number | null>(null);
@@ -1218,12 +1221,28 @@ export default function Home() {
     setDetailMessage(`${name}을(를) 상세페이지 목록에 추가했습니다.`);
   };
 
+  const changeDetailBrandImage = async (position: "header" | "footer", file: File | undefined) => {
+    if (!file || !isAccepted(file)) {
+      setDetailMessage("JPG/JPEG/PNG 이미지를 선택해주세요.");
+      return;
+    }
+    const slot = { dataUrl: await readFile(file), fileName: file.name };
+    if (position === "header") setDetailHeader(slot);
+    else setDetailFooter(slot);
+    setDetailPreview("");
+    setDetailMessage(`${position === "header" ? "상단" : "하단"} 이미지를 변경했습니다: ${file.name}`);
+  };
+
   const composeDetailPage = async () => {
     if (!detailImages.length) {
       throw new Error("상세페이지에 사용할 사진을 추가해주세요.");
     }
     const width = 780;
     const gap = 60;
+    const header = await loadImage(detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER);
+    const footer = detailFooter ? await loadImage(detailFooter.dataUrl) : null;
+    const headerHeight = Math.max(1, Math.round((header.height / header.width) * width));
+    const footerHeight = footer ? Math.max(1, Math.round((footer.height / footer.width) * width)) : 0;
     const prepared = await Promise.all(
       detailImages.map(async item => {
         const img = await loadImage(item.dataUrl);
@@ -1232,7 +1251,7 @@ export default function Home() {
       })
     );
     const totalHeight =
-      gap + prepared.reduce((s, i) => s + i.height, 0) + gap * Math.max(0, prepared.length - 1) + gap;
+      headerHeight + gap + prepared.reduce((s, i) => s + i.height, 0) + gap * Math.max(0, prepared.length - 1) + gap + footerHeight;
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = totalHeight;
@@ -1240,11 +1259,13 @@ export default function Home() {
     if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
     ctx.fillStyle = "#FFFFFF";
     ctx.fillRect(0, 0, width, totalHeight);
-    let y = gap;
+    ctx.drawImage(header, 0, 0, width, headerHeight);
+    let y = headerHeight + gap;
     for (const item of prepared) {
       ctx.drawImage(item.img, 0, y, width, item.height);
       y += item.height + gap;
     }
+    if (footer) ctx.drawImage(footer, 0, y, width, footerHeight);
     return { dataUrl: canvas.toDataURL("image/jpeg", 0.94), totalHeight };
   };
 
@@ -1356,7 +1377,7 @@ export default function Home() {
         savedAt: Date.now(),
         data: {
           product, analysis, photos, mainWear, allOptions, optionThumbs, detailCut, wear01, wear02, customSlots,
-          detailImages, detailPreview, sourcingUrls, sourcingUrlInputs, sourcingImages,
+          detailImages, detailHeader, detailFooter, detailPreview, sourcingUrls, sourcingUrlInputs, sourcingImages,
           uploadPool, title, tags,
         },
       });
@@ -1399,6 +1420,8 @@ export default function Home() {
     setWear02(data.wear02 || null);
     setCustomSlots(Array.isArray(data.customSlots) ? data.customSlots : []);
     setDetailImages(Array.isArray(data.detailImages) ? data.detailImages : []);
+    setDetailHeader(data.detailHeader || null);
+    setDetailFooter(data.detailFooter || null);
     setDetailPreview(data.detailPreview || "");
     setSourcingUrls(Array.isArray(data.sourcingUrls) ? data.sourcingUrls : ["", "", ""]);
     setSourcingUrlInputs(Array.isArray(data.sourcingUrlInputs) ? data.sourcingUrlInputs : ["", "", ""]);
@@ -1593,30 +1616,8 @@ export default function Home() {
     try {
       let preview = detailPreview;
       if (!preview && detailImages.length) {
-        await buildDetailPage();
-        // buildDetailPage sets state async — rebuild inline
-        const width = 780;
-        const gap = 60;
-        const prepared = await Promise.all(
-          detailImages.map(async item => {
-            const img = await loadImage(item.dataUrl);
-            return { img, height: Math.max(1, Math.round((img.height / img.width) * width)) };
-          })
-        );
-        const totalHeight =
-          gap + prepared.reduce((s, i) => s + i.height, 0) + gap * Math.max(0, prepared.length - 1) + gap;
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = totalHeight;
-        const ctx = canvas.getContext("2d")!;
-        ctx.fillStyle = "#FFFFFF";
-        ctx.fillRect(0, 0, width, totalHeight);
-        let y = gap;
-        for (const item of prepared) {
-          ctx.drawImage(item.img, 0, y, width, item.height);
-          y += item.height + gap;
-        }
-        preview = canvas.toDataURL("image/jpeg", 0.94);
+        const built = await composeDetailPage();
+        preview = built.dataUrl;
         setDetailPreview(preview);
       }
 
@@ -2212,6 +2213,30 @@ export default function Home() {
       {/* 6. 상세페이지 */}
       <section className="card full">
         <h2>6. 상세페이지</h2>
+        <div className="detailBrandImages">
+          <div className="detailBrandBlock">
+            <strong>상단 로고 이미지</strong>
+            <img src={detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER} alt="상단 로고 이미지" />
+            <label className="detailBrandUpload"
+              onDragOver={event => event.preventDefault()}
+              onDrop={event => { event.preventDefault(); void changeDetailBrandImage("header", event.dataTransfer.files?.[0]); }}>
+              다른 브랜드 로고 올리기
+              <input type="file" accept="image/jpeg,image/jpg,image/png" onChange={event => { void changeDetailBrandImage("header", event.target.files?.[0]); event.target.value = ""; }} />
+            </label>
+            {detailHeader && <button type="button" className="secondaryButton" onClick={() => { setDetailHeader(null); setDetailPreview(""); }}>NOID-B 기본 로고로 되돌리기</button>}
+          </div>
+          <div className="detailBrandBlock">
+            <strong>하단 로고·안내 이미지 (선택)</strong>
+            {detailFooter ? <img src={detailFooter.dataUrl} alt="하단 이미지" /> : <span>올리지 않으면 흰 여백으로 끝납니다.</span>}
+            <label className="detailBrandUpload"
+              onDragOver={event => event.preventDefault()}
+              onDrop={event => { event.preventDefault(); void changeDetailBrandImage("footer", event.dataTransfer.files?.[0]); }}>
+              하단 이미지 올리기
+              <input type="file" accept="image/jpeg,image/jpg,image/png" onChange={event => { void changeDetailBrandImage("footer", event.target.files?.[0]); event.target.value = ""; }} />
+            </label>
+            {detailFooter && <button type="button" className="secondaryButton" onClick={() => { setDetailFooter(null); setDetailPreview(""); }}>하단 이미지 빼기</button>}
+          </div>
+        </div>
         <div className="multiUpload existingDetailUpload" onClick={() => void openExistingDetailPicker()}
           onDragOver={e => e.preventDefault()}
           onDrop={e => {

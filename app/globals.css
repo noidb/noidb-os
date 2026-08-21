@@ -38,11 +38,13 @@
 .detailItemButtons button:disabled{opacity:.35;cursor:not-allowed}
 .detailItemButtons .removeButton{background:#fee2e2;color:#b91c1c}
 .detailResult{margin-top:22px}
+.detailBrandImages{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px}.detailBrandBlock{display:flex;flex-direction:column;gap:9px;padding:14px;border:1px solid #d8d3cc;border-radius:12px;background:#f8f6f2}.detailBrandBlock>img{display:block;width:100%;max-height:190px;object-fit:contain;background:#fff;border-radius:8px}.detailBrandBlock>span{min-height:72px;display:flex;align-items:center;color:#716d67}.detailBrandUpload{display:block;text-align:center;padding:11px;border:1px solid #c7b9a8;border-radius:8px;background:#e9ddcf;font-weight:750;cursor:pointer}.detailBrandUpload input{display:none}.detailBrandBlock>button{border:0;border-radius:8px;padding:10px;font-weight:750;cursor:pointer}
 .detailResult h3{margin-bottom:12px}
 .detailPreviewFrame{max-height:750px;overflow:auto;border:1px solid #d1d5db;background:#e5e7eb;padding:8px;border-radius:12px}
 .detailPreviewFrame img{display:block;width:100%;max-width:780px;height:auto;margin:0 auto;background:#fff}
 .detailDownload{width:100%;border:0;border-radius:10px;padding:13px;margin-top:12px;font-weight:800;cursor:pointer}
 @media(max-width:760px){
+  .detailBrandImages{grid-template-columns:1fr}
   .detailActions{flex-direction:column}
   .detailActions button{width:100%}
   .detailItem{align-items:flex-start}
