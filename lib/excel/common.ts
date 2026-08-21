@@ -88,6 +88,11 @@ export function buildSkuRows(payload: ExportPayload): SkuRow[] {
   return rows;
 }
 
+/** 쿠팡 옵션값에서 사람이 읽는 색상명과 옵션별 모델SKU를 함께 보존한다. */
+export function colorOptionWithSku(color: string, sku: string) {
+  return `${color.trim()} ${sku.trim()}`.trim();
+}
+
 export function templateFileForCategory(category: string) {
   if (category === "귀걸이" || category === "피어싱") return "귀걸이(피어싱).xlsx";
   if (category === "목걸이") return "목걸이.xlsx";

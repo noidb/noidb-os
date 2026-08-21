@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { loadSupplierHubPurchaseOrders } from "@/lib/wms/supplier-hub-orders";
+import { filterCurrentPurchaseOrders, loadSupplierHubPurchaseOrders } from "@/lib/wms/supplier-hub-orders";
 
 /**
  * NOID WMS 서플라이어 허브 발주서 읽기 전용 API. 기존 app/api/wms/purchase-orders(구글시트 기반)와
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const orders = await loadSupplierHubPurchaseOrders();
+    const orders = filterCurrentPurchaseOrders(await loadSupplierHubPurchaseOrders());
     return NextResponse.json({ orders });
   } catch (error) {
     return NextResponse.json(

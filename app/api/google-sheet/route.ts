@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildSkuRows, costWithVat, dimensionText, parseNumber, supplierLabel, supplyPrice } from "@/lib/excel/common";
+import { buildSkuRows, colorOptionWithSku, costWithVat, dimensionText, parseNumber, supplierLabel, supplyPrice } from "@/lib/excel/common";
 import type { ExportPayload } from "@/lib/excel/types";
 
 export const runtime = "nodejs";
@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
       const productDbRows = skus.map(sku => productDbRow({
         supplier, gender: payload.product.gender, category: payload.product.category, model: payload.model,
         modelSku: sku.sku, warehouse: payload.product.warehouse || "", image: sku.thumbFile,
-        title: payload.title, color: sku.color, size: sku.size, dimension, cost, sale, supply,
+        title: payload.title, color: colorOptionWithSku(sku.color, sku.sku), size: sku.size, dimension, cost, sale, supply,
         sourcingUrl: payload.sourcingUrl || "",
       }));
       const called = await callWebhook({
@@ -125,7 +125,7 @@ export async function POST(req: NextRequest) {
     const productDbRows = skus.map(sku => productDbRow({
       supplier, gender: payload.product.gender, category: payload.product.category, model: payload.model,
       modelSku: sku.sku, warehouse: payload.product.warehouse || "", image: sku.thumbFile,
-      title: payload.title, color: sku.color, size: sku.size, dimension, cost, sale, supply,
+      title: payload.title, color: colorOptionWithSku(sku.color, sku.sku), size: sku.size, dimension, cost, sale, supply,
       sourcingUrl: payload.sourcingUrl || "",
     }));
     const productImages = skus.flatMap(sku => {

@@ -224,6 +224,7 @@ export interface MatchedRow {
   currentStatus: string;
   currentSkuId: string;
   downloadSkuId: string | null;
+  downloadProductName: string | null;
   downloadBarcode: string | null;
   downloadOrderAvailability: string | null;
   matchCandidateCount: number;
@@ -326,6 +327,7 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
     const reasons: string[] = [];
     let eligible = false;
     let downloadSkuId: string | null = null;
+    let downloadProductName: string | null = null;
     let downloadBarcode: string | null = null;
     let downloadOrderAvailability: string | null = null;
     let alreadySame = false;
@@ -357,6 +359,7 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
         } else {
           const currentSkuId = String(row[idx.skuId] ?? "").trim();
           downloadSkuId = match.skuId;
+          downloadProductName = match.productName || null;
           downloadBarcode = match.barcode || null;
           downloadOrderAvailability = match.approvalRaw || null;
           if (currentSkuId === "") {
@@ -380,6 +383,7 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
       currentStatus: String(row[idx.status] ?? "").trim(),
       currentSkuId: String(row[idx.skuId] ?? "").trim(),
       downloadSkuId,
+      downloadProductName,
       downloadBarcode,
       downloadOrderAvailability,
       matchCandidateCount,
@@ -459,6 +463,7 @@ export async function applySupplyStatusUpdate(): Promise<SupplyStatusApplyResult
     afterStatus: preview.approvedStatusValue,
     beforeSkuId: r.currentSkuId,
     afterSkuId: r.downloadSkuId,
+    afterProductName: r.downloadProductName,
     afterBarcode: r.downloadBarcode,
     afterOrderAvailability: r.downloadOrderAvailability,
   }));
@@ -486,6 +491,9 @@ export async function applySupplyStatusUpdate(): Promise<SupplyStatusApplyResult
     }
     if (r.downloadBarcode) {
       cellUpdates.push({ row: r.sheetRowNumber, col: headerIndex.barcode + 1, value: r.downloadBarcode });
+    }
+    if (r.downloadProductName) {
+      cellUpdates.push({ row: r.sheetRowNumber, col: headerIndex.productName + 1, value: r.downloadProductName });
     }
     if (r.downloadOrderAvailability) {
       cellUpdates.push({ row: r.sheetRowNumber, col: headerIndex.orderAvailability + 1, value: r.downloadOrderAvailability });

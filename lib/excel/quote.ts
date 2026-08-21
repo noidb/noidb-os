@@ -3,6 +3,7 @@ import path from "path";
 import {
   altText,
   buildSkuRows,
+  colorOptionWithSku,
   categoryPath,
   detectStone,
   dimensionText,
@@ -143,18 +144,18 @@ export async function buildQuoteWorkbook(input: ExportPayload | ExportPayload[])
 
     skus.forEach((sku, index) => {
     const row = sheet.getRow(9 + totalSkuCount + index);
-    const optionValues = [sku.color, sku.size]
+    const colorOption = colorOptionWithSku(sku.color, sku.sku);
+    const optionValues = [colorOption, sku.size]
       .map(value => String(value || "").trim())
       .filter(value => value && value.toLowerCase() !== "free");
-    // 쿠팡 다운로드 파일에도 옵션별 고유키가 남도록 각 옵션 상품명 끝에 모델SKU를 넣는다.
-    // 이후 승인상태 업데이트는 상품명 추정 대신 이 값을 정확히 대조할 수 있다.
-    const productNameWithOptions = [payload.title, ...optionValues, sku.sku].join(", ");
+    // 모델SKU는 별도 꼬리표가 아니라 색상 옵션값 자체에 포함한다.
+    const productNameWithOptions = [payload.title, ...optionValues].join(", ");
     setByHeader(row, headers, "카테고리", defaults.path);
     setByHeader(row, headers, "상품명", productNameWithOptions);
     setByHeader(row, headers, "상품 바코드", defaults.barcode);
     setByHeader(row, headers, "검색태그", payload.tags);
     setByHeader(row, headers, "브랜드", defaults.brand);
-    setByHeader(row, headers, "색상", sku.color);
+    setByHeader(row, headers, "색상", colorOption);
     setByHeader(row, headers, "주얼리 사이즈", sku.size);
     setByHeader(row, headers, "사이즈", sku.size);
     setByHeader(row, headers, "반지 사이즈", "");

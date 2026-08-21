@@ -170,6 +170,21 @@ export async function loadSupplierHubPurchaseOrders(): Promise<SupplierHubPurcha
   return orders.sort((a, b) => a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber));
 }
 
+/** 한국시간 오늘(YYYY-MM-DD). 서버가 UTC로 실행되는 Vercel에서도 날짜 경계가 어긋나지 않게 한다. */
+export function todayInKorea(now = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+}
+
+/** 입고예정일이 오늘이거나 미래인 작업 대상만 반환한다. 날짜가 비어 있거나 형식이 이상하면 숨기지 않는다. */
+export function filterCurrentPurchaseOrders(orders: SupplierHubPurchaseOrder[], today = todayInKorea()) {
+  return orders.filter(order => !/^\d{4}-\d{2}-\d{2}$/.test(order.expectedDate) || order.expectedDate >= today);
+}
+
 export async function loadSupplierHubPurchaseOrdersFromDriveFiles(files: DriveFileInfo[]): Promise<SupplierHubPurchaseOrder[]> {
   const byPoNumber = new Map<string, SupplierHubPurchaseOrder>();
   for (const file of files) {

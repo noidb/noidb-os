@@ -62,7 +62,7 @@ export default function SupplyStatusUpdateButton() {
 
       const confirmed = window.confirm(
         `최신 상품공급상태관리 파일(${preview.fileName})을 기준으로\n` +
-          `승인 완료 ${preview.eligibleCount}개 상품의 SKU ID·바코드·발주가능상태·현재상태를 업데이트합니다.\n\n` +
+          `승인 완료 ${preview.eligibleCount}개 상품의 상품명·SKU ID·바코드·발주가능상태·현재상태를 업데이트합니다.\n\n` +
           `(미매칭 ${preview.unmatchedCount}건, 중복 ${preview.duplicateCount}건, 충돌 ${preview.conflictCount}건은 건드리지 않습니다)`
       );
       if (!confirmed) {
@@ -121,6 +121,7 @@ export default function SupplyStatusUpdateButton() {
             <li>확인한 승인대기 상품: {result.preview.pendingCount}개</li>
             <li>SKU ID 입력: {result.writtenCount - result.statusOnlyCount}개</li>
             <li>현재상태 변경: {result.writtenCount}개</li>
+            <li>쿠팡 상품명 갱신: {result.writtenCount}개</li>
             <li>바코드·발주가능상태 갱신: {result.writtenCount}개</li>
             <li>이미 동일한 SKU ID: {result.statusOnlyCount}개</li>
             <li>미매칭: {result.preview.unmatchedCount}개</li>
