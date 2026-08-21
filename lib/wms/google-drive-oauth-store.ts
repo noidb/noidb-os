@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { get, put } from "@vercel/blob";
 
 /**
  * 사용자 Google Drive OAuth의 refresh token / 업로드 폴더 ID를 저장하는 전용 모듈
@@ -19,6 +20,7 @@ import path from "node:path";
 
 const SECRET_DIR = path.join(process.cwd(), ".secrets");
 const SECRET_FILE = path.join(SECRET_DIR, "google-drive-oauth.json");
+const BLOB_SECRET_PATH = "noidb-system/google-drive-oauth.json";
 
 interface StoredOAuthState {
   refreshToken?: string;
@@ -35,6 +37,34 @@ async function readSecretFile(): Promise<StoredOAuthState> {
   }
 }
 
+async function readBlobSecret(): Promise<StoredOAuthState> {
+  if (!process.env.VERCEL) return {};
+  try {
+    const result = await get(BLOB_SECRET_PATH, { access: "private", useCache: false });
+    if (!result || result.statusCode !== 200 || !result.stream) return {};
+    return JSON.parse(await new Response(result.stream).text()) as StoredOAuthState;
+  } catch {
+    return {};
+  }
+}
+
+async function readStoredState(): Promise<StoredOAuthState> {
+  return process.env.VERCEL ? readBlobSecret() : readSecretFile();
+}
+
+async function writeStoredState(state: StoredOAuthState): Promise<void> {
+  if (process.env.VERCEL) {
+    await put(BLOB_SECRET_PATH, JSON.stringify(state), {
+      access: "private",
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      contentType: "application/json",
+    });
+    return;
+  }
+  await writeSecretFile(state);
+}
+
 async function writeSecretFile(state: StoredOAuthState): Promise<void> {
   await fs.mkdir(SECRET_DIR, { recursive: true });
   await fs.writeFile(SECRET_FILE, JSON.stringify(state, null, 2), "utf8");
@@ -49,7 +79,7 @@ export function hasEnvRefreshToken(): boolean {
 export async function getStoredRefreshToken(): Promise<string | null> {
   const envToken = process.env.GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN?.trim();
   if (envToken) return envToken;
-  const state = await readSecretFile();
+  const state = await readStoredState();
   return state.refreshToken?.trim() || null;
 }
 
@@ -59,29 +89,29 @@ export async function getStoredRefreshToken(): Promise<string | null> {
  * 다음 조회 시 GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN 환경변수가 있으면 그 값이 여전히 우선한다.
  */
 export async function saveRefreshTokenLocally(refreshToken: string): Promise<void> {
-  const state = await readSecretFile();
-  await writeSecretFile({ ...state, refreshToken, connectedAt: new Date().toISOString() });
+  const state = await readStoredState();
+  await writeStoredState({ ...state, refreshToken, connectedAt: new Date().toISOString() });
 }
 
 /** 로컬 비밀파일에 저장된 refresh token만 제거한다. 환경변수 값은 여기서 지울 수 없다. */
 export async function clearLocalRefreshToken(): Promise<void> {
-  const state = await readSecretFile();
+  const state = await readStoredState();
   delete state.refreshToken;
   delete state.connectedAt;
-  await writeSecretFile(state);
+  await writeStoredState(state);
 }
 
 export async function getConnectedAt(): Promise<string | null> {
-  const state = await readSecretFile();
+  const state = await readStoredState();
   return state.connectedAt || null;
 }
 
 export async function getStoredFolderId(): Promise<string | null> {
-  const state = await readSecretFile();
+  const state = await readStoredState();
   return state.folderId?.trim() || null;
 }
 
 export async function saveFolderId(folderId: string): Promise<void> {
-  const state = await readSecretFile();
-  await writeSecretFile({ ...state, folderId });
+  const state = await readStoredState();
+  await writeStoredState({ ...state, folderId });
 }
