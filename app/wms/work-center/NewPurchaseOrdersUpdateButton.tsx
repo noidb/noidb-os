@@ -62,7 +62,9 @@ export default function NewPurchaseOrdersUpdateButton() {
   }
 
   const newlyAddedSet = new Set(importResult?.addedPurchaseOrderNumbers ?? []);
-  const updatedSet = new Set(importResult?.updatedPurchaseOrderNumbers ?? []);
+  const completedChangeByPo = new Map(
+    (importResult?.updatedScheduleChanges ?? []).map(change => [change.purchaseOrderNumber, change])
+  );
   const recommendations = orders ? buildScheduleChangeRecommendations(orders) : [];
   const recommendationByTargetPo = new Map<string, ScheduleChangeRecommendation>();
   for (const rec of recommendations) {
@@ -170,6 +172,7 @@ export default function NewPurchaseOrdersUpdateButton() {
             <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
               {orders.map(order => {
                 const totalQuantity = order.items.reduce((sum, item) => sum + item.orderedQuantity, 0);
+                const completedChange = completedChangeByPo.get(order.purchaseOrderNumber);
                 return (
                   <div key={order.purchaseOrderNumber} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "12px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "4px", marginBottom: "8px" }}>
@@ -190,23 +193,26 @@ export default function NewPurchaseOrdersUpdateButton() {
                             신규
                           </span>
                         )}
-                        {updatedSet.has(order.purchaseOrderNumber) && (
-                          <span
-                            style={{
-                              marginLeft: "6px",
-                              fontSize: "10px",
-                              fontWeight: 800,
-                              color: wmsColors.warn,
-                            }}
-                          >
-                            일정 업데이트
-                          </span>
-                        )}
                       </strong>
                       <span style={{ fontSize: "11px", color: wmsColors.muted }}>{order.orderType}</span>
                     </div>
 
-                    {recommendationByTargetPo.has(order.purchaseOrderNumber) && (() => {
+                    {completedChange && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "5px", marginBottom: "8px" }}>
+                        {completedChange.expectedDateChanged && (
+                          <span style={{ fontSize: "10px", fontWeight: 800, color: wmsColors.greenDark, background: wmsColors.greenSoft, borderRadius: "999px", padding: "3px 8px" }}>
+                            입고예정일 변경완료
+                          </span>
+                        )}
+                        {completedChange.fulfillmentCenterChanged && (
+                          <span style={{ fontSize: "10px", fontWeight: 800, color: wmsColors.greenDark, background: wmsColors.greenSoft, borderRadius: "999px", padding: "3px 8px" }}>
+                            물류센터 변경완료
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {!completedChange && recommendationByTargetPo.has(order.purchaseOrderNumber) && (() => {
                       const rec = recommendationByTargetPo.get(order.purchaseOrderNumber)!;
                       const centerChanged = rec.current.fulfillmentCenter !== rec.recommended.fulfillmentCenter;
                       const dateChanged = rec.current.expectedDate !== rec.recommended.expectedDate;

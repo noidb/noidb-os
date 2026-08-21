@@ -30,6 +30,11 @@ export interface ImportLatestResult {
   sourceFileName: string;
   addedPurchaseOrderNumbers: string[];
   updatedPurchaseOrderNumbers: string[];
+  updatedScheduleChanges: {
+    purchaseOrderNumber: string;
+    expectedDateChanged: boolean;
+    fulfillmentCenterChanged: boolean;
+  }[];
   skippedDuplicatePurchaseOrderNumbers: string[];
   totalPurchaseOrders: number;
   totalSkuTypes: number;
@@ -113,6 +118,15 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
         return existing ? hasScheduleChange(existing, order) : false;
       })
       .map(order => order.purchaseOrderNumber);
+    const updatedScheduleChanges = latestOrders.flatMap(order => {
+      const existing = previousByPo.get(order.purchaseOrderNumber);
+      if (!existing || !hasScheduleChange(existing, order)) return [];
+      return [{
+        purchaseOrderNumber: order.purchaseOrderNumber,
+        expectedDateChanged: existing.expectedDate !== order.expectedDate,
+        fulfillmentCenterChanged: existing.fulfillmentCenter !== order.fulfillmentCenter,
+      }];
+    });
     const skippedDuplicatePurchaseOrderNumbers = latestOrders
       .filter(order => {
         const existing = previousByPo.get(order.purchaseOrderNumber);
@@ -148,6 +162,7 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
       sourceFileName: latest.name,
       addedPurchaseOrderNumbers,
       updatedPurchaseOrderNumbers,
+      updatedScheduleChanges,
       skippedDuplicatePurchaseOrderNumbers,
       totalPurchaseOrders: finalOrders.length,
       totalSkuTypes: skuCodes.size,
@@ -168,6 +183,7 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
 
   const addedPurchaseOrderNumbers: string[] = [];
   const updatedPurchaseOrderNumbers: string[] = [];
+  const updatedScheduleChanges: ImportLatestResult["updatedScheduleChanges"] = [];
   const skippedDuplicatePurchaseOrderNumbers: string[] = [];
   const now = new Date().toISOString();
   const incomingDir = getIncomingPurchaseOrdersDir();
@@ -187,6 +203,11 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
       await writeFile(path.join(incomingDir, destFileName), buffer);
       existingByPo.set(parsed.purchaseOrderNumber, parsed);
       updatedPurchaseOrderNumbers.push(parsed.purchaseOrderNumber);
+      updatedScheduleChanges.push({
+        purchaseOrderNumber: parsed.purchaseOrderNumber,
+        expectedDateChanged: existing.expectedDate !== parsed.expectedDate,
+        fulfillmentCenterChanged: existing.fulfillmentCenter !== parsed.fulfillmentCenter,
+      });
       continue;
     }
 
@@ -210,6 +231,7 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
     sourceFileName: latest.fileName,
     addedPurchaseOrderNumbers,
     updatedPurchaseOrderNumbers,
+    updatedScheduleChanges,
     skippedDuplicatePurchaseOrderNumbers,
     totalPurchaseOrders: finalOrders.length,
     totalSkuTypes: skuCodes.size,
