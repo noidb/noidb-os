@@ -62,6 +62,7 @@ export default function NewPurchaseOrdersUpdateButton() {
   }
 
   const newlyAddedSet = new Set(importResult?.addedPurchaseOrderNumbers ?? []);
+  const updatedSet = new Set(importResult?.updatedPurchaseOrderNumbers ?? []);
   const recommendations = orders ? buildScheduleChangeRecommendations(orders) : [];
   const recommendationByTargetPo = new Map<string, ScheduleChangeRecommendation>();
   for (const rec of recommendations) {
@@ -86,7 +87,7 @@ export default function NewPurchaseOrdersUpdateButton() {
 
       {importResult && !open && (
         <p style={{ fontSize: "11px", color: wmsColors.muted, margin: "6px 2px 0" }}>
-          신규 {importResult.addedPurchaseOrderNumbers.length}건 추가 · 총 발주서 {importResult.totalPurchaseOrders}건 (목록 접힘)
+          신규 {importResult.addedPurchaseOrderNumbers.length}건 추가 · 변경 {importResult.updatedPurchaseOrderNumbers?.length ?? 0}건 업데이트 · 총 발주서 {importResult.totalPurchaseOrders}건 (목록 접힘)
         </p>
       )}
 
@@ -112,6 +113,8 @@ export default function NewPurchaseOrdersUpdateButton() {
             >
               <div style={{ marginBottom: "4px" }}>
                 원본: {importResult.sourceFileName} · 신규 {importResult.addedPurchaseOrderNumbers.length}건 추가
+                {(importResult.updatedPurchaseOrderNumbers?.length ?? 0) > 0 &&
+                  ` · 입고예정일/물류센터 ${importResult.updatedPurchaseOrderNumbers.length}건 업데이트`}
                 {importResult.skippedDuplicatePurchaseOrderNumbers.length > 0 &&
                   ` · 중복 ${importResult.skippedDuplicatePurchaseOrderNumbers.length}건 건너뜀`}
               </div>
@@ -185,6 +188,18 @@ export default function NewPurchaseOrdersUpdateButton() {
                             }}
                           >
                             신규
+                          </span>
+                        )}
+                        {updatedSet.has(order.purchaseOrderNumber) && (
+                          <span
+                            style={{
+                              marginLeft: "6px",
+                              fontSize: "10px",
+                              fontWeight: 800,
+                              color: wmsColors.warn,
+                            }}
+                          >
+                            일정 업데이트
                           </span>
                         )}
                       </strong>

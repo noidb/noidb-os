@@ -187,7 +187,25 @@ export async function loadSupplierHubPurchaseOrdersFromDriveFiles(files: DriveFi
       }
       for (const input of inputs) {
         const order = await parseSupplierHubPurchaseOrderBuffer(input.buffer, input.name, file.modifiedTime);
-        if (order?.purchaseOrderNumber) byPoNumber.set(order.purchaseOrderNumber, order);
+        if (!order?.purchaseOrderNumber) continue;
+        const existing = byPoNumber.get(order.purchaseOrderNumber);
+        if (!existing) {
+          byPoNumber.set(order.purchaseOrderNumber, order);
+          continue;
+        }
+
+        // 같은 발주번호의 후속 파일은 신규 발주로 다시 등록하지 않는다. 쿠팡에서 수정 가능한
+        // 일정 정보가 실제로 달라진 경우에만 그 필드들을 최신값으로 반영하고 상품/수량은 보존한다.
+        if (existing.expectedDate !== order.expectedDate || existing.fulfillmentCenter !== order.fulfillmentCenter) {
+          byPoNumber.set(order.purchaseOrderNumber, {
+            ...existing,
+            fulfillmentCenter: order.fulfillmentCenter,
+            fulfillmentAddress: order.fulfillmentAddress,
+            expectedDate: order.expectedDate,
+            sourceFileName: order.sourceFileName,
+            capturedAt: order.capturedAt,
+          });
+        }
       }
   }
   return [...byPoNumber.values()].sort((a, b) => a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber));

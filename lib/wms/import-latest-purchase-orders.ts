@@ -29,10 +29,18 @@ const SOURCE_DIR = "G:\\내 드라이브\\쿠팡데이터\\발주서리스트다
 export interface ImportLatestResult {
   sourceFileName: string;
   addedPurchaseOrderNumbers: string[];
+  updatedPurchaseOrderNumbers: string[];
   skippedDuplicatePurchaseOrderNumbers: string[];
   totalPurchaseOrders: number;
   totalSkuTypes: number;
   totalQuantity: number;
+}
+
+function hasScheduleChange(
+  existing: { expectedDate: string; fulfillmentCenter: string },
+  incoming: { expectedDate: string; fulfillmentCenter: string }
+): boolean {
+  return existing.expectedDate !== incoming.expectedDate || existing.fulfillmentCenter !== incoming.fulfillmentCenter;
 }
 
 async function findLatestSourceFile(): Promise<{ filePath: string; fileName: string } | null> {
@@ -91,17 +99,42 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
 
     const [latestOrders, previousOrders] = await Promise.all([
       loadSupplierHubPurchaseOrdersFromDriveFiles([latest]),
-      loadSupplierHubPurchaseOrdersFromDriveFiles(files.slice(1)),
+      // 병합 함수는 입력 순서대로 같은 발주번호의 값을 덮어쓰므로, 과거→최신 순서로 넘겨
+      // 직전 최신 상태와 이번 파일을 정확히 비교한다.
+      loadSupplierHubPurchaseOrdersFromDriveFiles(files.slice(1).reverse()),
     ]);
-    const previousPoNumbers = new Set(previousOrders.map(order => order.purchaseOrderNumber));
+    const previousByPo = new Map(previousOrders.map(order => [order.purchaseOrderNumber, order]));
     const addedPurchaseOrderNumbers = latestOrders
       .map(order => order.purchaseOrderNumber)
-      .filter(poNumber => !previousPoNumbers.has(poNumber));
+      .filter(poNumber => !previousByPo.has(poNumber));
+    const updatedPurchaseOrderNumbers = latestOrders
+      .filter(order => {
+        const existing = previousByPo.get(order.purchaseOrderNumber);
+        return existing ? hasScheduleChange(existing, order) : false;
+      })
+      .map(order => order.purchaseOrderNumber);
     const skippedDuplicatePurchaseOrderNumbers = latestOrders
-      .map(order => order.purchaseOrderNumber)
-      .filter(poNumber => previousPoNumbers.has(poNumber));
+      .filter(order => {
+        const existing = previousByPo.get(order.purchaseOrderNumber);
+        return existing ? !hasScheduleChange(existing, order) : false;
+      })
+      .map(order => order.purchaseOrderNumber);
     const finalByPo = new Map(previousOrders.map(order => [order.purchaseOrderNumber, order]));
-    for (const order of latestOrders) finalByPo.set(order.purchaseOrderNumber, order);
+    for (const order of latestOrders) {
+      const existing = finalByPo.get(order.purchaseOrderNumber);
+      if (!existing) {
+        finalByPo.set(order.purchaseOrderNumber, order);
+      } else if (hasScheduleChange(existing, order)) {
+        finalByPo.set(order.purchaseOrderNumber, {
+          ...existing,
+          fulfillmentCenter: order.fulfillmentCenter,
+          fulfillmentAddress: order.fulfillmentAddress,
+          expectedDate: order.expectedDate,
+          sourceFileName: order.sourceFileName,
+          capturedAt: order.capturedAt,
+        });
+      }
+    }
     const finalOrders = [...finalByPo.values()];
     const skuCodes = new Set<string>();
     let totalQuantity = 0;
@@ -114,6 +147,7 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
     return {
       sourceFileName: latest.name,
       addedPurchaseOrderNumbers,
+      updatedPurchaseOrderNumbers,
       skippedDuplicatePurchaseOrderNumbers,
       totalPurchaseOrders: finalOrders.length,
       totalSkuTypes: skuCodes.size,
@@ -130,9 +164,10 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
     loadSupplierHubPurchaseOrders(),
     extractXlsxBuffers(latest.filePath),
   ]);
-  const existingPoNumbers = new Set(existingOrders.map(order => order.purchaseOrderNumber));
+  const existingByPo = new Map(existingOrders.map(order => [order.purchaseOrderNumber, order]));
 
   const addedPurchaseOrderNumbers: string[] = [];
+  const updatedPurchaseOrderNumbers: string[] = [];
   const skippedDuplicatePurchaseOrderNumbers: string[] = [];
   const now = new Date().toISOString();
   const incomingDir = getIncomingPurchaseOrdersDir();
@@ -141,14 +176,23 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
     const parsed = await parseSupplierHubPurchaseOrderBuffer(buffer, name, now);
     if (!parsed || !parsed.purchaseOrderNumber) continue;
 
-    if (existingPoNumbers.has(parsed.purchaseOrderNumber)) {
-      skippedDuplicatePurchaseOrderNumbers.push(parsed.purchaseOrderNumber);
+    const existing = existingByPo.get(parsed.purchaseOrderNumber);
+    if (existing) {
+      if (!hasScheduleChange(existing, parsed)) {
+        skippedDuplicatePurchaseOrderNumbers.push(parsed.purchaseOrderNumber);
+        continue;
+      }
+
+      const destFileName = `PO_${parsed.purchaseOrderNumber}.xlsx`;
+      await writeFile(path.join(incomingDir, destFileName), buffer);
+      existingByPo.set(parsed.purchaseOrderNumber, parsed);
+      updatedPurchaseOrderNumbers.push(parsed.purchaseOrderNumber);
       continue;
     }
 
     const destFileName = `PO_${parsed.purchaseOrderNumber}.xlsx`;
     await writeFile(path.join(incomingDir, destFileName), buffer);
-    existingPoNumbers.add(parsed.purchaseOrderNumber);
+    existingByPo.set(parsed.purchaseOrderNumber, parsed);
     addedPurchaseOrderNumbers.push(parsed.purchaseOrderNumber);
   }
 
@@ -165,6 +209,7 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
   return {
     sourceFileName: latest.fileName,
     addedPurchaseOrderNumbers,
+    updatedPurchaseOrderNumbers,
     skippedDuplicatePurchaseOrderNumbers,
     totalPurchaseOrders: finalOrders.length,
     totalSkuTypes: skuCodes.size,
