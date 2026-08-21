@@ -242,16 +242,23 @@ function normProductText(value: unknown): string {
 }
 
 /** 모델SKU가 없는 쿠팡 다운로드 양식은 상품명+색상이 모두 포함된 승인완료 행만 후보로 삼는다. */
-function findProductNameColorCandidates(rows: DownloadRow[], productName: string, color: string): DownloadRow[] {
+function inferRingSize(productName: string, modelSku: string): string {
+  if (!productName.includes("반지")) return "";
+  const match = modelSku.trim().match(/(?:BK|GO|RG|SI)(\d+)$/i);
+  return match ? `${match[1]}호` : "";
+}
+
+function findProductNameColorCandidates(rows: DownloadRow[], productName: string, color: string, modelSku: string): DownloadRow[] {
   const productKey = normProductText(productName);
   const colorKey = normProductText(color);
+  const sizeKey = normProductText(inferRingSize(productName, modelSku));
   if (!productKey || !colorKey) return [];
   return rows.filter(row => {
     const downloadName = normProductText(row.productName);
     const productIndex = downloadName.indexOf(productKey);
     if (!row.approved || productIndex < 0) return false;
     const optionSuffix = downloadName.slice(productIndex + productKey.length);
-    return optionSuffix.startsWith(colorKey);
+    return optionSuffix.startsWith(`${colorKey}${sizeKey}`);
   });
 }
 
@@ -327,7 +334,8 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
         : findProductNameColorCandidates(
             parsed.rows,
             String(row[idx.productName] ?? "").trim(),
-            String(row[idx.color] ?? "").trim()
+            String(row[idx.color] ?? "").trim(),
+            modelSku
           );
       matchCandidateCount = candidates.length;
       if (candidates.length === 0) {
