@@ -13,7 +13,8 @@ export function buildKakaoOrderText(vendorName: string, lines: VendorOrderDraftL
   const itemLines = lines.map((line, index) => {
     const memoText = line.memo ? ` — ${line.memo}` : "";
     const barcodeText = line.barcode ? ` (참고 바코드 ${line.barcode})` : ` (참고 바코드 미등록)`;
-    return `${index + 1}. SKU ${line.skuId} · ${line.optionLabel || "옵션 없음"} × ${line.shortageQuantity}개${barcodeText}${memoText}`;
+    const actualShortage = line.actualShortageQuantity ?? line.shortageQuantity;
+    return `${index + 1}. SKU ${line.skuId} · ${line.optionLabel || "옵션 없음"} × 발주 ${line.shortageQuantity}개${barcodeText}${memoText} (내부참고 부족 ${actualShortage}개)`;
   });
 
   return [
@@ -26,6 +27,11 @@ export function buildKakaoOrderText(vendorName: string, lines: VendorOrderDraftL
     `총 ${lines.length}종 / ${totalQuantity}개`,
     ``,
     `확인 후 발주 부탁드립니다. 감사합니다.`,
+    ``,
+    `[배송정보]`,
+    `받는 사람: 노이드비`,
+    `주소: 강원도 원주시 전망길 22-3 1층`,
+    `전화번호: 010-5769-5602`,
     ``,
     `(참고번호: ${waveId})`,
   ].join("\n");

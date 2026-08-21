@@ -19,6 +19,7 @@ interface ExportLine {
   imageUrl?: string;
   barcode?: string;
   shortageQuantity: number;
+  actualShortageQuantity?: number;
   currentStock: string;
   relatedPurchaseOrderNumbers: string[];
   memo: string;
@@ -53,12 +54,12 @@ export async function POST(request: NextRequest) {
   sheet.addRow([]);
 
   const headerRowIndex = sheet.rowCount + 1;
-  const headerRow = sheet.addRow(["상품 이미지", "모델명", "SKU", "옵션", "쿠팡 바코드", "부족수량", "현재고", "관련 발주서", "메모"]);
+  const headerRow = sheet.addRow(["상품 이미지", "모델명", "SKU", "옵션", "쿠팡 바코드", "발주수량", "부족수량(내부참고)", "현재고", "관련 발주서", "메모"]);
   headerRow.font = { bold: true };
 
   const IMAGE_COLUMN_WIDTH = 12;
   sheet.getColumn(1).width = IMAGE_COLUMN_WIDTH;
-  for (let col = 2; col <= 9; col++) sheet.getColumn(col).width = 18;
+  for (let col = 2; col <= 10; col++) sheet.getColumn(col).width = 18;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -71,6 +72,7 @@ export async function POST(request: NextRequest) {
       line.optionLabel,
       line.barcode || "쿠팡 바코드 미등록",
       line.shortageQuantity,
+      line.actualShortageQuantity ?? line.shortageQuantity,
       line.currentStock,
       (line.relatedPurchaseOrderNumbers || []).join(", "),
       line.memo,
@@ -89,6 +91,13 @@ export async function POST(request: NextRequest) {
       sheet.getCell(rowIndex, 1).value = "이미지 미등록";
     }
   }
+
+  sheet.addRow([]);
+  const deliveryTitle = sheet.addRow(["배송정보"]);
+  deliveryTitle.font = { bold: true, size: 14 };
+  sheet.addRow(["받는 사람", "노이드비"]);
+  sheet.addRow(["주소", "강원도 원주시 전망길 22-3 1층"]);
+  sheet.addRow(["전화번호", "010-5769-5602"]);
 
   const buffer = await workbook.xlsx.writeBuffer();
   const fileName = `발주서_${vendorName}_${waveId}.xlsx`;

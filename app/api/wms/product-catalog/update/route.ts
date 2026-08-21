@@ -18,6 +18,7 @@ const WRITABLE_FIELDS: ProductCatalogWritableField[] = [
   "warehouseNumber",
   "boxNumber",
   "currentStock",
+  "currentStatus",
   "barcode",
   "imageUrl",
 ];

@@ -60,6 +60,9 @@ export interface VendorOrderDraftLine {
   imageUrl: string;
   /** 제품DB의 실제 쿠팡 Seller SKU Barcode — 없으면 "" ("쿠팡 바코드 미등록"으로 표시), 임의 생성 금지 */
   barcode: string;
+  /** 피킹에서 확인된 실제 부족수량. 거래처 발주수량과 구분해 내부 참고용으로 표시한다. */
+  actualShortageQuantity?: number;
+  /** 거래처에 주문하는 수량(12개 단위 올림). 기존 저장 데이터 호환을 위해 shortageQuantity를 유지한다. */
   shortageQuantity: number;
   /** 제품DB "현재고" 텍스트 컬럼 (참고용, 실시간 재고 아님) */
   currentStock: string;

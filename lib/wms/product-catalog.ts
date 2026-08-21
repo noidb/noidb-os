@@ -28,6 +28,8 @@ export interface ProductCatalogItem {
   boxNumber: string;
   /** 아직 제품DB에 없는 컬럼(나중 추가 예정) — 없으면 항상 "" */
   currentStock: string;
+  /** 제품DB 현재상태(단종/과재고 등). */
+  currentStatus: string;
   /** 아직 제품DB에 없는 컬럼(나중 추가 예정) — 없으면 항상 "" (거래처별 부족분 발주서 그룹핑에 사용) */
   vendorName: string;
   /** 실제 쿠팡 Seller SKU Barcode. 임의 생성하지 않고 이 컬럼 값만 사용한다 — 없으면 "" */
@@ -50,6 +52,7 @@ export const FIELD_HEADER_CANDIDATES: Record<Exclude<keyof ProductCatalogItem, "
   warehouseNumber: ["창고번호"],
   boxNumber: ["BOX번호", "박스번호"],
   currentStock: ["현재고", "재고수량"],
+  currentStatus: ["현재상태"],
   vendorName: ["거래처", "거래처명", "매입처"],
   barcode: ["쿠팡 바코드", "Seller SKU Barcode", "쿠팡바코드", "바코드"],
   productLink: ["제품링크", "상품링크", "쿠팡 URL", "URL", "링크"],
@@ -91,6 +94,7 @@ export async function fetchProductCatalog(): Promise<{ configured: boolean; item
       warehouseNumber: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.warehouseNumber),
       boxNumber: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.boxNumber),
       currentStock: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.currentStock),
+      currentStatus: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.currentStatus),
       vendorName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.vendorName),
       barcode: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.barcode),
       productLink: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productLink),

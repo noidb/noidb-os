@@ -38,8 +38,8 @@ export function recalculateAutoVendorOrderLines(
     const orderQuantity = toVendorOrderQuantity(item.shortageQuantity);
     const existing = autoLinesByCode.get(item.productCode);
     if (existing) {
-      if (existing.shortageQuantity !== orderQuantity) updatedProductCodes.push(item.productCode);
-      nextAutoLines.push({ ...existing, shortageQuantity: orderQuantity, updatedAt: now });
+      if (existing.shortageQuantity !== orderQuantity || existing.actualShortageQuantity !== item.shortageQuantity) updatedProductCodes.push(item.productCode);
+      nextAutoLines.push({ ...existing, actualShortageQuantity: item.shortageQuantity, shortageQuantity: orderQuantity, updatedAt: now });
       autoLinesByCode.delete(item.productCode);
     } else {
       const vendorName = item.vendorName || UNASSIGNED_VENDOR_NAME;
@@ -57,6 +57,7 @@ export function recalculateAutoVendorOrderLines(
         productName: item.productName,
         imageUrl: item.imageUrl || "",
         barcode: item.catalogBarcode || "",
+        actualShortageQuantity: item.shortageQuantity,
         shortageQuantity: orderQuantity,
         currentStock: item.catalogCurrentStock || "",
         relatedPurchaseOrderNumbers: Array.from(new Set(item.sources.map(source => source.purchaseOrderNumber))),

@@ -91,6 +91,9 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   const [partialTotalValue, setPartialTotalValue] = useState("");
   const [allocationDraft, setAllocationDraft] = useState<PickingAllocationResult[] | null>(null);
   const [showProductInfoSheet, setShowProductInfoSheet] = useState(false);
+  const [currentStockDraft, setCurrentStockDraft] = useState("");
+  const [catalogQuickSaving, setCatalogQuickSaving] = useState(false);
+  const [catalogQuickMessage, setCatalogQuickMessage] = useState<string | null>(null);
   const [checklistMode, setChecklistMode] = useState(false);
   const [checkedProductCodes, setCheckedProductCodes] = useState<Set<string>>(new Set());
   const [bulkProcessing, setBulkProcessing] = useState(false);
@@ -200,6 +203,36 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
 
   const selectedBucket = allGroups.find(g => g.group.groupId === selectedGroupId);
   const selectedItem = selectedBucket?.items.find(item => item.productCode === selectedProductCode) ?? null;
+
+  useEffect(() => {
+    if (!selectedItem) return;
+    setCurrentStockDraft(resolveLiveFields(selectedItem, liveCatalogByProductCode).catalogCurrentStock || "");
+    setCatalogQuickMessage(null);
+  }, [selectedItem, liveCatalogByProductCode]);
+
+  function fulfillmentCentersForItem(item: PickingWaveItem): string[] {
+    return Array.from(new Set(item.sources.map(source => basketDisplayNames[source.basketNumber] || `바구니 ${source.basketNumber}`)));
+  }
+
+  async function saveCatalogQuickPatch(skuId: string, patch: { currentStock?: string; currentStatus?: "단종" | "과재고" }, successMessage: string) {
+    setCatalogQuickSaving(true);
+    setCatalogQuickMessage(null);
+    try {
+      const response = await fetch("/api/wms/product-catalog/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skuId, ...patch }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || "제품DB 저장에 실패했습니다.");
+      setCatalogQuickMessage(successMessage);
+      await refreshProductCatalog();
+    } catch (error) {
+      setCatalogQuickMessage(error instanceof Error ? error.message : "제품DB 저장에 실패했습니다.");
+    } finally {
+      setCatalogQuickSaving(false);
+    }
+  }
 
   async function persistItem(item: PickingWaveItem, patch: Partial<PickingWaveItem>) {
     const updated: PickingWaveItem = { ...item, ...patch, updatedAt: new Date().toISOString() };
@@ -579,6 +612,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   // 화면: 선택한 그룹의 아이템(SKU) 목록
   if (!selectedItem) {
     const doneInGroup = selectedBucket.items.filter(item => item.status !== "pending").length;
+    const groupCenters = Array.from(new Set(selectedBucket.items.flatMap(item => fulfillmentCentersForItem(item))));
     return (
       <main style={pageStyle}>
         <button onClick={() => setSelectedGroupId(null)} style={{ ...wmsGhostButton, marginBottom: "12px" }}>
@@ -591,6 +625,9 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
         <p style={{ textAlign: "center", color: wmsColors.green, fontWeight: 700, fontSize: "14px", margin: "8px 0 16px" }}>
           이 그룹 {doneInGroup} / {selectedBucket.items.length}
         </p>
+        <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "6px", marginBottom: "14px" }}>
+          {groupCenters.map(center => <span key={center} style={{ background: wmsColors.slateDark, color: "#fff", borderRadius: "10px", padding: "8px 14px", fontSize: "16px", fontWeight: 900 }}>{center}</span>)}
+        </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
           {selectedBucket.items.map(item => {
             const isDone = item.status !== "pending";
@@ -630,6 +667,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
                     {live.optionLabel || "옵션 없음"}
                   </div>
                   <div style={{ fontSize: "11px", color: wmsColors.muted }}>SKU {item.productCode}</div>
+                  <div style={{ marginTop: "3px", fontSize: "12px", fontWeight: 900, color: wmsColors.slateDark }}>{fulfillmentCentersForItem(item).join(" · ")}</div>
                 </div>
                 <ProductLinkIconButton productLink={live.productLink} />
                 <div style={{ fontSize: "14px", fontWeight: 700, flexShrink: 0 }}>
@@ -752,6 +790,23 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
 
         <div style={{ display: "flex", justifyContent: "center", gap: "16px", margin: "10px 0" }}>
           <InfoTile label="총 찾을 수량" value={selectedItem.totalQuantity} />
+        </div>
+
+        <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "6px", marginBottom: "10px" }}>
+          {fulfillmentCentersForItem(selectedItem).map(center => <span key={center} style={{ background: wmsColors.slateDark, color: "#fff", borderRadius: "10px", padding: "9px 16px", fontSize: "18px", fontWeight: 900 }}>{center}</span>)}
+        </div>
+
+        <div style={{ background: wmsColors.surfaceBeige, border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "8px", marginBottom: "8px" }}>
+          <div style={{ fontSize: "11px", color: wmsColors.muted, marginBottom: "4px" }}>재고 확인 즉시 제품DB 현재고 저장</div>
+          <div style={{ display: "flex", gap: "6px" }}>
+            <input type="number" min={0} value={currentStockDraft} onChange={event => setCurrentStockDraft(event.target.value)} placeholder="현재고" style={{ flex: 1, minWidth: 0, minHeight: "42px", borderRadius: "8px", border: `1px solid ${wmsColors.borderStrong}`, textAlign: "center", fontSize: "17px", fontWeight: 800 }} />
+            <button disabled={catalogQuickSaving || currentStockDraft === ""} onClick={() => saveCatalogQuickPatch(selectedItemLive.liveSkuId || selectedItem.productCode, { currentStock: String(Math.max(0, Number(currentStockDraft) || 0)) }, "현재고 저장완료")} style={{ ...wmsPrimaryButton, minHeight: "42px", padding: "0 12px", fontSize: "12px" }}>현재고 저장</button>
+          </div>
+          <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
+            <button disabled={catalogQuickSaving} onClick={() => saveCatalogQuickPatch(selectedItemLive.liveSkuId || selectedItem.productCode, { currentStatus: "단종" }, "단종 저장완료")} style={{ ...wmsWarnButton, flex: 1, minHeight: "36px", fontSize: "12px" }}>단종</button>
+            <button disabled={catalogQuickSaving} onClick={() => saveCatalogQuickPatch(selectedItemLive.liveSkuId || selectedItem.productCode, { currentStatus: "과재고" }, "과재고 저장완료")} style={{ ...wmsSecondaryButton, flex: 1, minHeight: "36px", fontSize: "12px" }}>과재고</button>
+          </div>
+          {catalogQuickMessage && <div style={{ fontSize: "11px", marginTop: "5px", color: catalogQuickMessage.includes("완료") ? wmsColors.greenDark : "#c0392b" }}>{catalogQuickMessage}</div>}
         </div>
 
         <div style={{ marginBottom: "8px", textAlign: "left" }}>

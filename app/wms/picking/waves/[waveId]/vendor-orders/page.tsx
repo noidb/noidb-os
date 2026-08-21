@@ -14,6 +14,7 @@ import {
 } from "@/lib/wms/vendor-order/types";
 import type { PickingWave } from "@/lib/wms/picking-wave/types";
 import { fetchLiveCatalogLookup, type LiveCatalogLookup } from "@/lib/wms/picking-wave/live-catalog";
+import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsGhostButton, wmsSlateDarkButton, wmsWarnButton, wmsOuterCard } from "@/lib/wms/ui-tokens";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
@@ -124,6 +125,27 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
     [groups]
   );
 
+  const lowStockByVendor = useMemo(() => {
+    const existingSkuIds = new Set(lines.map(line => line.skuId));
+    const unique = new Map<string, ProductCatalogItem>();
+    for (const item of liveCatalogByProductCode.values()) {
+      if (item.skuId) unique.set(item.skuId, item);
+    }
+    const result = new Map<string, ProductCatalogItem[]>();
+    for (const item of unique.values()) {
+      if (!item || existingSkuIds.has(item.skuId)) continue;
+      const stockText = String(item.currentStock ?? "").trim();
+      if (!stockText) continue;
+      const stock = Number(stockText);
+      if (!Number.isFinite(stock) || stock < 0 || stock > 1) continue;
+      if (!item.vendorName || item.currentStatus === "단종" || item.currentStatus === "과재고") continue;
+      const list = result.get(item.vendorName) || [];
+      list.push(item);
+      result.set(item.vendorName, list);
+    }
+    return result;
+  }, [lines, liveCatalogByProductCode]);
+
   function statusOf(vendorName: string): VendorOrderDraftStatus {
     return draftsByVendor[vendorName]?.status ?? "draft";
   }
@@ -160,7 +182,8 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
       productName: product.productName,
       imageUrl: product.imageUrl,
       barcode: product.barcode,
-      shortageQuantity: 1,
+      actualShortageQuantity: 0,
+      shortageQuantity: 12,
       currentStock: product.currentStock,
       relatedPurchaseOrderNumbers: [],
       memo: "",
@@ -171,6 +194,23 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
     setLines(prev => [...prev, newLine]);
     setSearchAddVendor(null);
     setDirty(true);
+  }
+
+  function addLowStockProduct(vendorName: string, product: ProductCatalogItem) {
+    addProductFromSearch(vendorName, {
+      skuId: product.skuId,
+      modelName: product.modelName,
+      category: product.category,
+      productName: product.productName,
+      optionLabel: product.optionLabel,
+      imageUrl: product.imageUrl,
+      barcode: product.barcode,
+      currentStock: product.currentStock,
+    });
+    const newIdPrefix = `${params.waveId}::${vendorName}::manual-`;
+    setLines(prev => prev.map(line => line.id.startsWith(newIdPrefix) && line.skuId === product.skuId
+      ? { ...line, memo: "저재고 추가발주", actualShortageQuantity: 0, shortageQuantity: 12 }
+      : line));
   }
 
   function createManualVendorOrder() {
@@ -324,7 +364,9 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
           {groups.map(group => {
             const status = statusOf(group.vendorName);
             const editable = !isPreview && (status === "draft" || status === "review" || status === "resend_needed");
-            const totalShortage = group.lines.reduce((sum, l) => sum + l.shortageQuantity, 0);
+            const totalOrderQuantity = group.lines.reduce((sum, l) => sum + l.shortageQuantity, 0);
+            const totalActualShortage = group.lines.reduce((sum, l) => sum + (l.actualShortageQuantity ?? l.shortageQuantity), 0);
+            const lowStockProducts = lowStockByVendor.get(group.vendorName) || [];
 
             return (
               <div key={group.vendorName} style={cardStyle}>
@@ -332,7 +374,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                   <h2 style={{ margin: 0, fontSize: "17px", minWidth: 0, overflowWrap: "anywhere" }}>
                     {group.vendorName}
                     <span style={{ marginLeft: "8px", fontSize: "12px", color: wmsColors.muted, fontWeight: 400 }}>
-                      부족 {totalShortage}개 · {group.lines.length}종
+                      실제부족 {totalActualShortage}개 · 발주 {totalOrderQuantity}개 · {group.lines.length}종
                     </span>
                   </h2>
                   <StatusBadge status={status} />
@@ -355,6 +397,18 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                     />
                   ))}
                 </div>
+
+                {editable && lowStockProducts.length > 0 && (
+                  <div style={{ background: wmsColors.warnSoft, border: `1px solid ${wmsColors.warn}`, borderRadius: "10px", padding: "10px", marginBottom: "10px" }}>
+                    <div style={{ fontSize: "12px", fontWeight: 800, color: wmsColors.warn, marginBottom: "6px" }}>현재고 0~1개 추가발주 추천</div>
+                    {lowStockProducts.map(product => (
+                      <div key={product.skuId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", fontSize: "11px", marginTop: "5px" }}>
+                        <span style={{ minWidth: 0 }}>{product.productName} · {product.optionLabel || "옵션 없음"} · 현재고 {product.currentStock}개</span>
+                        <button onClick={() => addLowStockProduct(group.vendorName, product)} style={{ ...wmsPrimaryButton, minHeight: "30px", padding: "0 10px", fontSize: "11px", flexShrink: 0 }}>추가</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {editable && (
                   <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
@@ -448,6 +502,8 @@ function VendorOrderLineCard({
   const [imageSaveError, setImageSaveError] = useState<string | null>(null);
   const [vendorSaving, setVendorSaving] = useState(false);
   const [vendorSaveError, setVendorSaveError] = useState<string | null>(null);
+  const [statusSaving, setStatusSaving] = useState<"단종" | "과재고" | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   /** 화면 표시 전용 URL — line.imageUrl(데이터/Sheets 저장/Canvas·카카오 공유용 원본)은 그대로
    *  두고, 이 카드의 <img src>에만 적용한다(2026-08-20 신규 — Google Drive 이미지를 화면에
@@ -533,6 +589,25 @@ function VendorOrderLineCard({
       setVendorSaveError(error instanceof Error ? error.message : "제품DB 거래처 저장 중 오류가 발생했습니다.");
     } finally {
       setVendorSaving(false);
+    }
+  }
+
+  async function handleSetCatalogStatus(status: "단종" | "과재고") {
+    if (!window.confirm(`SKU ${line.skuId}의 현재상태를 '${status}'로 저장할까요?`)) return;
+    setStatusSaving(status);
+    setStatusMessage(null);
+    try {
+      const response = await fetch("/api/wms/product-catalog/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skuId: line.skuId, currentStatus: status }),
+      });
+      const data = await response.json();
+      setStatusMessage(response.ok && data.success ? `${status} 저장완료` : (data.error || `${status} 저장 실패`));
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : `${status} 저장 실패`);
+    } finally {
+      setStatusSaving(null);
     }
   }
 
@@ -717,7 +792,7 @@ function VendorOrderLineCard({
        *  3줄 구조로 균일하게 배치한다(2026-08-20 재배치, 8-3 요구사항). */}
       <div style={{ marginTop: "14px", display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", alignItems: "stretch", columnGap: "10px" }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "6px" }}>
-          <div style={{ fontSize: "11px", color: wmsColors.muted, textAlign: "center" }}>수량</div>
+          <div style={{ fontSize: "11px", color: wmsColors.muted, textAlign: "center" }}>발주수량</div>
           {editable ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
               <button onClick={() => onStep(-1)} style={stepperButtonStyle}>
@@ -738,6 +813,7 @@ function VendorOrderLineCard({
           ) : (
             <strong style={{ fontSize: "18px" }}>{line.shortageQuantity}개</strong>
           )}
+          <div style={{ fontSize: "11px", color: wmsColors.warn, fontWeight: 700 }}>실제 부족수량 {line.actualShortageQuantity ?? line.shortageQuantity}개</div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "4px", minWidth: 0 }}>
           <div style={{ fontSize: "17px", fontWeight: 800, color: wmsColors.ink, textAlign: "center" }}>SKU {line.skuId}</div>
@@ -776,6 +852,15 @@ function VendorOrderLineCard({
           </div>
           {vendorSaveError && <p style={{ fontSize: "10px", color: "#c0392b", margin: 0 }}>{vendorSaveError}</p>}
           <input className="wms-input" value={line.memo} placeholder="메모" onChange={e => onChange({ memo: e.target.value })} style={inputStyle} />
+          <div style={{ display: "flex", gap: "6px" }}>
+            <button onClick={() => handleSetCatalogStatus("단종")} disabled={Boolean(statusSaving)} style={{ ...wmsWarnButton, flex: 1, minHeight: "34px", fontSize: "11px" }}>
+              {statusSaving === "단종" ? "저장 중..." : "단종"}
+            </button>
+            <button onClick={() => handleSetCatalogStatus("과재고")} disabled={Boolean(statusSaving)} style={{ ...wmsSecondaryButton, flex: 1, minHeight: "34px", fontSize: "11px" }}>
+              {statusSaving === "과재고" ? "저장 중..." : "과재고"}
+            </button>
+          </div>
+          {statusMessage && <div style={{ fontSize: "10px", color: statusMessage.includes("완료") ? wmsColors.greenDark : "#c0392b" }}>{statusMessage}</div>}
           <div style={{ fontSize: "10px", color: wmsColors.muted }}>
             현재고 {line.currentStock || "미입력"} · 관련 발주서 {line.relatedPurchaseOrderNumbers.join(", ") || (line.isManuallyAdded ? "수동추가" : "-")}
           </div>

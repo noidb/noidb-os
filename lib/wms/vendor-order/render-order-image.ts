@@ -54,13 +54,16 @@ interface CardLayout {
   cardHeight: number;
 }
 
-function buildTopInfoLines(category: string, option: string, quantity: number): TopInfoLine[] {
+function buildTopInfoLines(category: string, option: string, quantity: number, memo = ""): TopInfoLine[] {
   const lines: TopInfoLine[] = [];
   if (category) {
     lines.push({ text: category, font: "bold 28px sans-serif", color: "#252525", baselineGap: 26, blockHeight: 36 });
   }
   if (option) {
     lines.push({ text: option, font: "bold 23px sans-serif", color: "#4d6358", baselineGap: 23, blockHeight: 32 });
+  }
+  if (memo) {
+    lines.push({ text: memo, font: "bold 22px sans-serif", color: "#8a5a44", baselineGap: 23, blockHeight: 32 });
   }
   // 수량은 항상 "발주수량 N개" 형태로 표시 — 카테고리·옵션 유무와 무관하게 상단 핵심 정보로
   // 가장 크게 그린다(2026-08-20 배포 전 마지막 실기기 확인 4번). 값이 비어 있어도 NaN개/undefined개가
@@ -179,7 +182,7 @@ export async function renderVendorOrderImage(
   const cards: CardLayout[] = lines.map(line => {
     const { name, option } = resolveDisplayNameAndOption(line.productName, line.optionLabel);
     const category = (line.category || "").trim();
-    const topInfoLines = buildTopInfoLines(category, option.trim(), line.shortageQuantity);
+    const topInfoLines = buildTopInfoLines(category, option.trim(), line.shortageQuantity, line.memo.trim());
     const topInfoHeight = topInfoLines.reduce((sum, l) => sum + l.blockHeight, 0);
     const nameLines = wrapText(measureCtx, name, TEXT_MAX_WIDTH);
     const cardHeight =
@@ -192,7 +195,7 @@ export async function renderVendorOrderImage(
   });
 
   const totalCardsHeight = cards.reduce((sum, card) => sum + card.cardHeight, 0);
-  const height = HEADER_HEIGHT + totalCardsHeight + 60;
+  const height = HEADER_HEIGHT + totalCardsHeight + 170;
   const canvas = document.createElement("canvas");
   canvas.width = WIDTH;
   canvas.height = height;
@@ -298,6 +301,15 @@ export async function renderVendorOrderImage(
 
     drawBarcode(ctx, card.line.barcode, rightX, rowY + 4, barcodeColWidth - barcodeRightMargin, 52);
 
+    // 실제 부족수량은 내부 확인용이다. 거래처가 발주수량과 혼동하지 않도록 카드 오른쪽 아래에
+    // 작고 연한 글씨로만 표시한다.
+    const actualShortage = card.line.actualShortageQuantity ?? card.line.shortageQuantity;
+    ctx.textAlign = "right";
+    ctx.font = "11px sans-serif";
+    ctx.fillStyle = "#aaa39b";
+    ctx.fillText(`내부참고 부족 ${actualShortage}개`, WIDTH - CARD_PAD_X, rowTop + card.cardHeight - 8);
+    ctx.textAlign = "left";
+
     cursorY += card.cardHeight;
   });
 
@@ -312,6 +324,22 @@ export async function renderVendorOrderImage(
   ctx.font = "bold 16px sans-serif";
   ctx.fillStyle = "#252525";
   ctx.fillText(`총 ${lines.length}종 / ${totalQuantity}개`, CARD_PAD_X, footerY + 8);
+
+  // 배송정보는 상품 목록 맨 아래에서 가장 잘 보이도록 별도 강조 박스로 그린다.
+  const deliveryTop = footerY + 26;
+  ctx.fillStyle = "#eef3ef";
+  ctx.strokeStyle = "#6f887c";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(CARD_PAD_X, deliveryTop, WIDTH - CARD_PAD_X * 2, 92, 14);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#263d33";
+  ctx.font = "bold 19px sans-serif";
+  ctx.fillText("배송정보", CARD_PAD_X + 18, deliveryTop + 27);
+  ctx.font = "bold 16px sans-serif";
+  ctx.fillText("받는 사람: 노이드비  ·  전화번호: 010-5769-5602", CARD_PAD_X + 18, deliveryTop + 52);
+  ctx.fillText("주소: 강원도 원주시 전망길 22-3 1층", CARD_PAD_X + 18, deliveryTop + 76);
 
   return new Promise<Blob | null>(resolve => {
     try {

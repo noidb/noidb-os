@@ -52,6 +52,7 @@ function initialValues(item: PickingWaveItem, live: LiveResolvedFields): Record<
     warehouseNumber: live.catalogWarehouseNumber || "",
     boxNumber: live.catalogBoxNumber || "",
     currentStock: live.catalogCurrentStock || "",
+    currentStatus: "",
     barcode: live.catalogBarcode || "",
     imageUrl: live.imageUrl || "",
   };

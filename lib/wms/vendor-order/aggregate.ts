@@ -6,7 +6,9 @@ import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraft, type VendorOrderDraftLin
 export const MIN_AUTO_VENDOR_ORDER_QUANTITY = 12;
 
 export function toVendorOrderQuantity(shortageQuantity: number): number {
-  return Math.max(MIN_AUTO_VENDOR_ORDER_QUANTITY, shortageQuantity);
+  const safeShortage = Math.max(0, Math.ceil(shortageQuantity));
+  if (safeShortage === 0) return 0;
+  return Math.ceil(safeShortage / MIN_AUTO_VENDOR_ORDER_QUANTITY) * MIN_AUTO_VENDOR_ORDER_QUANTITY;
 }
 
 /**
@@ -51,6 +53,7 @@ export function buildVendorOrderDraftsFromWaveItems(
       productName: item.productName,
       imageUrl: item.imageUrl || "",
       barcode: item.catalogBarcode || "",
+      actualShortageQuantity: item.shortageQuantity,
       shortageQuantity: toVendorOrderQuantity(item.shortageQuantity),
       currentStock: item.catalogCurrentStock || "",
       relatedPurchaseOrderNumbers: Array.from(new Set(item.sources.map(source => source.purchaseOrderNumber))),
