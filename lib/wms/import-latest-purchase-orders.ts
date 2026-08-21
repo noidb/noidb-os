@@ -145,7 +145,8 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
           fulfillmentAddress: order.fulfillmentAddress,
           expectedDate: order.expectedDate,
           sourceFileName: order.sourceFileName,
-          capturedAt: order.capturedAt,
+          // 일정 변경은 입고예정일/센터만 반영하고 최초 발주일은 보존한다.
+          capturedAt: existing.capturedAt,
         });
       }
     }

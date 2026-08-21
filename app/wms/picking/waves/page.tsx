@@ -63,12 +63,29 @@ export default function WmsPickingWavesPage() {
         }
         const items = data.orders as SupplierHubPurchaseOrder[];
         setOrders(items);
-        setSelected(new Set(items.map(order => order.purchaseOrderNumber)));
+        const query = new URLSearchParams(window.location.search);
+        const onlyPo = query.get("onlyPo");
+        const addPo = query.get("addPo");
+        const targetWaveId = query.get("targetWave");
+        setSelected(onlyPo ? new Set(items.filter(order => order.purchaseOrderNumber === onlyPo).map(order => order.purchaseOrderNumber)) : new Set(items.map(order => order.purchaseOrderNumber)));
+
+        const waves = await refreshWaves();
+        if (addPo && targetWaveId) {
+          const targetWave = waves.find(wave => wave.id === targetWaveId && wave.status === "in_progress");
+          if (targetWave) {
+            const waveItems = await waveRepository.listItems(targetWave.id);
+            const compositionLocked = waveItems.some(item => item.status !== "pending");
+            setEditingWaveId(targetWave.id);
+            setEditName(targetWave.displayName || "");
+            setEditSelectedOrders(new Set([...targetWave.sourcePurchaseOrderNumbers, addPo]));
+            setEditCompositionLocked(compositionLocked);
+            setEditError(compositionLocked ? "기존 피킹 기록은 그대로 보존하고 새 발주서 수량만 추가됩니다. 구성을 확인한 뒤 저장해주세요." : null);
+          }
+        }
       } catch {
         setOrdersError("발주서를 불러오지 못했습니다.");
       }
     })();
-    refreshWaves();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waveRepository]);
 
@@ -267,6 +284,66 @@ export default function WmsPickingWavesPage() {
     try {
       const now = new Date().toISOString();
       const originalSet = new Set(targetWave.sourcePurchaseOrderNumbers);
+      const addedPoNumbers = [...editSelectedOrders].filter(po => !originalSet.has(po));
+      const removedPoNumbers = [...originalSet].filter(po => !editSelectedOrders.has(po));
+
+      // 피킹이 이미 시작된 웨이브는 기존 발주서/진행기록을 제거하지 않는다. 새 발주서 추가만
+      // 허용하고 기존 아이템의 찾은수량·상태를 보존한 채 새 요청수량을 합친다.
+      if (editCompositionLocked && addedPoNumbers.length > 0) {
+        if (removedPoNumbers.length > 0) {
+          setEditError("피킹이 시작된 웨이브에서는 기존 발주서를 제거할 수 없습니다. 새 발주서 추가만 가능합니다.");
+          return;
+        }
+        const addedOrders = (orders ?? []).filter(order => addedPoNumbers.includes(order.purchaseOrderNumber));
+        if (addedOrders.length !== addedPoNumbers.length) {
+          setEditError("추가할 발주서 정보를 찾지 못했습니다. 발주서를 다시 업데이트해주세요.");
+          return;
+        }
+        const [catalogRes, zones, shelves, boxes, modelLocations, skuExceptions, oldItems, oldBaskets] = await Promise.all([
+          fetch("/api/wms/product-catalog", { cache: "no-store" }).then(res => res.json()),
+          warehouseRepository.listZones(),
+          warehouseRepository.listShelves(),
+          warehouseRepository.listBoxes(),
+          warehouseRepository.listModelLocations(),
+          warehouseRepository.listSkuExceptions(),
+          waveRepository.listItems(editingWaveId),
+          waveRepository.listBaskets(editingWaveId),
+        ]);
+        const appended = buildPickingWave({
+          waveId: editingWaveId,
+          orders: addedOrders,
+          catalog: { configured: Boolean(catalogRes.configured), items: catalogRes.items || [] },
+          warehouse: { zones, shelves, boxes, modelLocations, skuExceptions },
+          now,
+        });
+        const nextBasketStart = oldBaskets.reduce((max, basket) => Math.max(max, Number(basket.basketNumber) || 0), 0) + 1;
+        const basketNumberMap = new Map<string, string>();
+        appended.baskets.forEach((basket, index) => basketNumberMap.set(basket.basketNumber, String(nextBasketStart + index)));
+        await Promise.all(appended.baskets.map(basket => waveRepository.saveBasket({ ...basket, basketNumber: basketNumberMap.get(basket.basketNumber)! })));
+
+        const oldByCode = new Map(oldItems.map(item => [item.productCode, item]));
+        const affectedGroupIds = new Set<string>();
+        for (const newItem of appended.items) {
+          const adjustedSources = newItem.sources.map(source => ({ ...source, basketNumber: basketNumberMap.get(source.basketNumber)! }));
+          const existing = oldByCode.get(newItem.productCode);
+          const merged = existing
+            ? { ...existing, totalQuantity: existing.totalQuantity + newItem.totalQuantity, sources: [...existing.sources, ...adjustedSources], status: "pending" as const, updatedAt: now }
+            : { ...newItem, sources: adjustedSources };
+          affectedGroupIds.add(`model:${merged.modelName || merged.productCode}`);
+          await waveRepository.saveItem(merged);
+        }
+        await waveRepository.saveWave({
+          ...targetWave,
+          displayName: editName.trim() || undefined,
+          sourcePurchaseOrderNumbers: [...targetWave.sourcePurchaseOrderNumbers, ...addedPoNumbers],
+          completedGroupIds: targetWave.completedGroupIds.filter(id => !affectedGroupIds.has(id)),
+          updatedAt: now,
+        });
+        await refreshWaves();
+        setEditingWaveId(null);
+        return;
+      }
+
       const compositionChanged =
         !editCompositionLocked &&
         (editSelectedOrders.size !== originalSet.size || [...editSelectedOrders].some(po => !originalSet.has(po)));
@@ -499,11 +576,11 @@ export default function WmsPickingWavesPage() {
 
                       <div style={{ fontSize: "11px", color: wmsColors.muted, marginBottom: "4px" }}>
                         연결된 발주서
-                        {editCompositionLocked && " (이미 피킹이 진행되어 조합 변경 불가 — 확인만 가능)"}
+                        {editCompositionLocked && " (피킹 진행기록 보존 — 기존 발주 제거 불가, 새 발주 추가 가능)"}
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginBottom: "8px" }}>
                         {(orders ?? [])
-                          .filter(order => wave.sourcePurchaseOrderNumbers.includes(order.purchaseOrderNumber) || !editCompositionLocked)
+                          .filter(order => wave.sourcePurchaseOrderNumbers.includes(order.purchaseOrderNumber) || editSelectedOrders.has(order.purchaseOrderNumber) || !editCompositionLocked)
                           .map(order => (
                             <label key={order.purchaseOrderNumber} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px" }}>
                               <input

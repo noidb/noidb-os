@@ -218,7 +218,8 @@ export async function loadSupplierHubPurchaseOrdersFromDriveFiles(files: DriveFi
             fulfillmentAddress: order.fulfillmentAddress,
             expectedDate: order.expectedDate,
             sourceFileName: order.sourceFileName,
-            capturedAt: order.capturedAt,
+            // 일정 수정 파일이 나중에 올라와도 최초 감지일(화면의 최초 발주일)은 바꾸지 않는다.
+            capturedAt: existing.capturedAt,
           });
         }
       }
