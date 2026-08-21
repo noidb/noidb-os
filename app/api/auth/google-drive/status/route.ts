@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { isDriveOAuthConfigured } from "@/lib/wms/google-drive-oauth";
-import { getStoredRefreshToken, getConnectedAt, getStoredFolderId, hasEnvRefreshToken } from "@/lib/wms/google-drive-oauth-store";
+import { getStoredRefreshToken, getConnectedAt, hasEnvRefreshToken } from "@/lib/wms/google-drive-oauth-store";
+import { verifyImageDriveFolder } from "@/lib/image-generator/google-drive-storage";
 
 /**
  * Google Drive OAuth 연결 상태만 반환한다. client secret, refresh token, access token은
@@ -14,13 +15,21 @@ export async function GET() {
   const refreshToken = configured ? await getStoredRefreshToken() : null;
   const connected = Boolean(refreshToken);
   const connectedAt = connected ? await getConnectedAt() : null;
-  const folderId = connected ? (process.env.GOOGLE_DRIVE_IMAGE_DB_FOLDER_ID?.trim() || (await getStoredFolderId())) : null;
+  let folderReady = false;
+  if (connected) {
+    try {
+      await verifyImageDriveFolder();
+      folderReady = true;
+    } catch {
+      folderReady = false;
+    }
+  }
 
   return NextResponse.json({
     configured,
     connected,
     connectedAt,
-    folderReady: Boolean(folderId),
+    folderReady,
     usingEnvRefreshToken: connected && hasEnvRefreshToken(),
   }, { headers: { "Cache-Control": "no-store" } });
 }
