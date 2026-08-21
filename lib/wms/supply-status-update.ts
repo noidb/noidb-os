@@ -248,7 +248,10 @@ function findProductNameColorCandidates(rows: DownloadRow[], productName: string
   if (!productKey || !colorKey) return [];
   return rows.filter(row => {
     const downloadName = normProductText(row.productName);
-    return row.approved && downloadName.includes(productKey) && downloadName.includes(colorKey);
+    const productIndex = downloadName.indexOf(productKey);
+    if (!row.approved || productIndex < 0) return false;
+    const optionSuffix = downloadName.slice(productIndex + productKey.length);
+    return optionSuffix.startsWith(colorKey);
   });
 }
 
