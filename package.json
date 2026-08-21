@@ -9,6 +9,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@vercel/blob": "^2.8.0",
     "exceljs": "^4.4.0",
     "jszip": "^3.10.1",
     "next": "14.2.31",
