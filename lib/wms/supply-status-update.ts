@@ -251,8 +251,14 @@ function inferRingSize(productName: string, modelSku: string): string {
 function findProductNameColorCandidates(rows: DownloadRow[], productName: string, color: string, modelSku: string): DownloadRow[] {
   const productKey = normProductText(productName);
   const colorKey = normProductText(color);
+  const modelSkuKey = normProductText(modelSku);
   const sizeKey = normProductText(inferRingSize(productName, modelSku));
   if (!productKey || !colorKey) return [];
+
+  // 새 견적서부터 옵션 상품명에 모델SKU가 포함된다. 해당 키가 있으면 다른 추정 없이 우선 사용한다.
+  const exactModelSkuMatches = rows.filter(row => row.approved && normProductText(row.productName).includes(modelSkuKey));
+  if (modelSkuKey && exactModelSkuMatches.length > 0) return exactModelSkuMatches;
+
   return rows.filter(row => {
     const downloadName = normProductText(row.productName);
     const productIndex = downloadName.indexOf(productKey);

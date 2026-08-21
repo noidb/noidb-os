@@ -146,7 +146,9 @@ export async function buildQuoteWorkbook(input: ExportPayload | ExportPayload[])
     const optionValues = [sku.color, sku.size]
       .map(value => String(value || "").trim())
       .filter(value => value && value.toLowerCase() !== "free");
-    const productNameWithOptions = [payload.title, ...optionValues].join(", ");
+    // 쿠팡 다운로드 파일에도 옵션별 고유키가 남도록 각 옵션 상품명 끝에 모델SKU를 넣는다.
+    // 이후 승인상태 업데이트는 상품명 추정 대신 이 값을 정확히 대조할 수 있다.
+    const productNameWithOptions = [payload.title, ...optionValues, sku.sku].join(", ");
     setByHeader(row, headers, "카테고리", defaults.path);
     setByHeader(row, headers, "상품명", productNameWithOptions);
     setByHeader(row, headers, "상품 바코드", defaults.barcode);
@@ -160,7 +162,7 @@ export async function buildQuoteWorkbook(input: ExportPayload | ExportPayload[])
     setByHeader(row, headers, "주문제작 여부", defaults.custom);
     setByHeader(row, headers, "사이즈 조절여부", defaults.sizeAdjust);
     setByHeader(row, headers, "주얼리 스톤", defaults.stone);
-    setByHeader(row, headers, "모델명/품번", payload.model);
+    setByHeader(row, headers, "모델명/품번", sku.sku);
     setByHeader(row, headers, "사용대상 구분", defaults.target);
     setByHeader(row, headers, "패션잡화 사용대상", defaults.target);
     setByHeader(row, headers, "각인 포함 유무", defaults.engraving);
