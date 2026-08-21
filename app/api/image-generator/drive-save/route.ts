@@ -8,6 +8,13 @@ function cleanSegment(value: unknown) {
   return String(value || "").trim().replace(/[\\/:*?"<>|]/g, "-").slice(0, 120);
 }
 
+function cleanMimeType(value: unknown) {
+  const mimeType = String(value || "").trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(mimeType)
+    ? mimeType
+    : "application/octet-stream";
+}
+
 function errorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "Google Drive 저장 중 오류가 발생했습니다.";
   if (error instanceof ImageDriveNotConfiguredError || error instanceof DriveOAuthNotConfiguredError) return NextResponse.json({ success: false, code: "not_configured", error: message }, { status: 400 });
@@ -31,7 +38,7 @@ export async function POST(request: NextRequest) {
     const filename = cleanSegment(body.filename);
     if (!filename || folders.length > 8) return NextResponse.json({ success: false, code: "invalid_path", error: "저장 경로가 올바르지 않습니다." }, { status: 400 });
     let buffer: Buffer;
-    let mimeType = cleanSegment(body.mimeType) || "application/octet-stream";
+    let mimeType = cleanMimeType(body.mimeType);
     if (typeof body.dataUrl === "string") {
       const match = body.dataUrl.match(/^data:([a-zA-Z0-9/+.-]+);base64,(.+)$/);
       if (!match) return NextResponse.json({ success: false, code: "invalid_file", error: "파일 데이터 형식이 올바르지 않습니다." }, { status: 400 });

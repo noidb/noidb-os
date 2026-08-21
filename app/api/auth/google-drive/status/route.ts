@@ -7,6 +7,7 @@ import { getStoredRefreshToken, getConnectedAt, getStoredFolderId, hasEnvRefresh
  * 절대 이 응답에 포함하지 않는다(2026-08-20 신규).
  */
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   const configured = isDriveOAuthConfigured();
@@ -21,5 +22,5 @@ export async function GET() {
     connectedAt,
     folderReady: Boolean(folderId),
     usingEnvRefreshToken: connected && hasEnvRefreshToken(),
-  });
+  }, { headers: { "Cache-Control": "no-store" } });
 }
