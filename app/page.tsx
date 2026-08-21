@@ -1624,10 +1624,11 @@ export default function Home() {
       const googleStatus = skipped.find(item => item.startsWith("Google 시트"));
       if (dbHandle) {
         const saved = await writeProductDbFiles(dbHandle, product.category, model, files);
+        const fileSkips = skipped.filter(item => !item.startsWith("Google 시트"));
         setDbSavedFiles(saved);
         setBatchStatus(
           `상품 생성 완료 · ${saved.length}개 저장 → ${product.category}/${model}/` +
-            (skipped.length ? ` · 건너뜀 ${skipped.length}` : "") +
+            (fileSkips.length ? ` · 미저장: ${fileSkips.join(", ")}` : "") +
             (googleStatus ? ` · ${googleStatus}` : "")
         );
       } else {

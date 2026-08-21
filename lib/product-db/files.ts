@@ -272,10 +272,13 @@ export async function collectProductDbFiles(
   const quoteCategories = ["반지", "귀걸이", "피어싱", "목걸이", "팔찌", "발찌"];
   if (quoteCategories.includes(category) && input.title) {
     try {
+      // 견적서에는 옵션 이미지가 들어가지 않는다. 원본 data URL까지 보내면
+      // 이미지가 많은 상품에서 Vercel 요청 용량을 초과해 견적서만 누락될 수 있다.
+      const { optionImages: _unusedOptionImages, ...quotePayload } = payload;
       const res = await fetch("/api/export-quote", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(quotePayload),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
