@@ -25,7 +25,15 @@ export default function WmsLayout({ children }: { children: ReactNode }) {
         <PickingWaveRepositoryProvider>
           <VendorOrderRepositoryProvider>
             <WmsHomeHeader />
-            {children}
+            <div className="wms-rounded-page-shell">{children}</div>
+            <style jsx global>{`
+              .wms-rounded-page-shell > main {
+                border: 1px solid #ddd7cd;
+                border-radius: 18px;
+                overflow: hidden;
+                box-shadow: 0 4px 16px rgba(30, 28, 25, 0.045);
+              }
+            `}</style>
           </VendorOrderRepositoryProvider>
         </PickingWaveRepositoryProvider>
       </WarehouseRepositoryProvider>

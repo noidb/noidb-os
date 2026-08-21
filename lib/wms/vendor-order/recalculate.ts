@@ -1,6 +1,7 @@
 import type { PickingWaveItem } from "../picking-wave/types";
 import { resolveDisplayOption } from "../display-name";
 import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraftLine } from "./types";
+import { toVendorOrderQuantity } from "./aggregate";
 
 /**
  * 웨이브의 최신 부족수량을 기준으로 "자동 생성" 라인만 다시 계산한다 (2026-08-19 신규).
@@ -34,10 +35,11 @@ export function recalculateAutoVendorOrderLines(
   const updatedProductCodes: string[] = [];
 
   for (const item of shortageItems) {
+    const orderQuantity = toVendorOrderQuantity(item.shortageQuantity);
     const existing = autoLinesByCode.get(item.productCode);
     if (existing) {
-      if (existing.shortageQuantity !== item.shortageQuantity) updatedProductCodes.push(item.productCode);
-      nextAutoLines.push({ ...existing, shortageQuantity: item.shortageQuantity, updatedAt: now });
+      if (existing.shortageQuantity !== orderQuantity) updatedProductCodes.push(item.productCode);
+      nextAutoLines.push({ ...existing, shortageQuantity: orderQuantity, updatedAt: now });
       autoLinesByCode.delete(item.productCode);
     } else {
       const vendorName = item.vendorName || UNASSIGNED_VENDOR_NAME;
@@ -55,7 +57,7 @@ export function recalculateAutoVendorOrderLines(
         productName: item.productName,
         imageUrl: item.imageUrl || "",
         barcode: item.catalogBarcode || "",
-        shortageQuantity: item.shortageQuantity,
+        shortageQuantity: orderQuantity,
         currentStock: item.catalogCurrentStock || "",
         relatedPurchaseOrderNumbers: Array.from(new Set(item.sources.map(source => source.purchaseOrderNumber))),
         memo: "",

@@ -2,6 +2,13 @@ import type { PickingWaveItem } from "../picking-wave/types";
 import { resolveDisplayOption } from "../display-name";
 import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraft, type VendorOrderDraftLine } from "./types";
 
+/** 거래처 자동 발주의 SKU별 최소 주문 단위(한 타스). */
+export const MIN_AUTO_VENDOR_ORDER_QUANTITY = 12;
+
+export function toVendorOrderQuantity(shortageQuantity: number): number {
+  return Math.max(MIN_AUTO_VENDOR_ORDER_QUANTITY, shortageQuantity);
+}
+
 /**
  * 완료된 통합 피킹(웨이브)의 부족 수량(shortageQuantity > 0)만 골라 제품DB "거래처" 기준으로
  * 자동 그룹핑한다 — 순수 함수, 저장하지 않는다(호출한 쪽이 VendorOrderRepository에 저장).
@@ -44,7 +51,7 @@ export function buildVendorOrderDraftsFromWaveItems(
       productName: item.productName,
       imageUrl: item.imageUrl || "",
       barcode: item.catalogBarcode || "",
-      shortageQuantity: item.shortageQuantity,
+      shortageQuantity: toVendorOrderQuantity(item.shortageQuantity),
       currentStock: item.catalogCurrentStock || "",
       relatedPurchaseOrderNumbers: Array.from(new Set(item.sources.map(source => source.purchaseOrderNumber))),
       memo: "",

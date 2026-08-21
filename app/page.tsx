@@ -20,7 +20,7 @@ import { dataUrlToBlob } from "@/lib/product-db/files";
 import { buildProductDbZip } from "@/lib/product-db/zip";
 import { compressImageDataUrl } from "@/lib/image/compress";
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
-import { defaultFitAdjust, fitToWhiteCanvas, type FitAdjust } from "@/lib/thumbnail/fit";
+import { coverSquareCanvas, defaultFitAdjust, fitToWhiteCanvas, type FitAdjust } from "@/lib/thumbnail/fit";
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 
 type Product = {
@@ -1126,7 +1126,7 @@ export default function Home() {
     else if (key === "detail") setDetailCut(value);
     else if (key === "wear01") setWear01(value);
     else if (key === "wear02") setWear02(value);
-    else if (key.startsWith("opt:")) setOptionThumb(key.slice(4), value);
+    else if (key.startsWith("opt:")) void setOptionThumbCovered(key.slice(4), value);
     else if (key.startsWith("custom:")) {
       setCustomSlots(prev => prev.map(item => item.id === key.slice(7) ? { ...item, slot: value } : item));
     }
@@ -1183,6 +1183,15 @@ export default function Home() {
 
   const setOptionThumb = (option: string, slot: SlotImage | null) => {
     setOptionThumbs(prev => ({ ...prev, [option]: slot }));
+  };
+
+  const setOptionThumbCovered = async (option: string, slot: SlotImage | null) => {
+    if (!slot) {
+      setOptionThumb(option, null);
+      return;
+    }
+    const dataUrl = await coverSquareCanvas(slot.dataUrl);
+    setOptionThumb(option, { ...slot, dataUrl });
   };
 
   const openAdjust = (key: string, dataUrl: string) => {
@@ -2116,8 +2125,9 @@ export default function Home() {
                   : "SKU.jpg"
               }
               value={optionThumbs[option] || null}
-              onChange={slot => setOptionThumb(option, slot)}
-              onPoolDrop={index => assignPoolItem(index, slot => setOptionThumb(option, slot))}
+              onChange={slot => void setOptionThumbCovered(option, slot)}
+              onPoolDrop={index => assignPoolItem(index, slot => void setOptionThumbCovered(option, slot))}
+              coverSquare
               onSlotSwap={swapSlots}
               onExpand={setLightbox}
               onFit={() => {
@@ -2429,6 +2439,7 @@ function ImageSlot({
   onPoolDrop,
   onSlotSwap,
   onRemoveSlot,
+  coverSquare = false,
 }: {
   slotKey: string;
   title: string;
@@ -2442,6 +2453,7 @@ function ImageSlot({
   onPoolDrop?: (index: number) => void;
   onSlotSwap?: (sourceKey: string, targetKey: string) => void;
   onRemoveSlot?: () => void;
+  coverSquare?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -2449,7 +2461,8 @@ function ImageSlot({
   const applyFile = async (file: File | undefined) => {
     if (!file) return;
     if (!ACCEPTED.includes(file.type) && !/\.(jpe?g|png)$/i.test(file.name)) return;
-    const dataUrl = await readFile(file);
+    const sourceDataUrl = await readFile(file);
+    const dataUrl = coverSquare ? await coverSquareCanvas(sourceDataUrl) : sourceDataUrl;
     onChange({ dataUrl, fileName: file.name });
   };
 

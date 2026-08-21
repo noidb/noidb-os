@@ -56,6 +56,16 @@ function guessRegion(fulfillmentCenter: string): string {
   return "기타";
 }
 
+/** 같은 거래처·입고예정일·물류센터에 이미 함께 출고할 다른 발주서가 있는지 확인한다. */
+function hasExistingShipmentGroup(order: SupplierHubPurchaseOrder, orders: SupplierHubPurchaseOrder[]): boolean {
+  return orders.some(candidate =>
+    candidate.purchaseOrderNumber !== order.purchaseOrderNumber &&
+    candidate.accountName === order.accountName &&
+    candidate.expectedDate === order.expectedDate &&
+    candidate.fulfillmentCenter === order.fulfillmentCenter
+  );
+}
+
 /**
  * 두 발주서씩 비교해 아래 조건을 모두 만족하면 합배송 추천을 만든다:
  * - 같은 거래처(accountName)
@@ -101,7 +111,18 @@ export function buildScheduleChangeRecommendations(
 
       const aQty = a.items.reduce((sum, item) => sum + item.orderedQuantity, 0);
       const bQty = b.items.reduce((sum, item) => sum + item.orderedQuantity, 0);
-      const [target, anchor] = aQty <= bQty ? [a, b] : [b, a];
+      const aHasShipmentGroup = hasExistingShipmentGroup(a, orders);
+      const bHasShipmentGroup = hasExistingShipmentGroup(b, orders);
+
+      // 서로 다른 센터라도 양쪽 모두 현재 날짜·센터에 이미 합배송할 발주서가 있으면
+      // 서울→대구와 대구→서울처럼 불필요하고 상충하는 센터 변경 추천을 만들지 않는다.
+      if (!centerSame && aHasShipmentGroup && bHasShipmentGroup) continue;
+
+      // 한쪽만 기존 합배송 그룹에 속해 있으면 그 그룹을 깨지 않고, 미그룹 발주서를 그룹 쪽에
+      // 맞추는 방향으로 추천한다. 양쪽 모두 미그룹일 때만 기존 수량 기준을 사용한다.
+      const [target, anchor] = aHasShipmentGroup !== bHasShipmentGroup
+        ? (aHasShipmentGroup ? [b, a] : [a, b])
+        : (aQty <= bQty ? [a, b] : [b, a]);
 
       const reasonParts = [
         `공통 SKU ${sharedSkus.length}종`,

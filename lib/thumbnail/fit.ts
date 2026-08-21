@@ -95,3 +95,23 @@ export async function fitToWhiteCanvas(
 
   return canvas.toDataURL("image/jpeg", 0.95);
 }
+
+/** 원본 비율은 유지하면서 중앙을 잘라 여백 없는 정사각형 JPG로 만든다. */
+export async function coverSquareCanvas(sourceDataUrl: string, size = 1000): Promise<string> {
+  const img = await loadImage(sourceDataUrl);
+  if (img.naturalWidth === img.naturalHeight && img.naturalWidth === size) return sourceDataUrl;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
+
+  const sourceSize = Math.min(img.naturalWidth, img.naturalHeight);
+  const sourceX = Math.round((img.naturalWidth - sourceSize) / 2);
+  const sourceY = Math.round((img.naturalHeight - sourceSize) / 2);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(img, sourceX, sourceY, sourceSize, sourceSize, 0, 0, size, size);
+  return canvas.toDataURL("image/jpeg", 0.95);
+}
