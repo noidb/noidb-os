@@ -61,8 +61,12 @@ export const FIELD_HEADER_CANDIDATES: Record<Exclude<keyof ProductCatalogItem, "
 /** 제품DB '이미지' 열의 =IMAGE("url",...) 수식에서 실제 이미지 URL만 추출한다. */
 function extractImageUrl(rawCell: string | undefined): string {
   const text = String(rawCell ?? "");
-  const formulaMatch = text.match(/=IMAGE\("([^"]+)"/i);
+  const formulaMatch = text.match(/=IMAGE\(\s*["']([^"']+)["']/i);
   if (formulaMatch) return formulaMatch[1];
+  const hyperlinkMatch = text.match(/=HYPERLINK\(\s*["']([^"']+)["']/i);
+  if (hyperlinkMatch) return hyperlinkMatch[1];
+  const embeddedUrl = text.match(/https?:\/\/[^"'\s,)]+/i);
+  if (embeddedUrl) return embeddedUrl[0];
   if (/^https?:\/\//i.test(text.trim())) return text.trim();
   return "";
 }

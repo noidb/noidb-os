@@ -56,7 +56,9 @@ interface CardLayout {
 
 function buildTopInfoLines(category: string, option: string, quantity: number, memo = ""): TopInfoLine[] {
   const lines: TopInfoLine[] = [];
-  if (category) {
+  // 사진만으로 혼동하기 쉬운 세 분류만 거래처 공유 이미지에 표시한다. 그 밖의 긴 쿠팡 분류 경로는
+  // 상품명과 이미지를 가리고 거래처 작업에도 필요하지 않아 줄 자체를 만들지 않는다.
+  if (category && /(목걸이|팔찌|발찌)/.test(category)) {
     lines.push({ text: category, font: "bold 28px sans-serif", color: "#252525", baselineGap: 26, blockHeight: 36 });
   }
   if (option) {
@@ -302,12 +304,12 @@ export async function renderVendorOrderImage(
     drawBarcode(ctx, card.line.barcode, rightX, rowY + 4, barcodeColWidth - barcodeRightMargin, 52);
 
     // 실제 부족수량은 내부 확인용이다. 거래처가 발주수량과 혼동하지 않도록 카드 오른쪽 아래에
-    // 작고 연한 글씨로만 표시한다.
+    // 발주수량보다 충분히 작게 유지하되 휴대폰에서도 내부 작업자가 읽을 수 있는 크기로 표시한다.
     const actualShortage = card.line.actualShortageQuantity ?? card.line.shortageQuantity;
     ctx.textAlign = "right";
-    ctx.font = "11px sans-serif";
-    ctx.fillStyle = "#aaa39b";
-    ctx.fillText(`내부참고 부족 ${actualShortage}개`, WIDTH - CARD_PAD_X, rowTop + card.cardHeight - 8);
+    ctx.font = "bold 16px sans-serif";
+    ctx.fillStyle = "#8f8982";
+    ctx.fillText(`내부참고 부족 ${actualShortage}개`, WIDTH - CARD_PAD_X, rowTop + card.cardHeight - 10);
     ctx.textAlign = "left";
 
     cursorY += card.cardHeight;

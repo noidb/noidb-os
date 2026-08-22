@@ -6,7 +6,6 @@ import { WarehouseRepositoryProvider } from "@/lib/warehouse/context";
 import { PickingWaveRepositoryProvider } from "@/lib/wms/picking-wave/context";
 import { VendorOrderRepositoryProvider } from "@/lib/wms/vendor-order/context";
 import WmsHomeHeader from "./WmsHomeHeader";
-import WmsHistoryBackButton from "./WmsHistoryBackButton";
 
 /**
  * /wms/* 전용 레이아웃. 기존 app/layout.tsx(루트)는 건드리지 않는다.
@@ -26,7 +25,6 @@ export default function WmsLayout({ children }: { children: ReactNode }) {
         <PickingWaveRepositoryProvider>
           <VendorOrderRepositoryProvider>
             <WmsHomeHeader />
-            <WmsHistoryBackButton />
             <div className="wms-rounded-page-shell">{children}</div>
             <style jsx global>{`
               .wms-rounded-page-shell > main {

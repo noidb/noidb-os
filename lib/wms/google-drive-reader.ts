@@ -121,3 +121,19 @@ export async function listDriveFilesFromEnv(envName: string): Promise<DriveFileI
   if (!folderId) throw new DriveReaderNotConfiguredError([envName]);
   return listDriveFolderFiles(folderId);
 }
+
+/** 서비스 계정에 공유된 Drive 범위에서 파일명으로 검색한다. 상품이미지DB의 하위 폴더도 검색 대상이다. */
+export async function searchDriveFilesByName(nameFragment: string): Promise<DriveFileInfo[]> {
+  const fragment = nameFragment.trim();
+  if (!fragment) return [];
+  const params = new URLSearchParams({
+    q: `name contains '${escapeDriveQuery(fragment)}' and trashed=false`,
+    fields: "files(id,name,mimeType,modifiedTime,size)",
+    orderBy: "modifiedTime desc,name",
+    pageSize: "100",
+    spaces: "drive",
+  });
+  const response = await driveFetch(`${DRIVE_API_BASE}/files?${params}`);
+  const data = await response.json();
+  return (data.files || []) as DriveFileInfo[];
+}

@@ -11,6 +11,7 @@ interface Props {
   vendorName: string;
   lines: VendorOrderDraftLine[];
   status: VendorOrderDraftStatus;
+  productLinksBySku: Record<string, string>;
   onMarkSent: () => void | Promise<void>;
   onReviseAgain: () => void | Promise<void>;
 }
@@ -31,7 +32,7 @@ interface Props {
  * (renderVendorOrderImage)는 카카오톡 공유가 파일 공유를 지원하지 않는 기기에서 대신 자동
  * 다운로드하는 폴백으로 계속 쓴다 — 기능 자체는 사라지지 않는다.
  */
-export default function VendorOrderExportPanel({ wave, vendorName, lines, status, onMarkSent, onReviseAgain }: Props) {
+export default function VendorOrderExportPanel({ wave, vendorName, lines, status, productLinksBySku, onMarkSent, onReviseAgain }: Props) {
   const [shareBusy, setShareBusy] = useState(false);
   const [shareFallbackMessage, setShareFallbackMessage] = useState<string | null>(null);
 
@@ -72,7 +73,13 @@ export default function VendorOrderExportPanel({ wave, vendorName, lines, status
         setShareFallbackMessage("이 기기/브라우저는 파일 공유를 지원하지 않아 이미지를 대신 다운로드했습니다 — 카카오톡에서 직접 첨부해주세요.");
         return;
       }
-      await nav.share!({ title: `노이드비 발주서 - ${vendorName}`, files: [file] });
+      const linkLines = lines
+        .filter(line => productLinksBySku[line.skuId])
+        .map((line, index) => `${index + 1}. ${line.productName}\n${productLinksBySku[line.skuId]}`);
+      const shareText = linkLines.length > 0
+        ? `제품링크\n\n${linkLines.join("\n\n")}`
+        : "제품링크가 등록된 상품이 없습니다.";
+      await nav.share!({ title: `노이드비 발주서 - ${vendorName}`, text: shareText, files: [file] });
     } catch (error) {
       if (error instanceof Error && error.name !== "AbortError") {
         setShareFallbackMessage("공유 중 오류가 발생했습니다 — 다시 시도해주세요.");

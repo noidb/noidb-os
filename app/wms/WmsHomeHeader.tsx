@@ -1,6 +1,7 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { useEffect } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { WMS_MOBILE_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
 import { HomeIcon } from "./icons";
 
@@ -12,7 +13,31 @@ import { HomeIcon } from "./icons";
  */
 export default function WmsHomeHeader() {
   const pathname = usePathname();
+  const router = useRouter();
   const isHome = pathname === "/wms/work-center";
+
+  useEffect(() => {
+    const key = "noidb:wms-route-history";
+    if (isHome) {
+      sessionStorage.setItem(key, JSON.stringify([pathname]));
+      return;
+    }
+    const stored = JSON.parse(sessionStorage.getItem(key) || "[]") as string[];
+    if (stored[stored.length - 1] !== pathname) {
+      sessionStorage.setItem(key, JSON.stringify([...stored.slice(-29), pathname]));
+    }
+  }, [isHome, pathname]);
+
+  function goBack() {
+    const key = "noidb:wms-route-history";
+    const stored = JSON.parse(sessionStorage.getItem(key) || "[]") as string[];
+    while (stored[stored.length - 1] === pathname) stored.pop();
+    const target = stored.pop();
+    sessionStorage.setItem(key, JSON.stringify(stored));
+    if (target) router.push(target);
+    else if (window.history.length > 1) window.history.back();
+    else router.push("/wms/work-center");
+  }
 
   return (
     <div
@@ -37,7 +62,15 @@ export default function WmsHomeHeader() {
        *  — 브랜드 헤더 바로 아래 제목이 오도록(2026-08-20 실기기 추가 확인 1번). 다른 화면에서는
        *  실제 이동 기능이 있는 HOME 버튼을 그대로 유지한다. */}
       {!isHome && (
-        <a href="/wms/work-center" style={{ textDecoration: "none" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
+          <button
+            type="button"
+            onClick={goBack}
+            style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: "#ffffff", color: wmsColors.ink, minHeight: "44px", padding: "0 14px", fontSize: "13px", fontWeight: 800, cursor: "pointer" }}
+          >
+            ← 뒤로가기
+          </button>
+          <a href="/wms/work-center" style={{ textDecoration: "none" }}>
           <button
             style={{
               display: "inline-flex",
@@ -57,7 +90,8 @@ export default function WmsHomeHeader() {
             <HomeIcon size={16} />
             HOME
           </button>
-        </a>
+          </a>
+        </div>
       )}
     </div>
   );

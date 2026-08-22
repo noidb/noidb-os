@@ -76,6 +76,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   const [wave, setWave] = useState<PickingWave | null>(null);
   const [items, setItems] = useState<PickingWaveItem[]>([]);
   const [basketDisplayNames, setBasketDisplayNames] = useState<Record<string, string>>({});
+  const [expectedDatesByPo, setExpectedDatesByPo] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [liveCatalogByProductCode, setLiveCatalogByProductCode] = useState<LiveCatalogLookup>(new Map());
@@ -191,6 +192,10 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   useEffect(() => {
     reload();
     refreshProductCatalog();
+    fetch("/api/wms/supplier-hub-orders", { cache: "no-store" })
+      .then(response => response.json())
+      .then(data => setExpectedDatesByPo(Object.fromEntries((data.orders || []).map((order: { purchaseOrderNumber: string; expectedDate?: string }) => [order.purchaseOrderNumber, order.expectedDate || ""]))))
+      .catch(() => setExpectedDatesByPo({}));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.waveId]);
 
@@ -555,6 +560,11 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
             bulkProcessing={bulkProcessing}
             liveCatalogByProductCode={liveCatalogByProductCode}
             bulkAreaRef={bulkAreaRef}
+            onOpenDetail={item => {
+              setSelectedGroupId(resolveGroup(item, liveCatalogByProductCode).groupId);
+              setSelectedProductCode(item.productCode);
+            }}
+            onStockSaved={refreshProductCatalog}
           />
         ) : (
         sections.map(section => (
@@ -658,7 +668,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
                   border: isDone ? `2px solid ${wmsColors.green}` : `1px solid ${wmsColors.border}`,
                 }}
               >
-                <ProductLinkThumbnailButton imageUrl={live.imageUrl} productLink={live.productLink} size={48} />
+                <ItemThumbnail imageUrl={live.imageUrl || catalogImageFallback(live.catalogModelName, item.modelSku, live.productLink)} size={48} />
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontWeight: 700, fontSize: "14px", whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.3 }}>
                     {live.name}
@@ -755,6 +765,15 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   // (ProductInfoEditSheet)가 완전히 같은 최신 제품DB 값을 쓰도록 한다 — 화면마다 별도로
   // resolveLiveFields를 다시 계산하지 않는다.
   const selectedItemLive = resolveLiveFields(selectedItem, liveCatalogByProductCode);
+  const detailItems = selectedBucket?.items || [];
+  const detailIndex = detailItems.findIndex(item => item.productCode === selectedItem.productCode);
+  function moveDetail(offset: number) {
+    const next = detailItems[detailIndex + offset];
+    if (!next) return;
+    setShowPartialInput(false);
+    setAllocationDraft(null);
+    setSelectedProductCode(next.productCode);
+  }
 
   return (
     <main style={{ ...pageStyle, display: "flex", flexDirection: "column", height: "100vh", paddingBottom: "calc(12px + env(safe-area-inset-bottom))" }}>
@@ -763,12 +782,13 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       </button>
 
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
-        <button
-          onClick={() => setShowProductInfoSheet(true)}
-          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "center" }}
-        >
-          <DetailImage imageUrl={selectedItemLive.imageUrl} alt={selectedItem.productName} />
-        </button>
+        <div style={{ display: "grid", gridTemplateColumns: "48px minmax(0,1fr) 48px", alignItems: "center", gap: "6px" }}>
+          <button type="button" aria-label="이전 상품" disabled={detailIndex <= 0} onClick={() => moveDetail(-1)} style={detailArrowStyle}>‹</button>
+          <button onClick={() => setShowProductInfoSheet(true)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "center", minWidth: 0 }}>
+            <DetailImage imageUrl={selectedItemLive.imageUrl || catalogImageFallback(selectedItemLive.catalogModelName, selectedItem.modelSku, selectedItemLive.productLink)} alt={selectedItem.productName} />
+          </button>
+          <button type="button" aria-label="다음 상품" disabled={detailIndex < 0 || detailIndex >= detailItems.length - 1} onClick={() => moveDetail(1)} style={detailArrowStyle}>›</button>
+        </div>
 
         <button
           onClick={() => setShowProductInfoSheet(true)}
@@ -815,6 +835,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
             <div key={source.purchaseOrderNumber} style={{ fontSize: "12px", display: "flex", justifyContent: "space-between" }}>
               <span>
                 {basketDisplayNames[source.basketNumber] || `바구니 ${source.basketNumber}`}
+                {expectedDatesByPo[source.purchaseOrderNumber] && <span style={{ color: wmsColors.greenDark, fontSize: "10px", fontWeight: 800 }}> · 입고예정일 {expectedDatesByPo[source.purchaseOrderNumber]}</span>}
                 <span style={{ color: wmsColors.muted, fontSize: "10px" }}> (발주서 {source.purchaseOrderNumber})</span>
               </span>
               <span style={{ fontWeight: 700 }}>{source.requestedQuantity}개</span>
@@ -890,6 +911,25 @@ const summaryGridStyle: CSSProperties = {
   gap: "10px",
 };
 
+const detailArrowStyle: CSSProperties = {
+  width: "46px",
+  height: "76px",
+  borderRadius: "14px",
+  border: `1px solid ${wmsColors.borderStrong}`,
+  background: "#ffffff",
+  color: wmsColors.slateDark,
+  fontSize: "42px",
+  fontWeight: 800,
+  lineHeight: 1,
+  cursor: "pointer",
+};
+
+function catalogImageFallback(modelName?: string, modelSku?: string, _productLink?: string): string {
+  const model = (modelName || modelSku || "").trim();
+  if (model) return `/api/wms/product-image/from-drive?model=${encodeURIComponent(model)}`;
+  return "";
+}
+
 /**
  * 전체 SKU를 그룹 이동 없이 한 화면에서 체크박스로 처리하는 목록 (2026-08-19 신규).
  * 창고 동선 순서(카테고리 버킷)로 정렬한다. 체크박스와 "상품 상세로 들어가기" 동작이 섞이지
@@ -905,6 +945,8 @@ function ChecklistView({
   bulkProcessing,
   liveCatalogByProductCode,
   bulkAreaRef,
+  onOpenDetail,
+  onStockSaved,
 }: {
   allItems: PickingWaveItem[];
   checkedProductCodes: Set<string>;
@@ -915,7 +957,13 @@ function ChecklistView({
   bulkProcessing: boolean;
   liveCatalogByProductCode: LiveCatalogLookup;
   bulkAreaRef: RefObject<HTMLDivElement>;
+  onOpenDetail: (item: PickingWaveItem) => void;
+  onStockSaved: () => void | Promise<void>;
 }) {
+  const [showStockEditor, setShowStockEditor] = useState(false);
+  const [stockDrafts, setStockDrafts] = useState<Record<string, string>>({});
+  const [stockSaving, setStockSaving] = useState(false);
+  const [stockMessage, setStockMessage] = useState<string | null>(null);
   const sortedItems = [...allItems].sort((a, b) =>
     resolveGroup(a, liveCatalogByProductCode).sortKey.localeCompare(resolveGroup(b, liveCatalogByProductCode).sortKey)
   );
@@ -982,8 +1030,10 @@ function ChecklistView({
                 onChange={() => onToggle(item.productCode)}
                 style={{ width: "22px", height: "22px", flexShrink: 0, cursor: "pointer" }}
               />
-              <ProductLinkThumbnailButton imageUrl={live.imageUrl} productLink={live.productLink} size={44} />
-              <div style={{ minWidth: 0, flex: 1 }}>
+              <button type="button" onClick={() => onOpenDetail(item)} style={{ border: 0, padding: 0, background: "transparent", lineHeight: 0, cursor: "pointer" }}>
+                <ItemThumbnail imageUrl={live.imageUrl || catalogImageFallback(live.catalogModelName, item.modelSku, live.productLink)} size={44} />
+              </button>
+              <button type="button" onClick={() => onOpenDetail(item)} style={{ minWidth: 0, flex: 1, border: 0, padding: 0, background: "transparent", textAlign: "left", cursor: "pointer" }}>
                 <div style={{ fontSize: "13px", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {live.name}
                 </div>
@@ -991,7 +1041,7 @@ function ChecklistView({
                   {live.optionLabel || "옵션 없음"}
                 </div>
                 <div style={{ fontSize: "10px", color: wmsColors.muted }}>SKU {item.productCode}</div>
-              </div>
+              </button>
               <ProductLinkIconButton productLink={live.productLink} />
               <div style={{ fontSize: "13px", fontWeight: 700, flexShrink: 0 }}>
                 {item.pickedQuantity} / {item.totalQuantity}개
@@ -1006,6 +1056,14 @@ function ChecklistView({
        *  이 영역 전체에 ref를 달아 일괄처리 직후 스크롤 위치를 이 자리 기준으로 복원한다
        *  (2026-08-20 신규, WmsPickingWaveDetailPage.applyBulkStatus 참고). */}
       <div ref={bulkAreaRef}>
+        <button
+          type="button"
+          disabled={checkedProductCodes.size === 0}
+          onClick={() => { setShowStockEditor(true); setStockMessage(null); }}
+          style={{ ...wmsPrimaryButton, width: "100%", minHeight: "44px", marginBottom: "8px", opacity: checkedProductCodes.size === 0 ? 0.5 : 1 }}
+        >
+          선택 제품 재고 입력하기 ({checkedProductCodes.size}개)
+        </button>
         <button
           onClick={selectUnprocessed}
           style={{ ...wmsSageButton, width: "100%", minHeight: "44px", fontSize: "13px", marginBottom: "8px" }}
@@ -1030,6 +1088,41 @@ function ChecklistView({
           </button>
         </div>
       </div>
+
+      {showStockEditor && (
+        <div role="dialog" aria-modal="true" style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,.38)", padding: "20px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ width: "min(520px,100%)", maxHeight: "82vh", overflowY: "auto", background: "#fff", borderRadius: "16px", padding: "16px" }}>
+            <h2 style={{ margin: "0 0 12px", fontSize: "17px" }}>선택 제품 현재고 일괄 입력</h2>
+            {sortedItems.filter(item => checkedProductCodes.has(item.productCode)).map(item => {
+              const live = resolveLiveFields(item, liveCatalogByProductCode);
+              const skuId = live.liveSkuId || item.productCode;
+              return <label key={item.productCode} style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: "8px", alignItems: "center", marginBottom: "8px", fontSize: "12px" }}>
+                <span style={{ minWidth: 0 }}>{live.name}<br /><small style={{ color: wmsColors.muted }}>SKU {skuId}</small></span>
+                <input type="number" min={0} inputMode="numeric" value={stockDrafts[skuId] ?? live.catalogCurrentStock ?? ""} onChange={event => setStockDrafts(prev => ({ ...prev, [skuId]: event.target.value }))} placeholder="현재고" style={{ minHeight: "40px", width: "100%", textAlign: "center", borderRadius: "8px", border: `1px solid ${wmsColors.borderStrong}`, fontSize: "16px" }} />
+              </label>;
+            })}
+            {stockMessage && <p style={{ fontSize: "12px", color: stockMessage.includes("완료") ? wmsColors.greenDark : "#c0392b" }}>{stockMessage}</p>}
+            <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+              <button type="button" disabled={stockSaving} onClick={() => setShowStockEditor(false)} style={{ ...wmsSecondaryButton, flex: 1 }}>취소</button>
+              <button type="button" disabled={stockSaving} onClick={async () => {
+                setStockSaving(true); setStockMessage(null);
+                const entries = Object.entries(stockDrafts).filter(([, value]) => value !== "");
+                const results = await Promise.all(entries.map(async ([skuId, value]) => {
+                  try {
+                    const response = await fetch("/api/wms/product-catalog/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuId, currentStock: String(Math.max(0, Number(value) || 0)) }) });
+                    const data = await response.json();
+                    return { skuId, ok: response.ok && data.success };
+                  } catch { return { skuId, ok: false }; }
+                }));
+                const failed = results.filter(result => !result.ok).map(result => result.skuId);
+                if (failed.length) setStockMessage(`저장 실패 ${failed.length}개: ${failed.join(", ")}`);
+                else { setStockMessage(`${results.length}개 현재고 저장완료`); await onStockSaved(); }
+                setStockSaving(false);
+              }} style={{ ...wmsPrimaryButton, flex: 2 }}>{stockSaving ? "저장 중..." : "선택 재고 일괄 저장"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1209,32 +1302,6 @@ function ItemThumbnail({ imageUrl, size }: { imageUrl?: string; size: number }) 
         </>
       )}
     </div>
-  );
-}
-
-/** 상품 이미지를 눌러 실제 제품링크를 여는 버튼(2026-08-20 신규). 체크박스/행 클릭과
- *  이벤트가 섞이지 않도록 stopPropagation을 쓴다. 링크가 없으면 클릭을 비활성화한다 —
- *  임의 쿠팡 URL을 만들어내지 않는다. */
-function ProductLinkThumbnailButton({ imageUrl, productLink, size }: { imageUrl?: string; productLink?: string; size: number }) {
-  if (!productLink) {
-    return (
-      <div style={{ position: "relative", flexShrink: 0 }} title="제품링크 미등록">
-        <ItemThumbnail imageUrl={imageUrl} size={size} />
-      </div>
-    );
-  }
-  return (
-    <button
-      type="button"
-      onClick={event => {
-        event.stopPropagation();
-        openProductLinkPreview(productLink);
-      }}
-      title="제품링크 열기"
-      style={{ background: "none", border: "none", padding: 0, margin: 0, cursor: "pointer", flexShrink: 0, lineHeight: 0 }}
-    >
-      <ItemThumbnail imageUrl={imageUrl} size={size} />
-    </button>
   );
 }
 

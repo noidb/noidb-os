@@ -225,6 +225,7 @@ export default function WmsPickingWavesPage() {
             purchaseOrderNumber: order.purchaseOrderNumber,
             fulfillmentCenter: order.fulfillmentCenter,
             expectedDate: order.expectedDate,
+            items: order.items,
           })),
         }),
       });

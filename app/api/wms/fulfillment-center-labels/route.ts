@@ -8,6 +8,13 @@ interface LabelInput {
   fulfillmentCenter?: unknown;
   expectedDate?: unknown;
   purchaseOrderNumber?: unknown;
+  items?: Array<{
+    productCode?: unknown;
+    skuId?: unknown;
+    vendorConfirmedQuantity?: unknown;
+    orderedQuantity?: unknown;
+    quantity?: unknown;
+  }>;
 }
 
 function text(value: unknown): string {
@@ -19,20 +26,26 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json() as { orders?: LabelInput[] };
     const orders = Array.isArray(body.orders) ? body.orders : [];
-    const byCenter = new Map<string, { dates: Set<string>; poNumbers: Set<string> }>();
+    const byCenterAndDate = new Map<string, { center: string; date: string; poNumbers: Set<string>; skuIds: Set<string>; totalQuantity: number }>();
 
     for (const order of orders) {
       const center = text(order.fulfillmentCenter);
       if (!center) continue;
-      const entry = byCenter.get(center) || { dates: new Set<string>(), poNumbers: new Set<string>() };
       const date = text(order.expectedDate);
+      const key = `${center}\u0000${date}`;
+      const entry = byCenterAndDate.get(key) || { center, date, poNumbers: new Set<string>(), skuIds: new Set<string>(), totalQuantity: 0 };
       const poNumber = text(order.purchaseOrderNumber);
-      if (date) entry.dates.add(date);
       if (poNumber) entry.poNumbers.add(poNumber);
-      byCenter.set(center, entry);
+      for (const item of Array.isArray(order.items) ? order.items : []) {
+        const skuId = text(item.productCode || item.skuId);
+        if (skuId) entry.skuIds.add(skuId);
+        const quantity = Number(item.vendorConfirmedQuantity ?? item.orderedQuantity ?? item.quantity ?? 0);
+        if (Number.isFinite(quantity) && quantity > 0) entry.totalQuantity += quantity;
+      }
+      byCenterAndDate.set(key, entry);
     }
 
-    if (byCenter.size === 0) {
+    if (byCenterAndDate.size === 0) {
       return NextResponse.json({ error: "라벨을 만들 물류센터가 없습니다." }, { status: 400 });
     }
 
@@ -42,14 +55,20 @@ export async function POST(req: NextRequest) {
       { header: "물류센터", key: "fulfillmentCenter", width: 32 },
       { header: "입고예정일", key: "expectedDate", width: 24 },
       { header: "발주서번호", key: "purchaseOrderNumber", width: 42 },
+      { header: "총SKU", key: "totalSku", width: 12 },
+      { header: "총수량", key: "totalQuantity", width: 12 },
       { header: "라벨수량", key: "labelQuantity", width: 12 },
     ];
 
-    for (const [center, entry] of [...byCenter.entries()].sort(([a], [b]) => a.localeCompare(b, "ko"))) {
+    for (const entry of [...byCenterAndDate.values()].sort((a, b) =>
+      a.center.localeCompare(b.center, "ko") || a.date.localeCompare(b.date, "ko")
+    )) {
       sheet.addRow({
-        fulfillmentCenter: center,
-        expectedDate: [...entry.dates].sort().join(", "),
+        fulfillmentCenter: entry.center,
+        expectedDate: entry.date,
         purchaseOrderNumber: [...entry.poNumbers].sort().join(", "),
+        totalSku: entry.skuIds.size,
+        totalQuantity: entry.totalQuantity,
         labelQuantity: 1,
       });
     }

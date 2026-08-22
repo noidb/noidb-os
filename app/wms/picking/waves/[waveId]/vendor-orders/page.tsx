@@ -121,8 +121,11 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
 
   // 거래처 입력 자동완성 후보 — 이미 이 발주서에 존재하는 실제 거래처명만 쓴다(새 값을 임의로 만들지 않음).
   const knownVendorNames = useMemo(
-    () => Array.from(new Set(groups.map(g => g.vendorName).filter(name => name && name !== UNASSIGNED_VENDOR_NAME))),
-    [groups]
+    () => Array.from(new Set([
+      ...groups.map(g => g.vendorName),
+      ...Array.from(liveCatalogByProductCode.values()).map(item => item.vendorName),
+    ].filter(name => name && name !== UNASSIGNED_VENDOR_NAME))).sort((a, b) => a.localeCompare(b, "ko")),
+    [groups, liveCatalogByProductCode]
   );
 
   const lowStockByVendor = useMemo(() => {
@@ -434,6 +437,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                     vendorName={group.vendorName}
                     lines={group.lines}
                     status={status}
+                    productLinksBySku={Object.fromEntries(group.lines.map(line => [line.skuId, liveCatalogByProductCode.get(line.skuId)?.productLink || ""]))}
                     onMarkSent={() => persistAll({ vendorName: group.vendorName, status: "sent" })}
                     onReviseAgain={() => persistAll({ vendorName: group.vendorName, status: "resend_needed" })}
                   />
@@ -502,6 +506,7 @@ function VendorOrderLineCard({
   const [imageSaveError, setImageSaveError] = useState<string | null>(null);
   const [vendorSaving, setVendorSaving] = useState(false);
   const [vendorSaveError, setVendorSaveError] = useState<string | null>(null);
+  const [editingVendor, setEditingVendor] = useState(false);
   const [statusSaving, setStatusSaving] = useState<"단종" | "과재고" | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
@@ -527,12 +532,6 @@ function VendorOrderLineCard({
     // 유지되는 동안은 부모의 line.vendorName 갱신(임시저장 등)이 입력 중인 draft를 덮어쓰지 않는다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [line.id]);
-
-  function commitVendorDraft() {
-    const next = vendorDraft.trim() ? vendorDraft.trim() : UNASSIGNED_VENDOR_NAME;
-    if (next !== line.vendorName) onChange({ vendorName: next });
-    if (next !== vendorDraft) setVendorDraft(next);
-  }
 
   const { name: displayName, option: displayOption } = resolveDisplayNameAndOption(line.productName, line.optionLabel);
   const datalistId = `vendor-suggestions-${line.id}`;
@@ -572,9 +571,8 @@ function VendorOrderLineCard({
   async function handleSaveVendorToCatalog() {
     const name = vendorDraft.trim();
     if (!name || name === UNASSIGNED_VENDOR_NAME) return;
-    const confirmed = window.confirm(`이 거래처명("${name}")을 SKU ${line.skuId}의 제품DB에도 저장할까요?`);
+    const confirmed = window.confirm(`거래처를 '${line.vendorName}'에서 '${name}'으로 수정하고 제품DB에도 저장할까요?`);
     if (!confirmed) return;
-    commitVendorDraft();
     setVendorSaving(true);
     setVendorSaveError(null);
     try {
@@ -585,6 +583,10 @@ function VendorOrderLineCard({
       });
       const data = await response.json();
       if (!response.ok || !data.success) setVendorSaveError(data.error || "제품DB 거래처 저장에 실패했습니다.");
+      else {
+        onChange({ vendorName: name });
+        setEditingVendor(false);
+      }
     } catch (error) {
       setVendorSaveError(error instanceof Error ? error.message : "제품DB 거래처 저장 중 오류가 발생했습니다.");
     } finally {
@@ -827,14 +829,18 @@ function VendorOrderLineCard({
 
       {editable && (
         <div style={{ marginTop: "14px", display: "flex", flexDirection: "column", gap: "6px", paddingTop: "10px", borderTop: `1px dashed ${wmsColors.border}` }}>
-          <div style={{ display: "flex", gap: "6px" }}>
+          {!editingVendor ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+              <span style={{ fontSize: "12px", fontWeight: 800 }}>거래처: {line.vendorName || UNASSIGNED_VENDOR_NAME}</span>
+              <button type="button" onClick={() => { setVendorDraft(line.vendorName); setEditingVendor(true); setVendorSaveError(null); }} style={{ ...wmsGhostButton, minHeight: "34px", padding: "0 10px", fontSize: "11px" }}>거래처 수정</button>
+            </div>
+          ) : <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
             <input
               className="wms-input"
               list={datalistId}
               value={vendorDraft}
               placeholder="거래처"
               onChange={e => setVendorDraft(e.target.value)}
-              onBlur={commitVendorDraft}
               style={{ ...inputStyle, flex: 1 }}
             />
             <datalist id={datalistId}>
@@ -847,9 +853,10 @@ function VendorOrderLineCard({
               disabled={vendorSaving || !vendorDraft.trim() || vendorDraft.trim() === UNASSIGNED_VENDOR_NAME}
               style={{ ...wmsGhostButton, minHeight: "32px", padding: "0 8px", fontSize: "10px", flexShrink: 0, opacity: vendorSaving ? 0.6 : 1 }}
             >
-              {vendorSaving ? "저장 중" : "제품DB에도 저장"}
+              {vendorSaving ? "저장 중" : "수정 저장"}
             </button>
-          </div>
+            <button type="button" onClick={() => { setVendorDraft(line.vendorName); setEditingVendor(false); }} style={{ ...wmsSecondaryButton, minHeight: "32px", padding: "0 8px", fontSize: "10px" }}>취소</button>
+          </div>}
           {vendorSaveError && <p style={{ fontSize: "10px", color: "#c0392b", margin: 0 }}>{vendorSaveError}</p>}
           <input className="wms-input" value={line.memo} placeholder="메모" onChange={e => onChange({ memo: e.target.value })} style={inputStyle} />
           <div style={{ display: "flex", gap: "6px" }}>
