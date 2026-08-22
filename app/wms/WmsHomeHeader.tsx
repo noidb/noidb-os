@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { WMS_MOBILE_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
 import { HomeIcon } from "./icons";
+import { useWmsUndo } from "@/lib/wms/undo-context";
 
 /**
  * 모든 /wms/* 화면에 공통으로 보이는 HOME 버튼 (2026-08-19 4차 실사용 테스트 반영).
@@ -15,27 +15,10 @@ export default function WmsHomeHeader() {
   const pathname = usePathname();
   const router = useRouter();
   const isHome = pathname === "/wms/work-center";
-
-  useEffect(() => {
-    const key = "noidb:wms-route-history";
-    if (isHome) {
-      sessionStorage.setItem(key, JSON.stringify([pathname]));
-      return;
-    }
-    const stored = JSON.parse(sessionStorage.getItem(key) || "[]") as string[];
-    if (stored[stored.length - 1] !== pathname) {
-      sessionStorage.setItem(key, JSON.stringify([...stored.slice(-29), pathname]));
-    }
-  }, [isHome, pathname]);
+  const { canUndo, undoLabel, undoing, undoLast } = useWmsUndo();
 
   function goBack() {
-    const key = "noidb:wms-route-history";
-    const stored = JSON.parse(sessionStorage.getItem(key) || "[]") as string[];
-    while (stored[stored.length - 1] === pathname) stored.pop();
-    const target = stored.pop();
-    sessionStorage.setItem(key, JSON.stringify(stored));
-    if (target) router.push(target);
-    else if (window.history.length > 1) window.history.back();
+    if (window.history.length > 1) router.back();
     else router.push("/wms/work-center");
   }
 
@@ -62,13 +45,16 @@ export default function WmsHomeHeader() {
        *  — 브랜드 헤더 바로 아래 제목이 오도록(2026-08-20 실기기 추가 확인 1번). 다른 화면에서는
        *  실제 이동 기능이 있는 HOME 버튼을 그대로 유지한다. */}
       {!isHome && (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
           <button
             type="button"
             onClick={goBack}
             style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: "#ffffff", color: wmsColors.ink, minHeight: "44px", padding: "0 14px", fontSize: "13px", fontWeight: 800, cursor: "pointer" }}
           >
             ← 뒤로가기
+          </button>
+          <button type="button" disabled={!canUndo || undoing} title={undoLabel || "되돌릴 작업 없음"} onClick={undoLast} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: wmsColors.surfaceBeige, color: wmsColors.ink, minHeight: "44px", padding: "0 12px", fontSize: "12px", fontWeight: 800, cursor: canUndo ? "pointer" : "default", opacity: canUndo ? 1 : 0.45 }}>
+            {undoing ? "복원 중" : "↶ 되돌리기"}
           </button>
           <a href="/wms/work-center" style={{ textDecoration: "none" }}>
           <button

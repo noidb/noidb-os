@@ -8,7 +8,7 @@ import { fetchLiveCatalogLookup, resolveLiveFields, type LiveCatalogLookup } fro
 import { proposeShortageAllocation, sumFulfilledQuantity } from "@/lib/wms/picking-wave/allocate";
 import { buildBasketDisplayNames } from "@/lib/wms/picking-wave/basket-display";
 import { UNASSIGNED_VENDOR_NAME } from "@/lib/wms/vendor-order/types";
-import type { PickingWave, PickingWaveItem, PickingAllocationResult } from "@/lib/wms/picking-wave/types";
+import type { BasketAssignment, PickingWave, PickingWaveItem, PickingAllocationResult } from "@/lib/wms/picking-wave/types";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsWarnButton, wmsGhostButton, wmsBronzeButton, wmsSageButton, wmsGreenDarkButton } from "@/lib/wms/ui-tokens";
 import ProductInfoEditSheet from "./ProductInfoEditSheet";
 import WmsExitNav from "../WmsExitNav";
@@ -76,6 +76,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   const [wave, setWave] = useState<PickingWave | null>(null);
   const [items, setItems] = useState<PickingWaveItem[]>([]);
   const [basketDisplayNames, setBasketDisplayNames] = useState<Record<string, string>>({});
+  const [basketsByNumber, setBasketsByNumber] = useState<Record<string, BasketAssignment>>({});
   const [expectedDatesByPo, setExpectedDatesByPo] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -117,6 +118,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       setWave(loadedWave);
       setItems(loadedItems);
       setBasketDisplayNames(buildBasketDisplayNames(loadedBaskets));
+      setBasketsByNumber(Object.fromEntries(loadedBaskets.map(basket => [basket.basketNumber, basket])));
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "웨이브 정보를 찾을 수 없습니다.");
     } finally {
@@ -219,9 +221,23 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
     return Array.from(new Set(item.sources.map(source => basketDisplayNames[source.basketNumber] || `바구니 ${source.basketNumber}`)));
   }
 
+  function actualFulfillmentCenter(basketNumber: string): string {
+    return basketsByNumber[basketNumber]?.fulfillmentCenter || basketDisplayNames[basketNumber] || `바구니 ${basketNumber}`;
+  }
+
+  function centerDateKey(basketNumber: string, purchaseOrderNumber: string): string {
+    return `${actualFulfillmentCenter(basketNumber)}\u0000${expectedDatesByPo[purchaseOrderNumber] || ""}`;
+  }
+
+  function centerDateLabel(basketNumber: string, purchaseOrderNumber: string): string {
+    const center = actualFulfillmentCenter(basketNumber);
+    const expectedDate = expectedDatesByPo[purchaseOrderNumber];
+    return expectedDate ? `${center} - ${expectedDate}` : center;
+  }
+
   function logisticsLabelsForItem(item: PickingWaveItem): string[] {
     return Array.from(new Set(item.sources.map(source => {
-      const center = basketDisplayNames[source.basketNumber] || `바구니 ${source.basketNumber}`;
+      const center = actualFulfillmentCenter(source.basketNumber);
       const expectedDate = expectedDatesByPo[source.purchaseOrderNumber];
       return expectedDate ? `${center} · 입고예정일 ${expectedDate}` : center;
     })));
@@ -780,6 +796,25 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
     resolveGroup(a, liveCatalogByProductCode).sortKey.localeCompare(resolveGroup(b, liveCatalogByProductCode).sortKey)
   );
   const detailIndex = detailItems.findIndex(item => item.productCode === selectedItem.productCode);
+  const selectedCenterDateKeys = new Set(selectedItem.sources.map(source =>
+    centerDateKey(source.basketNumber, source.purchaseOrderNumber)
+  ));
+  const centerDateSummaryMap = new Map<string, { label: string; skuIds: Set<string>; totalQuantity: number }>();
+  for (const item of items) {
+    for (const source of item.sources) {
+      const key = centerDateKey(source.basketNumber, source.purchaseOrderNumber);
+      if (!selectedCenterDateKeys.has(key)) continue;
+      const summary = centerDateSummaryMap.get(key) || {
+        label: centerDateLabel(source.basketNumber, source.purchaseOrderNumber),
+        skuIds: new Set<string>(),
+        totalQuantity: 0,
+      };
+      summary.skuIds.add(item.productCode);
+      summary.totalQuantity += source.requestedQuantity;
+      centerDateSummaryMap.set(key, summary);
+    }
+  }
+  const selectedCenterDateSummaries = Array.from(centerDateSummaryMap.values());
   function moveDetail(offset: number) {
     const next = detailItems[detailIndex + offset];
     if (!next) return;
@@ -827,7 +862,9 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
         </div>
 
         <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "6px", marginBottom: "10px" }}>
-          {fulfillmentCentersForItem(selectedItem).map(center => <span key={center} style={{ background: wmsColors.slateDark, color: "#fff", borderRadius: "10px", padding: "9px 16px", fontSize: "18px", fontWeight: 900 }}>{center}</span>)}
+          {Array.from(new Set(selectedItem.sources.map(source => centerDateLabel(source.basketNumber, source.purchaseOrderNumber)))).map(label => (
+            <span key={label} style={{ background: wmsColors.slateDark, color: "#fff", borderRadius: "10px", padding: "9px 16px", fontSize: "18px", fontWeight: 900 }}>{label}</span>
+          ))}
         </div>
 
         <div style={{ background: wmsColors.surfaceBeige, border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "8px", marginBottom: "8px" }}>
@@ -848,13 +885,24 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
           {selectedItem.sources.map(source => (
             <div key={source.purchaseOrderNumber} style={{ fontSize: "12px", display: "flex", justifyContent: "space-between" }}>
               <span>
-                {basketDisplayNames[source.basketNumber] || `바구니 ${source.basketNumber}`}
+                {actualFulfillmentCenter(source.basketNumber)}
                 {expectedDatesByPo[source.purchaseOrderNumber] && <span style={{ color: wmsColors.greenDark, fontSize: "10px", fontWeight: 800 }}> · 입고예정일 {expectedDatesByPo[source.purchaseOrderNumber]}</span>}
                 <span style={{ color: wmsColors.muted, fontSize: "10px" }}> (발주서 {source.purchaseOrderNumber})</span>
               </span>
               <span style={{ fontWeight: 700 }}>{source.requestedQuantity}개</span>
             </div>
           ))}
+          <div style={{ display: "grid", gap: "6px", marginTop: "8px" }}>
+            {selectedCenterDateSummaries.map(summary => (
+              <div key={summary.label} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: wmsColors.surfaceBeige, padding: "8px 10px" }}>
+                <div style={{ color: wmsColors.greenDark, fontSize: "12px", fontWeight: 900, marginBottom: "6px" }}>{summary.label}</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", textAlign: "center" }}>
+                  <div><strong style={{ fontSize: "20px", color: wmsColors.ink }}>{summary.skuIds.size}</strong><div style={{ fontSize: "10px", color: wmsColors.muted }}>총 SKU</div></div>
+                  <div><strong style={{ fontSize: "20px", color: wmsColors.ink }}>{summary.totalQuantity}</strong><div style={{ fontSize: "10px", color: wmsColors.muted }}>총수량</div></div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 

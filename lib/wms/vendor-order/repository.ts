@@ -8,6 +8,8 @@ import type { VendorOrderDraft, VendorOrderDraftLine } from "./types";
 export interface VendorOrderRepository {
   listDrafts(waveId: string): Promise<VendorOrderDraft[]>;
   saveDraft(draft: VendorOrderDraft): Promise<void>;
+  /** 발주서와 그 발주서에 속한 모든 품목 라인을 함께 삭제한다. */
+  deleteDraft(draftId: string): Promise<void>;
 
   listLines(waveId: string): Promise<VendorOrderDraftLine[]>;
   saveLine(line: VendorOrderDraftLine): Promise<void>;

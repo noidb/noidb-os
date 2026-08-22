@@ -14,6 +14,7 @@ import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import { fetchLiveCatalogLookup, type LiveCatalogLookup } from "@/lib/wms/picking-wave/live-catalog";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
+import { useWmsUndo } from "@/lib/wms/undo-context";
 
 /**
  * 발주 입고처리 화면 (2026-08-19 4차 실사용 테스트 신규).
@@ -39,6 +40,7 @@ function computeReceivingStatus(lines: VendorOrderDraftLine[]): ReceivingStatus 
 export default function VendorOrderReceivingPage() {
   const waveRepository = usePickingWaveRepository();
   const vendorOrderRepository = useVendorOrderRepository();
+  const { pushUndo } = useWmsUndo();
 
   const [loading, setLoading] = useState(true);
   const [waves, setWaves] = useState<PickingWave[]>([]);
@@ -50,7 +52,10 @@ export default function VendorOrderReceivingPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(new Set());
+  const [selectedDraftIds, setSelectedDraftIds] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
   const [liveCatalog, setLiveCatalog] = useState<LiveCatalogLookup>(new Map());
+  const [lastReceiveAllSnapshot, setLastReceiveAllSnapshot] = useState<VendorOrderDraftLine[] | null>(null);
 
   async function reload() {
     setLoading(true);
@@ -146,7 +151,14 @@ export default function VendorOrderReceivingPage() {
     }
   }
 
-  async function receiveAll(linesToReceive: VendorOrderDraftLine[]) {
+  async function restoreLines(snapshot: VendorOrderDraftLine[]) {
+    await Promise.all(snapshot.map(line => vendorOrderRepository.saveLine(line)));
+    setLines(previous => previous.map(line => snapshot.find(saved => saved.id === line.id) || line));
+    setEditValues(previous => ({ ...previous, ...Object.fromEntries(snapshot.map(line => [line.id, line.receivedQuantity || 0])) }));
+  }
+
+  async function receiveAll(linesToReceive: VendorOrderDraftLine[], rememberAsWhole = false) {
+    const snapshot = linesToReceive.map(line => ({ ...line }));
     const now = new Date().toISOString();
     await saveUpdatedLines(linesToReceive.map(line => ({
       ...line,
@@ -155,6 +167,58 @@ export default function VendorOrderReceivingPage() {
       reorderRequestedAt: undefined,
       updatedAt: now,
     })), "전량입고 처리했습니다.");
+    if (rememberAsWhole) setLastReceiveAllSnapshot(snapshot);
+    pushUndo("전량입고", () => restoreLines(snapshot));
+  }
+
+  async function releaseWholeReceive() {
+    if (!lastReceiveAllSnapshot) return;
+    const current = openRow?.draftLines.map(line => ({ ...line, receivedQuantity: editValues[line.id] ?? line.receivedQuantity ?? 0 })) || [];
+    await restoreLines(lastReceiveAllSnapshot);
+    pushUndo("전량입고 해제", () => restoreLines(current));
+    setLastReceiveAllSnapshot(null);
+    setSaveMessage("전체 전량입고 전 수량으로 복원했습니다.");
+  }
+
+  async function deleteSelectedLines(lineIds: string[]) {
+    if (lineIds.length === 0 || !openRow) return;
+    if (!window.confirm(`${lineIds.length}개 상품을 발주서에서 삭제할까요?`)) return;
+    const snapshot = openRow.draftLines.filter(line => lineIds.includes(line.id)).map(line => ({ ...line }));
+    await Promise.all(lineIds.map(id => vendorOrderRepository.deleteLine(id)));
+    setLines(previous => previous.filter(line => !lineIds.includes(line.id)));
+    setSelectedLineIds(new Set());
+    pushUndo("입고상품 삭제", async () => {
+      await Promise.all(snapshot.map(line => vendorOrderRepository.saveLine(line)));
+      await reload();
+    });
+    setSaveMessage(`${lineIds.length}개 상품을 삭제했습니다.`);
+  }
+
+  async function updateSelectedCatalog(kind: "단종" | "품절") {
+    if (!openRow || selectedLineIds.size === 0) return;
+    const targets = openRow.draftLines.filter(line => selectedLineIds.has(line.id));
+    if (!window.confirm(`선택한 ${targets.length}개 상품을 ${kind} 처리할까요?`)) return;
+    const snapshots = targets.map(line => {
+      const live = liveCatalog.get(line.skuId);
+      return { skuId: line.skuId, currentStock: live?.currentStock || "", currentStatus: live?.currentStatus || "" };
+    });
+    const patch: Record<string, string> = kind === "단종" ? { currentStatus: "단종" } : { currentStock: "0" };
+    const update = async (skuId: string, fields: Record<string, string>) => {
+      const response = await fetch("/api/wms/product-catalog/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuId, ...fields }) });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || `${kind} 처리에 실패했습니다.`);
+    };
+    setSaving(true);
+    try {
+      await Promise.all(targets.map(line => update(line.skuId, patch)));
+      pushUndo(`선택상품 ${kind}`, async () => {
+        await Promise.all(snapshots.map(snapshot => update(snapshot.skuId, kind === "단종" ? { currentStatus: snapshot.currentStatus } : { currentStock: snapshot.currentStock })));
+        await reload();
+      });
+      setSaveMessage(kind === "단종" ? "선택상품을 단종 처리했습니다." : "선택상품의 현재고를 0으로 저장했습니다.");
+      await reload();
+    } catch (error) { setSaveError(error instanceof Error ? error.message : `${kind} 처리에 실패했습니다.`); }
+    finally { setSaving(false); }
   }
 
   async function queueSelectedReorders() {
@@ -171,6 +235,32 @@ export default function VendorOrderReceivingPage() {
     if (updated.length === 0) return;
     await saveUpdatedLines(updated, `선택한 미입고 ${updated.length}종을 다음 발주 대기목록에 추가했습니다.`);
     setSelectedLineIds(new Set());
+  }
+
+  async function deleteDrafts(draftIds: string[]) {
+    if (draftIds.length === 0 || deleting) return;
+    const targetNames = rows.filter(row => draftIds.includes(row.draft.id)).map(row => row.draft.vendorName);
+    const description = draftIds.length === 1 ? targetNames[0] : `${draftIds.length}개 발주서`;
+    if (!window.confirm(`${description}를 삭제할까요?\n삭제 후 상단 되돌리기로 복원할 수 있습니다.`)) return;
+    const deletedDrafts = drafts.filter(draft => draftIds.includes(draft.id)).map(draft => ({ ...draft }));
+    const deletedLines = lines.filter(line => draftIds.includes(line.draftId)).map(line => ({ ...line }));
+    setDeleting(true);
+    setSaveError(null);
+    try {
+      await Promise.all(draftIds.map(draftId => vendorOrderRepository.deleteDraft(draftId)));
+      pushUndo("입고 발주서 삭제", async () => {
+        await Promise.all(deletedDrafts.map(draft => vendorOrderRepository.saveDraft(draft)));
+        await Promise.all(deletedLines.map(line => vendorOrderRepository.saveLine(line)));
+        await reload();
+      });
+      setSelectedDraftIds(new Set());
+      setSaveMessage(`${description}를 삭제했습니다.`);
+      await reload();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "발주서 삭제에 실패했습니다.");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   if (loading) {
@@ -195,8 +285,11 @@ export default function VendorOrderReceivingPage() {
           여기서 저장한 입고수량은 제품DB(구글시트) 현재고에 자동으로 반영되지 않습니다 — 발주서별 입고 기록만 저장합니다.
         </p>
 
-        <button onClick={() => receiveAll(openRow.draftLines)} disabled={saving} style={{ ...wmsPrimaryButton, width: "100%", marginBottom: "12px", opacity: saving ? 0.6 : 1 }}>
+        <button onClick={() => receiveAll(openRow.draftLines, true)} disabled={saving} style={{ ...wmsPrimaryButton, width: "100%", marginBottom: "8px", opacity: saving ? 0.6 : 1 }}>
           전체 상품 전량입고
+        </button>
+        <button onClick={releaseWholeReceive} disabled={saving || !lastReceiveAllSnapshot} style={{ ...wmsGhostButton, width: "100%", marginBottom: "12px", opacity: lastReceiveAllSnapshot ? 1 : 0.45 }}>
+          전체 상품 전량입고 해제
         </button>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
@@ -212,9 +305,8 @@ export default function VendorOrderReceivingPage() {
                 <div style={{ display: "flex", gap: "10px" }}>
                   <input
                     type="checkbox"
-                    aria-label={`${name} 미입고 재발주 선택`}
+                    aria-label={`${name} 상품 선택`}
                     checked={selectedLineIds.has(line.id)}
-                    disabled={remaining <= 0}
                     onChange={event => setSelectedLineIds(prev => {
                       const next = new Set(prev);
                       if (event.target.checked) next.add(line.id); else next.delete(line.id);
@@ -256,6 +348,7 @@ export default function VendorOrderReceivingPage() {
                 <button onClick={() => receiveAll([line])} disabled={saving || remaining === 0} style={{ ...wmsGhostButton, width: "100%", minHeight: "34px", marginTop: "8px", opacity: remaining === 0 ? 0.5 : 1 }}>
                   {remaining === 0 ? "전량입고 완료" : "전량입고"}
                 </button>
+                <button onClick={() => deleteSelectedLines([line.id])} disabled={saving} style={{ width: "100%", minHeight: "34px", marginTop: "6px", border: 0, borderRadius: "9px", background: "#f4dfd9", color: "#934633", fontWeight: 800 }}>삭제</button>
               </div>
             );
           })}
@@ -270,6 +363,11 @@ export default function VendorOrderReceivingPage() {
         <button onClick={queueSelectedReorders} disabled={saving || selectedLineIds.size === 0} style={{ ...wmsGhostButton, width: "100%", marginTop: "8px", opacity: selectedLineIds.size === 0 ? 0.5 : 1 }}>
           선택 미입고분 발주서 생성하기 ({selectedLineIds.size}종)
         </button>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "8px" }}>
+          <button onClick={() => updateSelectedCatalog("단종")} disabled={saving || selectedLineIds.size === 0} style={{ ...wmsGhostButton, minHeight: "40px", background: "#f4dfd9", color: "#934633", opacity: selectedLineIds.size ? 1 : 0.45 }}>선택상품 단종</button>
+          <button onClick={() => updateSelectedCatalog("품절")} disabled={saving || selectedLineIds.size === 0} style={{ ...wmsGhostButton, minHeight: "40px", opacity: selectedLineIds.size ? 1 : 0.45 }}>선택상품 품절</button>
+        </div>
+        <button onClick={() => deleteSelectedLines(Array.from(selectedLineIds))} disabled={saving || selectedLineIds.size === 0} style={{ width: "100%", minHeight: "40px", marginTop: "8px", border: 0, borderRadius: "10px", background: "#f4dfd9", color: "#934633", fontWeight: 900, opacity: selectedLineIds.size ? 1 : 0.45 }}>선택상품 삭제 ({selectedLineIds.size})</button>
       </main>
     );
   }
@@ -284,29 +382,44 @@ export default function VendorOrderReceivingPage() {
       {rows.length === 0 ? (
         <p style={{ fontSize: "13px", color: wmsColors.muted }}>아직 승인되거나 전송완료된 거래처 발주서가 없습니다.</p>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          {rows.map(row => (
-            <button
-              key={row.draft.id}
-              onClick={() => openDetail(row.draft.id, row.draftLines)}
-              style={{ display: "block", width: "100%", textAlign: "left", border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "12px", background: "#ffffff", cursor: "pointer" }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                <strong style={{ fontSize: "14px" }}>{row.draft.vendorName}</strong>
-                <ReceivingStatusBadge status={row.receivingStatus} />
-              </div>
-              <div style={{ fontSize: "11px", color: wmsColors.muted }}>
-                {row.draft.waveId === MANUAL_VENDOR_WORKSPACE_ID ? "웨이브 없음" : `웨이브 ${row.draft.waveId}`}
-                {row.wave ? ` · ${new Date(row.draft.approvedAt || row.draft.createdAt).toLocaleDateString("ko-KR")} 발주` : ""}
-                {" · "}
-                {row.draft.status === "sent" ? "전송완료" : "승인완료"}
-              </div>
-              <div style={{ fontSize: "12px", color: wmsColors.ink, marginTop: "4px" }}>
-                {row.lineCount}종 · 총 발주수량 {row.totalQuantity}개
-              </div>
+        <>
+          <div style={{ display: "flex", gap: "8px", marginBottom: "10px" }}>
+            <button type="button" onClick={() => setSelectedDraftIds(selectedDraftIds.size === rows.length ? new Set() : new Set(rows.map(row => row.draft.id)))} style={{ ...wmsGhostButton, flex: 1, minHeight: "40px", fontSize: "12px" }}>
+              {selectedDraftIds.size === rows.length ? "전체선택 해제" : "전체선택"}
             </button>
-          ))}
-        </div>
+            <button type="button" disabled={deleting || selectedDraftIds.size === 0} onClick={() => deleteDrafts(Array.from(selectedDraftIds))} style={{ ...wmsGhostButton, flex: 1.4, minHeight: "40px", fontSize: "12px", color: "#934633", background: "#f4dfd9", opacity: selectedDraftIds.size === 0 ? 0.5 : 1 }}>
+              선택 일괄삭제 ({selectedDraftIds.size})
+            </button>
+          </div>
+          {saveError && <p style={{ fontSize: "12px", color: "#c0392b", margin: "0 0 8px" }}>{saveError}</p>}
+          {saveMessage && <p style={{ fontSize: "12px", color: wmsColors.greenDark, margin: "0 0 8px" }}>{saveMessage}</p>}
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            {rows.map((row, index) => (
+              <div key={row.draft.id} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "16px", padding: "12px", background: index % 2 === 0 ? "#f7f4ef" : "#f1f5f2", boxShadow: "0 2px 8px rgba(60,55,48,0.05)" }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
+                  <input type="checkbox" aria-label={`${row.draft.vendorName} 발주서 선택`} checked={selectedDraftIds.has(row.draft.id)} onChange={event => setSelectedDraftIds(prev => {
+                    const next = new Set(prev);
+                    if (event.target.checked) next.add(row.draft.id); else next.delete(row.draft.id);
+                    return next;
+                  })} style={{ width: "23px", height: "23px", marginTop: "2px", flexShrink: 0 }} />
+                  <button type="button" onClick={() => openDetail(row.draft.id, row.draftLines)} style={{ flex: 1, minWidth: 0, padding: 0, border: 0, background: "transparent", textAlign: "left", cursor: "pointer" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                      <strong style={{ fontSize: "14px", color: "#2685e8" }}>{row.draft.vendorName}</strong>
+                      <ReceivingStatusBadge status={row.receivingStatus} />
+                    </div>
+                    <div style={{ fontSize: "11px", color: wmsColors.muted }}>
+                      {row.draft.waveId === MANUAL_VENDOR_WORKSPACE_ID ? "웨이브 없음" : `웨이브 ${row.draft.waveId}`}
+                      {row.wave ? ` · ${new Date(row.draft.approvedAt || row.draft.createdAt).toLocaleDateString("ko-KR")} 발주` : ""}
+                      {" · "}{row.draft.status === "sent" ? "전송완료" : "승인완료"}
+                    </div>
+                    <div style={{ fontSize: "12px", fontWeight: 700, color: wmsColors.ink, marginTop: "4px" }}>{row.lineCount}종 · 총 발주수량 {row.totalQuantity}개</div>
+                  </button>
+                </div>
+                <button type="button" disabled={deleting} onClick={() => deleteDrafts([row.draft.id])} style={{ width: "100%", minHeight: "34px", marginTop: "10px", border: 0, borderRadius: "10px", background: "#f4dfd9", color: "#934633", fontSize: "12px", fontWeight: 800, cursor: "pointer", opacity: deleting ? 0.5 : 1 }}>삭제</button>
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </main>
   );
