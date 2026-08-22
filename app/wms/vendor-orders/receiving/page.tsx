@@ -11,6 +11,8 @@ import {
 } from "@/lib/wms/vendor-order/types";
 import type { PickingWave } from "@/lib/wms/picking-wave/types";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
+import { fetchLiveCatalogLookup, type LiveCatalogLookup } from "@/lib/wms/picking-wave/live-catalog";
+import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
 
 /**
@@ -47,6 +49,8 @@ export default function VendorOrderReceivingPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(new Set());
+  const [liveCatalog, setLiveCatalog] = useState<LiveCatalogLookup>(new Map());
 
   async function reload() {
     setLoading(true);
@@ -59,6 +63,7 @@ export default function VendorOrderReceivingPage() {
       setWaves(loadedWaves);
       setDrafts(loadedDrafts.filter(draft => draft.status === "approved" || draft.status === "sent"));
       setLines(loadedLines);
+      setLiveCatalog(await fetchLiveCatalogLookup());
     } finally {
       setLoading(false);
     }
@@ -90,6 +95,7 @@ export default function VendorOrderReceivingPage() {
     setEditValues(Object.fromEntries(draftLines.map(line => [line.id, line.receivedQuantity || 0])));
     setSaveError(null);
     setSaveMessage(null);
+    setSelectedLineIds(new Set());
   }
 
   function updateReceived(line: VendorOrderDraftLine, value: number) {
@@ -104,7 +110,16 @@ export default function VendorOrderReceivingPage() {
     setSaveMessage(null);
     try {
       const now = new Date().toISOString();
-      const updatedLines = openRow.draftLines.map(line => ({ ...line, receivedQuantity: editValues[line.id] ?? line.receivedQuantity ?? 0, updatedAt: now }));
+      const updatedLines = openRow.draftLines.map(line => {
+        const receivedQuantity = editValues[line.id] ?? line.receivedQuantity ?? 0;
+        return {
+          ...line,
+          receivedQuantity,
+          reorderPendingQuantity: receivedQuantity >= line.shortageQuantity ? 0 : line.reorderPendingQuantity,
+          reorderRequestedAt: receivedQuantity >= line.shortageQuantity ? undefined : line.reorderRequestedAt,
+          updatedAt: now,
+        };
+      });
       await Promise.all(updatedLines.map(line => vendorOrderRepository.saveLine(line)));
       setLines(prev => prev.map(line => updatedLines.find(u => u.id === line.id) ?? line));
       setSaveMessage("입고수량을 저장했습니다.");
@@ -113,6 +128,49 @@ export default function VendorOrderReceivingPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function saveUpdatedLines(updatedLines: VendorOrderDraftLine[], message: string) {
+    setSaving(true);
+    setSaveError(null);
+    setSaveMessage(null);
+    try {
+      await Promise.all(updatedLines.map(line => vendorOrderRepository.saveLine(line)));
+      setLines(prev => prev.map(line => updatedLines.find(updated => updated.id === line.id) ?? line));
+      setEditValues(prev => ({ ...prev, ...Object.fromEntries(updatedLines.map(line => [line.id, line.receivedQuantity || 0])) }));
+      setSaveMessage(message);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "입고 처리 저장에 실패했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function receiveAll(linesToReceive: VendorOrderDraftLine[]) {
+    const now = new Date().toISOString();
+    await saveUpdatedLines(linesToReceive.map(line => ({
+      ...line,
+      receivedQuantity: line.shortageQuantity,
+      reorderPendingQuantity: 0,
+      reorderRequestedAt: undefined,
+      updatedAt: now,
+    })), "전량입고 처리했습니다.");
+  }
+
+  async function queueSelectedReorders() {
+    if (!openRow) return;
+    const now = new Date().toISOString();
+    const selected = openRow.draftLines.filter(line => selectedLineIds.has(line.id));
+    const updated = selected.map(line => ({
+      ...line,
+      receivedQuantity: editValues[line.id] ?? line.receivedQuantity ?? 0,
+      reorderPendingQuantity: Math.max(0, line.shortageQuantity - (editValues[line.id] ?? line.receivedQuantity ?? 0)),
+      reorderRequestedAt: now,
+      updatedAt: now,
+    })).filter(line => (line.reorderPendingQuantity || 0) > 0);
+    if (updated.length === 0) return;
+    await saveUpdatedLines(updated, `선택한 미입고 ${updated.length}종을 다음 발주 대기목록에 추가했습니다.`);
+    setSelectedLineIds(new Set());
   }
 
   if (loading) {
@@ -137,19 +195,43 @@ export default function VendorOrderReceivingPage() {
           여기서 저장한 입고수량은 제품DB(구글시트) 현재고에 자동으로 반영되지 않습니다 — 발주서별 입고 기록만 저장합니다.
         </p>
 
+        <button onClick={() => receiveAll(openRow.draftLines)} disabled={saving} style={{ ...wmsPrimaryButton, width: "100%", marginBottom: "12px", opacity: saving ? 0.6 : 1 }}>
+          전체 상품 전량입고
+        </button>
+
         <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
           {openRow.draftLines.map(line => {
             const { name, option } = resolveDisplayNameAndOption(line.productName, line.optionLabel);
             const received = editValues[line.id] ?? 0;
             const remaining = Math.max(0, line.shortageQuantity - received);
+            const live = liveCatalog.get(line.skuId);
+            const driveFallbackUrl = `/api/wms/product-image/from-drive?model=${encodeURIComponent(live?.modelName || line.modelName || line.skuId)}`;
+            const imageUrl = getWmsDisplayImageUrl(live?.imageUrl || line.imageUrl) || driveFallbackUrl;
             return (
               <div key={line.id} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "10px", background: "#ffffff" }}>
                 <div style={{ display: "flex", gap: "10px" }}>
-                  {line.imageUrl ? (
-                    <img src={line.imageUrl} alt="" width={56} height={56} style={{ width: "56px", height: "56px", borderRadius: "8px", objectFit: "cover", flexShrink: 0, background: wmsColors.surfaceBeige }} />
-                  ) : (
-                    <div style={{ width: "56px", height: "56px", borderRadius: "8px", background: wmsColors.surfaceBeige, flexShrink: 0 }} />
-                  )}
+                  <input
+                    type="checkbox"
+                    aria-label={`${name} 미입고 재발주 선택`}
+                    checked={selectedLineIds.has(line.id)}
+                    disabled={remaining <= 0}
+                    onChange={event => setSelectedLineIds(prev => {
+                      const next = new Set(prev);
+                      if (event.target.checked) next.add(line.id); else next.delete(line.id);
+                      return next;
+                    })}
+                    style={{ width: "22px", height: "22px", alignSelf: "center", flexShrink: 0 }}
+                  />
+                  <img
+                    src={imageUrl}
+                    alt={name}
+                    width={56}
+                    height={56}
+                    onError={event => {
+                      if (!event.currentTarget.src.includes("/api/wms/product-image/from-drive")) event.currentTarget.src = driveFallbackUrl;
+                    }}
+                    style={{ width: "56px", height: "56px", borderRadius: "8px", objectFit: "cover", flexShrink: 0, background: wmsColors.surfaceBeige }}
+                  />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: "13px", fontWeight: 700, whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.3 }}>{name}</div>
                     <div style={{ fontSize: "12px", fontWeight: 700, color: wmsColors.greenDark, marginTop: "2px" }}>{option || "옵션 없음"}</div>
@@ -171,6 +253,9 @@ export default function VendorOrderReceivingPage() {
                   </div>
                   <InfoTile label="미입고수량" value={remaining} highlight={remaining > 0} />
                 </div>
+                <button onClick={() => receiveAll([line])} disabled={saving || remaining === 0} style={{ ...wmsGhostButton, width: "100%", minHeight: "34px", marginTop: "8px", opacity: remaining === 0 ? 0.5 : 1 }}>
+                  {remaining === 0 ? "전량입고 완료" : "전량입고"}
+                </button>
               </div>
             );
           })}
@@ -181,6 +266,9 @@ export default function VendorOrderReceivingPage() {
 
         <button onClick={handleSave} disabled={saving} style={{ ...wmsPrimaryButton, width: "100%", opacity: saving ? 0.6 : 1 }}>
           {saving ? "저장 중..." : "입고수량 저장"}
+        </button>
+        <button onClick={queueSelectedReorders} disabled={saving || selectedLineIds.size === 0} style={{ ...wmsGhostButton, width: "100%", marginTop: "8px", opacity: selectedLineIds.size === 0 ? 0.5 : 1 }}>
+          선택 미입고분 발주서 생성하기 ({selectedLineIds.size}종)
         </button>
       </main>
     );

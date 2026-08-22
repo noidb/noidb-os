@@ -8,6 +8,8 @@ import {
 } from "@/lib/wms/picking-sample-data";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
+import type { PickingWave } from "@/lib/wms/picking-wave/types";
+import { PICKING_WAVE_STATUS_LABEL } from "@/lib/wms/picking-wave/status-label";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import { UNASSIGNED_VENDOR_NAME } from "@/lib/wms/vendor-order/types";
 import { TruckIcon } from "../icons";
@@ -78,6 +80,48 @@ function ShortageVendorOrdersBanner() {
   );
 }
 
+/** 작업이 끝나지 않은 웨이브를 첫 화면에서 바로 이어서 열 수 있게 보여준다. */
+function ActiveWavesList() {
+  const waveRepository = usePickingWaveRepository();
+  const [waves, setWaves] = useState<PickingWave[] | null>(null);
+
+  useEffect(() => {
+    waveRepository.listWaves().then(loaded => {
+      setWaves(loaded
+        .filter(wave => wave.status !== "order_confirmed")
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+    });
+  }, [waveRepository]);
+
+  if (!waves || waves.length === 0) return null;
+
+  return (
+    <section style={{ marginBottom: "18px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+        <h2 style={{ margin: 0, fontSize: "16px" }}>현재 진행중인 웨이브</h2>
+        <a href="/wms/picking/waves" style={{ fontSize: "11px", color: wmsColors.muted }}>전체보기</a>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        {waves.map(wave => (
+          <a key={wave.id} href={`/wms/picking/waves/${wave.id}`} style={{ display: "block", textDecoration: "none" }}>
+            <div style={{ background: "#ffffff", border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "12px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
+                <strong style={{ fontSize: "14px", color: wmsColors.ink }}>{wave.displayName || wave.id}</strong>
+                <span style={{ flexShrink: 0, fontSize: "11px", fontWeight: 800, color: wave.status === "in_progress" ? wmsColors.warn : wmsColors.greenDark }}>
+                  {PICKING_WAVE_STATUS_LABEL[wave.status]}
+                </span>
+              </div>
+              <div style={{ marginTop: "4px", fontSize: "11px", color: wmsColors.muted }}>
+                {wave.id} · 발주서 {wave.sourcePurchaseOrderNumbers.length}건
+              </div>
+            </div>
+          </a>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function WmsWorkCenterPage() {
   const totalBoxes = SAMPLE_WORK_BATCHES.reduce((sum, batch) => sum + countBoxesInBatch(batch), 0);
   const totalSkus = SAMPLE_WORK_BATCHES.reduce((sum, batch) => sum + countOptionsInBatch(batch), 0);
@@ -123,6 +167,8 @@ export default function WmsWorkCenterPage() {
       <a href="/wms/picking/waves" style={{ display: "block", textDecoration: "none", marginBottom: "18px" }}>
         <button style={{ ...wmsPrimaryButton, width: "100%" }}>통합 피킹 시작 (실제 발주 기준)</button>
       </a>
+
+      <ActiveWavesList />
 
       <div
         style={{

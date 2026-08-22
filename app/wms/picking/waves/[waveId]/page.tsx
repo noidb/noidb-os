@@ -219,6 +219,14 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
     return Array.from(new Set(item.sources.map(source => basketDisplayNames[source.basketNumber] || `바구니 ${source.basketNumber}`)));
   }
 
+  function logisticsLabelsForItem(item: PickingWaveItem): string[] {
+    return Array.from(new Set(item.sources.map(source => {
+      const center = basketDisplayNames[source.basketNumber] || `바구니 ${source.basketNumber}`;
+      const expectedDate = expectedDatesByPo[source.purchaseOrderNumber];
+      return expectedDate ? `${center} · 입고예정일 ${expectedDate}` : center;
+    })));
+  }
+
   async function saveCatalogQuickPatch(skuId: string, patch: { currentStock?: string; currentStatus?: "단종" | "과재고" }, successMessage: string) {
     setCatalogQuickSaving(true);
     setCatalogQuickMessage(null);
@@ -249,34 +257,29 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
 
   async function afterDecision(updated: PickingWaveItem, nextItems: PickingWaveItem[]) {
     if (!wave) return;
-    const group = resolveGroup(updated, liveCatalogByProductCode);
-    const groupItems = nextItems.filter(item => resolveGroup(item, liveCatalogByProductCode).groupId === group.groupId);
-    const nextPending = groupItems.find(item => item.status === "pending");
+    const allGroupsNow = buildSections(nextItems, liveCatalogByProductCode).flatMap(section => section.groups);
+    const nextCompletedGroupIds = allGroupsNow
+      .filter(bucket => bucket.items.every(item => item.status !== "pending"))
+      .map(bucket => bucket.group.groupId);
+    const sortedItems = [...nextItems].sort((a, b) =>
+      resolveGroup(a, liveCatalogByProductCode).sortKey.localeCompare(resolveGroup(b, liveCatalogByProductCode).sortKey)
+    );
+    const currentIndex = sortedItems.findIndex(item => item.id === updated.id);
+    const nextPending = [
+      ...sortedItems.slice(currentIndex + 1),
+      ...sortedItems.slice(0, Math.max(0, currentIndex)),
+    ].find(item => item.status === "pending");
 
     if (nextPending) {
+      const updatedWave: PickingWave = { ...wave, completedGroupIds: nextCompletedGroupIds, updatedAt: new Date().toISOString() };
+      await waveRepository.saveWave(updatedWave);
+      setWave(updatedWave);
+      setSelectedGroupId(resolveGroup(nextPending, liveCatalogByProductCode).groupId);
       setSelectedProductCode(nextPending.productCode);
       return;
     }
 
-    // 그룹 내 모든 아이템 처리 완료 — 중간 확인화면 없이 바로 다음 그룹으로 이동한다
-    // (2026-08-19 사용자 확정: 전량찾음 등 한 번의 클릭으로 다음 그룹까지 자동 진행).
-    setSelectedProductCode(null);
-    if (wave.completedGroupIds.includes(group.groupId)) return;
-
-    const nextCompletedGroupIds = [...wave.completedGroupIds, group.groupId];
-    const allGroupsNow = buildSections(nextItems, liveCatalogByProductCode).flatMap(section => section.groups);
-    const nextGroup = allGroupsNow.find(g => !nextCompletedGroupIds.includes(g.group.groupId));
-
-    if (nextGroup) {
-      const updatedWave: PickingWave = { ...wave, completedGroupIds: nextCompletedGroupIds, updatedAt: new Date().toISOString() };
-      await waveRepository.saveWave(updatedWave);
-      setWave(updatedWave);
-      setSelectedGroupId(nextGroup.group.groupId);
-      setSelectedProductCode(nextGroup.items.length === 1 ? nextGroup.items[0].productCode : null);
-      return;
-    }
-
-    // 마지막 그룹까지 전부 완료 — 웨이브 전체 완료 처리 후 완료 화면으로 이동
+    // 남은 미처리 상품이 없을 때만 웨이브 완료 화면으로 이동한다.
     const completedWave: PickingWave = {
       ...wave,
       completedGroupIds: nextCompletedGroupIds,
@@ -565,6 +568,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
               setSelectedProductCode(item.productCode);
             }}
             onStockSaved={refreshProductCatalog}
+            logisticsLabelsForItem={logisticsLabelsForItem}
           />
         ) : (
         sections.map(section => (
@@ -577,6 +581,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
                 const done = groupItems.filter(item => item.status !== "pending").length;
                 const total = groupItems.length;
                 const isDone = wave.completedGroupIds.includes(group.groupId);
+                const logisticsLabels = Array.from(new Set(groupItems.flatMap(item => logisticsLabelsForItem(item))));
                 return (
                   <button
                     key={group.groupId}
@@ -599,9 +604,14 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
                       <ItemThumbnail imageUrl={resolveLiveFields(groupItems[0], liveCatalogByProductCode).imageUrl} size={40} />
-                      <span style={{ fontWeight: 800, fontSize: "16px", textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {group.groupLabel}
-                      </span>
+                      <div style={{ minWidth: 0, textAlign: "left" }}>
+                        <div style={{ fontWeight: 800, fontSize: "16px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {group.groupLabel}
+                        </div>
+                        <div style={{ marginTop: "3px", fontSize: "11px", fontWeight: 800, color: wmsColors.slateDark, whiteSpace: "normal", lineHeight: 1.35 }}>
+                          {logisticsLabels.join(" / ")}
+                        </div>
+                      </div>
                     </div>
                     <span style={{ fontWeight: 700, fontSize: "15px", flexShrink: 0 }}>
                       {done} / {total}
@@ -765,13 +775,17 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   // (ProductInfoEditSheet)가 완전히 같은 최신 제품DB 값을 쓰도록 한다 — 화면마다 별도로
   // resolveLiveFields를 다시 계산하지 않는다.
   const selectedItemLive = resolveLiveFields(selectedItem, liveCatalogByProductCode);
-  const detailItems = selectedBucket?.items || [];
+  // 화살표 이동은 현재 그룹 안에서만 돌지 않고 웨이브 전체 상품 순서를 사용한다.
+  const detailItems = [...items].sort((a, b) =>
+    resolveGroup(a, liveCatalogByProductCode).sortKey.localeCompare(resolveGroup(b, liveCatalogByProductCode).sortKey)
+  );
   const detailIndex = detailItems.findIndex(item => item.productCode === selectedItem.productCode);
   function moveDetail(offset: number) {
     const next = detailItems[detailIndex + offset];
     if (!next) return;
     setShowPartialInput(false);
     setAllocationDraft(null);
+    setSelectedGroupId(resolveGroup(next, liveCatalogByProductCode).groupId);
     setSelectedProductCode(next.productCode);
   }
 
@@ -782,12 +796,10 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       </button>
 
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "48px minmax(0,1fr) 48px", alignItems: "center", gap: "6px" }}>
-          <button type="button" aria-label="이전 상품" disabled={detailIndex <= 0} onClick={() => moveDetail(-1)} style={detailArrowStyle}>‹</button>
+        <div style={{ display: "flex", justifyContent: "center" }}>
           <button onClick={() => setShowProductInfoSheet(true)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "center", minWidth: 0 }}>
             <DetailImage imageUrl={selectedItemLive.imageUrl || catalogImageFallback(selectedItemLive.catalogModelName, selectedItem.modelSku, selectedItemLive.productLink)} alt={selectedItem.productName} />
           </button>
-          <button type="button" aria-label="다음 상품" disabled={detailIndex < 0 || detailIndex >= detailItems.length - 1} onClick={() => moveDetail(1)} style={detailArrowStyle}>›</button>
         </div>
 
         <button
@@ -808,8 +820,10 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
 
         <ImageDiagnosticsPanel item={selectedItem} live={selectedItemLive} />
 
-        <div style={{ display: "flex", justifyContent: "center", gap: "16px", margin: "10px 0" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "72px minmax(0,1fr) 72px", alignItems: "stretch", gap: "10px", margin: "10px 0" }}>
+          <button type="button" aria-label="이전 상품" disabled={detailIndex <= 0} onClick={() => moveDetail(-1)} style={{ ...detailArrowStyle, opacity: detailIndex <= 0 ? 0.35 : 1 }}>‹</button>
           <InfoTile label="총 찾을 수량" value={selectedItem.totalQuantity} />
+          <button type="button" aria-label="다음 상품" disabled={detailIndex < 0 || detailIndex >= detailItems.length - 1} onClick={() => moveDetail(1)} style={{ ...detailArrowStyle, opacity: detailIndex < 0 || detailIndex >= detailItems.length - 1 ? 0.35 : 1 }}>›</button>
         </div>
 
         <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "6px", marginBottom: "10px" }}>
@@ -912,13 +926,13 @@ const summaryGridStyle: CSSProperties = {
 };
 
 const detailArrowStyle: CSSProperties = {
-  width: "46px",
-  height: "76px",
-  borderRadius: "14px",
+  width: "72px",
+  minHeight: "76px",
+  borderRadius: "12px",
   border: `1px solid ${wmsColors.borderStrong}`,
   background: "#ffffff",
   color: wmsColors.slateDark,
-  fontSize: "42px",
+  fontSize: "38px",
   fontWeight: 800,
   lineHeight: 1,
   cursor: "pointer",
@@ -947,6 +961,7 @@ function ChecklistView({
   bulkAreaRef,
   onOpenDetail,
   onStockSaved,
+  logisticsLabelsForItem,
 }: {
   allItems: PickingWaveItem[];
   checkedProductCodes: Set<string>;
@@ -959,6 +974,7 @@ function ChecklistView({
   bulkAreaRef: RefObject<HTMLDivElement>;
   onOpenDetail: (item: PickingWaveItem) => void;
   onStockSaved: () => void | Promise<void>;
+  logisticsLabelsForItem: (item: PickingWaveItem) => string[];
 }) {
   const [showStockEditor, setShowStockEditor] = useState(false);
   const [stockDrafts, setStockDrafts] = useState<Record<string, string>>({});
@@ -1041,6 +1057,9 @@ function ChecklistView({
                   {live.optionLabel || "옵션 없음"}
                 </div>
                 <div style={{ fontSize: "10px", color: wmsColors.muted }}>SKU {item.productCode}</div>
+                <div style={{ marginTop: "3px", fontSize: "10px", fontWeight: 800, color: wmsColors.slateDark, whiteSpace: "normal", lineHeight: 1.35 }}>
+                  {logisticsLabelsForItem(item).join(" / ")}
+                </div>
               </button>
               <ProductLinkIconButton productLink={live.productLink} />
               <div style={{ fontSize: "13px", fontWeight: 700, flexShrink: 0 }}>

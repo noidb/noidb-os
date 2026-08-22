@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import { recalculateAutoVendorOrderLines } from "@/lib/wms/vendor-order/recalculate";
+import { toVendorOrderQuantity } from "@/lib/wms/vendor-order/aggregate";
 import {
   MANUAL_VENDOR_WORKSPACE_ID,
   UNASSIGNED_VENDOR_NAME,
@@ -52,6 +53,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
   const [addingManualVendor, setAddingManualVendor] = useState(false);
   const [newVendorNameInput, setNewVendorNameInput] = useState("");
   const [liveCatalogByProductCode, setLiveCatalogByProductCode] = useState<LiveCatalogLookup>(new Map());
+  const [pendingReorderLines, setPendingReorderLines] = useState<VendorOrderDraftLine[]>([]);
 
   /** 제품링크는 발주서 라인에 저장하지 않고 항상 제품DB에서 SKU 기준으로 최신값을 읽는다 —
    *  기존 웨이브/라인은 이 필드가 생기기 전에 만들어졌을 수 있어, 저장된 스냅샷 대신 실시간
@@ -63,12 +65,14 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
   useEffect(() => {
     (async () => {
       try {
-        const [loadedWave, waveItems, existingDrafts, existingLines] = await Promise.all([
+        const [loadedWave, waveItems, existingDrafts, existingLines, allVendorLines] = await Promise.all([
           isManualWorkspace ? Promise.resolve(null) : waveRepository.getWave(params.waveId),
           isManualWorkspace ? Promise.resolve([]) : waveRepository.listItems(params.waveId),
           vendorOrderRepository.listDrafts(params.waveId),
           vendorOrderRepository.listLines(params.waveId),
+          vendorOrderRepository.listAllLines(),
         ]);
+        setPendingReorderLines(allVendorLines.filter(line => (line.reorderPendingQuantity || 0) > 0));
         setWave(loadedWave);
         setDraftsByVendor(Object.fromEntries(existingDrafts.map(draft => [draft.vendorName, draft])));
 
@@ -111,13 +115,13 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
       map.set(vendor, list);
     }
     // 상품 없이 "발주서 수동 추가"로 막 만든 거래처도 빈 그룹으로 보여준다 (2026-08-19 신규).
-    for (const vendorName of manualVendorNames) {
+    for (const vendorName of [...manualVendorNames, ...pendingReorderLines.map(line => line.vendorName || UNASSIGNED_VENDOR_NAME)]) {
       if (!map.has(vendorName)) map.set(vendorName, []);
     }
     return Array.from(map.entries())
       .map(([vendorName, groupLines]) => ({ vendorName, lines: groupLines }))
       .sort((a, b) => (a.vendorName === UNASSIGNED_VENDOR_NAME ? 1 : b.vendorName === UNASSIGNED_VENDOR_NAME ? -1 : a.vendorName.localeCompare(b.vendorName)));
-  }, [lines, manualVendorNames]);
+  }, [lines, manualVendorNames, pendingReorderLines]);
 
   // 거래처 입력 자동완성 후보 — 이미 이 발주서에 존재하는 실제 거래처명만 쓴다(새 값을 임의로 만들지 않음).
   const knownVendorNames = useMemo(
@@ -214,6 +218,41 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
     setLines(prev => prev.map(line => line.id.startsWith(newIdPrefix) && line.skuId === product.skuId
       ? { ...line, memo: "저재고 추가발주", actualShortageQuantity: 0, shortageQuantity: 12 }
       : line));
+  }
+
+  async function addPendingReorder(source: VendorOrderDraftLine) {
+    const pendingQuantity = Math.max(0, source.reorderPendingQuantity || 0);
+    if (pendingQuantity <= 0) return;
+    const vendorName = source.vendorName || UNASSIGNED_VENDOR_NAME;
+    const now = new Date().toISOString();
+    const existing = lines.find(line => line.vendorName === vendorName && line.skuId === source.skuId);
+    if (existing) {
+      updateLine(existing.id, {
+        actualShortageQuantity: (existing.actualShortageQuantity || 0) + pendingQuantity,
+        shortageQuantity: toVendorOrderQuantity((existing.actualShortageQuantity || existing.shortageQuantity) + pendingQuantity),
+        memo: [existing.memo, `미입고 재발주 ${pendingQuantity}개`].filter(Boolean).join(" · "),
+      });
+    } else {
+      setLines(prev => [...prev, {
+        ...source,
+        id: `${params.waveId}::${vendorName}::reorder-${Date.now()}`,
+        draftId: `${params.waveId}::${vendorName}`,
+        waveId: params.waveId,
+        actualShortageQuantity: pendingQuantity,
+        shortageQuantity: toVendorOrderQuantity(pendingQuantity),
+        receivedQuantity: 0,
+        reorderPendingQuantity: undefined,
+        reorderRequestedAt: undefined,
+        relatedPurchaseOrderNumbers: source.relatedPurchaseOrderNumbers,
+        memo: `미입고 재발주 ${pendingQuantity}개`,
+        isManuallyAdded: true,
+        createdAt: now,
+        updatedAt: now,
+      }]);
+      setDirty(true);
+    }
+    await vendorOrderRepository.saveLine({ ...source, reorderPendingQuantity: 0, reorderRequestedAt: undefined, updatedAt: now });
+    setPendingReorderLines(prev => prev.filter(line => line.id !== source.id));
   }
 
   function createManualVendorOrder() {
@@ -370,6 +409,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
             const totalOrderQuantity = group.lines.reduce((sum, l) => sum + l.shortageQuantity, 0);
             const totalActualShortage = group.lines.reduce((sum, l) => sum + (l.actualShortageQuantity ?? l.shortageQuantity), 0);
             const lowStockProducts = lowStockByVendor.get(group.vendorName) || [];
+            const pendingReorders = pendingReorderLines.filter(line => (line.vendorName || UNASSIGNED_VENDOR_NAME) === group.vendorName);
 
             return (
               <div key={group.vendorName} style={cardStyle}>
@@ -408,6 +448,18 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                       <div key={product.skuId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", fontSize: "11px", marginTop: "5px" }}>
                         <span style={{ minWidth: 0 }}>{product.productName} · {product.optionLabel || "옵션 없음"} · 현재고 {product.currentStock}개</span>
                         <button onClick={() => addLowStockProduct(group.vendorName, product)} style={{ ...wmsPrimaryButton, minHeight: "30px", padding: "0 10px", fontSize: "11px", flexShrink: 0 }}>추가</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {editable && pendingReorders.length > 0 && (
+                  <div style={{ background: "#fff3e0", border: `1px solid ${wmsColors.warn}`, borderRadius: "10px", padding: "10px", marginBottom: "10px" }}>
+                    <div style={{ fontSize: "12px", fontWeight: 800, color: wmsColors.warn, marginBottom: "6px" }}>이전 발주 미입고 재발주 대기</div>
+                    {pendingReorders.map(source => (
+                      <div key={source.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", marginTop: "6px" }}>
+                        <span style={{ minWidth: 0, fontSize: "11px" }}>{source.productName} · {source.optionLabel || "옵션 없음"} · 미입고 {source.reorderPendingQuantity}개</span>
+                        <button onClick={() => addPendingReorder(source)} style={{ ...wmsPrimaryButton, minHeight: "30px", padding: "0 10px", fontSize: "11px", flexShrink: 0 }}>초안에 추가</button>
                       </div>
                     ))}
                   </div>
