@@ -2,6 +2,7 @@ const ROUTES: { href: string; label: string }[] = [
   { href: "/wms/work-center", label: "작업센터 (발주서 조회)" },
   { href: "/wms/picking", label: "피킹" },
   { href: "/wms/vendor-orders", label: "거래처 발주" },
+  { href: "/wms/vendor-orders/status-requests", label: "단종/해제 SKU" },
   { href: "/wms/inbound", label: "입고" },
   { href: "/wms/shipment", label: "쉽먼트" },
   { href: "/wms/inventory", label: "재고" },

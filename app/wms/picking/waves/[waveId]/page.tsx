@@ -244,7 +244,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
     })));
   }
 
-  async function saveCatalogQuickPatch(skuId: string, patch: { currentStock?: string; currentStatus?: "단종" | "과재고" }, successMessage: string) {
+  async function saveCatalogQuickPatch(skuId: string, patch: { currentStock?: string; currentStatus?: "단종" | "과재고" | "" }, successMessage: string) {
     setCatalogQuickSaving(true);
     setCatalogQuickMessage(null);
     try {
@@ -598,6 +598,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
                 const total = groupItems.length;
                 const isDone = wave.completedGroupIds.includes(group.groupId);
                 const logisticsLabels = Array.from(new Set(groupItems.flatMap(item => logisticsLabelsForItem(item))));
+                const firstLive = resolveLiveFields(groupItems[0], liveCatalogByProductCode);
                 return (
                   <button
                     key={group.groupId}
@@ -619,7 +620,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
-                      <ItemThumbnail imageUrl={resolveLiveFields(groupItems[0], liveCatalogByProductCode).imageUrl} size={40} />
+                      <ItemThumbnail imageUrl={firstLive.imageUrl || catalogImageFallback(firstLive.catalogModelName, firstLive.liveModelSku || groupItems[0].modelSku, firstLive.productLink)} size={40} />
                       <div style={{ minWidth: 0, textAlign: "left" }}>
                         <div style={{ fontWeight: 800, fontSize: "16px", whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.35 }}>
                           {group.groupLabel}
@@ -694,20 +695,21 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
                   border: isDone ? `2px solid ${wmsColors.green}` : `1px solid ${wmsColors.border}`,
                 }}
               >
-                <ItemThumbnail imageUrl={live.imageUrl || catalogImageFallback(live.catalogModelName, item.modelSku, live.productLink)} size={48} />
+                <ItemThumbnail imageUrl={live.imageUrl || catalogImageFallback(live.catalogModelName, live.liveModelSku || item.modelSku, live.productLink)} size={48} />
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: "14px", whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.3 }}>
+                  <div style={{ fontWeight: 800, fontSize: "15px", color: wmsColors.ink, whiteSpace: "normal", overflow: "visible", wordBreak: "keep-all", lineHeight: 1.4 }}>
                     {live.name}
                   </div>
-                  <div style={{ fontSize: "13px", fontWeight: 700, color: wmsColors.greenDark, whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.3 }}>
-                    {live.optionLabel || "옵션 없음"}
+                  <div style={{ display: "inline-block", marginTop: "4px", padding: "3px 7px", borderRadius: "6px", background: wmsColors.surfaceBeige, fontSize: "13px", fontWeight: 800, color: "#3f4541", whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.35 }}>
+                    옵션 · {live.optionLabel || "옵션 없음"}
                   </div>
                   <div style={{ fontSize: "11px", color: wmsColors.muted }}>SKU {item.productCode}</div>
                   <div style={{ marginTop: "3px", fontSize: "12px", fontWeight: 900, color: wmsColors.slateDark }}>{fulfillmentCentersForItem(item).join(" · ")}</div>
                 </div>
                 <ProductLinkIconButton productLink={live.productLink} />
-                <div style={{ fontSize: "14px", fontWeight: 700, flexShrink: 0 }}>
-                  {item.pickedQuantity} / {item.totalQuantity}개
+                <div style={{ minWidth: "54px", textAlign: "center", flexShrink: 0 }}>
+                  <div style={{ fontSize: "16px", fontWeight: 900, color: wmsColors.ink }}>{item.pickedQuantity} / {item.totalQuantity}</div>
+                  <div style={{ fontSize: "10px", color: wmsColors.muted }}>찾음 / 전체</div>
                   {isDone && <div style={{ fontSize: "10px", color: wmsColors.greenDark, textAlign: "right" }}>완료</div>}
                 </div>
               </div>
@@ -825,7 +827,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   }
 
   return (
-    <main style={{ ...pageStyle, display: "flex", flexDirection: "column", height: "100vh", paddingBottom: "calc(12px + env(safe-area-inset-bottom))" }}>
+    <main style={{ ...pageStyle, display: "flex", flexDirection: "column", height: "100vh", padding: "12px 12px calc(12px + env(safe-area-inset-bottom))" }}>
       <button onClick={() => setSelectedProductCode(null)} style={{ ...wmsGhostButton, marginBottom: "8px", flexShrink: 0 }}>
         ← 그룹 안 목록으로
       </button>
@@ -833,7 +835,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", justifyContent: "center" }}>
           <button onClick={() => setShowProductInfoSheet(true)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "center", minWidth: 0 }}>
-            <DetailImage imageUrl={selectedItemLive.imageUrl || catalogImageFallback(selectedItemLive.catalogModelName, selectedItem.modelSku, selectedItemLive.productLink)} alt={selectedItem.productName} />
+            <DetailImage imageUrl={selectedItemLive.imageUrl || catalogImageFallback(selectedItemLive.catalogModelName, selectedItemLive.liveModelSku || selectedItem.modelSku, selectedItemLive.productLink)} alt={selectedItem.productName} />
           </button>
         </div>
 
@@ -857,7 +859,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
 
         <div style={{ display: "grid", gridTemplateColumns: "72px minmax(0,1fr) 72px", alignItems: "stretch", gap: "10px", margin: "10px 0" }}>
           <button type="button" aria-label="이전 상품" disabled={detailIndex <= 0} onClick={() => moveDetail(-1)} style={{ ...detailArrowStyle, opacity: detailIndex <= 0 ? 0.35 : 1 }}>‹</button>
-          <InfoTile label="총 찾을 수량" value={selectedItem.totalQuantity} />
+          <InfoTile label="총 찾을 수량" value={selectedItem.totalQuantity} centered prominent />
           <button type="button" aria-label="다음 상품" disabled={detailIndex < 0 || detailIndex >= detailItems.length - 1} onClick={() => moveDetail(1)} style={{ ...detailArrowStyle, opacity: detailIndex < 0 || detailIndex >= detailItems.length - 1 ? 0.35 : 1 }}>›</button>
         </div>
 
@@ -869,10 +871,12 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
 
         <div style={{ background: wmsColors.surfaceBeige, border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "8px", marginBottom: "8px" }}>
           <div style={{ fontSize: "11px", color: wmsColors.muted, marginBottom: "4px" }}>재고 확인 즉시 제품DB 현재고 저장</div>
-          <div style={{ display: "flex", gap: "6px" }}>
-            <input type="number" min={0} value={currentStockDraft} onChange={event => setCurrentStockDraft(event.target.value)} placeholder="현재고" style={{ flex: 1, minWidth: 0, minHeight: "42px", borderRadius: "8px", border: `1px solid ${wmsColors.borderStrong}`, textAlign: "center", fontSize: "17px", fontWeight: 800 }} />
-            <button disabled={catalogQuickSaving || currentStockDraft === ""} onClick={() => saveCatalogQuickPatch(selectedItemLive.liveSkuId || selectedItem.productCode, { currentStock: String(Math.max(0, Number(currentStockDraft) || 0)) }, "현재고 저장완료")} style={{ ...wmsPrimaryButton, minHeight: "42px", padding: "0 12px", fontSize: "12px" }}>현재고 저장</button>
+          <div style={{ display: "grid", gridTemplateColumns: "44px minmax(0,1fr) 44px", gap: "6px" }}>
+            <button type="button" onClick={() => setCurrentStockDraft(value => String(Math.max(0, (Number(value) || 0) - 1)))} style={{ ...wmsSecondaryButton, minHeight: "44px", padding: 0, fontSize: "22px" }}>−</button>
+            <input type="number" min={0} inputMode="numeric" value={currentStockDraft} onChange={event => setCurrentStockDraft(event.target.value)} placeholder="현재고" style={{ minWidth: 0, minHeight: "44px", borderRadius: "8px", border: `1px solid ${wmsColors.borderStrong}`, textAlign: "center", fontSize: "21px", fontWeight: 900 }} />
+            <button type="button" onClick={() => setCurrentStockDraft(value => String((Number(value) || 0) + 1))} style={{ ...wmsSecondaryButton, minHeight: "44px", padding: 0, fontSize: "22px" }}>＋</button>
           </div>
+          <button disabled={catalogQuickSaving || currentStockDraft === ""} onClick={() => saveCatalogQuickPatch(selectedItemLive.liveSkuId || selectedItem.productCode, { currentStock: String(Math.max(0, Number(currentStockDraft) || 0)) }, "현재고 저장완료")} style={{ ...wmsPrimaryButton, width: "100%", minHeight: "42px", marginTop: "6px", fontSize: "12px" }}>현재고 저장</button>
           <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
             <button disabled={catalogQuickSaving} onClick={() => saveCatalogQuickPatch(selectedItemLive.liveSkuId || selectedItem.productCode, { currentStatus: "단종" }, "단종 저장완료")} style={{ ...wmsWarnButton, flex: 1, minHeight: "36px", fontSize: "12px" }}>단종</button>
             <button disabled={catalogQuickSaving} onClick={() => saveCatalogQuickPatch(selectedItemLive.liveSkuId || selectedItem.productCode, { currentStatus: "과재고" }, "과재고 저장완료")} style={{ ...wmsSecondaryButton, flex: 1, minHeight: "36px", fontSize: "12px" }}>과재고</button>
@@ -987,7 +991,9 @@ const detailArrowStyle: CSSProperties = {
 };
 
 function catalogImageFallback(modelName?: string, modelSku?: string, _productLink?: string): string {
-  const model = (modelName || modelSku || "").trim();
+  // 옵션별로 고유한 모델SKU를 먼저 사용해 같은 모델의 다른 색상/사이즈 이미지를 잘못
+  // 표시하지 않는다. 모델SKU가 실제 데이터에 없을 때만 모델명으로 후퇴한다.
+  const model = (modelSku || modelName || "").trim();
   if (model) return `/api/wms/product-image/from-drive?model=${encodeURIComponent(model)}`;
   return "";
 }
@@ -1095,14 +1101,14 @@ function ChecklistView({
                 style={{ width: "22px", height: "22px", flexShrink: 0, cursor: "pointer" }}
               />
               <button type="button" onClick={() => onOpenDetail(item)} style={{ border: 0, padding: 0, background: "transparent", lineHeight: 0, cursor: "pointer" }}>
-                <ItemThumbnail imageUrl={live.imageUrl || catalogImageFallback(live.catalogModelName, item.modelSku, live.productLink)} size={44} />
+                <ItemThumbnail imageUrl={live.imageUrl || catalogImageFallback(live.catalogModelName, live.liveModelSku || item.modelSku, live.productLink)} size={44} />
               </button>
               <button type="button" onClick={() => onOpenDetail(item)} style={{ minWidth: 0, flex: 1, border: 0, padding: 0, background: "transparent", textAlign: "left", cursor: "pointer" }}>
-                <div style={{ fontSize: "13px", fontWeight: 700, whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.35 }}>
+                <div style={{ fontSize: "14px", fontWeight: 800, color: wmsColors.ink, whiteSpace: "normal", overflow: "visible", wordBreak: "keep-all", lineHeight: 1.4 }}>
                   {live.name}
                 </div>
-                <div style={{ fontSize: "12px", fontWeight: 700, color: wmsColors.greenDark, whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.3 }}>
-                  {live.optionLabel || "옵션 없음"}
+                <div style={{ display: "inline-block", marginTop: "3px", padding: "2px 6px", borderRadius: "6px", background: wmsColors.surfaceBeige, fontSize: "12px", fontWeight: 800, color: "#3f4541", whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.35 }}>
+                  옵션 · {live.optionLabel || "옵션 없음"}
                 </div>
                 <div style={{ fontSize: "10px", color: wmsColors.muted }}>SKU {item.productCode}</div>
                 <div style={{ marginTop: "3px", fontSize: "10px", fontWeight: 800, color: wmsColors.slateDark, whiteSpace: "normal", lineHeight: 1.35 }}>
@@ -1412,11 +1418,11 @@ function SummaryTile({ label, value, highlight }: { label: string; value: number
   );
 }
 
-function InfoTile({ label, value, highlight, muted }: { label: string; value: string | number; highlight?: boolean; muted?: boolean }) {
+function InfoTile({ label, value, highlight, muted, centered, prominent }: { label: string; value: string | number; highlight?: boolean; muted?: boolean; centered?: boolean; prominent?: boolean }) {
   return (
-    <div style={{ background: wmsColors.surfaceBeige, borderRadius: "10px", padding: "10px" }}>
-      <div style={{ color: wmsColors.muted, fontSize: "11px" }}>{label}</div>
-      <div style={{ fontSize: muted ? "12px" : "17px", fontWeight: muted ? 500 : 800, color: muted ? wmsColors.muted : highlight ? wmsColors.warn : wmsColors.ink }}>
+    <div style={{ background: wmsColors.surfaceBeige, borderRadius: "10px", padding: prominent ? "12px 10px" : "10px", textAlign: centered ? "center" : "left", display: centered ? "flex" : "block", flexDirection: centered ? "column" : undefined, alignItems: centered ? "center" : undefined, justifyContent: centered ? "center" : undefined, minWidth: 0 }}>
+      <div style={{ width: "100%", color: wmsColors.muted, fontSize: prominent ? "12px" : "11px", textAlign: centered ? "center" : "left" }}>{label}</div>
+      <div style={{ width: "100%", marginTop: prominent ? "4px" : 0, textAlign: centered ? "center" : "left", fontSize: prominent ? "28px" : muted ? "12px" : "17px", lineHeight: prominent ? 1 : undefined, fontWeight: prominent ? 900 : muted ? 500 : 800, color: muted ? wmsColors.muted : highlight ? wmsColors.warn : wmsColors.ink }}>
         {value}
       </div>
     </div>

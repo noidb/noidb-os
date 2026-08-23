@@ -121,7 +121,7 @@ export default function SupplyStatusUpdateButton() {
             <li>확인한 승인대기 상품: {result.preview.pendingCount}개</li>
             <li>SKU ID 입력: {result.writtenCount - result.statusOnlyCount}개</li>
             <li>현재상태 변경: {result.writtenCount}개</li>
-            <li>쿠팡 상품명 갱신: {result.writtenCount}개</li>
+            <li>상품명 갱신: {result.writtenCount}개</li>
             <li>바코드·발주가능상태 갱신: {result.writtenCount}개</li>
             <li>이미 동일한 SKU ID: {result.statusOnlyCount}개</li>
             <li>미매칭: {result.preview.unmatchedCount}개</li>

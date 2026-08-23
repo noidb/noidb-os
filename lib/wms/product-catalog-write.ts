@@ -25,6 +25,7 @@ export type ProductCatalogWritableField =
   | "boxNumber"
   | "currentStock"
   | "currentStatus"
+  | "costVatIncluded"
   | "barcode"
   | "imageUrl";
 

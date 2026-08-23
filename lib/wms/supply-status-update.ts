@@ -299,10 +299,13 @@ function createDryRunToken(preview: Omit<SupplyStatusPreview, "dryRunToken">): s
   const target = preview.rows.map(row => ({
     sheetRowNumber: row.sheetRowNumber,
     modelSku: row.modelSku,
+    productName: row.productName,
     currentStatus: row.currentStatus,
     currentSkuId: row.currentSkuId,
     downloadSkuId: row.downloadSkuId,
+    downloadProductName: row.downloadProductName,
     downloadBarcode: row.downloadBarcode,
+    downloadOrderAvailability: row.downloadOrderAvailability,
     eligible: row.eligible,
     conflict: row.conflict,
   }));

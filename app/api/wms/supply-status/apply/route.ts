@@ -5,10 +5,8 @@ import {
   ProductDbHeaderMissingError,
   SupplyStatusPreviewChangedError,
 } from "@/lib/wms/supply-status-update";
-/**
- * 복구 dry-run 승인 전에는 어떤 호출도 Google Sheet 쓰기로 이어지지 않는다.
- * 전체 백업과 상품 단위 원자 검증을 포함한 별도 승인 반영 경로가 준비될 때까지 잠근다.
- */
+/** 승인 문자열과 최신 dry-run 토큰이 모두 일치할 때만 반영한다.
+ * 실제 쓰기 함수가 전체 백업, 대상 재검증, 중복·충돌 차단을 추가로 수행한다. */
 export const runtime = "nodejs";
 
 const APPLY_CONFIRMATION = "상품공급상태 업데이트 승인";

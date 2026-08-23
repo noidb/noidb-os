@@ -445,7 +445,7 @@ export default function WmsPickingWavesPage() {
 
   async function handleDeleteWave(wave: PickingWave) {
     const confirmed = window.confirm(
-      `${wave.displayName || wave.id} 웨이브를 삭제할까요?\n연결된 발주서 원본과 다른 웨이브에는 영향이 없습니다. 이 작업은 되돌릴 수 없습니다.`
+      `웨이브 "${wave.displayName || wave.id}"을 삭제할까요?\n포함 발주서 ${wave.sourcePurchaseOrderNumbers.length}건\n연결된 발주서 원본과 다른 웨이브에는 영향이 없습니다. 확정 완료된 발주 이력은 보존됩니다.`
     );
     if (!confirmed) return;
     await waveRepository.deleteWave(wave.id);

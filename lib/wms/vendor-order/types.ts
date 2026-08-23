@@ -77,6 +77,18 @@ export interface VendorOrderDraftLine {
    *  없으면 0으로 취급한다. 이 값을 저장해도 제품DB(구글시트) 현재고는 자동으로 바뀌지 않는다 —
    *  재고 자동 반영은 별도 사용자 지시가 있을 때까지 구현하지 않는다. */
   receivedQuantity?: number;
+  /** 거래처발주 입고처리에서 입력한 부가세 별도 개당 단가. */
+  receivedUnitPrice?: number;
+  /** receivedUnitPrice의 10% 부가세(기존 원가 정수 처리와 같은 반올림). */
+  receivedVat?: number;
+  /** 제품DB 원가(부가세포함)에 반영한 금액. */
+  receivedCostVatIncluded?: number;
+  /** 제품DB 원가 및 입고원가 이력 반영 시각. */
+  receivedCostAppliedAt?: string;
+  /** 미입고분이 거래처 사유로 지연 중일 때의 표시·저장 시각. 값이 없으면 지연 해제 상태다. */
+  receivingDelayedAt?: string;
+  /** 입고지연을 해제한 시각. 과거 receivingDelayedAt은 이력으로 남긴다. */
+  receivingDelayReleasedAt?: string;
   /** 입고되지 않은 수량 중 다음 거래처 발주 초안에서 다시 주문하도록 보관한 수량. */
   reorderPendingQuantity?: number;
   /** 미입고 재발주 대기열에 등록한 시각. */

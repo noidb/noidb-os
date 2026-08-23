@@ -52,7 +52,8 @@ function initialValues(item: PickingWaveItem, live: LiveResolvedFields): Record<
     warehouseNumber: live.catalogWarehouseNumber || "",
     boxNumber: live.catalogBoxNumber || "",
     currentStock: live.catalogCurrentStock || "",
-    currentStatus: "",
+    currentStatus: live.catalogCurrentStatus || "",
+    costVatIncluded: live.catalogCostVatIncluded || "",
     barcode: live.catalogBarcode || "",
     imageUrl: live.imageUrl || "",
   };

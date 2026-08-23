@@ -55,6 +55,16 @@ export default function VendorOrdersHubPage() {
         tint={wmsColors.greenSoft}
         borderTint={wmsColors.green}
         textColor={wmsColors.greenDark}
+      />
+
+      <VendorOrderHubMenuCard
+        href="/wms/vendor-orders/status-requests"
+        icon={<span style={{ fontSize: "30px", fontWeight: 900, color: "#934633" }}>!</span>}
+        title="단종/해제 SKU"
+        description="제품DB 상태 변경 이력과 Supply Hub 수동 처리대기·완료 관리"
+        tint="#f4dfd9"
+        borderTint="#c98c7d"
+        textColor="#734035"
         last
       />
     </main>

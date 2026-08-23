@@ -248,22 +248,27 @@ export async function POST(req: NextRequest) {
       let totalOutbound = 0;
       for (const file of files) {
         const { rows, buffer } = await xlsxRows(file);
-        const totals = new Map<string, { sku: string; name: string; inbound: number; outbound: number; prices: { date: string; price: number }[]; lastDate: string }>();
+        const totals = new Map<string, { po: string; expectedDate: string; sku: string; name: string; inbound: number; outbound: number; prices: { date: string; price: number }[]; lastDate: string }>();
         for (const row of toObjects(rows)) {
           const sku = row["SKU번호"] || row["SKU ID"];
           if (!sku) continue;
-          const current = totals.get(sku) || { sku, name: row["SKU명"] || row["SKU 이름"], inbound: 0, outbound: 0, prices: [], lastDate: "" };
+          // 쿠팡 입고상세내역의 실제 헤더는 "번호"이며 값이 발주번호다. 다른 내보내기 형식의
+          // 명시적 헤더도 함께 지원하되 상품명/날짜로는 절대 추측 매칭하지 않는다.
+          const po = cleanText(row["발주번호"] || row["발주서번호"] || row["발주서 번호"] || row["번호"]);
+          const expectedDate = cleanText(row["입고예정일"] || row["입고예정일시"]);
+          const key = [po, expectedDate, sku].join("|");
+          const current = totals.get(key) || { po, expectedDate, sku, name: row["SKU명"] || row["SKU 이름"], inbound: 0, outbound: 0, prices: [], lastDate: "" };
           const quantity = parseNumber(row["수량"] || row["입고수량"]);
           const type = row["구분"];
           const date = row["입고/반출시각"] || row["입고일"] || "";
-          if (type === "발주") current.inbound += quantity;
+          if (type === "발주" || type === "입고") current.inbound += quantity;
           if (type === "반출") current.outbound += quantity;
-          if (type === "발주") {
+          if (type === "발주" || type === "입고") {
             const price = parseNumber(row["공급가액"] || row["공급가"]);
             if (price > 0 && date) current.prices.push({ date, price });
           }
           if (date > current.lastDate) current.lastDate = date;
-          totals.set(sku, current);
+          totals.set(key, current);
         }
         const items = [...totals.values()].map(item => {
           const prices = item.prices.sort((a, b) => a.date.localeCompare(b.date));
@@ -273,7 +278,8 @@ export async function POST(req: NextRequest) {
           totalInbound += item.inbound;
           totalOutbound += item.outbound;
           return {
-            sku: item.sku, name: item.name, totalInbound: item.inbound, outbound: item.outbound,
+            po: item.po, expectedDate: item.expectedDate, sku: item.sku, name: item.name,
+            totalInbound: item.inbound, outbound: item.outbound,
             netInbound: item.inbound - item.outbound, lastDate: item.lastDate,
             previousSupplyDate: prices.length > 1 ? prices.at(-2)?.date || "" : "",
             previousSupplyPrice: previous,

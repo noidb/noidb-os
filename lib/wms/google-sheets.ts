@@ -71,6 +71,71 @@ export interface SheetBackupResult {
   sourceSheetId: number;
 }
 
+export interface SheetTabProperties {
+  sheetId: number;
+  title: string;
+  hidden: boolean;
+}
+
+async function fetchSpreadsheetTabs(): Promise<SheetTabProperties[]> {
+  const accessToken = await getWmsGoogleAccessToken();
+  const spreadsheetId = getWmsSpreadsheetId();
+  const response = await fetch(`${SHEETS_API_BASE}/${spreadsheetId}?fields=sheets.properties`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
+  const data = await response.json().catch(() => ({} as any));
+  if (!response.ok) throw new Error(`Google Sheet 탭 조회 실패: ${data?.error?.message || response.status}`);
+  return (data.sheets || []).map((sheet: any) => ({
+    sheetId: Number(sheet?.properties?.sheetId || 0),
+    title: String(sheet?.properties?.title || ""),
+    hidden: Boolean(sheet?.properties?.hidden),
+  }));
+}
+
+/** 이력 저장용 숨김 탭이 없을 때만 만들고, 기존 탭이면 헤더가 정확한지 검증한다. */
+export async function ensureHiddenSheet(sheetName: string, headers: string[]): Promise<SheetTabProperties> {
+  const tabs = await fetchSpreadsheetTabs();
+  const existing = tabs.find(tab => tab.title === sheetName);
+  if (existing) {
+    const rows = await fetchSheetRows(sheetName);
+    const actual = (rows[0] || []).slice(0, headers.length).map(value => String(value || "").trim());
+    if (actual.length < headers.length || headers.some((header, index) => actual[index] !== header)) {
+      throw new Error(`[${sheetName}] 예상 헤더와 달라 이력 쓰기를 중단했습니다.`);
+    }
+    return existing;
+  }
+
+  const accessToken = await getWmsGoogleAccessToken();
+  const spreadsheetId = getWmsSpreadsheetId();
+  const response = await fetch(`${SHEETS_API_BASE}/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      requests: [{ addSheet: { properties: { title: sheetName, hidden: true, gridProperties: { rowCount: 1000, columnCount: headers.length } } } }],
+    }),
+  });
+  const data = await response.json().catch(() => ({} as any));
+  if (!response.ok) throw new Error(`[${sheetName}] 이력 탭 생성 실패: ${data?.error?.message || response.status}`);
+  const sheetId = Number(data?.replies?.[0]?.addSheet?.properties?.sheetId || 0);
+  await updateSheetCells(sheetName, headers.map((value, index) => ({ row: 1, col: index + 1, value })));
+  return { sheetId, title: sheetName, hidden: true };
+}
+
+/** 기존 행을 건드리지 않고 한 행만 append한다. 호출 전에 ensureHiddenSheet로 헤더를 검증한다. */
+export async function appendSheetRow(sheetName: string, values: Array<string | number>): Promise<void> {
+  const accessToken = await getWmsGoogleAccessToken();
+  const spreadsheetId = getWmsSpreadsheetId();
+  const range = encodeURIComponent(`'${sheetName}'!A:A`);
+  const response = await fetch(`${SHEETS_API_BASE}/${spreadsheetId}/values/${range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ values: [values] }),
+  });
+  const data = await response.json().catch(() => ({} as any));
+  if (!response.ok) throw new Error(`[${sheetName}] 이력 추가 실패: ${data?.error?.message || response.status}`);
+}
+
 /** 같은 스프레드시트 안에 원본 탭 전체를 숨김 백업 탭으로 원자 복제한다. 원본 행은 건드리지 않는다. */
 export async function backupSheetWithinSpreadsheet(sheetName: string): Promise<SheetBackupResult> {
   const accessToken = await getWmsGoogleAccessToken();

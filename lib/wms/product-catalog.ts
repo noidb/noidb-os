@@ -4,7 +4,7 @@ export { normalizeSkuId, normalizeModelSkuKey } from "./sku-normalize";
 
 /**
  * "제품DB" 시트만 읽어 상품코드(SKU ID) 기준으로 모델명/카테고리/상품명/옵션명/대표이미지/창고번호/
- * BOX번호/현재고를 매핑하는 읽기 전용 조회 모델. lib/wms/purchase-orders.ts가 이미 쓰고 있는 조인
+ * BOX번호/현재고/제조국명을 매핑하는 읽기 전용 조회 모델. lib/wms/purchase-orders.ts가 이미 쓰고 있는 조인
  * 방식(SKU ID 기준)과 동일한 정규화 규칙을 쓴다. 이 파일은 오직 읽기만 수행하며 시트에 값을 쓰지 않는다.
  *
  * 컬럼 확장 방법: FIELD_HEADER_CANDIDATES에 헤더 후보를 추가/수정하기만 하면 된다. 시트에 그 헤더가
@@ -32,10 +32,14 @@ export interface ProductCatalogItem {
   currentStock: string;
   /** 제품DB 현재상태(단종/과재고 등). */
   currentStatus: string;
+  /** 제품DB 원가(부가세포함). 거래처 입고단가 반영 전후 비교에 사용한다. */
+  costVatIncluded: string;
   /** 아직 제품DB에 없는 컬럼(나중 추가 예정) — 없으면 항상 "" (거래처별 부족분 발주서 그룹핑에 사용) */
   vendorName: string;
   /** 실제 쿠팡 Seller SKU Barcode. 임의 생성하지 않고 이 컬럼 값만 사용한다 — 없으면 "" */
   barcode: string;
+  /** 제품DB "제조국명". 원본 셀이 비어 있거나 헤더가 없으면 "" — 국가 기본값을 추측하지 않는다. */
+  countryOfOrigin: string;
   /** 제품DB "제품링크"(실제 쿠팡 상품 URL) — 없으면 "". SKU로 URL을 임의 생성하지 않고 이
    *  컬럼 값만 그대로 쓴다 (2026-08-19 5차 실사용 테스트 신규 — 거래처 발주서 카드 링크 버튼용). */
   productLink: string;
@@ -56,8 +60,10 @@ export const FIELD_HEADER_CANDIDATES: Record<Exclude<keyof ProductCatalogItem, "
   boxNumber: ["BOX번호", "박스번호"],
   currentStock: ["현재고", "재고수량"],
   currentStatus: ["현재상태"],
+  costVatIncluded: ["원가(부가세포함)"],
   vendorName: ["거래처", "거래처명", "매입처"],
   barcode: ["쿠팡 바코드", "Seller SKU Barcode", "쿠팡바코드", "바코드"],
+  countryOfOrigin: ["제조국명"],
   productLink: ["제품링크", "상품링크", "쿠팡 URL", "URL", "링크"],
 };
 
@@ -103,8 +109,10 @@ export async function fetchProductCatalog(): Promise<{ configured: boolean; item
       boxNumber: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.boxNumber),
       currentStock: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.currentStock),
       currentStatus: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.currentStatus),
+      costVatIncluded: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.costVatIncluded),
       vendorName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.vendorName),
       barcode: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.barcode),
+      countryOfOrigin: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.countryOfOrigin),
       productLink: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productLink),
     }))
     .filter(item => item.skuId);

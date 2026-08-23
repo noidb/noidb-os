@@ -86,6 +86,26 @@ export function resolveDisplayNameAndOption(
   const stored = (storedOptionLabel || "").trim();
   const knownOption = live || stored;
 
+  // 피킹 현장에서 색상뿐 아니라 호수/사이즈까지 즉시 구분할 수 있도록, 첫 번째 쉼표 뒤의
+  // 실제 원문 전체를 옵션으로 사용한다. 저장된 제품DB 상품명은 바꾸지 않고 표시 문자열만
+  // 분리하며, 원문 순서를 유지한 채 같은 옵션 조각만 중복 제거한다.
+  const commaIndex = cleanedName.indexOf(",");
+  if (commaIndex >= 0) {
+    const name = cleanedName.slice(0, commaIndex).trim();
+    const optionParts = [cleanedName.slice(commaIndex + 1), knownOption]
+      .flatMap(value => value.split(","))
+      .map(value => value.trim())
+      .filter(Boolean);
+    const seen = new Set<string>();
+    const unique = optionParts.filter(value => {
+      const key = value.toLocaleLowerCase().replace(/\s+/g, " ");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return { name: name || cleanedName, option: unique.join(", ") };
+  }
+
   if (knownOption) {
     return { name: stripTrailingOptionFromName(cleanedName, knownOption), option: knownOption };
   }

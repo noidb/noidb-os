@@ -4,8 +4,6 @@ import { downloadDriveFile, searchDriveFilesByName } from "@/lib/wms/google-driv
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const IMAGE_EXTENSIONS = /\.(?:jpe?g|png|webp|gif)$/i;
-
 export async function GET(request: NextRequest) {
   const model = (request.nextUrl.searchParams.get("model") || "").trim();
   if (!/^[a-z0-9_-]{3,40}$/i.test(model)) {
@@ -14,7 +12,9 @@ export async function GET(request: NextRequest) {
   try {
     const files = await searchDriveFilesByName(model);
     const exact = files.find(file => file.mimeType.startsWith("image/") && new RegExp(`(^|[^a-z0-9])${model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`, "i").test(file.name));
-    const image = exact || files.find(file => file.mimeType.startsWith("image/") || IMAGE_EXTENSIONS.test(file.name));
+    // 검색 결과의 첫 이미지를 임의 사용하면 다른 옵션/모델 이미지가 섞일 수 있다. 파일명에
+    // 요청한 모델SKU/모델명이 경계까지 정확히 포함된 실제 이미지 한 건만 허용한다.
+    const image = exact;
     if (!image) return NextResponse.json({ error: "Drive에서 모델 이미지를 찾을 수 없습니다." }, { status: 404 });
     const buffer = await downloadDriveFile(image.id);
     return new NextResponse(buffer, {
