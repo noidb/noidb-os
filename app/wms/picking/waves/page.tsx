@@ -33,6 +33,7 @@ export default function WmsPickingWavesPage() {
   const [orders, setOrders] = useState<SupplierHubPurchaseOrder[] | null>(null);
   const [ordersError, setOrdersError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [showByExpectedDate, setShowByExpectedDate] = useState(false);
   const [existingWaves, setExistingWaves] = useState<PickingWave[]>([]);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -93,6 +94,21 @@ export default function WmsPickingWavesPage() {
     () => (orders ?? []).filter(order => selected.has(order.purchaseOrderNumber)),
     [orders, selected]
   );
+
+  const ordersByExpectedDate = useMemo(() => {
+    const grouped = new Map<string, SupplierHubPurchaseOrder[]>();
+    for (const order of orders ?? []) {
+      const expectedDate = order.expectedDate?.trim() || "입고예정일 미정";
+      const dateOrders = grouped.get(expectedDate) ?? [];
+      dateOrders.push(order);
+      grouped.set(expectedDate, dateOrders);
+    }
+    return [...grouped.entries()].sort(([dateA], [dateB]) => {
+      if (dateA === "입고예정일 미정") return 1;
+      if (dateB === "입고예정일 미정") return -1;
+      return dateA.localeCompare(dateB);
+    });
+  }, [orders]);
 
   const duplicateInProgressWave = useMemo(() => {
     if (selectedOrders.length === 0) return null;
@@ -210,6 +226,10 @@ export default function WmsPickingWavesPage() {
       setCreateError(error instanceof Error ? error.message : "통합 피킹 작업 생성 중 오류가 발생했습니다.");
       setCreating(false);
     }
+  }
+
+  function selectOnlyExpectedDate(dateOrders: SupplierHubPurchaseOrder[]) {
+    setSelected(new Set(dateOrders.map(order => order.purchaseOrderNumber)));
   }
 
   async function handleCreateCenterLabels() {
@@ -437,32 +457,61 @@ export default function WmsPickingWavesPage() {
 
       {orders && orders.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
-          {orders.map(order => (
-            <label
-              key={order.purchaseOrderNumber}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "10px",
-                border: `1px solid ${wmsColors.border}`,
-                borderRadius: "10px",
-                padding: "10px 12px",
-                background: "#ffffff",
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={selected.has(order.purchaseOrderNumber)}
-                onChange={() => toggleOrder(order.purchaseOrderNumber)}
-              />
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 700, fontSize: "13px" }}>발주서 {order.purchaseOrderNumber}</div>
-                <div style={{ fontSize: "11px", color: wmsColors.muted }}>
-                  {order.fulfillmentCenter} · 입고예정일 {order.expectedDate} · SKU {order.items.length}개
-                </div>
-              </div>
-            </label>
-          ))}
+          <button
+            type="button"
+            aria-pressed={showByExpectedDate}
+            onClick={() => setShowByExpectedDate(value => !value)}
+            style={{
+              ...wmsSecondaryButton,
+              width: "100%",
+              minHeight: "38px",
+              background: showByExpectedDate ? wmsColors.surfaceBeige : "#ffffff",
+            }}
+          >
+            {showByExpectedDate ? "기본 목록으로 보기" : "입고예정일별 보기"}
+          </button>
+
+          {showByExpectedDate
+            ? ordersByExpectedDate.map(([expectedDate, dateOrders]) => (
+                <section key={expectedDate} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "8px",
+                      padding: "6px 2px 0",
+                    }}
+                  >
+                    <div style={{ fontSize: "13px", fontWeight: 800 }}>
+                      {expectedDate} <span style={{ color: wmsColors.muted, fontSize: "11px" }}>{dateOrders.length}건</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => selectOnlyExpectedDate(dateOrders)}
+                      style={{ ...wmsSecondaryButton, minHeight: "30px", padding: "5px 10px", fontSize: "11px" }}
+                    >
+                      이 날짜 전체선택
+                    </button>
+                  </div>
+                  {dateOrders.map(order => (
+                    <PurchaseOrderCheckbox
+                      key={order.purchaseOrderNumber}
+                      order={order}
+                      checked={selected.has(order.purchaseOrderNumber)}
+                      onToggle={toggleOrder}
+                    />
+                  ))}
+                </section>
+              ))
+            : orders.map(order => (
+                <PurchaseOrderCheckbox
+                  key={order.purchaseOrderNumber}
+                  order={order}
+                  checked={selected.has(order.purchaseOrderNumber)}
+                  onToggle={toggleOrder}
+                />
+              ))}
         </div>
       )}
 
@@ -618,6 +667,38 @@ export default function WmsPickingWavesPage() {
         </div>
       )}
     </main>
+  );
+}
+
+function PurchaseOrderCheckbox({
+  order,
+  checked,
+  onToggle,
+}: {
+  order: SupplierHubPurchaseOrder;
+  checked: boolean;
+  onToggle: (purchaseOrderNumber: string) => void;
+}) {
+  return (
+    <label
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "10px",
+        border: `1px solid ${wmsColors.border}`,
+        borderRadius: "10px",
+        padding: "10px 12px",
+        background: "#ffffff",
+      }}
+    >
+      <input type="checkbox" checked={checked} onChange={() => onToggle(order.purchaseOrderNumber)} />
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 700, fontSize: "13px" }}>발주서 {order.purchaseOrderNumber}</div>
+        <div style={{ fontSize: "11px", color: wmsColors.muted }}>
+          {order.fulfillmentCenter} · 입고예정일 {order.expectedDate} · SKU {order.items.length}개
+        </div>
+      </div>
+    </label>
   );
 }
 
