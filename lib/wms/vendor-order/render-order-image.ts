@@ -18,18 +18,19 @@ import { resolveDisplayNameAndOption } from "../display-name";
  * 실제 카카오톡 공유 이미지가 이 함수 하나만 거치므로 항상 같은 결과가 나온다.
  */
 
-const HEADER_HEIGHT = 108;
-const WIDTH = 760;
-const CARD_PAD_X = 28;
+const HEADER_HEIGHT = 190;
+/** 카카오톡/사진 앱에서 축소 표시되어도 글자가 선명하도록 최종 PNG 자체를 1080px로 만든다. */
+const WIDTH = 1080;
+const CARD_PAD_X = 48;
 const IMAGE_SIZE = WIDTH - CARD_PAD_X * 2; // 카드 가로폭 최대한 크게(2026-08-20)
-const TOP_INFO_GAP_TOP = 14;
-const GAP_INFO_TO_IMAGE = 12;
-const GAP_IMAGE_TO_NAME = 18;
-const NAME_FONT = "bold 26px sans-serif";
-const NAME_LINE_HEIGHT = 33;
-const GAP_NAME_TO_SKUROW = 14;
-const SKU_BARCODE_ROW_HEIGHT = 96;
-const CARD_BOTTOM_PAD = 22;
+const TOP_INFO_GAP_TOP = 26;
+const GAP_INFO_TO_IMAGE = 22;
+const GAP_IMAGE_TO_NAME = 28;
+const NAME_FONT = "bold 38px sans-serif";
+const NAME_LINE_HEIGHT = 50;
+const GAP_NAME_TO_SKUROW = 24;
+const SKU_BARCODE_ROW_HEIGHT = 150;
+const CARD_BOTTOM_PAD = 38;
 const TEXT_MAX_WIDTH = WIDTH - CARD_PAD_X * 2;
 
 /** 상단 카테고리/옵션/수량 3줄 — 값이 없는 항목은 "미분류"/"옵션 없음" 같은 폴백 문구를 아예
@@ -39,16 +40,15 @@ interface TopInfoLine {
   text: string;
   font: string;
   color: string;
-  /** 이전 줄 바닥선부터 이 줄 글자기준선(baseline)까지의 거리 */
-  baselineGap: number;
-  /** 이 줄이 차지하는 총 높이(다음 줄/이미지로 넘어가기 전 여백 포함) */
-  blockHeight: number;
+  lineHeight: number;
+  marginTop: number;
+  marginBottom: number;
 }
 
 interface CardLayout {
   line: VendorOrderDraftLine;
   displayName: string;
-  topInfoLines: TopInfoLine[];
+  topInfoLines: Array<TopInfoLine & { wrappedLines: string[] }>;
   topInfoHeight: number;
   nameLines: string[];
   cardHeight: number;
@@ -59,13 +59,13 @@ function buildTopInfoLines(category: string, option: string, quantity: number, m
   // 사진만으로 혼동하기 쉬운 세 분류만 거래처 공유 이미지에 표시한다. 그 밖의 긴 쿠팡 분류 경로는
   // 상품명과 이미지를 가리고 거래처 작업에도 필요하지 않아 줄 자체를 만들지 않는다.
   if (category && /(목걸이|팔찌|발찌)/.test(category)) {
-    lines.push({ text: category, font: "bold 28px sans-serif", color: "#252525", baselineGap: 26, blockHeight: 36 });
+    lines.push({ text: category, font: "bold 36px sans-serif", color: "#252525", lineHeight: 46, marginTop: 0, marginBottom: 8 });
   }
   if (option) {
-    lines.push({ text: option, font: "bold 23px sans-serif", color: "#4d6358", baselineGap: 23, blockHeight: 32 });
+    lines.push({ text: option, font: "bold 40px sans-serif", color: "#4d6358", lineHeight: 52, marginTop: 8, marginBottom: 12 });
   }
   if (memo) {
-    lines.push({ text: memo, font: "bold 22px sans-serif", color: "#8a5a44", baselineGap: 23, blockHeight: 32 });
+    lines.push({ text: memo, font: "bold 32px sans-serif", color: "#8a5a44", lineHeight: 42, marginTop: 8, marginBottom: 12 });
   }
   // 수량은 항상 "발주수량 N개" 형태로 표시 — 카테고리·옵션 유무와 무관하게 상단 핵심 정보로
   // 가장 크게 그린다(2026-08-20 배포 전 마지막 실기기 확인 4번). 값이 비어 있어도 NaN개/undefined개가
@@ -74,10 +74,11 @@ function buildTopInfoLines(category: string, option: string, quantity: number, m
   const safeQuantity = Number.isFinite(quantity) ? quantity : 0;
   lines.push({
     text: `발주수량 ${safeQuantity}개`,
-    font: "bold 40px sans-serif",
+    font: "bold 48px sans-serif",
     color: "#252525",
-    baselineGap: lines.length === 0 ? 36 : 48,
-    blockHeight: 48,
+    lineHeight: 62,
+    marginTop: lines.length === 0 ? 0 : 20,
+    marginBottom: 10,
   });
   return lines;
 }
@@ -123,7 +124,7 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
 function drawBarcode(ctx: CanvasRenderingContext2D, barcodeValue: string, x: number, y: number, width: number, barHeight: number) {
   if (!barcodeValue) {
     ctx.textAlign = "center";
-    ctx.font = "bold 14px sans-serif";
+    ctx.font = "bold 22px sans-serif";
     ctx.fillStyle = "#a6614e";
     ctx.fillText("쿠팡 바코드 미등록", x + width / 2, y + barHeight / 2 + 5);
     ctx.textAlign = "left";
@@ -132,7 +133,7 @@ function drawBarcode(ctx: CanvasRenderingContext2D, barcodeValue: string, x: num
   try {
     const widths = encodeCode128B(barcodeValue);
     const totalModules = widths.reduce((sum, w) => sum + w, 0);
-    const moduleWidth = Math.min(3.2, width / totalModules);
+    const moduleWidth = Math.min(4.2, width / totalModules);
     const barcodeWidth = totalModules * moduleWidth;
     let bx = x + (width - barcodeWidth) / 2;
     widths.forEach((w, index) => {
@@ -144,13 +145,13 @@ function drawBarcode(ctx: CanvasRenderingContext2D, barcodeValue: string, x: num
       bx += barWidth;
     });
     ctx.textAlign = "center";
-    ctx.font = "bold 21px monospace";
+    ctx.font = "bold 28px monospace";
     ctx.fillStyle = "#252525";
-    ctx.fillText(barcodeValue, x + width / 2, y + barHeight + 27);
+    ctx.fillText(barcodeValue, x + width / 2, y + barHeight + 36);
     ctx.textAlign = "left";
   } catch {
     ctx.textAlign = "center";
-    ctx.font = "bold 21px monospace";
+    ctx.font = "bold 28px monospace";
     ctx.fillStyle = "#252525";
     ctx.fillText(barcodeValue, x + width / 2, y + barHeight / 2 + 5);
     ctx.textAlign = "left";
@@ -172,7 +173,7 @@ function fitSkuFontSize(ctx: CanvasRenderingContext2D, text: string, maxWidth: n
 export async function renderVendorOrderImage(
   vendorName: string,
   lines: VendorOrderDraftLine[],
-  waveId: string
+  _waveId: string
 ): Promise<Blob | null> {
   const images = await Promise.all(lines.map(line => loadImageSafe(line.imageUrl, line.skuId)));
 
@@ -184,8 +185,15 @@ export async function renderVendorOrderImage(
   const cards: CardLayout[] = lines.map(line => {
     const { name, option } = resolveDisplayNameAndOption(line.productName, line.optionLabel);
     const category = (line.category || "").trim();
-    const topInfoLines = buildTopInfoLines(category, option.trim(), line.shortageQuantity, line.memo.trim());
-    const topInfoHeight = topInfoLines.reduce((sum, l) => sum + l.blockHeight, 0);
+    const topInfoLines = buildTopInfoLines(category, option.trim(), line.shortageQuantity, line.memo.trim()).map(info => {
+      measureCtx.font = info.font;
+      return { ...info, wrappedLines: wrapText(measureCtx, info.text, TEXT_MAX_WIDTH) };
+    });
+    const topInfoHeight = topInfoLines.reduce(
+      (sum, info) => sum + info.marginTop + info.wrappedLines.length * info.lineHeight + info.marginBottom,
+      0
+    );
+    measureCtx.font = NAME_FONT;
     const nameLines = wrapText(measureCtx, name, TEXT_MAX_WIDTH);
     const cardHeight =
       TOP_INFO_GAP_TOP + topInfoHeight +
@@ -196,8 +204,13 @@ export async function renderVendorOrderImage(
     return { line, displayName: name, topInfoLines, topInfoHeight, nameLines, cardHeight };
   });
 
+  const deliveryAddress = "강원도 원주시 전망길 22-3 1층";
+  measureCtx.font = "bold 28px sans-serif";
+  const deliveryAddressLines = wrapText(measureCtx, `주소: ${deliveryAddress}`, TEXT_MAX_WIDTH - 56);
+  const summaryHeight = 108;
+  const deliveryHeight = 56 + 44 + 22 + 42 * (2 + deliveryAddressLines.length) + 34;
   const totalCardsHeight = cards.reduce((sum, card) => sum + card.cardHeight, 0);
-  const height = HEADER_HEIGHT + totalCardsHeight + 170;
+  const height = HEADER_HEIGHT + totalCardsHeight + summaryHeight + deliveryHeight + 54;
   const canvas = document.createElement("canvas");
   canvas.width = WIDTH;
   canvas.height = height;
@@ -207,15 +220,15 @@ export async function renderVendorOrderImage(
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, WIDTH, height);
 
-  // 헤더는 최대한 컴팩트하게 — 거래처명/발주일/참고번호만 한 줄씩(2026-08-20).
+  // 웨이브 ID는 내부 데이터와 파일명에 유지하되 거래처 공유 이미지에는 표시하지 않는다.
   ctx.fillStyle = "#252525";
-  ctx.font = "bold 24px sans-serif";
-  ctx.fillText("노이드비 발주서", CARD_PAD_X, 40);
+  ctx.font = "bold 48px sans-serif";
+  ctx.fillText("노이드비 발주서", CARD_PAD_X, 66);
 
-  ctx.font = "13px sans-serif";
+  ctx.font = "bold 28px sans-serif";
   ctx.fillStyle = "#77716a";
-  ctx.fillText(`거래처: ${vendorName}`, CARD_PAD_X, 64);
-  ctx.fillText(`발주일: ${new Date().toLocaleDateString("ko-KR")} · 참고번호: ${waveId}`, CARD_PAD_X, 84);
+  ctx.fillText(`거래처: ${vendorName}`, CARD_PAD_X, 116);
+  ctx.fillText(`발주일: ${new Date().toLocaleDateString("ko-KR")}`, CARD_PAD_X, 158);
 
   ctx.strokeStyle = "#e5dace";
   ctx.beginPath();
@@ -236,11 +249,14 @@ export async function renderVendorOrderImage(
     let textY = rowTop + TOP_INFO_GAP_TOP;
     ctx.textAlign = "center";
     for (const infoLine of card.topInfoLines) {
-      textY += infoLine.baselineGap;
+      textY += infoLine.marginTop;
       ctx.font = infoLine.font;
       ctx.fillStyle = infoLine.color;
-      ctx.fillText(infoLine.text, WIDTH / 2, textY);
-      textY += infoLine.blockHeight - infoLine.baselineGap;
+      for (const wrappedLine of infoLine.wrappedLines) {
+        ctx.fillText(wrappedLine, WIDTH / 2, textY + infoLine.lineHeight * 0.8);
+        textY += infoLine.lineHeight;
+      }
+      textY += infoLine.marginBottom;
     }
     ctx.textAlign = "left";
 
@@ -259,14 +275,14 @@ export async function renderVendorOrderImage(
       ctx.fillStyle = "#f2dfd8";
       ctx.fillRect(imgX, imgY, IMAGE_SIZE, IMAGE_SIZE);
       ctx.fillStyle = "#a6614e";
-      ctx.font = "bold 22px sans-serif";
+      ctx.font = "bold 32px sans-serif";
       ctx.textAlign = "center";
       ctx.fillText("이미지 미등록", WIDTH / 2, imgY + IMAGE_SIZE / 2 + 8);
       ctx.textAlign = "left";
     }
 
     // 3순위: 이미지 아래 상품명(전체 표시, 브랜드명 제거는 resolveDisplayNameAndOption에서 처리됨)
-    let nameY = imgY + IMAGE_SIZE + GAP_IMAGE_TO_NAME + 22;
+    let nameY = imgY + IMAGE_SIZE + GAP_IMAGE_TO_NAME + 38;
     ctx.textAlign = "center";
     ctx.fillStyle = "#252525";
     ctx.font = NAME_FONT;
@@ -292,22 +308,22 @@ export async function renderVendorOrderImage(
     const barcodeRightMargin = 40;
 
     ctx.textAlign = "center";
-    ctx.font = "19px sans-serif";
+    ctx.font = "26px sans-serif";
     ctx.fillStyle = "#77716a";
-    ctx.fillText("SKU", leftX + skuColWidth / 2, rowY + 25);
-    const skuFontSize = fitSkuFontSize(ctx, card.line.skuId, skuColWidth - 12, 44, 30);
+    ctx.fillText("SKU", leftX + skuColWidth / 2, rowY + 34);
+    const skuFontSize = fitSkuFontSize(ctx, card.line.skuId, skuColWidth - 12, 54, 38);
     ctx.font = `bold ${skuFontSize}px sans-serif`;
     ctx.fillStyle = "#252525";
-    ctx.fillText(card.line.skuId, leftX + skuColWidth / 2, rowY + 72);
+    ctx.fillText(card.line.skuId, leftX + skuColWidth / 2, rowY + 96);
     ctx.textAlign = "left";
 
-    drawBarcode(ctx, card.line.barcode, rightX, rowY + 4, barcodeColWidth - barcodeRightMargin, 52);
+    drawBarcode(ctx, card.line.barcode, rightX, rowY + 8, barcodeColWidth - barcodeRightMargin, 80);
 
     // 실제 부족수량은 내부 확인용이다. 거래처가 발주수량과 혼동하지 않도록 카드 오른쪽 아래에
     // 발주수량보다 충분히 작게 유지하되 휴대폰에서도 내부 작업자가 읽을 수 있는 크기로 표시한다.
     const actualShortage = card.line.actualShortageQuantity ?? card.line.shortageQuantity;
     ctx.textAlign = "right";
-    ctx.font = "bold 16px sans-serif";
+    ctx.font = "bold 20px sans-serif";
     ctx.fillStyle = "#8f8982";
     ctx.fillText(`내부참고 부족 ${actualShortage}개`, WIDTH - CARD_PAD_X, rowTop + card.cardHeight - 10);
     ctx.textAlign = "left";
@@ -316,32 +332,40 @@ export async function renderVendorOrderImage(
   });
 
   const totalQuantity = lines.reduce((sum, line) => sum + line.shortageQuantity, 0);
-  const footerY = cursorY + 30;
+  const footerY = cursorY + 34;
   ctx.strokeStyle = "#e5dace";
   ctx.beginPath();
   ctx.moveTo(0, footerY - 20);
   ctx.lineTo(WIDTH, footerY - 20);
   ctx.stroke();
 
-  ctx.font = "bold 16px sans-serif";
+  ctx.font = "bold 32px sans-serif";
   ctx.fillStyle = "#252525";
-  ctx.fillText(`총 ${lines.length}종 / ${totalQuantity}개`, CARD_PAD_X, footerY + 8);
+  ctx.fillText(`총 ${lines.length}종 · 총수량 ${totalQuantity}개`, CARD_PAD_X, footerY + 34);
 
   // 배송정보는 상품 목록 맨 아래에서 가장 잘 보이도록 별도 강조 박스로 그린다.
-  const deliveryTop = footerY + 26;
+  const deliveryTop = cursorY + summaryHeight;
   ctx.fillStyle = "#eef3ef";
   ctx.strokeStyle = "#6f887c";
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(CARD_PAD_X, deliveryTop, WIDTH - CARD_PAD_X * 2, 92, 14);
+  ctx.roundRect(CARD_PAD_X, deliveryTop, WIDTH - CARD_PAD_X * 2, deliveryHeight, 18);
   ctx.fill();
   ctx.stroke();
   ctx.fillStyle = "#263d33";
-  ctx.font = "bold 19px sans-serif";
-  ctx.fillText("배송정보", CARD_PAD_X + 18, deliveryTop + 27);
-  ctx.font = "bold 16px sans-serif";
-  ctx.fillText("받는 사람: 노이드비  ·  전화번호: 010-5769-5602", CARD_PAD_X + 18, deliveryTop + 52);
-  ctx.fillText("주소: 강원도 원주시 전망길 22-3 1층", CARD_PAD_X + 18, deliveryTop + 76);
+  const deliveryX = CARD_PAD_X + 28;
+  let deliveryY = deliveryTop + 52;
+  ctx.font = "bold 32px sans-serif";
+  ctx.fillText("배송정보", deliveryX, deliveryY);
+  ctx.font = "bold 28px sans-serif";
+  deliveryY += 62;
+  ctx.fillText("받는 사람: 노이드비", deliveryX, deliveryY);
+  deliveryY += 42;
+  ctx.fillText("전화번호: 010-5769-5602", deliveryX, deliveryY);
+  for (const addressLine of deliveryAddressLines) {
+    deliveryY += 42;
+    ctx.fillText(addressLine, deliveryX, deliveryY);
+  }
 
   return new Promise<Blob | null>(resolve => {
     try {

@@ -39,6 +39,8 @@ export interface VendorOrderDraft {
   updatedAt: string;
   approvedAt?: string;
   sentAt?: string;
+  /** sent 토글 해제 시 정확히 복원할 상태. */
+  statusBeforeSent?: Exclude<VendorOrderDraftStatus, "sent">;
 }
 
 export interface VendorOrderDraftLine {

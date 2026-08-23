@@ -286,7 +286,7 @@ export default function WmsPickingPage() {
               >
                 <img src={model.representativeImageDataUri} alt={model.modelName} width={56} height={56} style={{ borderRadius: "8px", flexShrink: 0 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: "15px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <div style={{ fontWeight: 700, fontSize: "15px", whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.35 }}>
                     {model.modelName}
                   </div>
                   <div style={{ fontSize: "12px", color: wmsColors.muted }}>옵션 {total}개</div>

@@ -6,6 +6,7 @@ import { useWarehouseRepository } from "@/lib/warehouse/context";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import { buildPickingWave, generateWaveId } from "@/lib/wms/picking-wave/build-wave";
 import type { SupplierHubPurchaseOrder } from "@/lib/wms/supplier-hub-orders";
+import { groupPurchaseOrdersForShipping, summarizePurchaseOrder, toggleExpectedDateSelection } from "@/lib/wms/purchase-order-view";
 import type { PickingWave } from "@/lib/wms/picking-wave/types";
 import { PICKING_WAVE_STATUS_LABEL } from "@/lib/wms/picking-wave/status-label";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
@@ -19,6 +20,12 @@ import {
   setScheduleRecommendationDecision,
   type ScheduleRecommendationDecision,
 } from "@/lib/wms/schedule-recommendation-decisions";
+
+function defaultWaveDisplayName(now = new Date()): string {
+  const parts = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value || "";
+  return `${value("year")}-${value("month")}-${value("day")} ${value("hour")}:${value("minute")}`;
+}
 
 /**
  * 통합 피킹(웨이브) 생성 화면. 실제 발주(서플라이어 허브 스냅샷)를 선택해 하나의 웨이브로 합친다.
@@ -36,6 +43,9 @@ export default function WmsPickingWavesPage() {
   const [showByExpectedDate, setShowByExpectedDate] = useState(false);
   const [existingWaves, setExistingWaves] = useState<PickingWave[]>([]);
   const [creating, setCreating] = useState(false);
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [createDisplayName, setCreateDisplayName] = useState("");
+  const [workerName, setWorkerName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [creatingLabels, setCreatingLabels] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
@@ -192,7 +202,12 @@ export default function WmsPickingWavesPage() {
   }
 
   async function handleCreate() {
-    if (selectedOrders.length === 0) return;
+    const trimmedDisplayName = createDisplayName.trim();
+    const trimmedWorkerName = workerName.trim();
+    if (selectedOrders.length === 0 || !trimmedDisplayName || !trimmedWorkerName) {
+      setCreateError("웨이브명과 작업자 이름을 모두 입력해주세요.");
+      return;
+    }
     setCreating(true);
     setCreateError(null);
     try {
@@ -217,7 +232,13 @@ export default function WmsPickingWavesPage() {
         now,
       });
 
-      await waveRepository.saveWave(wave);
+      const shippingGroups = groupPurchaseOrdersForShipping(selectedOrders).map(group => ({
+        key: group.key,
+        expectedDate: group.expectedDate,
+        fulfillmentCenter: group.fulfillmentCenter,
+        purchaseOrderNumbers: group.orders.map(order => order.purchaseOrderNumber),
+      }));
+      await waveRepository.saveWave({ ...wave, displayName: trimmedDisplayName, workerName: trimmedWorkerName, shippingGroups });
       await Promise.all(items.map(item => waveRepository.saveItem(item)));
       await Promise.all(baskets.map(basket => waveRepository.saveBasket(basket)));
 
@@ -229,7 +250,7 @@ export default function WmsPickingWavesPage() {
   }
 
   function selectOnlyExpectedDate(dateOrders: SupplierHubPurchaseOrder[]) {
-    setSelected(new Set(dateOrders.map(order => order.purchaseOrderNumber)));
+    setSelected(prev => toggleExpectedDateSelection(prev, dateOrders));
   }
 
   async function handleCreateCenterLabels() {
@@ -491,16 +512,19 @@ export default function WmsPickingWavesPage() {
                       onClick={() => selectOnlyExpectedDate(dateOrders)}
                       style={{ ...wmsSecondaryButton, minHeight: "30px", padding: "5px 10px", fontSize: "11px" }}
                     >
-                      이 날짜 전체선택
+                      이 날짜 전체선택/해제
                     </button>
                   </div>
-                  {dateOrders.map(order => (
-                    <PurchaseOrderCheckbox
-                      key={order.purchaseOrderNumber}
-                      order={order}
-                      checked={selected.has(order.purchaseOrderNumber)}
-                      onToggle={toggleOrder}
-                    />
+                  {groupPurchaseOrdersForShipping(dateOrders).map(group => (
+                    <div key={group.key} style={{ border: `2px solid ${wmsColors.borderStrong}`, borderRadius: "14px", padding: "10px", background: wmsColors.surfaceBeige }}>
+                      <div style={{ fontSize: "12px", fontWeight: 800, marginBottom: "8px", overflowWrap: "anywhere" }}>
+                        {group.fulfillmentCenter} · 입고예정일 {group.expectedDate}<br />
+                        <span style={{ color: wmsColors.muted, fontWeight: 700 }}>발주서 {group.orderCount}건 · SKU {group.skuCount}개 · 총수량 {group.totalQuantity}개</span>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                        {group.orders.map(order => <PurchaseOrderCheckbox key={order.purchaseOrderNumber} order={order} checked={selected.has(order.purchaseOrderNumber)} onToggle={toggleOrder} />)}
+                      </div>
+                    </div>
                   ))}
                 </section>
               ))
@@ -576,12 +600,35 @@ export default function WmsPickingWavesPage() {
       {labelError && <p style={{ color: "#c0392b", fontSize: "12px", marginTop: 0 }}>{labelError}</p>}
 
       <button
-        onClick={handleCreate}
+        onClick={() => {
+          setCreateError(null);
+          setCreateDisplayName(defaultWaveDisplayName());
+          setShowCreateDialog(true);
+        }}
         disabled={selectedOrders.length === 0 || creating}
         style={{ ...wmsPrimaryButton, width: "100%", opacity: selectedOrders.length === 0 || creating ? 0.5 : 1 }}
       >
         {creating ? "생성 중..." : "통합 피킹 작업 생성"}
       </button>
+
+      {showCreateDialog && (
+        <div onClick={() => !creating && setShowCreateDialog(false)} style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(37,37,37,0.58)", display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="create-wave-title" onClick={event => event.stopPropagation()} style={{ width: "100%", maxWidth: "390px", borderRadius: "16px", background: "#fff", padding: "18px", boxSizing: "border-box" }}>
+            <h2 id="create-wave-title" style={{ margin: "0 0 14px", fontSize: "18px" }}>통합 피킹 작업 생성</h2>
+            <label style={{ display: "block", fontSize: "12px", fontWeight: 800, marginBottom: "12px" }}>웨이브명
+              <input value={createDisplayName} onChange={event => setCreateDisplayName(event.target.value)} style={{ width: "100%", minWidth: 0, boxSizing: "border-box", minHeight: "44px", marginTop: "5px", padding: "8px 10px", borderRadius: "8px", border: `1px solid ${wmsColors.borderStrong}`, fontSize: "16px" }} />
+            </label>
+            <label style={{ display: "block", fontSize: "14px", fontWeight: 900, marginBottom: "12px", color: wmsColors.greenDark }}>작업자 이름 (필수)
+              <input autoFocus value={workerName} onChange={event => setWorkerName(event.target.value)} placeholder="작업자 이름을 입력하세요" style={{ width: "100%", minWidth: 0, boxSizing: "border-box", minHeight: "48px", marginTop: "5px", padding: "9px 10px", borderRadius: "8px", border: `2px solid ${wmsColors.greenDark}`, fontSize: "16px" }} />
+            </label>
+            {createError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{createError}</p>}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+              <button disabled={creating} onClick={() => setShowCreateDialog(false)} style={{ ...wmsSecondaryButton, minHeight: "44px" }}>취소</button>
+              <button disabled={creating || !createDisplayName.trim() || !workerName.trim()} onClick={handleCreate} style={{ ...wmsPrimaryButton, minHeight: "44px", opacity: creating || !createDisplayName.trim() || !workerName.trim() ? 0.5 : 1 }}>{creating ? "생성 중..." : "생성"}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {existingWaves.length > 0 && (
         <div style={{ marginTop: "24px" }}>
@@ -592,7 +639,7 @@ export default function WmsPickingWavesPage() {
               return (
                 <div key={wave.id} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "10px 12px", background: "#ffffff" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
-                    <a href={`/wms/picking/waves/${wave.id}`} style={{ color: wmsColors.ink, textDecoration: "none", fontWeight: 700, fontSize: "13px", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <a href={`/wms/picking/waves/${wave.id}`} style={{ color: wmsColors.ink, textDecoration: "none", fontWeight: 700, fontSize: "13px", flex: 1, minWidth: 0, whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.35 }}>
                       {wave.displayName || wave.id}
                     </a>
                     <span style={{ fontSize: "11px", color: wmsColors.muted, flexShrink: 0 }}>
@@ -600,7 +647,7 @@ export default function WmsPickingWavesPage() {
                     </span>
                   </div>
                   <div style={{ fontSize: "11px", color: wmsColors.muted, margin: "2px 0 8px" }}>
-                    {wave.id} · 발주서 {wave.sourcePurchaseOrderNumbers.length}건
+                    {wave.id} · 발주서 {wave.sourcePurchaseOrderNumbers.length}건{wave.workerName ? ` · 작업자 ${wave.workerName}` : ""}
                   </div>
 
                   {!isEditing ? (
@@ -679,6 +726,7 @@ function PurchaseOrderCheckbox({
   checked: boolean;
   onToggle: (purchaseOrderNumber: string) => void;
 }) {
+  const summary = summarizePurchaseOrder(order);
   return (
     <label
       style={{
@@ -695,7 +743,7 @@ function PurchaseOrderCheckbox({
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 700, fontSize: "13px" }}>발주서 {order.purchaseOrderNumber}</div>
         <div style={{ fontSize: "11px", color: wmsColors.muted }}>
-          {order.fulfillmentCenter} · 입고예정일 {order.expectedDate} · SKU {order.items.length}개
+          {order.fulfillmentCenter} · 입고예정일 {order.expectedDate} · SKU {summary.skuCount}개 · 총수량 {summary.totalQuantity}개
         </div>
       </div>
     </label>

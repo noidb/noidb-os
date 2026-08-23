@@ -19,6 +19,8 @@ export interface ProductCatalogItem {
   modelSku: string;
   modelName: string;
   category: string;
+  /** 제품DB 성별. 빈 값이면 화면 정렬에서 상품명 추론값을 즉시 사용한다. */
+  gender: string;
   productName: string;
   optionLabel: string;
   imageUrl: string;
@@ -47,6 +49,7 @@ export const FIELD_HEADER_CANDIDATES: Record<Exclude<keyof ProductCatalogItem, "
   modelSku: ["모델SKU"],
   modelName: ["모델명/품번"],
   category: ["카테고리"],
+  gender: ["성별"],
   productName: ["상품명"],
   optionLabel: ["옵션명", "옵션", "색상"],
   warehouseNumber: ["창고번호"],
@@ -92,6 +95,7 @@ export async function fetchProductCatalog(): Promise<{ configured: boolean; item
       modelSku: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.modelSku),
       modelName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.modelName),
       category: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.category),
+      gender: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.gender),
       productName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productName),
       optionLabel: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.optionLabel),
       imageUrl: extractImageUrl(row["이미지"]),

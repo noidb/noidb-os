@@ -1,6 +1,7 @@
 import type { PickingWaveItem } from "../picking-wave/types";
 import { resolveDisplayOption } from "../display-name";
 import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraft, type VendorOrderDraftLine } from "./types";
+import { sortWarehouseProducts } from "../category-order";
 
 /** 거래처 자동 발주의 SKU별 최소 주문 단위(한 타스). */
 export const MIN_AUTO_VENDOR_ORDER_QUANTITY = 12;
@@ -21,7 +22,7 @@ export function buildVendorOrderDraftsFromWaveItems(
   items: PickingWaveItem[],
   now: string
 ): { drafts: VendorOrderDraft[]; lines: VendorOrderDraftLine[] } {
-  const shortageItems = items.filter(item => item.shortageQuantity > 0);
+  const shortageItems = sortWarehouseProducts(items.filter(item => item.shortageQuantity > 0));
 
   const draftByVendor = new Map<string, VendorOrderDraft>();
   const lines: VendorOrderDraftLine[] = [];
@@ -64,5 +65,5 @@ export function buildVendorOrderDraftsFromWaveItems(
     });
   }
 
-  return { drafts: Array.from(draftByVendor.values()), lines };
+  return { drafts: Array.from(draftByVendor.values()), lines: sortWarehouseProducts(lines) };
 }

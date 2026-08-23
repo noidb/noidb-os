@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { renderVendorOrderImage } from "@/lib/wms/vendor-order/render-order-image";
+import { buildProductLinkShareText } from "@/lib/wms/vendor-order/export-text";
 import type { VendorOrderDraftLine, VendorOrderDraftStatus } from "@/lib/wms/vendor-order/types";
 import type { PickingWave } from "@/lib/wms/picking-wave/types";
 import { wmsColors, wmsGreenDarkButton, wmsPrimaryButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
@@ -73,13 +74,10 @@ export default function VendorOrderExportPanel({ wave, vendorName, lines, status
         setShareFallbackMessage("이 기기/브라우저는 파일 공유를 지원하지 않아 이미지를 대신 다운로드했습니다 — 카카오톡에서 직접 첨부해주세요.");
         return;
       }
-      const linkLines = lines
-        .filter(line => productLinksBySku[line.skuId])
-        .map((line, index) => `${index + 1}. ${line.productName}\n${productLinksBySku[line.skuId]}`);
-      const shareText = linkLines.length > 0
-        ? `제품링크\n\n${linkLines.join("\n\n")}`
-        : "제품링크가 등록된 상품이 없습니다.";
-      await nav.share!({ title: `노이드비 발주서 - ${vendorName}`, text: shareText, files: [file] });
+      const shareText = buildProductLinkShareText(lines, productLinksBySku);
+      const shareData: ShareData = { title: `노이드비 발주서 - ${vendorName}`, files: [file] };
+      if (shareText) shareData.text = shareText;
+      await nav.share!(shareData);
     } catch (error) {
       if (error instanceof Error && error.name !== "AbortError") {
         setShareFallbackMessage("공유 중 오류가 발생했습니다 — 다시 시도해주세요.");
@@ -88,8 +86,6 @@ export default function VendorOrderExportPanel({ wave, vendorName, lines, status
       setShareBusy(false);
     }
   }
-
-  const sent = status === "sent";
 
   return (
     <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: `1px dashed ${wmsColors.border}` }}>
@@ -114,10 +110,9 @@ export default function VendorOrderExportPanel({ wave, vendorName, lines, status
         </button>
         <button
           onClick={() => onMarkSent()}
-          disabled={sent}
-          style={{ ...wmsGreenDarkButton, minHeight: "48px", fontSize: "12px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25, opacity: sent ? 0.55 : 1 }}
+          style={{ ...wmsGreenDarkButton, minHeight: "48px", fontSize: "12px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25 }}
         >
-          {sent ? "전송완료됨" : "전송완료 표시"}
+          전송완료/해제
         </button>
         <button
           onClick={() => onReviseAgain()}

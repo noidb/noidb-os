@@ -58,11 +58,14 @@ export function resolveGroup(
   const modelKey = item.modelName || item.productCode;
   const liveEntry = liveCatalogByProductCode?.get(item.productCode);
   const effectiveCategory = liveEntry ? liveEntry.category : item.category;
-  const bucket = resolveWarehouseCategoryBucket(effectiveCategory);
+  const effectiveGender = liveEntry ? liveEntry.gender : item.gender;
+  const bucket = resolveWarehouseCategoryBucket(effectiveCategory, effectiveGender, item.productName);
   const bucketPriority = String(warehouseCategorySortIndex(bucket)).padStart(2, "0");
   // 창고번호/BOX번호는 대부분 비어있어(2026-08-19 확인) 실제 위치 순서로 쓰지 못한다 —
   // 기존 순서(창고번호 → 모델명 → SKU → 수량)를 그대로 유지하고 버킷 우선순위만 맨 앞에 둔다.
-  const sortKey = `${bucketPriority}::${item.catalogWarehouseNumber || ""}::${item.catalogBoxNumber || ""}::${modelKey}::${item.productCode}::${String(Math.max(0, Math.round(item.totalQuantity))).padStart(6, "0")}`;
+  const comparable = { ...item, category: effectiveCategory, gender: effectiveGender, warehouseNumber: item.catalogWarehouseNumber, boxNumber: item.catalogBoxNumber, skuId: item.productCode };
+  // 문자열 sortKey 소비자를 유지하면서 공통 comparator와 동일한 키 우선순위를 사용한다.
+  const sortKey = `${bucketPriority}::${comparable.zoneId || "￿"}::${comparable.shelfId || "￿"}::${comparable.boxId || comparable.boxNumber || comparable.warehouseNumber || "￿"}::${modelKey}::${item.productCode}`;
 
   return {
     groupId: `model:${modelKey}`,

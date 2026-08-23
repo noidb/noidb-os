@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { wmsColors, wmsGhostButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
-import { resolveWarehouseCategoryBucket, warehouseCategorySortIndex } from "@/lib/wms/category-order";
+import { compareWarehouseProducts } from "@/lib/wms/category-order";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 
@@ -10,6 +10,7 @@ interface CatalogItem {
   skuId: string;
   modelName: string;
   category: string;
+  gender: string;
   productName: string;
   optionLabel: string;
   imageUrl: string;
@@ -77,9 +78,7 @@ export default function ProductSearchAddSheet({ onClose, onSelect }: Props) {
   // 창고 동선 순서(카테고리 버킷)로 정렬 — 최신 제품DB 카테고리 기준, 계산 결과를 저장하지 않고
   // 검색할 때마다 새로 계산한다 (2026-08-19 사용자 확정).
   function byWarehouseOrder(a: CatalogItem, b: CatalogItem): number {
-    const diff = warehouseCategorySortIndex(resolveWarehouseCategoryBucket(a.category)) - warehouseCategorySortIndex(resolveWarehouseCategoryBucket(b.category));
-    if (diff !== 0) return diff;
-    return a.productName.localeCompare(b.productName);
+    return compareWarehouseProducts({ ...a, skuId: a.skuId }, { ...b, skuId: b.skuId });
   }
 
   const results = useMemo(() => {

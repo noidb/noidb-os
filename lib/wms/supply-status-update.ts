@@ -1,7 +1,8 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
-import { fetchSheetRows, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
+import { backupSheetWithinSpreadsheet, fetchSheetRows, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
 import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
 import {
   downloadDriveFile,
@@ -284,6 +285,7 @@ export interface SupplyStatusPreview {
   conflictCount: number;
   alreadySameCount: number;
   rows: MatchedRow[];
+  dryRunToken: string;
 }
 
 export type SupplyStatusPreviewOrNotFound = SupplyStatusPreview | { fileFound: false };
@@ -291,6 +293,20 @@ export type SupplyStatusPreviewOrNotFound = SupplyStatusPreview | { fileFound: f
 interface InternalMatchResult {
   preview: SupplyStatusPreview;
   headerIndex: ProductDbHeaderIndex;
+}
+
+function createDryRunToken(preview: Omit<SupplyStatusPreview, "dryRunToken">): string {
+  const target = preview.rows.map(row => ({
+    sheetRowNumber: row.sheetRowNumber,
+    modelSku: row.modelSku,
+    currentStatus: row.currentStatus,
+    currentSkuId: row.currentSkuId,
+    downloadSkuId: row.downloadSkuId,
+    downloadBarcode: row.downloadBarcode,
+    eligible: row.eligible,
+    conflict: row.conflict,
+  }));
+  return createHash("sha256").update(JSON.stringify({ fileName: preview.fileName, fileMtime: preview.fileMtime, target })).digest("hex");
 }
 
 async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
@@ -409,7 +425,7 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
     }
   }
 
-  const preview: SupplyStatusPreview = {
+  const previewWithoutToken: Omit<SupplyStatusPreview, "dryRunToken"> = {
     fileFound: true,
     fileName: fileInfo.fileName,
     fileMtime: fileInfo.mtime,
@@ -425,6 +441,7 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
     alreadySameCount: matchedRows.filter(r => r.alreadySame).length,
     rows: matchedRows,
   };
+  const preview: SupplyStatusPreview = { ...previewWithoutToken, dryRunToken: createDryRunToken(previewWithoutToken) };
 
   return { preview, headerIndex: idx };
 }
@@ -439,19 +456,28 @@ export interface SupplyStatusApplyResult {
   applied: boolean;
   preview: SupplyStatusPreview;
   backupPath?: string;
+  backupSheetName?: string;
   writtenCount: number;
   statusOnlyCount: number;
 }
 
 /** 미리보기를 서버에서 다시 계산해(클라이언트 캐시를 신뢰하지 않음) 안전 조건을 만족하는
  *  행만 실제로 쓴다. 대상이 0건이면 Google Sheets에 아무 요청도 보내지 않는다. */
-export async function applySupplyStatusUpdate(): Promise<SupplyStatusApplyResult | { fileFound: false }> {
+export class SupplyStatusPreviewChangedError extends Error {
+  constructor() {
+    super("dry-run 이후 대상 데이터가 변경되었습니다. 미리보기를 다시 확인해주세요.");
+    this.name = "SupplyStatusPreviewChangedError";
+  }
+}
+
+export async function applySupplyStatusUpdate(expectedDryRunToken: string): Promise<SupplyStatusApplyResult | { fileFound: false }> {
   const result = await computeSupplyStatusMatch();
   if (!result) return { fileFound: false };
   const { preview, headerIndex } = result;
+  if (!expectedDryRunToken || expectedDryRunToken !== preview.dryRunToken) throw new SupplyStatusPreviewChangedError();
 
   const toWrite = preview.rows.filter(r => r.eligible);
-  if (toWrite.length === 0) {
+  if (toWrite.length === 0 || preview.duplicateCount > 0 || preview.conflictCount > 0) {
     return { applied: false, preview, writtenCount: 0, statusOnlyCount: 0 };
   }
 
@@ -480,6 +506,10 @@ export async function applySupplyStatusUpdate(): Promise<SupplyStatusApplyResult
     );
   }
 
+  const fullBackup = await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME);
+  const rechecked = await computeSupplyStatusMatch();
+  if (!rechecked || rechecked.preview.dryRunToken !== preview.dryRunToken) throw new SupplyStatusPreviewChangedError();
+
   const cellUpdates: SheetCellUpdate[] = [];
   let statusOnlyCount = 0;
   for (const r of toWrite) {
@@ -502,5 +532,5 @@ export async function applySupplyStatusUpdate(): Promise<SupplyStatusApplyResult
 
   await updateSheetCells(PRODUCT_DB_SHEET_NAME, cellUpdates);
 
-  return { applied: true, preview, backupPath, writtenCount: toWrite.length, statusOnlyCount };
+  return { applied: true, preview, backupPath, backupSheetName: fullBackup.sheetName, writtenCount: toWrite.length, statusOnlyCount };
 }

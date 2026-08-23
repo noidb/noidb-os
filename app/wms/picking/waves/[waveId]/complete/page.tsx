@@ -16,6 +16,7 @@ import HanjinStepSequence from "./HanjinStepSequence";
 import EditPickingResultsPanel from "./EditPickingResultsPanel";
 import WmsExitNav from "../../WmsExitNav";
 import RefreshCatalogButton from "../../RefreshCatalogButton";
+import WaveIdentityEditor from "../../WaveIdentityEditor";
 
 export default function WmsPickingWaveCompletePage({ params }: { params: { waveId: string } }) {
   const waveRepository = usePickingWaveRepository();
@@ -199,10 +200,8 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
       </div>
       <div style={{ textAlign: "center", padding: "16px 0" }}>
         <div style={{ fontSize: "40px" }}>✅</div>
-        <h1 style={{ fontSize: "20px", margin: "8px 0" }}>{wave.displayName || wave.id}</h1>
-        <p style={{ color: wmsColors.muted, margin: 0 }}>
-          {wave.id} · {PICKING_WAVE_STATUS_LABEL[wave.status]}
-        </p>
+        <WaveIdentityEditor wave={wave} onSave={async updated => { await waveRepository.saveWave(updated); setWave(updated); }} />
+        <p style={{ color: wmsColors.muted, margin: "6px 0 0" }}>{PICKING_WAVE_STATUS_LABEL[wave.status]}</p>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "10px" }}>

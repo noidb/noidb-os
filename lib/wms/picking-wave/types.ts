@@ -28,6 +28,8 @@ export interface PickingWaveSourceRef {
   /** 현재는 발주서=바구니 1:1 임시 배정. 나중에 쉽먼트 번호가 생기면 BasketAssignment.shipmentNumber만 갱신한다. */
   basketNumber: string;
   requestedQuantity: number;
+  /** 입고예정일+물류센터가 같은 화면상 합배송 그룹. 수량 병합에는 사용하지 않는다. */
+  shippingGroupKey?: string;
 }
 
 /** 피킹 결과(찾은/부족)를 발주서·바구니별로 나눈 확정 값 */
@@ -49,6 +51,7 @@ export interface PickingWaveItem {
   barcode: string;
   /** 제품DB 조인 성공 시에만 존재 — 모델 모드 1차 그룹 기준 */
   category?: string;
+  gender?: string;
   /** 제품DB 조인 성공 시에만 존재 — 모델 모드 2차 그룹 기준 */
   modelName?: string;
   /** 제품DB "모델SKU"(F열, 옵션별 고유값) — 조인 성공 시에만 존재. SKU ID가 나중에 바뀌어도
@@ -100,6 +103,10 @@ export interface PickingWave {
   id: string;
   /** 사용자가 직접 붙이는 표시용 이름 (선택, 없으면 화면에서 id를 그대로 보여준다) */
   displayName?: string;
+  /** 생성 시 필수 입력한 작업자 표시명. */
+  workerName?: string;
+  /** 생성 당시 합배송 그룹 정보. 발주 원본과 피킹 수량은 병합하지 않는다. */
+  shippingGroups?: { key: string; expectedDate: string; fulfillmentCenter: string; purchaseOrderNumbers: string[] }[];
   status: PickingWaveStatus;
   sourcePurchaseOrderNumbers: string[];
   /** 완료 처리된 그룹 id (모델 모드: "model:xxx", 위치 모드: "box:xxx") — 재접속해도 유지 */

@@ -17,6 +17,7 @@ import ImageDiagnosticsPanel from "./ImageDiagnosticsPanel";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { openProductLinkPreview } from "@/lib/wms/product-link-preview";
 import { ExternalLinkIcon } from "../../../icons";
+import WaveIdentityEditor from "../WaveIdentityEditor";
 
 interface CatalogRefreshSummary {
   catalogCount: number;
@@ -493,10 +494,9 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
     return (
       <main style={pageStyle}>
         <WmsExitNav />
-        <h1 style={{ fontSize: "18px", margin: "0 0 2px" }}>통합 피킹</h1>
-        <p style={{ color: wmsColors.muted, fontSize: "13px", margin: "0 0 4px" }}>
-          {wave.id} · 발주서 {wave.sourcePurchaseOrderNumbers.length}건
-        </p>
+        <h1 style={{ fontSize: "18px", margin: "0 0 6px" }}>통합 피킹</h1>
+        <WaveIdentityEditor wave={wave} onSave={async updated => { await waveRepository.saveWave(updated); setWave(updated); }} />
+        <p style={{ color: wmsColors.muted, fontSize: "13px", margin: "4px 0" }}>발주서 {wave.sourcePurchaseOrderNumbers.length}건</p>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 0 10px" }}>
           <p style={{ color: wmsColors.green, fontSize: "13px", fontWeight: 700, margin: 0 }}>
             전체 그룹 진행률 {doneGroupCount} / {totalGroups}
@@ -621,7 +621,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
                     <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
                       <ItemThumbnail imageUrl={resolveLiveFields(groupItems[0], liveCatalogByProductCode).imageUrl} size={40} />
                       <div style={{ minWidth: 0, textAlign: "left" }}>
-                        <div style={{ fontWeight: 800, fontSize: "16px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        <div style={{ fontWeight: 800, fontSize: "16px", whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.35 }}>
                           {group.groupLabel}
                         </div>
                         <div style={{ marginTop: "3px", fontSize: "11px", fontWeight: 800, color: wmsColors.slateDark, whiteSpace: "normal", lineHeight: 1.35 }}>
@@ -1098,7 +1098,7 @@ function ChecklistView({
                 <ItemThumbnail imageUrl={live.imageUrl || catalogImageFallback(live.catalogModelName, item.modelSku, live.productLink)} size={44} />
               </button>
               <button type="button" onClick={() => onOpenDetail(item)} style={{ minWidth: 0, flex: 1, border: 0, padding: 0, background: "transparent", textAlign: "left", cursor: "pointer" }}>
-                <div style={{ fontSize: "13px", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <div style={{ fontSize: "13px", fontWeight: 700, whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.35 }}>
                   {live.name}
                 </div>
                 <div style={{ fontSize: "12px", fontWeight: 700, color: wmsColors.greenDark, whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.3 }}>

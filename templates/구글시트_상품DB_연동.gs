@@ -209,7 +209,87 @@ function upsertProduct_(db, productInputRow, productDbRows) {
   const row = productInputRow.slice(0, PRODUCT_INPUT_HEADERS.length);
   const model = String(row[4] || '').trim();
   if (!model) throw new Error('모델명이 없습니다.');
+  const existingModelRows = productDbRowsForModel_(db, model);
+  if (existingModelRows.length) {
+    updateExistingModelRowsAtomic_(db, model, productDbRows, existingModelRows);
+    return;
+  }
   replaceDbRowsForModel_(db, model, productDbRows);
+}
+
+/**
+ * 기존 상품 재저장은 모델SKU를 안정키로 삼아 기존 행을 제자리 갱신한다.
+ * 모든 옵션이 정확히 1행씩 대응하는지 먼저 검증한 뒤에만 쓰며, 패키지 행과 운영 열은 보존한다.
+ */
+function productDbRowsForModel_(db, model) {
+  if (!model || db.getLastRow() < 2) return [];
+  const range = db.getRange(2, 1, db.getLastRow() - 1, PRODUCT_DB_HEADERS.length);
+  const values = range.getValues();
+  const formulas = range.getFormulas();
+  return values.map((row, index) => ({
+    sheetRow: index + 2,
+    values: row,
+    formulas: formulas[index]
+  })).filter(item => String(item.values[dbColumn_('모델명/품번')] || '').trim() === model);
+}
+
+function isPackageProductDbRow_(row) {
+  const packageValue = String(row[dbColumn_('패키지')] || '').trim();
+  const name = String(row[dbColumn_('상품명')] || '').toLowerCase();
+  return Boolean(packageValue) || /패키지|랜덤발송|세트/.test(name);
+}
+
+function updateExistingModelRowsAtomic_(db, model, newRows, existingItems) {
+  assertUniqueProductKeys_(newRows, '기존상품 갱신 옵션');
+  if (!Array.isArray(newRows) || !newRows.length) throw new Error(model + ': 저장할 옵션이 없습니다. 기존 행은 변경하지 않았습니다.');
+  const modelSkuColumn = dbColumn_('모델SKU');
+  const protectedNames = ['창고번호','현재고','누적입고','미입고','최근발주일','최근입고일',
+    '이전쿠팡공급가','최근쿠팡공급가','공급가차이','공급가확인','SKU ID','바코드',
+    '제품링크','노출상품ID','옵션ID','쿠팡 노출가','재고현황','기본순서','패키지'];
+  const existingBasic = existingItems.filter(item => !isPackageProductDbRow_(item.values));
+  const byModelSku = {};
+  existingBasic.forEach(item => {
+    const key = String(item.values[modelSkuColumn] || '').trim().toUpperCase();
+    if (key) (byModelSku[key] || (byModelSku[key] = [])).push(item);
+  });
+  const prepared = newRows.map(source => {
+    const next = source.slice(0, PRODUCT_DB_HEADERS.length);
+    while (next.length < PRODUCT_DB_HEADERS.length) next.push('');
+    if (isPackageProductDbRow_(next)) throw new Error(model + ': 패키지/랜덤발송/세트 행은 기본 옵션 갱신에 포함할 수 없습니다.');
+    const key = String(next[modelSkuColumn] || '').trim().toUpperCase();
+    const matches = key ? (byModelSku[key] || []) : [];
+    if (matches.length !== 1) throw new Error(model + ' / ' + (key || '(빈 모델SKU)') + ': 대상 행이 ' + matches.length + '건입니다. 기존 행은 변경하지 않았습니다.');
+    const old = matches[0];
+    protectedNames.forEach(name => {
+      const column = dbColumn_(name);
+      next[column] = old.formulas[column] || old.values[column];
+    });
+    return { sheetRow: old.sheetRow, values: next };
+  });
+  if (prepared.length !== existingBasic.length) {
+    throw new Error(model + ': 기존 기본 옵션 ' + existingBasic.length + '개와 새 옵션 ' + prepared.length + '개가 다릅니다. 부분 저장하지 않았습니다.');
+  }
+  const targetRows = {};
+  prepared.forEach(item => {
+    if (targetRows[item.sheetRow]) throw new Error(model + ': 같은 행에 옵션이 중복 매칭됐습니다. 기존 행은 변경하지 않았습니다.');
+    targetRows[item.sheetRow] = true;
+  });
+  const lock = LockService.getDocumentLock();
+  lock.waitLock(30000);
+  const snapshots = prepared.map(item => ({
+    sheetRow: item.sheetRow,
+    values: db.getRange(item.sheetRow, 1, 1, PRODUCT_DB_HEADERS.length).getValues()[0]
+  }));
+  try {
+    prepared.forEach(item => db.getRange(item.sheetRow, 1, 1, PRODUCT_DB_HEADERS.length).setValues([item.values]));
+    SpreadsheetApp.flush();
+  } catch (error) {
+    snapshots.forEach(item => db.getRange(item.sheetRow, 1, 1, PRODUCT_DB_HEADERS.length).setValues([item.values]));
+    SpreadsheetApp.flush();
+    throw new Error(model + ': 옵션 일괄 저장 중 오류가 발생해 모든 대상 행을 복원했습니다. ' + String(error));
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function replaceDbRowsForModel_(db, model, newRows) {

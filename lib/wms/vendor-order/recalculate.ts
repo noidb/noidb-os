@@ -2,6 +2,7 @@ import type { PickingWaveItem } from "../picking-wave/types";
 import { resolveDisplayOption } from "../display-name";
 import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraftLine } from "./types";
 import { toVendorOrderQuantity } from "./aggregate";
+import { sortWarehouseProducts } from "../category-order";
 
 /**
  * 웨이브의 최신 부족수량을 기준으로 "자동 생성" 라인만 다시 계산한다 (2026-08-19 신규).
@@ -26,7 +27,7 @@ export function recalculateAutoVendorOrderLines(
   existingLines: VendorOrderDraftLine[],
   now: string
 ): RecalculateResult {
-  const shortageItems = waveItems.filter(item => item.shortageQuantity > 0);
+  const shortageItems = sortWarehouseProducts(waveItems.filter(item => item.shortageQuantity > 0));
   const manualLines = existingLines.filter(line => line.isManuallyAdded);
   const autoLinesByCode = new Map(existingLines.filter(line => !line.isManuallyAdded).map(line => [line.skuId, line]));
 
@@ -72,5 +73,5 @@ export function recalculateAutoVendorOrderLines(
   // 남은 것들(shortageItems에 더 이상 없음) = 부족수량이 0이 된 자동 라인 → 삭제 대상
   const removedLineIds = Array.from(autoLinesByCode.values()).map(line => line.id);
 
-  return { lines: [...manualLines, ...nextAutoLines], removedLineIds, addedProductCodes, updatedProductCodes };
+  return { lines: sortWarehouseProducts([...manualLines, ...nextAutoLines]), removedLineIds, addedProductCodes, updatedProductCodes };
 }

@@ -1,4 +1,5 @@
 import type { PickingWaveItem } from "./types";
+import { sortWarehouseProducts } from "../category-order";
 
 /**
  * 발주서(PO) 1건 기준으로 확정수량 서류 생성에 필요한 행을 계산하는 순수 함수.
@@ -15,8 +16,7 @@ export interface PoConfirmRow {
 }
 
 export function buildPoConfirmRows(items: PickingWaveItem[], purchaseOrderNumber: string): PoConfirmRow[] {
-  return items
-    .filter(item => item.sources.some(source => source.purchaseOrderNumber === purchaseOrderNumber))
+  return sortWarehouseProducts(items.filter(item => item.sources.some(source => source.purchaseOrderNumber === purchaseOrderNumber)))
     .map(item => {
       const source = item.sources.find(s => s.purchaseOrderNumber === purchaseOrderNumber)!;
       const allocation = item.allocations.find(a => a.purchaseOrderNumber === purchaseOrderNumber);

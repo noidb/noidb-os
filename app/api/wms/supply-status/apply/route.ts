@@ -3,32 +3,30 @@ import {
   applySupplyStatusUpdate,
   ApprovedStatusNotFoundError,
   ProductDbHeaderMissingError,
+  SupplyStatusPreviewChangedError,
 } from "@/lib/wms/supply-status-update";
-
 /**
- * 상품공급상태 업데이트 — 실제 반영 (2026-08-20 신규). 서버에서 매칭을 다시 계산해(클라이언트
- * 미리보기를 신뢰하지 않음) 안전 조건을 만족하는 행만 제품DB A열/H열에 쓴다. 대상이 0건이면
- * Google Sheets에 아무 요청도 보내지 않는다.
+ * 복구 dry-run 승인 전에는 어떤 호출도 Google Sheet 쓰기로 이어지지 않는다.
+ * 전체 백업과 상품 단위 원자 검증을 포함한 별도 승인 반영 경로가 준비될 때까지 잠근다.
  */
 export const runtime = "nodejs";
 
-export async function POST() {
+const APPLY_CONFIRMATION = "상품공급상태 업데이트 승인";
+
+export async function POST(request: Request) {
+  const body = await request.json().catch(() => ({}));
+  if (body?.confirmation !== APPLY_CONFIRMATION || typeof body?.dryRunToken !== "string") {
+    return NextResponse.json({ applied: false, writtenCount: 0, error: "명시적 승인 문자열과 최신 dry-run 토큰이 필요합니다." }, { status: 423 });
+  }
   try {
-    const result = await applySupplyStatusUpdate();
-    if (!("applied" in result)) {
-      return NextResponse.json(
-        { error: "상품공급상태관리 다운로드 폴더에서 사용할 수 있는 엑셀 파일을 찾지 못했습니다." },
-        { status: 404 }
-      );
-    }
+    const result = await applySupplyStatusUpdate(body.dryRunToken);
+    if (!("applied" in result)) return NextResponse.json({ error: "상품공급상태 파일을 찾지 못했습니다." }, { status: 404 });
     return NextResponse.json(result);
   } catch (error) {
+    if (error instanceof SupplyStatusPreviewChangedError) return NextResponse.json({ applied: false, error: error.message }, { status: 409 });
     if (error instanceof ApprovedStatusNotFoundError || error instanceof ProductDbHeaderMissingError) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
+      return NextResponse.json({ applied: false, error: error.message }, { status: 400 });
     }
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "상품공급상태 업데이트 중 오류가 발생했습니다." },
-      { status: 500 }
-    );
+    return NextResponse.json({ applied: false, error: error instanceof Error ? error.message : "상품공급상태 업데이트 실패" }, { status: 500 });
   }
 }

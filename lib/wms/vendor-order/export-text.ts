@@ -1,10 +1,37 @@
 import type { VendorOrderDraftLine } from "./types";
 
+function normalizeShareUrl(value: unknown): string | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  try {
+    const url = new URL(text);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 유효한 제품링크만 중복 없이 공유 문구로 만든다. 링크가 없으면 text 속성을 생략할 수 있게 undefined를 반환한다. */
+export function buildProductLinkShareText(
+  lines: Pick<VendorOrderDraftLine, "skuId" | "productName">[],
+  productLinksBySku: Record<string, string | null | undefined>
+): string | undefined {
+  const seen = new Set<string>();
+  const linkLines: string[] = [];
+  for (const line of lines) {
+    const url = normalizeShareUrl(productLinksBySku[line.skuId]);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    linkLines.push(`${linkLines.length + 1}. ${line.productName}\n${url}`);
+  }
+  return linkLines.length > 0 ? `제품링크\n\n${linkLines.join("\n\n")}` : undefined;
+}
+
 /**
  * 승인된 거래처별 부족분 발주서를 카카오톡으로 보낼 텍스트로 만든다.
  * 순수 문자열 포매팅만 하며, 어디로도 전송하지 않는다 — 사용자가 복사해서 직접 붙여넣는다.
  */
-export function buildKakaoOrderText(vendorName: string, lines: VendorOrderDraftLine[], waveId: string): string {
+export function buildKakaoOrderText(vendorName: string, lines: VendorOrderDraftLine[], _waveId: string): string {
   const today = new Date().toLocaleDateString("ko-KR");
   const totalQuantity = lines.reduce((sum, line) => sum + line.shortageQuantity, 0);
 
@@ -32,7 +59,5 @@ export function buildKakaoOrderText(vendorName: string, lines: VendorOrderDraftL
     `받는 사람: 노이드비`,
     `주소: 강원도 원주시 전망길 22-3 1층`,
     `전화번호: 010-5769-5602`,
-    ``,
-    `(참고번호: ${waveId})`,
   ].join("\n");
 }

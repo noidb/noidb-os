@@ -65,6 +65,46 @@ export interface SheetCellUpdate {
   value: string;
 }
 
+export interface SheetBackupResult {
+  sheetName: string;
+  sheetId: number;
+  sourceSheetId: number;
+}
+
+/** 같은 스프레드시트 안에 원본 탭 전체를 숨김 백업 탭으로 원자 복제한다. 원본 행은 건드리지 않는다. */
+export async function backupSheetWithinSpreadsheet(sheetName: string): Promise<SheetBackupResult> {
+  const accessToken = await getWmsGoogleAccessToken();
+  const spreadsheetId = getWmsSpreadsheetId();
+  const metadataUrl = `${SHEETS_API_BASE}/${spreadsheetId}?fields=sheets.properties`;
+  const metadataResponse = await fetch(metadataUrl, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
+  const metadata = await metadataResponse.json().catch(() => ({} as any));
+  if (!metadataResponse.ok) throw new Error(`Google Sheet 백업 메타데이터 조회 실패: ${metadata?.error?.message || metadataResponse.status}`);
+  const source = (metadata.sheets || []).map((sheet: any) => sheet.properties).find((properties: any) => properties?.title === sheetName);
+  if (!source?.sheetId) throw new Error(`백업할 시트 탭을 찾지 못했습니다: ${sheetName}`);
+
+  const existingIds = new Set<number>((metadata.sheets || []).map((sheet: any) => Number(sheet?.properties?.sheetId || 0)));
+  let backupSheetId = Math.floor(Date.now() % 1_900_000_000) + 100_000_000;
+  while (existingIds.has(backupSheetId)) backupSheetId += 1;
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
+  const backupSheetName = `_백업_${sheetName}_${stamp}`;
+  const response = await fetch(`${SHEETS_API_BASE}/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      requests: [
+        { duplicateSheet: { sourceSheetId: source.sheetId, newSheetId: backupSheetId, newSheetName: backupSheetName } },
+        { updateSheetProperties: { properties: { sheetId: backupSheetId, hidden: true }, fields: "hidden" } },
+      ],
+    }),
+  });
+  const data = await response.json().catch(() => ({} as any));
+  if (!response.ok) throw new Error(`Google Sheet 전체 백업 실패: ${data?.error?.message || response.status}`);
+  return { sheetName: backupSheetName, sheetId: backupSheetId, sourceSheetId: Number(source.sheetId) };
+}
+
 /** 1-based 열 번호를 A1 표기 열 문자로 바꾼다 (1→A, 27→AA). */
 function columnIndexToLetter(index: number): string {
   let n = index;

@@ -41,6 +41,7 @@ export async function fetchLiveCatalogLookup(): Promise<LiveCatalogLookup> {
 
 export interface LiveResolvedFields {
   category?: string;
+  gender?: string;
   /** 옵션이 상품명 끝에 중복 포함돼 있으면 제거된 상품명 (resolveDisplayNameAndOption 재사용,
    *  2026-08-20 신규 — 이전에는 화면마다 cleanDisplayProductName만 따로 불러 옵션 중복이 남았다) */
   name: string;
@@ -75,6 +76,7 @@ type LiveResolvableItem = Pick<
   | "productCode"
   | "productName"
   | "category"
+  | "gender"
   | "optionLabel"
   | "imageUrl"
   | "vendorName"
@@ -117,6 +119,7 @@ export function resolveLiveFields(item: LiveResolvableItem, liveCatalogByProduct
   const { name, option } = resolveDisplayNameAndOption(item.productName, item.optionLabel, live?.optionLabel);
   return {
     category: live ? live.category : item.category,
+    gender: live ? live.gender : item.gender,
     name,
     optionLabel: option,
     imageUrl: live?.imageUrl || item.imageUrl,

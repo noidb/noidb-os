@@ -1,6 +1,7 @@
 import type { SupplierHubPurchaseOrder } from "../supplier-hub-orders";
 import type { ProductCatalogItem } from "../product-catalog";
 import { normalizeSkuId } from "../sku-normalize";
+import { sortWarehouseProducts } from "../category-order";
 import type { ModelLocation, Shelf, SkuLocation, WarehouseBox, WarehouseZone } from "../types";
 import type { BasketAssignment, PickingWave, PickingWaveItem, PickingWaveSourceRef } from "./types";
 
@@ -85,10 +86,11 @@ export function buildPickingWave(input: BuildWaveInput): BuildWaveResult {
     const basketNumber = basketNumberByPo.get(order.purchaseOrderNumber)!;
     for (const line of order.items) {
       const existing = accumByProductCode.get(line.productCode);
-      const source: PickingWaveSourceRef = {
+        const source: PickingWaveSourceRef = {
         purchaseOrderNumber: order.purchaseOrderNumber,
         basketNumber,
-        requestedQuantity: line.orderedQuantity,
+          requestedQuantity: line.orderedQuantity,
+          shippingGroupKey: `${order.expectedDate}\u0000${order.fulfillmentCenter}`,
       };
       if (existing) {
         existing.totalQuantity += line.orderedQuantity;
@@ -112,6 +114,7 @@ export function buildPickingWave(input: BuildWaveInput): BuildWaveResult {
     // 처음부터 비어버리는 문제를 방지).
     const catalogEntry = catalogBySkuId.get(normalizeSkuId(accum.productCode));
     const category = catalogEntry?.category || undefined;
+    const gender = catalogEntry?.gender || undefined;
     const modelName = catalogEntry?.modelName || undefined;
     const modelSku = catalogEntry?.modelSku || undefined;
     const imageUrl = catalogEntry?.imageUrl || undefined;
@@ -156,6 +159,7 @@ export function buildPickingWave(input: BuildWaveInput): BuildWaveResult {
       productName: accum.productName,
       barcode: accum.barcode,
       category,
+      gender,
       modelName,
       modelSku,
       imageUrl,
@@ -203,5 +207,5 @@ export function buildPickingWave(input: BuildWaveInput): BuildWaveResult {
     updatedAt: now,
   }));
 
-  return { wave, items, baskets };
+  return { wave, items: sortWarehouseProducts(items), baskets };
 }

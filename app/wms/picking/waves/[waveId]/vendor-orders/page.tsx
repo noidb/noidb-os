@@ -290,7 +290,8 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
             status: isOverride ? overrideStatus!.status : existing.status,
             updatedAt: now,
             approvedAt: isOverride && overrideStatus!.status === "approved" ? now : existing.approvedAt,
-            sentAt: isOverride && overrideStatus!.status === "sent" ? now : existing.sentAt,
+            sentAt: isOverride ? (overrideStatus!.status === "sent" ? now : undefined) : existing.sentAt,
+            statusBeforeSent: isOverride && overrideStatus!.status === "sent" && existing.status !== "sent" ? existing.status : existing.statusBeforeSent,
           }
         : {
             id: `${params.waveId}::${vendorName}`,
@@ -301,6 +302,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
             updatedAt: now,
             approvedAt: isOverride && overrideStatus!.status === "approved" ? now : undefined,
             sentAt: isOverride && overrideStatus!.status === "sent" ? now : undefined,
+            statusBeforeSent: isOverride && overrideStatus!.status === "sent" ? "draft" : undefined,
           };
       nextDraftsByVendor[vendorName] = draft;
       await vendorOrderRepository.saveDraft(draft);
@@ -321,6 +323,11 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
 
   async function handleApprove(vendorName: string) {
     await persistAll({ vendorName, status: "approved" });
+  }
+
+  async function toggleSent(vendorName: string) {
+    const draft = draftsByVendor[vendorName];
+    await persistAll({ vendorName, status: draft?.status === "sent" ? (draft.statusBeforeSent || "approved") : "sent" });
   }
 
   if (loading) {
@@ -362,7 +369,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
       <p style={{ fontSize: "12px", color: wmsColors.muted, margin: "0 0 16px" }}>
         {isManualWorkspace
           ? '웨이브 없이 수동으로 만든 거래처 발주서입니다. "+ 발주서 수동 추가"와 "상품 검색 추가"로 상품을 넣어주세요.'
-          : `${wave.id} · 부족 수량을 제품DB "거래처" 기준으로 자동 분리했습니다. 거래처 정보가 없는 SKU는 "${UNASSIGNED_VENDOR_NAME}"로 별도 표시됩니다. 자동 발송은 없으며, 승인은 직접 눌러야 합니다.`}
+          : `${wave.displayName || wave.id}${wave.workerName ? ` · 작업자 ${wave.workerName}` : ""} · 부족 수량을 제품DB "거래처" 기준으로 자동 분리했습니다. 거래처 정보가 없는 SKU는 "${UNASSIGNED_VENDOR_NAME}"로 별도 표시됩니다. 자동 발송은 없으며, 승인은 직접 눌러야 합니다.`}
       </p>
 
       {isPreview && (
@@ -490,7 +497,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                     lines={group.lines}
                     status={status}
                     productLinksBySku={Object.fromEntries(group.lines.map(line => [line.skuId, liveCatalogByProductCode.get(line.skuId)?.productLink || ""]))}
-                    onMarkSent={() => persistAll({ vendorName: group.vendorName, status: "sent" })}
+                    onMarkSent={() => toggleSent(group.vendorName)}
                     onReviseAgain={() => persistAll({ vendorName: group.vendorName, status: "resend_needed" })}
                   />
                 )}

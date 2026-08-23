@@ -142,7 +142,7 @@ export default function EditPickingResultsPanel({ items, liveCatalogByProductCod
                   </div>
                 )}
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: "13px", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <div style={{ fontSize: "13px", fontWeight: 700, whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.35 }}>
                     {live.name}
                   </div>
                   <div style={{ fontSize: "12px", fontWeight: 700, color: wmsColors.greenDark, whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.3 }}>

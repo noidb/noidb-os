@@ -112,7 +112,7 @@ function ActiveWavesList() {
                 </span>
               </div>
               <div style={{ marginTop: "4px", fontSize: "11px", color: wmsColors.muted }}>
-                {wave.id} · 발주서 {wave.sourcePurchaseOrderNumbers.length}건
+                {wave.id} · 발주서 {wave.sourcePurchaseOrderNumbers.length}건{wave.workerName ? ` · 작업자 ${wave.workerName}` : ""}
               </div>
             </div>
           </a>
