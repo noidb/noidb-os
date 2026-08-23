@@ -10,7 +10,6 @@ import { PICKING_WAVE_STATUS_LABEL } from "@/lib/wms/picking-wave/status-label";
 import { fetchLiveCatalogLookup, type LiveCatalogLookup } from "@/lib/wms/picking-wave/live-catalog";
 import type { BasketAssignment, PickingWave, PickingWaveItem } from "@/lib/wms/picking-wave/types";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
-import PoConfirmSection from "./PoConfirmSection";
 import GenerateAllPoConfirmButton from "./GenerateAllPoConfirmButton";
 import HanjinStepSequence from "./HanjinStepSequence";
 import EditPickingResultsPanel from "./EditPickingResultsPanel";
@@ -32,7 +31,6 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [confirmingResult, setConfirmingResult] = useState(false);
-  const [confirmingOrder, setConfirmingOrder] = useState(false);
   const [catalogRefreshing, setCatalogRefreshing] = useState(false);
 
   /** 카테고리/옵션명/대표이미지/거래처/창고번호/BOX번호/쿠팡바코드만 다시 불러온다 — 피킹 수량이나
@@ -110,21 +108,6 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
       setWave(updatedWave);
     } finally {
       setConfirmingResult(false);
-    }
-  }
-
-  async function handleOrderConfirm() {
-    if (!wave) return;
-    const confirmed = window.confirm("발주확정 후에는 일반 피킹 수정이 제한됩니다. 진행하시겠습니까?");
-    if (!confirmed) return;
-    setConfirmingOrder(true);
-    try {
-      const now = new Date().toISOString();
-      const updatedWave: PickingWave = { ...wave, status: "order_confirmed", orderConfirmedAt: now, updatedAt: now };
-      await waveRepository.saveWave(updatedWave);
-      setWave(updatedWave);
-    } finally {
-      setConfirmingOrder(false);
     }
   }
 
@@ -285,28 +268,25 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
         </div>
       )}
 
-      {/* 7단계: 최종 발주확정 미리보기 + 확정 */}
+      {/* 7단계: 선택 발주 통합 서류 생성 → 쿠팡 업로드 → 발주별 완료 확인 */}
       {reachedResultConfirm && (
         <div style={{ marginTop: "20px" }}>
-          <h2 style={{ fontSize: "14px", margin: "0 0 8px" }}>발주확정 미리보기 / 서류 생성</h2>
+          <h2 style={{ fontSize: "14px", margin: "0 0 8px" }}>발주확정 선택 / 통합 서류 생성</h2>
           <p style={{ fontSize: "11px", color: wmsColors.muted, margin: "0 0 10px" }}>
-            발주서별로 실제 찾은 수량을 확인하고, 필요하면 확정수량을 직접 고친 뒤 서류를 생성하세요.
-            원본 PO_FOR_CONFIRM 파일을 찾지 못하면 안내 메시지가 뜹니다 (lib/wms/data/po-for-confirm
-            폴더에 넣어야 합니다). 외부 Supplier Hub에는 자동 업로드하지 않습니다 — 파일만 만들어집니다.
+            원본 엑셀 내부의 발주번호 전체를 확인한 뒤, 선택한 발주만 쿠팡 업로드용 XLSX 한 개로 만듭니다.
+            외부 Supplier Hub에는 자동 업로드하지 않으며, 사용자가 업로드 성공을 확인해야만 완료 처리됩니다.
           </p>
 
-          <GenerateAllPoConfirmButton wave={wave} items={items} />
+          <GenerateAllPoConfirmButton
+            wave={wave}
+            items={items}
+            baskets={baskets}
+            onWaveChange={async updatedWave => {
+              await waveRepository.saveWave(updatedWave);
+              setWave(updatedWave);
+            }}
+          />
 
-          {wave.sourcePurchaseOrderNumbers.map(poNumber => {
-            const basket = baskets.find(b => b.purchaseOrderNumber === poNumber);
-            return <PoConfirmSection key={poNumber} purchaseOrderNumber={poNumber} fulfillmentCenter={basket?.fulfillmentCenter || "-"} items={items} />;
-          })}
-
-          {wave.status === "result_confirmed" && (
-            <button onClick={handleOrderConfirm} disabled={confirmingOrder} style={{ ...wmsPrimaryButton, width: "100%", opacity: confirmingOrder ? 0.6 : 1 }}>
-              {confirmingOrder ? "처리 중..." : "최종 발주확정"}
-            </button>
-          )}
           {wave.status === "order_confirmed" && (
             <p style={{ fontSize: "12px", color: wmsColors.greenDark, fontWeight: 700, textAlign: "center" }}>
               발주확정 완료됨 ({wave.orderConfirmedAt ? new Date(wave.orderConfirmedAt).toLocaleString("ko-KR") : ""})

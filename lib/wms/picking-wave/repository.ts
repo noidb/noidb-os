@@ -9,7 +9,10 @@ export interface PickingWaveRepository {
   listWaves(): Promise<PickingWave[]>;
   getWave(waveId: string): Promise<PickingWave | null>;
   saveWave(wave: PickingWave): Promise<void>;
-  /** 웨이브와 그 아이템·바구니를 함께 삭제한다. 다른 웨이브나 실제 발주 원본(엑셀)에는 영향 없다. */
+  /**
+   * 웨이브와 그 아이템·바구니, 해당 웨이브의 임시 발주확정 진행상태를 함께 삭제한다.
+   * 발주확정 완료 이력, 다른 웨이브, 거래처 발주·입고 이력, 실제 발주 원본에는 영향이 없다.
+   */
   deleteWave(waveId: string): Promise<void>;
 
   listItems(waveId: string): Promise<PickingWaveItem[]>;

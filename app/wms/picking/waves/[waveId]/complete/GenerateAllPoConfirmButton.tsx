@@ -1,400 +1,508 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import JSZip from "jszip";
-import { buildPoConfirmRows } from "@/lib/wms/picking-wave/po-confirm-rows";
+import { useEffect, useMemo, useState } from "react";
 import { readFileAsBase64 } from "@/lib/wms/file-base64";
-import type { PickingWave, PickingWaveItem } from "@/lib/wms/picking-wave/types";
-import { wmsColors, wmsPrimaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
+import { buildPoConfirmRows, type PoConfirmRow } from "@/lib/wms/picking-wave/po-confirm-rows";
+import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
+import type { BasketAssignment, PickingWave, PickingWaveItem } from "@/lib/wms/picking-wave/types";
+import {
+  clearPoConfirmationErrors,
+  collectConfirmedPurchaseOrderNumbers,
+  listPoConfirmationRecords,
+  upsertPoConfirmationRecords,
+  type PoConfirmationRecord,
+} from "@/lib/wms/po-confirm-state";
+import { wmsColors, wmsGhostButton, wmsOuterCard, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
+import PoConfirmSection, { type PoConfirmCardStage, type PoConfirmSourceSummary } from "./PoConfirmSection";
 
 interface Props {
   wave: PickingWave;
   items: PickingWaveItem[];
+  baskets: BasketAssignment[];
+  onWaveChange: (wave: PickingWave) => Promise<void>;
 }
 
-interface FailedPo {
-  poNumber: string;
-  message: string;
+interface InspectedPurchaseOrder extends PoConfirmSourceSummary {
+  purchaseOrderNumber: string;
+  errorMessages: string[];
 }
 
-interface UploadState {
+interface InspectedSource {
   fileName: string;
-  base64: string;
-  checking: boolean;
-  foundPoNumber: string | null;
-  matches: boolean;
-  error: string | null;
+  fileHash: string;
+  source: string;
+  totalPurchaseOrderCount: number;
+  totalRowCount: number;
+  sheetNames: string[];
+  purchaseOrders: InspectedPurchaseOrder[];
 }
 
-type FolderPoStatus = "found" | "missing" | "duplicate" | "error";
+interface InspectSourceResponse {
+  primaryDir?: string;
+  folderAccessible?: boolean;
+  source?: InspectedSource | null;
+  error?: string;
+}
 
-interface FolderStatusEntry {
+interface CardState {
   poNumber: string;
-  status: FolderPoStatus;
-  fileName?: string;
-  duplicateFileNames?: string[];
-  errorMessage?: string;
+  rows: PoConfirmRow[];
+  sourceSummary?: InspectedPurchaseOrder;
+  fulfillmentCenter: string;
+  record?: PoConfirmationRecord;
+  stage: PoConfirmCardStage;
+  errors: string[];
+  eligible: boolean;
+}
+
+function downloadFile(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function responseFileName(response: Response, fallback: string): string {
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (!encoded) return fallback;
+  try {
+    return decodeURIComponent(encoded.replace(/^"|"$/g, ""));
+  } catch {
+    return fallback;
+  }
+}
+
+function SummaryTile({ label, value, highlight }: { label: string; value: number; highlight?: boolean }) {
+  return (
+    <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: "#ffffff", padding: "9px 6px", textAlign: "center", minWidth: 0 }}>
+      <div style={{ fontSize: "20px", lineHeight: 1.1, fontWeight: 900, color: highlight && value > 0 ? wmsColors.warn : wmsColors.ink }}>{value}</div>
+      <div style={{ marginTop: "3px", fontSize: "10px", color: wmsColors.muted, overflowWrap: "anywhere" }}>{label}</div>
+    </div>
+  );
 }
 
 /**
- * 발주서별로 하나씩 눌러야 했던 [발주확정 서류 생성]을 웨이브 전체 기준으로 한 번에 실행하는
- * 버튼 (2026-08-19 4차 실사용 테스트 신규). 기존 개별 생성 API(/api/wms/po-confirm/generate)와
- * 행 계산 로직(buildPoConfirmRows)을 그대로 재사용하며, 새 서버 로직은 추가하지 않았다 —
- * 발주서마다 기존과 동일한 xlsx를 순서대로 받아 브라우저에서 jszip(기존 의존성, 새 설치 없음)으로
- * 묶기만 한다. 하나라도 실패하면(원본 템플릿 없음 등) 그 어떤 파일도 다운로드하지 않고 실패
- * 목록만 보여준다 — 일부만 조용히 받아지는 것을 막기 위함이다. 원본 PO_FOR_CONFIRM 템플릿과
- * 발주확정 상태(order_confirmed 등)는 이 버튼이 전혀 건드리지 않는다(서류 생성 전용).
- *
- * 2026-08-20 전면 개편 — 모바일에서 발주서마다 원본을 하나씩 업로드해야 했던 불편을 없앴다.
- * 서버가 /api/wms/po-confirm/folder-status로 Google Drive 동기화 폴더(기본
- * "G:\내 드라이브\쿠팡데이터\발주서업로드양식", WMS_PO_FOR_CONFIRM_DIR로 재정의 가능)를 자동
- * 검색해 발주서별 원본 확인 상태(확인됨/누락/중복/오류)를 보여준다. 개별 업로드 카드는 기본
- * 화면에서 없앴고, 자동검색이 실패한 발주서에 한해서만 "고급: 수동 원본 업로드" 접이 영역에서
- * 보조로 쓸 수 있다 — 자동검색된 발주서는 항상 자동검색 파일이 우선이며 수동 업로드로 덮이지
- * 않는다.
+ * 하나의 쿠팡 원본 파일을 내부 발주번호 전체로 검사하고, 사용자가 고른 발주만 원본 형식의 XLSX
+ * 한 개로 만든다. 파일 생성·쿠팡 업로드·최종 확인 상태를 서로 분리해 저장한다.
  */
-export default function GenerateAllPoConfirmButton({ wave, items }: Props) {
-  const [generating, setGenerating] = useState(false);
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const [failures, setFailures] = useState<FailedPo[] | null>(null);
-  const [successResult, setSuccessResult] = useState<{ fileCount: number; shortageRowCount: number; reasonAppliedCount: number } | null>(null);
-
-  const [checkingFolder, setCheckingFolder] = useState(true);
+export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWaveChange }: Props) {
+  const waveRepository = usePickingWaveRepository();
+  const [source, setSource] = useState<InspectedSource | null>(null);
   const [primaryDir, setPrimaryDir] = useState<string | null>(null);
   const [folderAccessible, setFolderAccessible] = useState(true);
-  const [statusByPo, setStatusByPo] = useState<Record<string, FolderStatusEntry>>({});
-  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
-  const [showManualUpload, setShowManualUpload] = useState(false);
-  const [uploadsByPo, setUploadsByPo] = useState<Record<string, UploadState>>({});
+  const [inspecting, setInspecting] = useState(true);
+  const [inspectError, setInspectError] = useState<string | null>(null);
+  const [manualFile, setManualFile] = useState<{ fileName: string; base64: string } | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmedByPo, setConfirmedByPo] = useState<Record<string, Record<string, number>>>({});
+  const [records, setRecords] = useState<PoConfirmationRecord[]>([]);
+  const [allWaves, setAllWaves] = useState<PickingWave[]>([]);
+  const [generating, setGenerating] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const poNumbers = wave.sourcePurchaseOrderNumbers;
-  const rowsByPo = poNumbers.map(poNumber => ({ poNumber, rows: buildPoConfirmRows(items, poNumber) }));
-  const totalSkuCount = rowsByPo.reduce((sum, entry) => sum + entry.rows.length, 0);
-  const totalConfirmedQuantity = rowsByPo.reduce((sum, entry) => sum + entry.rows.reduce((s, row) => s + row.foundQuantity, 0), 0);
+  const rowsByPo = useMemo(() => {
+    const result = new Map<string, PoConfirmRow[]>();
+    for (const poNumber of wave.sourcePurchaseOrderNumbers) {
+      result.set(poNumber, buildPoConfirmRows(items, poNumber));
+    }
+    return result;
+  }, [items, wave.sourcePurchaseOrderNumbers]);
 
-  async function checkFolderStatus() {
-    setCheckingFolder(true);
+  useEffect(() => {
+    const initial: Record<string, Record<string, number>> = {};
+    for (const [poNumber, rows] of rowsByPo) {
+      initial[poNumber] = Object.fromEntries(rows.map(row => [row.skuId, row.foundQuantity]));
+    }
+    setConfirmedByPo(initial);
+  }, [rowsByPo]);
+
+  async function refreshStoredState() {
     try {
-      const response = await fetch("/api/wms/po-confirm/folder-status", {
+      const loadedWaves = await waveRepository.listWaves();
+      setAllWaves(loadedWaves);
+      setRecords(listPoConfirmationRecords());
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "저장된 발주확정 상태를 읽지 못했습니다.");
+    }
+  }
+
+  async function inspectCombinedSource(uploadedFileBase64?: string, uploadedFileName?: string) {
+    setInspecting(true);
+    setInspectError(null);
+    setActionError(null);
+    setSuccessMessage(null);
+    if (!uploadedFileBase64) setManualFile(null);
+    try {
+      const response = await fetch("/api/wms/po-confirm/inspect-source", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ poNumbers }),
+        body: JSON.stringify({
+          expectedPoNumbers: wave.sourcePurchaseOrderNumbers,
+          uploadedFileBase64,
+          uploadedFileName,
+        }),
       });
-      const data = await response.json();
-      if (!response.ok) {
-        setFolderAccessible(false);
-        setStatusByPo({});
+      const data = await response.json().catch(() => ({})) as InspectSourceResponse;
+      setPrimaryDir(data.primaryDir || null);
+      setFolderAccessible(data.folderAccessible !== false);
+      if (!response.ok || !data.source) {
+        setSource(null);
+        setSelected(new Set());
+        setInspectError(data.error || "통합 발주확정 원본 파일을 찾거나 읽지 못했습니다.");
         return;
       }
-      setPrimaryDir(data.primaryDir);
-      setFolderAccessible(Boolean(data.folderAccessible));
-      const map: Record<string, FolderStatusEntry> = {};
-      for (const entry of (data.entries || []) as FolderStatusEntry[]) map[entry.poNumber] = entry;
-      setStatusByPo(map);
-    } catch {
-      setFolderAccessible(false);
-      setStatusByPo({});
+
+      setSource(data.source);
+      setSelected(new Set());
+      // 생성 실패로 남은 error만 지운다. 생성·업로드·확정 이력은 그대로 유지된다.
+      setRecords(clearPoConfirmationErrors(wave.sourcePurchaseOrderNumbers, wave.id));
+    } catch (error) {
+      setSource(null);
+      setSelected(new Set());
+      setInspectError(error instanceof Error ? error.message : "통합 발주확정 원본을 확인하지 못했습니다.");
     } finally {
-      setCheckingFolder(false);
+      setInspecting(false);
     }
   }
 
   useEffect(() => {
-    checkFolderStatus();
+    void refreshStoredState();
+    void inspectCombinedSource();
+    // 웨이브가 바뀔 때만 원본과 로컬 진행상태를 새로 읽는다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wave.id]);
 
-  const foundCount = poNumbers.filter(po => statusByPo[po]?.status === "found").length;
-  const missingPoNumbers = poNumbers.filter(po => statusByPo[po]?.status === "missing" || !statusByPo[po]);
-  const duplicatePoNumbers = poNumbers.filter(po => statusByPo[po]?.status === "duplicate");
-  const errorPoNumbers = poNumbers.filter(po => statusByPo[po]?.status === "error");
-  const needsManualPoNumbers = poNumbers.filter(po => statusByPo[po]?.status !== "found");
+  const recordByPo = useMemo(() => new Map(records.map(record => [record.poNumber, record])), [records]);
+  const confirmedPoNumbers = useMemo(
+    () => collectConfirmedPurchaseOrderNumbers(allWaves, records),
+    [allWaves, records]
+  );
+  const sourceByPo = useMemo(
+    () => new Map((source?.purchaseOrders || []).map(order => [order.purchaseOrderNumber, order])),
+    [source]
+  );
 
-  const allReady =
-    !checkingFolder &&
-    folderAccessible &&
-    poNumbers.every(po => statusByPo[po]?.status === "found" || uploadsByPo[po]?.matches === true);
+  const cardStates = useMemo<CardState[]>(() => {
+    const inWave = new Set(wave.sourcePurchaseOrderNumbers);
+    const allPoNumbers = [
+      ...wave.sourcePurchaseOrderNumbers,
+      ...(source?.purchaseOrders || []).map(order => order.purchaseOrderNumber).filter(poNumber => !inWave.has(poNumber)),
+    ];
 
-  async function handleCopyFolderPath() {
-    if (!primaryDir) return;
-    try {
-      await navigator.clipboard.writeText(primaryDir);
-      setCopyFeedback("복사했습니다");
-    } catch {
-      setCopyFeedback("복사에 실패했습니다 — 경로를 직접 선택해 복사해주세요.");
-    }
-    setTimeout(() => setCopyFeedback(null), 2500);
+    return allPoNumbers.map(poNumber => {
+      const rows = rowsByPo.get(poNumber) || [];
+      const sourceSummary = sourceByPo.get(poNumber);
+      const record = recordByPo.get(poNumber);
+      const errors: string[] = [];
+      if (!inWave.has(poNumber)) errors.push("현재 웨이브에 포함되지 않은 발주입니다.");
+      if (!sourceSummary) errors.push("통합 원본 파일에서 이 발주번호를 찾을 수 없습니다.");
+      if (inWave.has(poNumber) && rows.length === 0) errors.push("이 웨이브의 피킹 결과에서 발주 품목을 찾을 수 없습니다.");
+      if (sourceSummary) errors.push(...sourceSummary.errorMessages);
+      if (sourceSummary && rows.length > 0 && sourceSummary.rowCount !== rows.length) {
+        errors.push(`원본 행 수(${sourceSummary.rowCount})와 웨이브 품목 수(${rows.length})가 다릅니다.`);
+      }
+      const sourceConfirmed = sourceSummary?.sourceConfirmed === true;
+      const confirmed = confirmedPoNumbers.has(poNumber) || sourceConfirmed;
+      if (
+        !confirmed &&
+        record &&
+        record.waveId !== wave.id &&
+        (record.stage === "document_generated" || record.stage === "uploaded")
+      ) {
+        errors.push(`다른 웨이브(${record.waveId})에서 이미 서류 생성 또는 업로드 단계가 진행 중입니다.`);
+      }
+      if (record?.stage === "error" && record.waveId === wave.id && record.errorMessage) errors.push(record.errorMessage);
+
+      const stage: PoConfirmCardStage = confirmed
+        ? "confirmed"
+        : errors.length > 0
+          ? "error"
+          : record?.stage || "eligible";
+      const eligible = inWave.has(poNumber) && Boolean(sourceSummary) && rows.length > 0 && errors.length === 0 && !confirmed;
+      const basketCenter = baskets.find(basket => basket.purchaseOrderNumber === poNumber)?.fulfillmentCenter || "";
+
+      return {
+        poNumber,
+        rows,
+        sourceSummary,
+        record,
+        stage,
+        errors: [...new Set(errors)],
+        eligible,
+        fulfillmentCenter: sourceSummary?.fulfillmentCenters[0] || basketCenter || "-",
+      };
+    });
+  }, [baskets, confirmedPoNumbers, recordByPo, rowsByPo, source, sourceByPo, wave.id, wave.sourcePurchaseOrderNumbers]);
+
+  const eligiblePoNumbers = useMemo(
+    () => cardStates.filter(card => card.eligible).map(card => card.poNumber),
+    [cardStates]
+  );
+
+  useEffect(() => {
+    const eligible = new Set(eligiblePoNumbers);
+    setSelected(previous => new Set([...previous].filter(poNumber => eligible.has(poNumber))));
+  }, [eligiblePoNumbers]);
+
+  const allEligibleSelected = eligiblePoNumbers.length > 0 && eligiblePoNumbers.every(poNumber => selected.has(poNumber));
+  const confirmedCount = cardStates.filter(card => card.stage === "confirmed").length;
+  const errorCount = cardStates.filter(card => card.stage === "error").length;
+
+  function toggleAllEligible() {
+    setSelected(allEligibleSelected ? new Set() : new Set(eligiblePoNumbers));
   }
 
-  async function handleFileSelected(poNumber: string, e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
+  function toggleOne(poNumber: string) {
+    setSelected(previous => {
+      const next = new Set(previous);
+      if (next.has(poNumber)) next.delete(poNumber);
+      else next.add(poNumber);
+      return next;
+    });
+  }
+
+  function updateConfirmedQuantity(poNumber: string, skuId: string, value: number) {
+    setConfirmedByPo(previous => ({
+      ...previous,
+      [poNumber]: { ...previous[poNumber], [skuId]: value },
+    }));
+  }
+
+  async function handleManualFileSelected(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
     if (!file) return;
-    setUploadsByPo(prev => ({ ...prev, [poNumber]: { fileName: file.name, base64: "", checking: true, foundPoNumber: null, matches: false, error: null } }));
     try {
       const base64 = await readFileAsBase64(file);
-      const response = await fetch("/api/wms/po-confirm/inspect-upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileBase64: base64, expectedPoNumber: poNumber }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setUploadsByPo(prev => ({ ...prev, [poNumber]: { fileName: file.name, base64, checking: false, foundPoNumber: null, matches: false, error: data.error || "파일을 확인하지 못했습니다." } }));
-        return;
-      }
-      setUploadsByPo(prev => ({ ...prev, [poNumber]: { fileName: file.name, base64, checking: false, foundPoNumber: data.foundPoNumber, matches: data.matches, error: null } }));
-    } catch (err) {
-      setUploadsByPo(prev => ({
-        ...prev,
-        [poNumber]: { fileName: file.name, base64: "", checking: false, foundPoNumber: null, matches: false, error: err instanceof Error ? err.message : "파일을 확인하는 중 오류가 발생했습니다." },
-      }));
+      setManualFile({ fileName: file.name, base64 });
+      await inspectCombinedSource(base64, file.name);
+      setManualFile({ fileName: file.name, base64 });
+    } catch (error) {
+      setInspectError(error instanceof Error ? error.message : "업로드한 원본 파일을 읽지 못했습니다.");
     }
   }
 
-  async function handleGenerateAll() {
-    if (generating || poNumbers.length === 0 || !allReady) return;
-    setGenerating(true);
-    setFailures(null);
-    setSuccessResult(null);
-    setProgress({ done: 0, total: poNumbers.length });
+  function buildRecord(
+    poNumber: string,
+    stage: PoConfirmationRecord["stage"],
+    now: string,
+    options: { generatedFileName?: string; errorMessage?: string } = {}
+  ): PoConfirmationRecord {
+    const previous = recordByPo.get(poNumber);
+    const selectedRowCount = sourceByPo.get(poNumber)?.rowCount || rowsByPo.get(poNumber)?.length || 0;
+    return {
+      poNumber,
+      waveId: wave.id,
+      stage,
+      sourceFileName: source?.fileName || manualFile?.fileName || previous?.sourceFileName || "",
+      sourceFileHash: source?.fileHash || previous?.sourceFileHash || "",
+      sourcePurchaseOrderCount: source?.totalPurchaseOrderCount || previous?.sourcePurchaseOrderCount || 0,
+      sourceRowCount: source?.totalRowCount || previous?.sourceRowCount || 0,
+      selectedRowCount,
+      generatedFileName: options.generatedFileName || previous?.generatedFileName,
+      documentGeneratedAt: stage === "document_generated" ? now : previous?.documentGeneratedAt,
+      uploadedAt: stage === "uploaded" || stage === "confirmed" ? previous?.uploadedAt || now : previous?.uploadedAt,
+      confirmedAt: stage === "confirmed" ? now : previous?.confirmedAt,
+      errorMessage: options.errorMessage,
+      updatedAt: now,
+    };
+  }
 
-    const succeeded: { fileName: string; blob: Blob }[] = [];
-    const failed: FailedPo[] = [];
-    let totalShortageRowCount = 0;
-    let totalReasonAppliedCount = 0;
-
-    for (const { poNumber, rows } of rowsByPo) {
-      if (rows.length === 0) {
-        failed.push({ poNumber, message: "이 웨이브 안에서 이 발주서에 해당하는 SKU를 찾을 수 없습니다." });
-        setProgress(prev => (prev ? { ...prev, done: prev.done + 1 } : prev));
-        continue;
-      }
-      try {
-        // 자동검색된 발주서는 항상 자동검색 파일을 우선 쓴다 — 수동 업로드가 있어도 무시한다
-        // (2026-08-20, "동일 발주번호는 자동검색 파일을 우선 사용" 요구사항).
-        const useAutoSearch = statusByPo[poNumber]?.status === "found";
-        const response = await fetch("/api/wms/po-confirm/generate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            poNumber,
-            confirmedQuantities: rows.map(row => ({ skuId: row.skuId, confirmedQuantity: row.foundQuantity })),
-            uploadedFileBase64: useAutoSearch ? undefined : uploadsByPo[poNumber]?.base64,
-          }),
-        });
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}));
-          failed.push({ poNumber, message: data.error || `HTTP ${response.status}` });
-        } else {
-          const disposition = response.headers.get("Content-Disposition") || "";
-          const fileNameMatch = disposition.match(/filename\*=UTF-8''(.+)$/);
-          const fileName = fileNameMatch ? decodeURIComponent(fileNameMatch[1]) : `PO_FOR_CONFIRM(${poNumber}).xlsx`;
-          totalShortageRowCount += Number(response.headers.get("X-Shortage-Row-Count") || 0);
-          totalReasonAppliedCount += Number(response.headers.get("X-Reason-Applied-Count") || 0);
-          succeeded.push({ fileName, blob: await response.blob() });
-        }
-      } catch (error) {
-        failed.push({ poNumber, message: error instanceof Error ? error.message : "요청 중 오류가 발생했습니다." });
-      }
-      setProgress(prev => (prev ? { ...prev, done: prev.done + 1 } : prev));
-    }
-
-    if (failed.length > 0) {
-      // 일부 발주서만 조용히 다운로드되지 않도록, 실패가 하나라도 있으면 전체를 내려받지 않는다.
-      setFailures(failed);
-      setGenerating(false);
-      setProgress(null);
+  async function handleGenerateSelected() {
+    if (!source || generating || selected.size === 0) return;
+    const selectedPoNumbers = cardStates.filter(card => selected.has(card.poNumber) && card.eligible).map(card => card.poNumber);
+    if (selectedPoNumbers.length !== selected.size || selectedPoNumbers.length === 0) {
+      setActionError("선택 상태가 변경되었습니다. 오류·확정 발주를 제외하고 다시 선택해주세요.");
       return;
     }
 
-    const zip = new JSZip();
-    for (const file of succeeded) zip.file(file.fileName, file.blob);
-    const zipBlob = await zip.generateAsync({ type: "blob" });
+    setGenerating(true);
+    setActionError(null);
+    setSuccessMessage(null);
+    try {
+      const response = await fetch("/api/wms/po-confirm/generate-selected", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          selectedPoNumbers,
+          confirmedQuantitiesByPo: selectedPoNumbers.map(poNumber => ({
+            poNumber,
+            quantities: (rowsByPo.get(poNumber) || []).map(row => ({
+              skuId: row.skuId,
+              confirmedQuantity: confirmedByPo[poNumber]?.[row.skuId] ?? row.foundQuantity,
+            })),
+          })),
+          expectedSourceHash: source.fileHash,
+          uploadedFileBase64: manualFile?.base64,
+          uploadedFileName: manualFile?.fileName,
+        }),
+      });
 
-    const now = new Date();
-    const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
-    const zipName = `전체_발주확정서류_${wave.id}_${stamp}.zip`;
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        const message = data.error || `발주확정 통합 파일 생성에 실패했습니다(HTTP ${response.status}).`;
+        const now = new Date().toISOString();
+        setRecords(upsertPoConfirmationRecords(selectedPoNumbers.map(poNumber => buildRecord(poNumber, "error", now, { errorMessage: message }))));
+        setActionError(message);
+        return;
+      }
 
-    const url = URL.createObjectURL(zipBlob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = zipName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+      const fallback = `PO_FOR_CONFIRM_선택발주_${selectedPoNumbers.length}건.xlsx`;
+      const fileName = responseFileName(response, fallback);
+      downloadFile(await response.blob(), fileName);
 
-    setSuccessResult({ fileCount: succeeded.length, shortageRowCount: totalShortageRowCount, reasonAppliedCount: totalReasonAppliedCount });
-    setGenerating(false);
-    setProgress(null);
+      const now = new Date().toISOString();
+      setRecords(
+        upsertPoConfirmationRecords(
+          selectedPoNumbers.map(poNumber =>
+            buildRecord(poNumber, "document_generated", now, { generatedFileName: fileName })
+          )
+        )
+      );
+      setSelected(new Set());
+      setSuccessMessage(`${selectedPoNumbers.length}개 발주의 통합 파일 1개가 생성되었습니다. 쿠팡 업로드 전까지 발주확정 완료로 처리되지 않습니다.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "발주확정 통합 파일 생성 중 오류가 발생했습니다.";
+      const now = new Date().toISOString();
+      const selectedPoNumbers = [...selected];
+      if (source && selectedPoNumbers.length > 0) {
+        setRecords(upsertPoConfirmationRecords(selectedPoNumbers.map(poNumber => buildRecord(poNumber, "error", now, { errorMessage: message }))));
+      }
+      setActionError(message);
+    } finally {
+      setGenerating(false);
+    }
   }
 
-  if (poNumbers.length === 0) return null;
+  function handleMarkUploaded(poNumber: string) {
+    try {
+      const now = new Date().toISOString();
+      setRecords(upsertPoConfirmationRecords(buildRecord(poNumber, "uploaded", now)));
+      setActionError(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "쿠팡 업로드 상태를 저장하지 못했습니다.");
+    }
+  }
+
+  async function handleConfirmCompleted(poNumber: string) {
+    if (!window.confirm(`발주서 ${poNumber}가 쿠팡 서플라이허브에서 정상적으로 발주확정 완료된 것을 확인했습니까?`)) return;
+    try {
+      const now = new Date().toISOString();
+      const nextRecords = upsertPoConfirmationRecords(buildRecord(poNumber, "confirmed", now));
+      setRecords(nextRecords);
+
+      const confirmed = collectConfirmedPurchaseOrderNumbers(allWaves, nextRecords);
+      for (const card of cardStates) {
+        if (card.sourceSummary?.sourceConfirmed) confirmed.add(card.poNumber);
+      }
+      const allCurrentWaveConfirmed = wave.sourcePurchaseOrderNumbers.every(currentPo => confirmed.has(currentPo));
+      const updatedWave: PickingWave = {
+        ...wave,
+        status: allCurrentWaveConfirmed ? "order_confirmed" : "result_confirmed",
+        orderConfirmedAt: allCurrentWaveConfirmed ? now : undefined,
+        updatedAt: now,
+      };
+      await onWaveChange(updatedWave);
+      setAllWaves(previous => {
+        const exists = previous.some(existing => existing.id === updatedWave.id);
+        return exists
+          ? previous.map(existing => existing.id === updatedWave.id ? updatedWave : existing)
+          : [...previous, updatedWave];
+      });
+      setActionError(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "발주확정 완료 상태를 저장하지 못했습니다.");
+    }
+  }
+
+  const sourceHasInspectionErrors = source !== null && (
+    source.purchaseOrders.some(order => order.errorMessages.length > 0) ||
+    wave.sourcePurchaseOrderNumbers.some(poNumber => !sourceByPo.has(poNumber))
+  );
+  const manualUploadNeeded = !inspecting && (!source || !folderAccessible || Boolean(inspectError) || sourceHasInspectionErrors);
 
   return (
-    <div style={{ border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "14px", boxShadow: "0 4px 16px rgba(30,28,25,.045)", padding: "14px", marginBottom: "16px", background: wmsColors.surfaceBeige }}>
-      <h3 style={{ margin: "0 0 6px", fontSize: "14px" }}>전체 발주확정 서류 생성</h3>
-      <p style={{ margin: "0 0 4px", fontSize: "11px", color: wmsColors.muted }}>
-        대상 발주서 {poNumbers.length}건 · 전체 SKU {totalSkuCount}개 · 전체 확정수량 {totalConfirmedQuantity}개
-      </p>
-      <p style={{ margin: "0 0 10px", fontSize: "10px", color: wmsColors.muted }}>
-        확정수량이 발주수량보다 적은 상품에는 "협력사 재고부족 - 재고 할당정책"이 자동 입력됩니다.
+    <section style={{ ...wmsOuterCard, padding: "14px", marginBottom: "16px", background: wmsColors.surfaceBeige }}>
+      <h3 style={{ margin: "0 0 6px", fontSize: "16px" }}>발주확정 통합 파일</h3>
+      <p style={{ margin: "0 0 10px", fontSize: "11px", color: wmsColors.muted, lineHeight: 1.5 }}>
+        엑셀 내부 발주번호를 기준으로 선택한 발주만 쿠팡 업로드용 XLSX 한 개에 담습니다. 파일 생성만으로 발주확정 완료가 되지 않습니다.
       </p>
 
-      <div style={{ background: "#ffffff", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "10px 12px", marginBottom: "10px" }}>
-        <div style={{ fontSize: "11px", color: wmsColors.muted, marginBottom: "4px" }}>원본파일 폴더</div>
-        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
-          <code style={{ fontSize: "11px", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", background: wmsColors.surfaceBeige, borderRadius: "6px", padding: "4px 6px" }}>
-            {primaryDir || "확인 중..."}
-          </code>
-          <button onClick={handleCopyFolderPath} disabled={!primaryDir} style={{ ...wmsGhostButton, minHeight: "28px", fontSize: "10px", padding: "0 8px", flexShrink: 0 }}>
-            폴더 경로 복사
-          </button>
-        </div>
-        {copyFeedback && <p style={{ fontSize: "10px", color: wmsColors.greenDark, margin: "0 0 8px" }}>{copyFeedback}</p>}
-
-        {checkingFolder ? (
-          <p style={{ fontSize: "11px", color: wmsColors.muted, margin: 0 }}>발주서별 원본 파일 확인 중...</p>
-        ) : !folderAccessible ? (
-          <p style={{ fontSize: "11px", color: wmsColors.warnText, margin: 0 }}>
-            원본파일 폴더를 찾을 수 없습니다 — Google Drive 동기화가 완료됐는지, PC에서 이 폴더가 정상적으로 열리는지 확인한 뒤 다시 시도해주세요.
-          </p>
+      <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: "#ffffff", padding: "10px", marginBottom: "10px" }}>
+        {inspecting ? (
+          <p style={{ margin: 0, fontSize: "12px", color: wmsColors.muted }}>통합 원본 파일의 내부 발주번호를 확인 중...</p>
+        ) : source ? (
+          <div style={{ fontSize: "11px", lineHeight: 1.6, overflowWrap: "anywhere" }}>
+            <strong style={{ display: "block", fontSize: "12px" }}>{manualFile?.fileName || source.fileName}</strong>
+            <span>내부 발주 {source.totalPurchaseOrderCount}건 · 전체 {source.totalRowCount}행</span>
+            <br />
+            <span style={{ color: wmsColors.muted }}>파일 식별값 {source.fileHash.slice(0, 12)}… · {source.source}</span>
+          </div>
         ) : (
-          <>
-            <div style={{ fontSize: "11px", lineHeight: 1.8 }}>
-              <div>대상 발주서: {poNumbers.length}건</div>
-              <div style={{ color: wmsColors.greenDark, fontWeight: 700 }}>원본파일 확인: {foundCount}건</div>
-              {missingPoNumbers.length > 0 && <div style={{ color: wmsColors.warnText, fontWeight: 700 }}>누락: {missingPoNumbers.length}건</div>}
-              {duplicatePoNumbers.length > 0 && <div style={{ color: wmsColors.warnText, fontWeight: 700 }}>중복: {duplicatePoNumbers.length}건</div>}
-              {errorPoNumbers.length > 0 && <div style={{ color: "#c0392b", fontWeight: 700 }}>오류: {errorPoNumbers.length}건</div>}
-            </div>
-
-            {missingPoNumbers.length > 0 && (
-              <div style={{ fontSize: "11px", color: wmsColors.warnText, margin: "8px 0 0" }}>
-                아래 발주번호의 원본파일을 폴더에 넣어주세요.
-                <ul style={{ margin: "4px 0 0", paddingLeft: "18px" }}>
-                  {missingPoNumbers.map(po => (
-                    <li key={po}>{po}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {duplicatePoNumbers.length > 0 && (
-              <div style={{ fontSize: "11px", color: wmsColors.warnText, margin: "8px 0 0" }}>
-                {duplicatePoNumbers.map(po => (
-                  <div key={po}>
-                    발주서 {po}: 동일 발주번호 파일이 여러 개입니다 — {(statusByPo[po]?.duplicateFileNames || []).join(", ")} (폴더에서 정리해주세요)
-                  </div>
-                ))}
-              </div>
-            )}
-            {errorPoNumbers.length > 0 && (
-              <div style={{ fontSize: "11px", color: "#c0392b", margin: "8px 0 0" }}>
-                {errorPoNumbers.map(po => (
-                  <div key={po}>
-                    발주서 {po}: {statusByPo[po]?.errorMessage}
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
+          <p style={{ margin: 0, fontSize: "12px", color: wmsColors.warnText, lineHeight: 1.5 }}>
+            {inspectError || "통합 원본 파일을 찾지 못했습니다."}
+          </p>
         )}
+        {primaryDir ? <p style={{ margin: "7px 0 0", fontSize: "10px", color: wmsColors.muted, overflowWrap: "anywhere" }}>자동 검색 위치: {primaryDir}</p> : null}
 
-        <button onClick={checkFolderStatus} disabled={checkingFolder} style={{ ...wmsGhostButton, width: "100%", minHeight: "34px", fontSize: "12px", marginTop: "10px", opacity: checkingFolder ? 0.6 : 1 }}>
-          원본파일 다시 확인
+        <button type="button" onClick={() => void inspectCombinedSource()} disabled={inspecting} style={{ ...wmsGhostButton, width: "100%", minHeight: "40px", marginTop: "9px", fontSize: "12px", opacity: inspecting ? 0.5 : 1 }}>
+          원본 파일 다시 확인
         </button>
+
+        {manualUploadNeeded ? (
+          <label style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "46px", marginTop: "8px", border: `1px dashed ${wmsColors.warnSoftBorder}`, borderRadius: "8px", background: wmsColors.warnSoft, color: wmsColors.warnText, fontSize: "12px", fontWeight: 800, cursor: "pointer", textAlign: "center", padding: "4px 8px", overflowWrap: "anywhere" }}>
+            {manualFile?.fileName || "통합 원본 PO_FOR_CONFIRM 파일 1개 선택"}
+            <input type="file" accept=".xlsx" onChange={handleManualFileSelected} style={{ display: "none" }} />
+          </label>
+        ) : null}
       </div>
 
-      {needsManualPoNumbers.length > 0 && (
-        <div style={{ marginBottom: "10px" }}>
-          <button
-            onClick={() => setShowManualUpload(prev => !prev)}
-            style={{ ...wmsGhostButton, width: "100%", minHeight: "34px", fontSize: "11px" }}
-          >
-            {showManualUpload ? "고급: 수동 원본 업로드 접기" : `고급: 수동 원본 업로드 (자동검색 실패 ${needsManualPoNumbers.length}건)`}
-          </button>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: "7px", marginBottom: "10px" }}>
+        <SummaryTile label="전체 발주" value={cardStates.length} />
+        <SummaryTile label="확정 가능" value={eligiblePoNumbers.length} />
+        <SummaryTile label="선택됨" value={selected.size} />
+        <SummaryTile label="이미 확정되어 제외됨" value={confirmedCount} />
+        <div style={{ gridColumn: "1 / -1" }}><SummaryTile label="오류 발주" value={errorCount} highlight /></div>
+      </div>
 
-          {showManualUpload && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }}>
-              {needsManualPoNumbers.map(poNumber => {
-                const upload = uploadsByPo[poNumber];
-                return (
-                  <div key={poNumber} style={{ background: wmsColors.warnSoft, borderRadius: "8px", padding: "8px 10px" }}>
-                    <div style={{ fontSize: "11px", fontWeight: 700, color: wmsColors.warnText, marginBottom: "6px" }}>발주서 {poNumber}</div>
-                    <label
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        minHeight: "42px",
-                        border: `1px dashed ${wmsColors.warnSoftBorder}`,
-                        borderRadius: "8px",
-                        background: "#ffffff",
-                        color: wmsColors.warnText,
-                        fontSize: "11px",
-                        fontWeight: 700,
-                        cursor: "pointer",
-                      }}
-                    >
-                      {upload?.fileName || "원본 PO_FOR_CONFIRM 파일 선택 (xlsx)"}
-                      <input type="file" accept=".xlsx" onChange={e => handleFileSelected(poNumber, e)} style={{ display: "none" }} />
-                    </label>
-                    {upload?.checking && <p style={{ fontSize: "10px", color: wmsColors.muted, margin: "6px 0 0" }}>발주번호 확인 중...</p>}
-                    {upload?.error && <p style={{ fontSize: "10px", color: "#c0392b", margin: "6px 0 0" }}>{upload.error}</p>}
-                    {upload && !upload.checking && !upload.error && (
-                      <p style={{ fontSize: "10px", margin: "6px 0 0", fontWeight: 700, color: upload.matches ? wmsColors.greenDark : "#c0392b" }}>
-                        {upload.matches ? `발주번호 확인됨(${upload.foundPoNumber})` : `발주번호 불일치: ${upload.foundPoNumber || "확인 불가"}`}
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
+      <label style={{ display: "flex", alignItems: "center", gap: "10px", minHeight: "48px", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "10px", background: "#ffffff", padding: "0 12px", marginBottom: "8px", cursor: eligiblePoNumbers.length === 0 ? "default" : "pointer", opacity: eligiblePoNumbers.length === 0 ? 0.55 : 1 }}>
+        <input type="checkbox" checked={allEligibleSelected} disabled={eligiblePoNumbers.length === 0} onChange={toggleAllEligible} style={{ width: "22px", height: "22px", flexShrink: 0 }} />
+        <strong style={{ fontSize: "13px" }}>확정 가능한 발주 전체 선택/해제</strong>
+      </label>
 
-      <button
-        onClick={handleGenerateAll}
-        disabled={generating || !allReady}
-        style={{ ...wmsPrimaryButton, width: "100%", opacity: generating || !allReady ? 0.5 : 1 }}
-      >
-        {generating
-          ? progress
-            ? `${progress.total}건 중 ${progress.done}건 생성 중...`
-            : "생성 중..."
-          : allReady
-            ? "전체 발주확정 서류 생성 (ZIP)"
-            : "원본 파일을 모두 준비하면 생성할 수 있습니다"}
+      <button type="button" onClick={handleGenerateSelected} disabled={generating || selected.size === 0 || !source} style={{ ...wmsPrimaryButton, width: "100%", minHeight: "50px", marginBottom: "10px", opacity: generating || selected.size === 0 || !source ? 0.5 : 1 }}>
+        {generating ? "통합 파일 검증·생성 중..." : "선택 발주확정 서류 생성"}
       </button>
 
-      {successResult && (
-        <div style={{ marginTop: "8px", background: "#ffffff", border: `1px solid ${wmsColors.green}`, borderRadius: "10px", padding: "10px 12px", fontSize: "12px" }}>
-          <p style={{ margin: "0 0 4px", color: wmsColors.greenDark, fontWeight: 700 }}>ZIP 파일이 다운로드되었습니다.</p>
-          <ul style={{ margin: 0, paddingLeft: "16px", color: wmsColors.ink, lineHeight: 1.7 }}>
-            <li>생성 파일: {successResult.fileCount}개</li>
-            <li>부족수량 발생 행: {successResult.shortageRowCount}개</li>
-            <li>납품부족사유 자동입력: {successResult.reasonAppliedCount}건</li>
-            <li>부족사유 누락: 0건</li>
-          </ul>
-        </div>
-      )}
+      {actionError ? <p style={{ margin: "0 0 10px", padding: "9px", borderRadius: "8px", background: wmsColors.warnSoft, color: "#c0392b", fontSize: "11px", lineHeight: 1.5 }}>{actionError}</p> : null}
+      {successMessage ? <p style={{ margin: "0 0 10px", padding: "9px", borderRadius: "8px", background: wmsColors.greenSoft, color: wmsColors.greenDark, fontSize: "11px", fontWeight: 700, lineHeight: 1.5 }}>{successMessage}</p> : null}
 
-      {failures && failures.length > 0 && (
-        <div style={{ marginTop: "10px" }}>
-          <p style={{ fontSize: "12px", color: "#c0392b", fontWeight: 700, margin: "0 0 6px" }}>
-            아래 발주서에 문제가 있어 아무 파일도 내려받지 않았습니다. 수정 후 다시 시도해주세요.
-          </p>
-          <ul style={{ margin: 0, paddingLeft: "18px" }}>
-            {failures.map(f => (
-              <li key={f.poNumber} style={{ fontSize: "11px", color: "#c0392b" }}>
-                발주서 {f.poNumber}: {f.message}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
+      <div>
+        {cardStates.map(card => (
+          <PoConfirmSection
+            key={card.poNumber}
+            purchaseOrderNumber={card.poNumber}
+            fulfillmentCenter={card.fulfillmentCenter}
+            rows={card.rows}
+            sourceSummary={card.sourceSummary}
+            checked={selected.has(card.poNumber)}
+            disabled={!card.eligible}
+            stage={card.stage}
+            errorMessages={card.errors}
+            confirmedQuantities={confirmedByPo[card.poNumber] || {}}
+            onToggle={() => toggleOne(card.poNumber)}
+            onConfirmedQuantityChange={(skuId, value) => updateConfirmedQuantity(card.poNumber, skuId, value)}
+            onMarkUploaded={() => handleMarkUploaded(card.poNumber)}
+            onConfirmCompleted={() => void handleConfirmCompleted(card.poNumber)}
+          />
+        ))}
+      </div>
+    </section>
   );
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
-import { extractPoNumberFromWorkbook } from "@/lib/wms/po-confirm";
+import { extractPoNumbersFromWorkbook } from "@/lib/wms/po-confirm";
 
 /**
  * 사용자가 방금 고른 원본 PO_FOR_CONFIRM 파일의 실제 발주번호(A열)를 읽어서, 현재 화면의
@@ -27,11 +27,13 @@ export async function POST(request: NextRequest) {
 
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(decodeBase64(fileBase64) as unknown as ExcelJS.Buffer);
-    const foundPoNumber = extractPoNumberFromWorkbook(workbook);
+    const foundPoNumbers = extractPoNumbersFromWorkbook(workbook);
+    const foundPoNumber = foundPoNumbers[0] || null;
 
     return NextResponse.json({
       foundPoNumber,
-      matches: Boolean(foundPoNumber) && foundPoNumber === expectedPoNumber,
+      foundPoNumbers,
+      matches: Boolean(expectedPoNumber) && foundPoNumbers.includes(expectedPoNumber),
     });
   } catch (error) {
     return NextResponse.json(
