@@ -18,6 +18,7 @@ import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { openProductLinkPreview } from "@/lib/wms/product-link-preview";
 import { ExternalLinkIcon } from "../../../icons";
 import WaveIdentityEditor from "../WaveIdentityEditor";
+import PoConfirmEntryButton from "./PoConfirmEntryButton";
 
 interface CatalogRefreshSummary {
   catalogCount: number;
@@ -516,6 +517,8 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
             }
           />
         </div>
+
+        <PoConfirmEntryButton itemCount={items.length} />
 
         {catalogRefreshError && (
           <p style={{ fontSize: "11px", color: "#c0392b", margin: "0 0 10px" }}>{catalogRefreshError}</p>
