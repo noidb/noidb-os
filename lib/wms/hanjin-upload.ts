@@ -1,14 +1,8 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import ExcelJS from "exceljs";
 import { SaxesParser, type SaxesTagPlain } from "saxes";
-import {
-  downloadDriveFile,
-  isDriveReaderConfigured,
-  listDriveFilesFromEnv,
-  shouldRequireDriveReader,
-} from "./google-drive-reader";
 import { loadSupplierHubPurchaseOrders, type SupplierHubPurchaseOrder } from "./supplier-hub-orders";
 import { normalizeSkuId } from "./sku-normalize";
 import { findVerifiedPostalCode } from "./data/verified-postal-codes";
@@ -43,9 +37,32 @@ import { findVerifiedPostalCode } from "./data/verified-postal-codes";
  * 매 생성 요청마다 현재 선택된 발주서만으로 그룹을 새로 만들고, "이미 있어서 건너뜀" 판단
  * 자체를 하지 않는다(과거 행을 안 남기므로 중복될 여지가 없다) — skippedAlreadyPresent는
  * 인터페이스 호환을 위해 남겨두되 항상 빈 배열이다.
+ *
+ * 2026-08-24(3차): 운영(Vercel)에서 "헤더 행(1행)을 찾을 수 없습니다" 오류로 생성이 실패하는
+ * 원인을 확인했다 — 이전에는 원본 서식을 (1) Google Drive의
+ * GOOGLE_DRIVE_HANJIN_SHIPMENT_FOLDER_ID 폴더에서 "한진택배"로 시작하는 최초 매칭 파일을
+ * 찾거나, (2) 로컬 개발 전용 gitignored 폴더(lib/wms/data/hanjin-template/)에서 찾았는데,
+ * 실제 그 Drive 폴더에는 이름만 "한진택배"로 시작할 뿐 완전히 다른 서식("한진택배
+ * 서식_씨엘링크_...xlsx" — 네임스페이스 없는 일반 <row> 구조, 우리가 쓰는 <x:row> 구조가
+ * 아님)이 들어있었고, 실제 검증해온 "쿠팡(고정형)" 서식은 "샘플파일_한진택배..."로 시작해서
+ * 애초에 이름 조건에 안 맞았다. 로컬 개발 폴더는 gitignore 대상이라 Vercel 배포 산출물에
+ * 아예 포함되지도 않는다. 즉 운영에서는 (a) 엉뚱한 서식을 잘못 집어오거나 (b) 아무 파일도
+ * 못 찾는 두 경우만 있었다 — G드라이브 폴더 내용이나 파일명 관례에 기대지 않고, 검증 완료된
+ * "쿠팡(고정형)" 서식 원본을 lib/wms/data/hanjin-template-static/(Git에 커밋됨, gitignore
+ * 아님)에 고정 자산으로 포함해 항상 그 파일만 읽도록 바꿨다 — 로컬/운영 어디서든 완전히
+ * 동일한 파일을 쓴다. 이 정적 파일도 결과에는 헤더(1행)와 열 구조만 쓰이고, 안에 남아있는
+ * 물류센터별 과거 행은 여전히 목적지(우편번호 등) 조회용 참고 데이터로만 쓰인다(2차 수정에서
+ * 확립한 동작 그대로 — 결과 파일에는 절대 복사되지 않는다).
  */
 
-const HANJIN_TEMPLATE_DIR = path.join(process.cwd(), "lib", "wms", "data", "hanjin-template");
+const STATIC_TEMPLATE_PATH = path.join(
+  process.cwd(),
+  "lib",
+  "wms",
+  "data",
+  "hanjin-template-static",
+  "한진택배_쿠팡_고정형_기준서식.xlsx"
+);
 const SHEET_PATH = "xl/worksheets/sheet1.xml";
 
 // 실제 서식 파일의 컬럼 순서 그대로 (A~AF, 32개 — 2026-08-19 원본 확인)
@@ -63,8 +80,9 @@ const COL_AF = "AF";
 export class HanjinTemplateNotFoundError extends Error {
   constructor() {
     super(
-      "한진택배 업로드 서식 원본을 찾지 못했습니다. lib/wms/data/hanjin-template 폴더에 " +
-        "\"한진택배 서식_쿠팡(고정형)_...xlsx\" 파일을 넣어주세요."
+      "한진택배 업로드 서식 원본을 찾지 못했습니다. " +
+        "lib/wms/data/hanjin-template-static/한진택배_쿠팡_고정형_기준서식.xlsx 파일이 " +
+        "저장소에 있는지 확인해주세요."
     );
     this.name = "HanjinTemplateNotFoundError";
   }
@@ -87,30 +105,16 @@ interface ParsedTemplate {
   sourceFileName: string;
 }
 
+/** 검증된 "쿠팡(고정형)" 원본 서식 하나만 Git에 커밋된 고정 자산에서 읽는다 — 로컬/운영
+ *  어디서든 완전히 같은 파일을 쓴다(2026-08-24 3차, 위 상단 설명 참고). */
 async function findLatestTemplateFile(): Promise<{ sourceFileName: string; buffer: Buffer }> {
-  if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
-    const files = await listDriveFilesFromEnv("GOOGLE_DRIVE_HANJIN_SHIPMENT_FOLDER_ID");
-    const latest = files.find(file => file.name.startsWith("한진택배") && file.name.toLowerCase().endsWith(".xlsx"));
-    if (!latest) throw new HanjinTemplateNotFoundError();
-    return { sourceFileName: latest.name, buffer: await downloadDriveFile(latest.id) };
-  }
-
-  let fileNames: string[];
+  let buffer: Buffer;
   try {
-    fileNames = (await readdir(HANJIN_TEMPLATE_DIR)).filter(name => name.startsWith("한진택배") && name.toLowerCase().endsWith(".xlsx"));
+    buffer = await readFile(STATIC_TEMPLATE_PATH);
   } catch {
-    fileNames = [];
+    throw new HanjinTemplateNotFoundError();
   }
-  if (fileNames.length === 0) throw new HanjinTemplateNotFoundError();
-
-  let latest: { name: string; mtimeMs: number } | null = null;
-  for (const name of fileNames) {
-    const filePath = path.join(HANJIN_TEMPLATE_DIR, name);
-    const fileStat = await stat(filePath);
-    if (!latest || fileStat.mtimeMs > latest.mtimeMs) latest = { name, mtimeMs: fileStat.mtimeMs };
-  }
-  const filePath = path.join(HANJIN_TEMPLATE_DIR, latest!.name);
-  return { sourceFileName: latest!.name, buffer: await readFile(filePath) };
+  return { sourceFileName: path.basename(STATIC_TEMPLATE_PATH), buffer };
 }
 
 function splitCellRef(ref: string): { col: string; row: number } | null {
