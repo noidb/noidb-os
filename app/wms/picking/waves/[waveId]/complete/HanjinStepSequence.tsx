@@ -130,11 +130,12 @@ function StepCard({
         </span>
       </div>
       {subtitle && <p style={{ fontSize: "10px", color: wmsColors.muted, margin: "0 0 8px" }}>{subtitle}</p>}
-      {status === "locked" ? (
-        <p style={{ fontSize: "11px", color: wmsColors.muted, margin: 0 }}>{lockedReason || "이전 단계를 먼저 완료해주세요."}</p>
-      ) : (
-        children
+      {status === "locked" && (
+        <p style={{ fontSize: "11px", color: wmsColors.muted, margin: "0 0 8px" }}>
+          {lockedReason || "이전 단계를 먼저 완료해주세요."}
+        </p>
       )}
+      {children}
     </div>
   );
 }
