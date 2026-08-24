@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { BasketAssignment } from "@/lib/wms/picking-wave/types";
 import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 
@@ -21,8 +21,22 @@ export default function HanjinUploadSection({ baskets, onGenerated }: Props) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
+  /** K열 표시 문구("{물류센터} / {M월D일} / 발주서 번호 ...")에 쓸 입고예정일 — 발주번호 기준으로
+   *  조회한다(2026-08-24 신규, 합배송 그룹핑도 이 값 기준으로 서버에서 이뤄진다). */
+  const [expectedDatesByPo, setExpectedDatesByPo] = useState<Record<string, string>>({});
 
-  const requests = baskets.map(basket => ({ purchaseOrderNumber: basket.purchaseOrderNumber, fulfillmentCenter: basket.fulfillmentCenter }));
+  useEffect(() => {
+    fetch("/api/wms/supplier-hub-orders", { cache: "no-store" })
+      .then(response => response.json())
+      .then(data => setExpectedDatesByPo(Object.fromEntries((data.orders || []).map((order: { purchaseOrderNumber: string; expectedDate?: string }) => [order.purchaseOrderNumber, order.expectedDate || ""]))))
+      .catch(() => setExpectedDatesByPo({}));
+  }, []);
+
+  const requests = baskets.map(basket => ({
+    purchaseOrderNumber: basket.purchaseOrderNumber,
+    fulfillmentCenter: basket.fulfillmentCenter,
+    expectedDate: expectedDatesByPo[basket.purchaseOrderNumber] || "",
+  }));
 
   async function handleGenerate() {
     setGenerating(true);

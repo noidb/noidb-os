@@ -20,10 +20,16 @@ import {
  *
  * 실제 샘플(한진택배 서식_쿠팡(고정형)_20260814.xlsx, 재출력_세부내역과 대조해 확인, 2026-08-19)
  * 기준 데이터 행 구조:
- *   K열(내품명1)  = "로켓입고*{발주번호}"
+ *   K열(내품명1)  = 쿠팡 물류센터용 표시 문구 (2026-08-24 형식 변경, buildShipmentLabel 참고)
  *   AB열(받으시는 분) = "로켓배송*{물류센터}"
  *   AC/AD/AE/AF = 전화/우편번호/주소/특기사항("던지지마세요") — 물류센터별로 고정
  *   그 외 열은 전부 비어있다(값을 넣지 않는다 — 실제 사용 패턴 그대로 따름, 임의로 채우지 않음).
+ *
+ * 2026-08-24: K열 문구를 "로켓입고*{발주번호}"에서 사람이 읽는 "{물류센터} / {M월D일} /
+ * 발주서 번호 {발주번호(들)}" 형식으로 바꿨다. 같은 물류센터+같은 입고예정일로 합배송되는
+ * 요청은 한 행(=한 운송장)으로 묶고 그 행의 K열에 발주번호를 전부(중복 제거) 나열한다 —
+ * buildShipmentLabel/groupRequestsByCenterAndDate 참고. 이 함수는 로켓배송(물류센터향) 행만
+ * 만들기 때문에 개인 고객용 운송장에는 애초에 적용되지 않는다.
  */
 
 const HANJIN_TEMPLATE_DIR = path.join(process.cwd(), "lib", "wms", "data", "hanjin-template");
@@ -151,8 +157,7 @@ function parseSheetXml(sheetXml: string): { destinationsByCenter: Map<string, Ha
         else if (parsed.col === COL_AF) afValue = value;
       }
 
-      const poMatch = kValue.match(/^로켓입고\*(\d+)/);
-      if (poMatch) existingPoNumbers.add(poMatch[1]);
+      for (const po of extractPoNumbersFromLabel(kValue)) existingPoNumbers.add(po);
 
       const centerMatch = abValue.match(/^로켓배송\*(.+)$/);
       if (centerMatch) {
@@ -179,6 +184,74 @@ function escapeXml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+/** K열에서 기존에 들어있던 발주번호(들)를 뽑아낸다. 구 형식("로켓입고*123")과 신 형식(아래
+ *  buildShipmentLabel이 만드는 "...발주서 번호 123, 456" 또는 두 줄 "123 / 456")을 둘 다
+ *  지원해야 한다 — 이 기능 배포 전에 이미 업로드된 행은 구 형식 그대로 남아있기 때문이다. */
+function extractPoNumbersFromLabel(kValue: string): string[] {
+  const legacyMatch = kValue.match(/^로켓입고\*(\d+)/);
+  if (legacyMatch) return [legacyMatch[1]];
+
+  const newFormatMatch = kValue.match(/발주서\s*번호\s*([\s\S]+)$/);
+  if (!newFormatMatch) return [];
+  return newFormatMatch[1]
+    .split(/[,/]/)
+    .map(token => token.trim())
+    .filter(token => /^\d+$/.test(token));
+}
+
+/** "YYYY-MM-DD"(또는 "YYYY/MM/DD", "YYYYMMDD") 입고예정일을 "M월D일"로 바꾼다 — 형식을
+ *  못 알아보면 임의로 바꾸지 않고 원본 문자열을 그대로 돌려준다. */
+function formatMonthDay(expectedDate: string): string {
+  const match =
+    expectedDate.match(/^(\d{4})-(\d{2})-(\d{2})/) ||
+    expectedDate.match(/^(\d{4})\/(\d{2})\/(\d{2})/) ||
+    expectedDate.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (!match) return expectedDate;
+  const [, , month, day] = match;
+  return `${Number(month)}월${Number(day)}일`;
+}
+
+/** 한 줄 문구("발주서 번호"를 쉼표로 구분)가 이 길이를 넘으면 두 줄(슬래시 구분)로 바꾼다.
+ *  발주번호 2개(9자리 기준)는 한 줄에 들어가고 3개부터 넘어가도록 실측해 정한 값이다. */
+const SINGLE_LINE_MAX_LENGTH = 45;
+
+/**
+ * 쿠팡 물류센터용 표시 문구를 만든다: "{물류센터} / {M월D일} / 발주서 번호 {발주번호(들)}".
+ * 합배송(같은 물류센터+같은 입고예정일)으로 발주번호가 여러 개면 쉼표로 이어붙이고, 문구가
+ * 너무 길어지면 "{물류센터} / {M월D일}" + 줄바꿈 + "발주서 번호 {po1} / {po2} / {po3}"로 바꾼다.
+ */
+function buildShipmentLabel(fulfillmentCenter: string, expectedDate: string, purchaseOrderNumbers: string[]): string {
+  const monthDay = formatMonthDay(expectedDate);
+  const prefix = `${fulfillmentCenter} / ${monthDay}`;
+  const singleLine = `${prefix} / 발주서 번호 ${purchaseOrderNumbers.join(", ")}`;
+  if (singleLine.length <= SINGLE_LINE_MAX_LENGTH) return singleLine;
+  return `${prefix}\n발주서 번호 ${purchaseOrderNumbers.join(" / ")}`;
+}
+
+interface ShipmentRequestGroup {
+  fulfillmentCenter: string;
+  expectedDate: string;
+  purchaseOrderNumbers: string[];
+}
+
+/** 같은 물류센터+같은 입고예정일 요청을 한 그룹(=한 운송장 행)으로 묶는다. 발주번호 중복은
+ *  제거하되, 서로 다른 물류센터나 입고예정일은 절대 같은 그룹으로 합치지 않는다. */
+function groupRequestsByCenterAndDate(requests: HanjinShipmentRequest[]): ShipmentRequestGroup[] {
+  const groups = new Map<string, ShipmentRequestGroup>();
+  for (const request of requests) {
+    const key = `${request.fulfillmentCenter} ${request.expectedDate}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { fulfillmentCenter: request.fulfillmentCenter, expectedDate: request.expectedDate, purchaseOrderNumbers: [] };
+      groups.set(key, group);
+    }
+    if (!group.purchaseOrderNumbers.includes(request.purchaseOrderNumber)) {
+      group.purchaseOrderNumbers.push(request.purchaseOrderNumber);
+    }
+  }
+  return [...groups.values()];
+}
+
 function buildRowXml(rowIndex: number, filledColumns: Record<string, string>): string {
   const cells = ALL_COLUMNS.map(col => {
     const ref = `${col}${rowIndex}`;
@@ -194,6 +267,8 @@ function buildRowXml(rowIndex: number, filledColumns: Record<string, string>): s
 export interface HanjinShipmentRequest {
   purchaseOrderNumber: string;
   fulfillmentCenter: string;
+  /** "YYYY-MM-DD" 형식 입고예정일 — K열 표시 문구("{물류센터} / {M월D일} / 발주서 번호 ...")에 쓰인다. */
+  expectedDate: string;
 }
 
 export interface BuildHanjinUploadResult {
@@ -217,28 +292,39 @@ export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[]): 
   const newRowsXml: string[] = [];
   let nextRow = template.maxRowIndex + 1;
 
-  for (const request of requests) {
-    if (template.existingPoNumbers.has(request.purchaseOrderNumber)) {
-      skippedAlreadyPresent.push(request.purchaseOrderNumber);
-      continue;
-    }
-    const destination = template.destinationsByCenter.get(request.fulfillmentCenter);
+  // 같은 물류센터+같은 입고예정일은 한 행(=한 운송장)으로 합배송 처리한다 — 서로 다른 물류센터나
+  // 입고예정일은 절대 합치지 않는다(groupRequestsByCenterAndDate가 키로 분리해서 보장).
+  const groups = groupRequestsByCenterAndDate(requests);
+
+  for (const group of groups) {
+    const newPoNumbers = group.purchaseOrderNumbers.filter(po => {
+      if (template.existingPoNumbers.has(po)) {
+        skippedAlreadyPresent.push(po);
+        return false;
+      }
+      return true;
+    });
+    if (newPoNumbers.length === 0) continue; // 이 묶음의 발주번호가 전부 이미 있으면 행 자체를 만들지 않는다.
+
+    const destination = template.destinationsByCenter.get(group.fulfillmentCenter);
     if (!destination) {
-      skippedMissingDestination.push({ purchaseOrderNumber: request.purchaseOrderNumber, fulfillmentCenter: request.fulfillmentCenter });
+      for (const po of newPoNumbers) {
+        skippedMissingDestination.push({ purchaseOrderNumber: po, fulfillmentCenter: group.fulfillmentCenter });
+      }
       continue;
     }
 
     newRowsXml.push(
       buildRowXml(nextRow, {
-        [COL_K]: `로켓입고*${request.purchaseOrderNumber}`,
-        [COL_AB]: `로켓배송*${request.fulfillmentCenter}`,
+        [COL_K]: buildShipmentLabel(group.fulfillmentCenter, group.expectedDate, newPoNumbers),
+        [COL_AB]: `로켓배송*${group.fulfillmentCenter}`,
         [COL_AC]: destination.phone,
         [COL_AD]: destination.zip,
         [COL_AE]: destination.address,
         [COL_AF]: destination.note || "던지지마세요",
       })
     );
-    addedPurchaseOrderNumbers.push(request.purchaseOrderNumber);
+    addedPurchaseOrderNumbers.push(...newPoNumbers);
     nextRow += 1;
   }
 
