@@ -33,6 +33,16 @@ import { findVerifiedPostalCode } from "./data/verified-postal-codes";
  * 요청은 한 행(=한 운송장)으로 묶고 그 행의 K열에 발주번호를 전부(중복 제거) 나열한다 —
  * buildShipmentLabel/groupRequestsByCenterAndDate 참고. 이 함수는 로켓배송(물류센터향) 행만
  * 만들기 때문에 개인 고객용 운송장에는 애초에 적용되지 않는다.
+ *
+ * 2026-08-24(2차): 원본 서식은 레이아웃/헤더(1행)만 템플릿으로 쓰고, 원본에 들어있던 과거
+ * 데이터 행(2행 이후)은 결과 파일에 전혀 포함하지 않는다 — 예전에는 과거 행을 그대로 복사해
+ * 남겨두고 새 행만 append했는데, 이 때문에 과거에 구 형식("로켓입고*발주번호")으로 이미
+ * 개별 행이 있던 발주번호가 이번 합배송 그룹에 섞여 있으면 그 발주번호가 "이미 있음"으로
+ * 걸러지면서 같은 그룹의 나머지 발주번호만 새로 추가되어, 원래 하나로 합쳐져야 할 그룹이
+ * 과거 개별 행 + 새 개별 행으로 쪼개지는 문제가 있었다(대구3/인천36 케이스로 확인). 이제는
+ * 매 생성 요청마다 현재 선택된 발주서만으로 그룹을 새로 만들고, "이미 있어서 건너뜀" 판단
+ * 자체를 하지 않는다(과거 행을 안 남기므로 중복될 여지가 없다) — skippedAlreadyPresent는
+ * 인터페이스 호환을 위해 남겨두되 항상 빈 배열이다.
  */
 
 const HANJIN_TEMPLATE_DIR = path.join(process.cwd(), "lib", "wms", "data", "hanjin-template");
@@ -70,9 +80,10 @@ interface HanjinDestination {
 interface ParsedTemplate {
   zip: JSZip;
   sheetXml: string;
+  /** 원본 1행(헤더) 원문 그대로 — 결과 파일 재구성 시 이 값 + 새 데이터 행만 쓰고 과거 데이터
+   *  행(2행 이후)은 버린다. */
+  headerRowXml: string;
   destinationsByCenter: Map<string, HanjinDestination>;
-  existingPoNumbers: Set<string>;
-  maxRowIndex: number;
   sourceFileName: string;
 }
 
@@ -114,11 +125,11 @@ function normalizeCenterName(value: string): string {
   return value.trim().replace(/\s+/g, "");
 }
 
-/** sheet1.xml 원문을 SAX로 훑어서 기존 데이터(물류센터별 수취인 정보, 이미 있는 발주번호, 마지막 행 번호)를 뽑아낸다. */
-function parseSheetXml(sheetXml: string): { destinationsByCenter: Map<string, HanjinDestination>; existingPoNumbers: Set<string>; maxRowIndex: number } {
+/** sheet1.xml 원문을 SAX로 훑어서 물류센터별 수취인 정보(전화/우편번호/주소/특기사항)만
+ *  뽑아낸다 — 결과 파일에는 이 과거 행 자체를 복사하지 않고, 우편번호 등 발주서 원본에 없는
+ *  값을 보충할 때만 조회용으로 쓴다(resolveGroupDestination 참고). */
+function parseSheetXml(sheetXml: string): { destinationsByCenter: Map<string, HanjinDestination> } {
   const destinationsByCenter = new Map<string, HanjinDestination>();
-  const existingPoNumbers = new Set<string>();
-  let maxRowIndex = 0;
 
   const parser = new SaxesParser();
   let currentRowCells: Record<string, string> = {};
@@ -129,8 +140,6 @@ function parseSheetXml(sheetXml: string): { destinationsByCenter: Map<string, Ha
   parser.on("opentag", (node: SaxesTagPlain) => {
     if (node.name === "x:row") {
       currentRowCells = {};
-      const r = Number(node.attributes.r as string);
-      if (Number.isFinite(r) && r > maxRowIndex) maxRowIndex = r;
     } else if (node.name === "x:c") {
       currentCellRef = (node.attributes.r as string) || null;
       currentCellText = "";
@@ -149,7 +158,6 @@ function parseSheetXml(sheetXml: string): { destinationsByCenter: Map<string, Ha
       insideValueTag = false;
       if (currentCellRef) currentRowCells[currentCellRef] = currentCellText;
     } else if (node.name === "x:row") {
-      let kValue = "";
       let abValue = "";
       let acValue = "";
       let adValue = "";
@@ -158,15 +166,12 @@ function parseSheetXml(sheetXml: string): { destinationsByCenter: Map<string, Ha
       for (const [ref, value] of Object.entries(currentRowCells)) {
         const parsed = splitCellRef(ref);
         if (!parsed) continue;
-        if (parsed.col === COL_K) kValue = value;
-        else if (parsed.col === COL_AB) abValue = value;
+        if (parsed.col === COL_AB) abValue = value;
         else if (parsed.col === COL_AC) acValue = value;
         else if (parsed.col === COL_AD) adValue = value;
         else if (parsed.col === COL_AE) aeValue = value;
         else if (parsed.col === COL_AF) afValue = value;
       }
-
-      for (const po of extractPoNumbersFromLabel(kValue)) existingPoNumbers.add(po);
 
       const centerMatch = abValue.match(/^로켓배송\*(.+)$/);
       if (centerMatch) {
@@ -176,7 +181,15 @@ function parseSheetXml(sheetXml: string): { destinationsByCenter: Map<string, Ha
   });
 
   parser.write(sheetXml).close();
-  return { destinationsByCenter, existingPoNumbers, maxRowIndex };
+  return { destinationsByCenter };
+}
+
+/** 원본 sheet1.xml에서 1행(헤더) 원문을 그대로 뽑아낸다 — 결과 파일은 이 헤더 뒤에 새 데이터
+ *  행만 붙이고, 원본의 다른 데이터 행은 전혀 가져오지 않는다. */
+function extractHeaderRowXml(sheetXml: string): string {
+  const match = sheetXml.match(/<x:row r="1"[^>]*>[\s\S]*?<\/x:row>/);
+  if (!match) throw new Error("원본 파일에서 헤더 행(1행)을 찾을 수 없습니다. 파일 구조를 확인해주세요.");
+  return match[0];
 }
 
 async function loadTemplate(): Promise<ParsedTemplate> {
@@ -185,27 +198,13 @@ async function loadTemplate(): Promise<ParsedTemplate> {
   const sheetEntry = zip.file(SHEET_PATH);
   if (!sheetEntry) throw new Error(`원본 파일에서 ${SHEET_PATH}를 찾을 수 없습니다. 파일 구조를 확인해주세요.`);
   const sheetXml = await sheetEntry.async("string");
-  const { destinationsByCenter, existingPoNumbers, maxRowIndex } = parseSheetXml(sheetXml);
-  return { zip, sheetXml, destinationsByCenter, existingPoNumbers, maxRowIndex, sourceFileName: source.sourceFileName };
+  const { destinationsByCenter } = parseSheetXml(sheetXml);
+  const headerRowXml = extractHeaderRowXml(sheetXml);
+  return { zip, sheetXml, headerRowXml, destinationsByCenter, sourceFileName: source.sourceFileName };
 }
 
 function escapeXml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-/** K열에서 기존에 들어있던 발주번호(들)를 뽑아낸다. 구 형식("로켓입고*123")과 신 형식(아래
- *  buildShipmentLabel이 만드는 "...발주서 번호 123, 456" 또는 두 줄 "123 / 456")을 둘 다
- *  지원해야 한다 — 이 기능 배포 전에 이미 업로드된 행은 구 형식 그대로 남아있기 때문이다. */
-function extractPoNumbersFromLabel(kValue: string): string[] {
-  const legacyMatch = kValue.match(/^로켓입고\*(\d+)/);
-  if (legacyMatch) return [legacyMatch[1]];
-
-  const newFormatMatch = kValue.match(/발주서\s*번호\s*([\s\S]+)$/);
-  if (!newFormatMatch) return [];
-  return newFormatMatch[1]
-    .split(/[,/]/)
-    .map(token => token.trim())
-    .filter(token => /^\d+$/.test(token));
 }
 
 /** "YYYY-MM-DD"(또는 "YYYY/MM/DD", "YYYYMMDD") 입고예정일을 "M월D일"로 바꾼다 — 형식을
@@ -248,7 +247,7 @@ interface ShipmentRequestGroup {
 function groupRequestsByCenterAndDate(requests: HanjinShipmentRequest[]): ShipmentRequestGroup[] {
   const groups = new Map<string, ShipmentRequestGroup>();
   for (const request of requests) {
-    const key = `${request.fulfillmentCenter} ${request.expectedDate}`;
+    const key = `${request.fulfillmentCenter} ${request.expectedDate}`;
     let group = groups.get(key);
     if (!group) {
       group = { fulfillmentCenter: request.fulfillmentCenter, expectedDate: request.expectedDate, purchaseOrderNumbers: [] };
@@ -283,6 +282,8 @@ export interface HanjinShipmentRequest {
 export interface BuildHanjinUploadResult {
   buffer: Buffer;
   addedPurchaseOrderNumbers: string[];
+  /** 결과 파일이 과거 행을 전혀 포함하지 않게 되면서(2026-08-24 2차) "이미 있어서 건너뜀" 판단
+   *  자체가 없어졌다 — 호출부(API 응답/화면) 호환을 위해 필드는 남기되 항상 빈 배열이다. */
   skippedAlreadyPresent: string[];
   skippedMissingDestination: { purchaseOrderNumber: string; fulfillmentCenter: string; reason: string }[];
   sourceFileName: string;
@@ -305,6 +306,24 @@ export interface BuildHanjinUploadResult {
  *   "정보 불일치"로 걸러서 사람이 확인하게 한다 — 절대 덮어쓰지 않는다.
  * - 그래도 주소/전화번호/우편번호 중 하나라도 못 채우면 운송장을 만들지 않는다(추측 금지).
  */
+/** 발주서 원본 주소(D13) 끝에는 항상 "(택배수령담당자 :+82...)" 안내문구가 붙어있어, 접미사가
+ *  없는 기존 한진 서식의 과거 행 주소와 비교하면 실제로는 같은 주소인데도 매번 "불일치"로
+ *  잘못 걸러졌다(2026-08-24 3차 — 인천4 등 과거 행이 있는 센터에서 확인). 비교용으로만 이
+ *  안내문구를 떼어내고, 실제 저장/출력에 쓰는 orderAddress 원본 값은 절대 건드리지 않는다. */
+function stripContactAnnotationForComparison(address: string): string {
+  return address.replace(/\(택배수령담당자\s*:\s*\+?\d+\)\s*$/, "").trim();
+}
+
+/** 발주서 원본 전화번호("+8270..." 국제표기)와 기존 한진 서식의 전화번호("070..." 국내표기)는
+ *  같은 번호를 다른 형식으로 적은 것뿐인데 문자열이 달라 비교 시 항상 "불일치"로 잘못
+ *  걸러졌다(2026-08-24 3차). 숫자만 남기고 "82"로 시작하면 국내 0-표기로 맞춰 비교한다 —
+ *  실제 저장/출력에 쓰는 orderPhone 원본 값은 절대 건드리지 않는다. */
+function normalizePhoneForComparison(phone: string): string {
+  const digits = phone.replace(/[^\d]/g, "");
+  if (digits.startsWith("82") && digits.length > 10) return "0" + digits.slice(2);
+  return digits;
+}
+
 function resolveGroupDestination(
   group: ShipmentRequestGroup,
   orderByPoNumber: Map<string, SupplierHubPurchaseOrder>,
@@ -330,13 +349,17 @@ function resolveGroupDestination(
   const orderAddress = [...orderAddresses][0] || "";
   const orderPhone = [...orderPhones][0] || "";
 
-  if (orderAddress && templateDestination?.address && orderAddress !== templateDestination.address) {
+  if (
+    orderAddress &&
+    templateDestination?.address &&
+    stripContactAnnotationForComparison(orderAddress) !== stripContactAnnotationForComparison(templateDestination.address)
+  ) {
     return {
       destination: null,
       reason: `주소 불일치(임의로 덮어쓰지 않음) — 발주서 원본: "${orderAddress}" / 기존 한진 서식: "${templateDestination.address}"`,
     };
   }
-  if (orderPhone && templateDestination?.phone && orderPhone !== templateDestination.phone) {
+  if (orderPhone && templateDestination?.phone && normalizePhoneForComparison(orderPhone) !== normalizePhoneForComparison(templateDestination.phone)) {
     return {
       destination: null,
       reason: `전화번호 불일치(임의로 덮어쓰지 않음) — 발주서 원본: "${orderPhone}" / 기존 한진 서식: "${templateDestination.phone}"`,
@@ -362,37 +385,31 @@ function resolveGroupDestination(
 }
 
 /**
- * 요청받은 (발주번호, 물류센터, 입고예정일) 목록 중, 아직 서식에 없는 것만 새 행으로 추가한
- * 업로드파일을 만든다. 목적지(전화/우편번호/주소)는 발주서 원본을 최우선으로 쓰고
- * (resolveGroupDestination 참고), 그래도 못 채우면 임의로 채우지 않고 건너뛴 뒤 정확한 사유를 알려준다.
+ * 요청받은 (발주번호, 물류센터, 입고예정일) 목록만으로 업로드파일을 새로 만든다. 원본 서식은
+ * 레이아웃/헤더(1행)만 템플릿으로 쓰고, 원본에 있던 과거 데이터 행은 결과 파일에 절대 포함하지
+ * 않는다 — 매 호출이 그 시점에 선택된 발주서만으로 완결된 결과를 만드는 방식이라 "이미 있어서
+ * 건너뜀" 판단 자체가 필요 없다. 먼저 물류센터+입고예정일로 전부 그룹화한 뒤 그룹당 정확히
+ * 한 행만 만든다(개별 행을 만들었다가 나중에 합치지 않는다). 목적지(전화/우편번호/주소)는
+ * 발주서 원본을 최우선으로 쓰고(resolveGroupDestination 참고), 그래도 못 채우면 임의로 채우지
+ * 않고 건너뛴 뒤 정확한 사유를 알려준다.
  */
 export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[]): Promise<BuildHanjinUploadResult> {
   const [template, orders] = await Promise.all([loadTemplate(), loadSupplierHubPurchaseOrders()]);
   const orderByPoNumber = new Map(orders.map(order => [normalizeSkuId(order.purchaseOrderNumber), order]));
 
   const addedPurchaseOrderNumbers: string[] = [];
-  const skippedAlreadyPresent: string[] = [];
   const skippedMissingDestination: { purchaseOrderNumber: string; fulfillmentCenter: string; reason: string }[] = [];
   const newRowsXml: string[] = [];
-  let nextRow = template.maxRowIndex + 1;
+  let nextRow = 2; // 결과 파일에는 과거 데이터 행이 없으므로 항상 헤더(1행) 바로 다음부터 새로 쓴다.
 
   // 같은 물류센터+같은 입고예정일은 한 행(=한 운송장)으로 합배송 처리한다 — 서로 다른 물류센터나
   // 입고예정일은 절대 합치지 않는다(groupRequestsByCenterAndDate가 키로 분리해서 보장).
   const groups = groupRequestsByCenterAndDate(requests);
 
   for (const group of groups) {
-    const newPoNumbers = group.purchaseOrderNumbers.filter(po => {
-      if (template.existingPoNumbers.has(po)) {
-        skippedAlreadyPresent.push(po);
-        return false;
-      }
-      return true;
-    });
-    if (newPoNumbers.length === 0) continue; // 이 묶음의 발주번호가 전부 이미 있으면 행 자체를 만들지 않는다.
-
     const { destination, reason } = resolveGroupDestination(group, orderByPoNumber, template.destinationsByCenter);
     if (!destination) {
-      for (const po of newPoNumbers) {
+      for (const po of group.purchaseOrderNumbers) {
         skippedMissingDestination.push({ purchaseOrderNumber: po, fulfillmentCenter: group.fulfillmentCenter, reason: reason || "목적지 정보 없음" });
       }
       continue;
@@ -400,7 +417,7 @@ export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[]): 
 
     newRowsXml.push(
       buildRowXml(nextRow, {
-        [COL_K]: buildShipmentLabel(group.fulfillmentCenter, group.expectedDate, newPoNumbers),
+        [COL_K]: buildShipmentLabel(group.fulfillmentCenter, group.expectedDate, group.purchaseOrderNumbers),
         [COL_AB]: `로켓배송*${group.fulfillmentCenter}`,
         [COL_AC]: destination.phone,
         [COL_AD]: destination.zip,
@@ -408,18 +425,21 @@ export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[]): 
         [COL_AF]: destination.note,
       })
     );
-    addedPurchaseOrderNumbers.push(...newPoNumbers);
+    addedPurchaseOrderNumbers.push(...group.purchaseOrderNumbers);
     nextRow += 1;
   }
 
-  const updatedSheetXml = template.sheetXml.replace("</x:sheetData>", `${newRowsXml.join("")}</x:sheetData>`);
+  const updatedSheetXml = template.sheetXml.replace(
+    /<x:sheetData([^>]*)>[\s\S]*?<\/x:sheetData>/,
+    (_match, attrs: string) => `<x:sheetData${attrs}>${template.headerRowXml}${newRowsXml.join("")}</x:sheetData>`
+  );
   template.zip.file(SHEET_PATH, updatedSheetXml);
   const buffer = await template.zip.generateAsync({ type: "nodebuffer" });
 
   return {
     buffer,
     addedPurchaseOrderNumbers,
-    skippedAlreadyPresent,
+    skippedAlreadyPresent: [],
     skippedMissingDestination,
     sourceFileName: template.sourceFileName,
   };
