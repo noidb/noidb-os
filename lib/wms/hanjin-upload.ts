@@ -567,8 +567,11 @@ export interface ParsedTrackingRow {
   shippedQuantity: string;
 }
 
+/** 발주번호/물류센터 표기 차이(선행 0/쉼표/공백 등)로 매칭이 실패하지 않도록 정규화해서 키를
+ *  만든다 — 표시용 원본 값은 그대로 두고 Map 키 생성에만 쓴다(2026-08-24 5차, 한진 결과 파일과
+ *  현재 웨이브 값의 표기가 항상 100% 동일하다는 보장이 없어 추가). */
 export function trackingKey(purchaseOrderNumber: string, fulfillmentCenter: string): string {
-  return `${purchaseOrderNumber}::${fulfillmentCenter}`;
+  return `${normalizeSkuId(purchaseOrderNumber)}::${normalizeCenterName(fulfillmentCenter)}`;
 }
 
 /** SKU별 행 전체를 그대로 읽는다 — 3단계 재생성(전체 컬럼 필요)과 2단계 매칭 미리보기(요약)가
@@ -611,17 +614,35 @@ export function buildTrackingMapFromRows(rows: ParsedTrackingRow[]): Map<string,
   return map;
 }
 
+export interface ExcludedShipmentRow {
+  purchaseOrderNumber: string;
+  fulfillmentCenter: string;
+  skuId: string;
+  productName: string;
+  reason: string;
+}
+
 export interface BuildShipmentUploadResult {
   buffer: Buffer;
   includedCount: number;
   excludedUnmatchedCount: number;
+  /** 송장번호가 없어 실제 업로드파일에서는 뺀 행 각각의 이유 — 개수만 알려주던 것을
+   *  2026-08-24 5차에서 행별로 명확히 표시하도록 확장했다(집계용 excludedUnmatchedCount는
+   *  호환을 위해 그대로 둠). 여러 발주번호가 한 운송장으로 묶인 그룹은 실제 한진 결과 파일에
+   *  찍힌 송장번호를 발주번호별로 그대로 따라간다 — 이 함수가 임의로 다시 나누거나 합치지
+   *  않는다(합배송 그룹은 2단계 원본 그대로 유지). */
+  excludedRows: ExcludedShipmentRow[];
 }
 
 /**
  * 3단계 전용 — 2단계에서 업로드한 원본의 실제 행 데이터 중, 현재 웨이브의 (발주번호,물류센터)와
- * 일치하고 송장번호가 실제로 채워진 행만 골라 새 "상품목록" 시트(원본과 같은 실제 헤더)로
- * 만든다. 1단계 한진 업로드 서식(K/AB~AF 고정 컬럼)과는 완전히 다른 파일이다. 송장번호가 없는
- * (매칭 실패) 행은 절대 포함하지 않는다 — 임의로 채우거나 끼워 넣지 않는다.
+ * 일치하는 행으로 새 "상품목록" 시트(원본과 같은 실제 헤더 — Supplier Hub 실제 업로드 형식과
+ * 동일)를 만든다. 1단계 한진 업로드 서식(K/AB~AF 고정 컬럼)과는 완전히 다른 파일이다.
+ * 송장번호가 없는(매칭 실패) 행은 실제 업로드파일 안에는 넣지 않지만(형식이 다른 값이 섞이면
+ * 실제 Supplier Hub 업로드가 깨질 수 있어서), 결과에서 빼는 대신 조용히 버리지 않고
+ * excludedRows로 행 하나하나의 이유를 명확히 알려준다(2026-08-24 5차) — 합배송으로 여러
+ * 발주번호가 한 운송장에 묶인 경우, 2단계 원본에 실제로 찍힌 송장번호를 발주번호별로 그대로
+ * 따라가며 이 함수가 그룹을 다시 나누거나 합치지 않는다.
  */
 export async function buildShipmentCreationUploadFile(
   allRows: ParsedTrackingRow[],
@@ -630,7 +651,15 @@ export async function buildShipmentCreationUploadFile(
   const targetKeys = new Set(targets.map(t => trackingKey(t.purchaseOrderNumber, t.fulfillmentCenter)));
   const inTarget = allRows.filter(row => targetKeys.has(trackingKey(row.purchaseOrderNumber, row.fulfillmentCenter)));
   const included = inTarget.filter(row => row.trackingNumber);
-  const excludedUnmatchedCount = inTarget.length - included.length;
+  const excludedRows: ExcludedShipmentRow[] = inTarget
+    .filter(row => !row.trackingNumber)
+    .map(row => ({
+      purchaseOrderNumber: row.purchaseOrderNumber,
+      fulfillmentCenter: row.fulfillmentCenter,
+      skuId: row.skuId,
+      productName: row.productName,
+      reason: "송장번호 없음 — 2단계 파일에 이 발주번호/상품의 송장번호가 아직 채워지지 않았습니다.",
+    }));
 
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet(TRACKING_SHEET_NAME);
@@ -651,5 +680,5 @@ export async function buildShipmentCreationUploadFile(
   }
 
   const buffer = (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
-  return { buffer, includedCount: included.length, excludedUnmatchedCount };
+  return { buffer, includedCount: included.length, excludedUnmatchedCount: excludedRows.length, excludedRows };
 }

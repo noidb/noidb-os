@@ -35,7 +35,11 @@ export async function POST(request: NextRequest) {
 
     if (result.includedCount === 0) {
       return NextResponse.json(
-        { error: "송장번호가 채워진 대상 행이 없습니다 — 2단계 매칭 결과를 다시 확인해주세요.", excludedUnmatchedCount: result.excludedUnmatchedCount },
+        {
+          error: "송장번호가 채워진 대상 행이 없습니다 — 2단계 매칭 결과를 다시 확인해주세요.",
+          excludedUnmatchedCount: result.excludedUnmatchedCount,
+          excludedRows: result.excludedRows,
+        },
         { status: 400 }
       );
     }
@@ -49,6 +53,9 @@ export async function POST(request: NextRequest) {
         "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
         "X-Included-Count": String(result.includedCount),
         "X-Excluded-Unmatched-Count": String(result.excludedUnmatchedCount),
+        "X-Excluded-Rows": encodeURIComponent(
+          result.excludedRows.map(r => `${r.purchaseOrderNumber}(${r.fulfillmentCenter}/${r.skuId}): ${r.reason}`).join(" | ")
+        ),
       },
     });
   } catch (error) {

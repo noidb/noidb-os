@@ -39,12 +39,17 @@ export default function HanjinShipmentUploadSection({ waveId, baskets, trackingF
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        setError(data.error || "쉽먼트 생성 업로드파일 생성에 실패했습니다.");
+        let message = data.error || "쉽먼트 생성 업로드파일 생성에 실패했습니다.";
+        if (data.excludedRows?.length > 0) {
+          message += ` (${data.excludedRows.map((r: { purchaseOrderNumber: string; fulfillmentCenter: string; skuId: string; reason: string }) => `${r.purchaseOrderNumber}(${r.fulfillmentCenter}/${r.skuId}): ${r.reason}`).join(" | ")})`;
+        }
+        setError(message);
         return;
       }
 
       const includedCount = response.headers.get("X-Included-Count");
       const excludedCount = response.headers.get("X-Excluded-Unmatched-Count");
+      const excludedRowsRaw = decodeURIComponent(response.headers.get("X-Excluded-Rows") || "");
       const disposition = response.headers.get("Content-Disposition") || "";
       const fileNameMatch = disposition.match(/filename\*=UTF-8''(.+)$/);
       const fileName = fileNameMatch ? decodeURIComponent(fileNameMatch[1]) : `쉽먼트생성_업로드파일_${waveId}.xlsx`;
@@ -61,7 +66,7 @@ export default function HanjinShipmentUploadSection({ waveId, baskets, trackingF
 
       setResultMessage(
         `송장번호가 확인된 ${includedCount}개 행으로 생성했습니다` +
-          (Number(excludedCount) > 0 ? ` (송장번호 없어 제외한 행 ${excludedCount}개)` : "")
+          (Number(excludedCount) > 0 ? ` (업로드파일에서 뺀 행 ${excludedCount}개 — ${excludedRowsRaw})` : "")
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "쉽먼트 생성 업로드파일 생성 중 오류가 발생했습니다.");
