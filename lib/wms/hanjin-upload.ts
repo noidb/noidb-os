@@ -328,6 +328,71 @@ function normalizePhoneForComparison(phone: string): string {
   return digits;
 }
 
+/** 실제 한진 파일 "받는분총주소" 열에 쓸 값에서 택배수령담당자 안내문구·전화번호(+82/0 두
+ *  표기 다)·정리 후 남는 빈 괄호·중복 공백을 제거한다(2026-08-24 4차 — 이 문구가 그대로
+ *  들어가 주소 길이 검증에 실패하는 문제 수정). 도로명/지번 주소 자체 글자는 손대지 않는다. */
+function sanitizeAddressForOutput(address: string): string {
+  let result = address;
+  result = result.replace(/\(\s*택배수령담당자[^)]*\)/g, " ");
+  result = result.replace(/택배수령담당자\s*:?\s*/g, " ");
+  result = result.replace(/\+82[\d\s-]{7,}/g, " ");
+  result = result.replace(/\(\s*\)/g, " ");
+  result = result.replace(/\s{2,}/g, " ");
+  result = result.replace(/\s*,\s*$/g, "");
+  return result.trim();
+}
+
+/** 주소 끝에 붙는 "동/층/도크/게이트" 류 상세 위치 표현 — 특기사항으로 옮길 대상 판별 패턴. */
+const DETAIL_KEYWORD = "(?:\\d+\\s*층|\\d+\\s*[Ff]\\b|[A-Za-z0-9]+동|\\d+\\s*번?\\s*(?:도크|Dock)|게이트|Gate)";
+const DETAIL_KEYWORD_RE = new RegExp(DETAIL_KEYWORD);
+
+/** 주소에서 "공식 기본 주소(도로명/지번+건물번호)"와 "층/동/도크 등 상세 위치"를 분리한다.
+ *  쉼표·슬래시로 뒤에 딸린 구간, 끝에 남은 괄호 안 문구, 괄호 없이 바로 붙은 끝 토큰 순서로
+ *  검사하되, 상세 위치로 보이는 키워드가 실제로 있을 때만 떼어낸다 — 일반 주소의 쉼표까지
+ *  임의로 잘라내지 않는다(2026-08-24 4차, 인천28 등 실제 사례로 검증). */
+function splitAddressDetail(address: string): { baseAddress: string; detail: string } {
+  let base = address.trim();
+  const details: string[] = [];
+
+  const delimiterMatch = base.match(/^(.*?)\s*(?:,|\/)\s*(.+)$/);
+  if (delimiterMatch && DETAIL_KEYWORD_RE.test(delimiterMatch[2])) {
+    base = delimiterMatch[1].trim();
+    details.push(delimiterMatch[2].trim());
+  }
+
+  const parenMatch = base.match(/^(.*?)\s*\(([^)]*)\)\s*$/);
+  if (parenMatch && DETAIL_KEYWORD_RE.test(parenMatch[2])) {
+    base = parenMatch[1].trim();
+    details.unshift(parenMatch[2].trim());
+  }
+
+  const trailingMatch = base.match(new RegExp(`^(.*?)\\s+(${DETAIL_KEYWORD}(?:\\s+\\S+)*)$`));
+  if (trailingMatch) {
+    base = trailingMatch[1].trim();
+    details.unshift(trailingMatch[2].trim());
+  }
+
+  return { baseAddress: base, detail: details.join(" / ") };
+}
+
+/** 특기사항으로 옮긴 상세 위치 문구 표시용 정리 — "7F" 같은 표기를 "7층"으로 통일한다. */
+function normalizeFloorNotation(text: string): string {
+  return text.replace(/(\d+)\s*[Ff]\b/g, "$1층");
+}
+
+/** 한진 파일 "받으시는 분 전화" 열에 쓸 표시 형식 — "+8270..."(국제)과 "070..."(국내, 하이픈
+ *  없음) 두 원본 형식을 모두 하이픈 있는 국내 표기로 통일한다. 실제 번호(자릿수)는 절대
+ *  바꾸지 않고 표시 형식만 바꾼다(2026-08-24 4차). */
+function formatPhoneForDisplay(phone: string): string {
+  const digits = normalizePhoneForComparison(phone);
+  if (digits.length === 11) return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
+  if (digits.length === 10) {
+    if (digits.startsWith("02")) return `${digits.slice(0, 2)}-${digits.slice(2, 6)}-${digits.slice(6)}`;
+    return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+  }
+  return phone; // 예상 밖 형식이면 임의로 바꾸지 않고 원본 그대로 둔다(추측 금지).
+}
+
 function resolveGroupDestination(
   group: ShipmentRequestGroup,
   orderByPoNumber: Map<string, SupplierHubPurchaseOrder>,
@@ -385,7 +450,16 @@ function resolveGroupDestination(
     return { destination: null, reason: `목적지 정보 없음(${missing.join(", ")} 확인 안 됨) — 발주서 원본/기존 한진 서식 어디에도 없습니다.` };
   }
 
-  return { destination: { phone, zip, address, note }, reason: null };
+  // 여기서부터는 실제 한진 파일에 쓸 값만 다듬는다 — 위에서 이미 끝난 우편번호 계산/불일치
+  // 판정에는 전혀 영향을 주지 않는다. 주소 열에는 택배수령담당자 안내문구·전화번호를 제거한
+  // 도로명/지번 주소만 남기고, 동/층/도크 같은 상세 위치는 특기사항으로 옮긴다(기존
+  // "던지지마세요" 문구는 지우지 않고 함께 남긴다) — 정보 자체는 하나도 버리지 않는다.
+  const { baseAddress, detail } = splitAddressDetail(sanitizeAddressForOutput(address));
+  const outputAddress = baseAddress || sanitizeAddressForOutput(address) || address;
+  const outputNote = detail ? `${normalizeFloorNotation(detail)} / ${note}` : note;
+  const outputPhone = formatPhoneForDisplay(phone);
+
+  return { destination: { phone: outputPhone, zip, address: outputAddress, note: outputNote }, reason: null };
 }
 
 /**
