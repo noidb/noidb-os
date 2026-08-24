@@ -211,16 +211,25 @@ function escapeXml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-/** "YYYY-MM-DD"(또는 "YYYY/MM/DD", "YYYYMMDD") 입고예정일을 "M월D일"로 바꾼다 — 형식을
- *  못 알아보면 임의로 바꾸지 않고 원본 문자열을 그대로 돌려준다. */
-function formatMonthDay(expectedDate: string): string {
+/** "YYYY-MM-DD"/"YYYY/MM/DD"/"YYYYMMDD" 입고예정일을 {month, day}로 파싱한다 — 형식을 못
+ *  알아보면 null. formatMonthDay(K열 표시용)와 입고예정일 필수 검증(buildHanjinUploadFile)이
+ *  이 파서 하나를 공유해서 "표시는 되는데 검증은 실패" 같은 불일치가 생기지 않는다
+ *  (2026-08-24 6차). */
+function parseExpectedDate(expectedDate: string): { month: number; day: number } | null {
   const match =
     expectedDate.match(/^(\d{4})-(\d{2})-(\d{2})/) ||
     expectedDate.match(/^(\d{4})\/(\d{2})\/(\d{2})/) ||
     expectedDate.match(/^(\d{4})(\d{2})(\d{2})$/);
-  if (!match) return expectedDate;
-  const [, , month, day] = match;
-  return `${Number(month)}월${Number(day)}일`;
+  if (!match) return null;
+  return { month: Number(match[2]), day: Number(match[3]) };
+}
+
+/** 입고예정일을 "M월D일"로 바꾼다 — 형식을 못 알아보면 임의로 바꾸지 않고 원본 문자열을
+ *  그대로 돌려준다(호출 전에 buildHanjinUploadFile이 parseExpectedDate로 이미 유효성을
+ *  걸러내므로, 이 함수가 실제로 폴백 값을 돌려주는 경우는 없다). */
+function formatMonthDay(expectedDate: string): string {
+  const parsed = parseExpectedDate(expectedDate);
+  return parsed ? `${parsed.month}월${parsed.day}일` : expectedDate;
 }
 
 /** 한 줄 문구("발주서 번호"를 쉼표로 구분)가 이 길이를 넘으면 두 줄(슬래시 구분)로 바꾼다.
@@ -328,11 +337,22 @@ function normalizePhoneForComparison(phone: string): string {
   return digits;
 }
 
-/** 실제 한진 파일 "받는분총주소" 열에 쓸 값에서 택배수령담당자 안내문구·전화번호(+82/0 두
- *  표기 다)·정리 후 남는 빈 괄호·중복 공백을 제거한다(2026-08-24 4차 — 이 문구가 그대로
- *  들어가 주소 길이 검증에 실패하는 문제 수정). 도로명/지번 주소 자체 글자는 손대지 않는다. */
-function sanitizeAddressForOutput(address: string): string {
-  let result = address;
+/**
+ * 2026-08-24 6차 — AE(주소)/AF(특기사항)/K(내품명) 생성 로직이 하나의 함수(splitAddressDetail)
+ * 안에서 뒤엉켜 있어서 한쪽을 고치면 다른 쪽이 영향을 받는 문제가 있었다(주소 길이를 줄이려고
+ * 상세 위치를 "잘라내" AF로 옮기는 방식이라, AE 자체가 원본과 달라졌다). 지금은 세 열을
+ * 완전히 독립된 함수로 나눴다 — buildAddressColumn(AE)과 buildNoteColumn(AF)은 서로 결과를
+ * 참조하지 않고 각자 원본 주소(address)를 따로 받아 처리하며, K(buildShipmentLabel)는 애초에
+ * 주소/전화 정보를 아예 받지 않는다. 한 열의 로직을 바꿔도 다른 열이 만드는 값은 절대
+ * 달라지지 않는다.
+ */
+
+/** 한진 파일 "받는분총주소" 열에 쓸 값 — 택배수령담당자 안내문구·전화번호(+82/0 두 표기 다)·
+ *  정리 후 남는 빈 괄호·중복 공백만 제거한다. 도로명/지번 주소 글자는 그대로 두고, 상세 위치를
+ *  AF로 옮기기 위해 잘라내는 일은 하지 않는다 — buildNoteColumn의 결과를 전혀 참조하지 않는
+ *  독립 함수다. */
+function buildAddressColumn(rawAddress: string): string {
+  let result = rawAddress;
   result = result.replace(/\(\s*택배수령담당자[^)]*\)/g, " ");
   result = result.replace(/택배수령담당자\s*:?\s*/g, " ");
   result = result.replace(/\+82[\d\s-]{7,}/g, " ");
@@ -342,42 +362,45 @@ function sanitizeAddressForOutput(address: string): string {
   return result.trim();
 }
 
-/** 주소 끝에 붙는 "동/층/도크/게이트" 류 상세 위치 표현 — 특기사항으로 옮길 대상 판별 패턴. */
+/** 주소 끝에 붙는 "동/층/도크/게이트" 류 상세 위치 표현 판별 패턴. */
 const DETAIL_KEYWORD = "(?:\\d+\\s*층|\\d+\\s*[Ff]\\b|[A-Za-z0-9]+동|\\d+\\s*번?\\s*(?:도크|Dock)|게이트|Gate)";
 const DETAIL_KEYWORD_RE = new RegExp(DETAIL_KEYWORD);
 
-/** 주소에서 "공식 기본 주소(도로명/지번+건물번호)"와 "층/동/도크 등 상세 위치"를 분리한다.
- *  쉼표·슬래시로 뒤에 딸린 구간, 끝에 남은 괄호 안 문구, 괄호 없이 바로 붙은 끝 토큰 순서로
- *  검사하되, 상세 위치로 보이는 키워드가 실제로 있을 때만 떼어낸다 — 일반 주소의 쉼표까지
- *  임의로 잘라내지 않는다(2026-08-24 4차, 인천28 등 실제 사례로 검증). */
-function splitAddressDetail(address: string): { baseAddress: string; detail: string } {
-  let base = address.trim();
+/** 주소 문자열을 훑어 "동/층/도크/게이트" 같은 상세 위치 표현을 찾기만 하는 순수 조회 함수 —
+ *  입력 문자열을 절대 수정하지 않고, 찾은 phrase를 그대로 돌려준다("7F"는 "7층"으로 표시만
+ *  통일). 쉼표·슬래시 뒤에 딸린 구간, 괄호 안 문구, 괄호 없이 바로 붙은 끝 토큰 순서로
+ *  검사하되, 상세 위치로 보이는 키워드가 실제로 있을 때만 담는다(일반 주소의 쉼표까지 임의로
+ *  상세 위치로 오인하지 않는다, 2026-08-24 4차에 확립한 판별 규칙 그대로 재사용). */
+function findLocationDetail(address: string): string {
+  let scan = address.trim();
   const details: string[] = [];
 
-  const delimiterMatch = base.match(/^(.*?)\s*(?:,|\/)\s*(.+)$/);
+  const delimiterMatch = scan.match(/^(.*?)\s*(?:,|\/)\s*(.+)$/);
   if (delimiterMatch && DETAIL_KEYWORD_RE.test(delimiterMatch[2])) {
-    base = delimiterMatch[1].trim();
     details.push(delimiterMatch[2].trim());
+    scan = delimiterMatch[1].trim();
   }
 
-  const parenMatch = base.match(/^(.*?)\s*\(([^)]*)\)\s*$/);
-  if (parenMatch && DETAIL_KEYWORD_RE.test(parenMatch[2])) {
-    base = parenMatch[1].trim();
-    details.unshift(parenMatch[2].trim());
+  const parenMatch = scan.match(/\(([^)]*)\)\s*$/);
+  if (parenMatch && DETAIL_KEYWORD_RE.test(parenMatch[1])) {
+    details.unshift(parenMatch[1].trim());
   }
 
-  const trailingMatch = base.match(new RegExp(`^(.*?)\\s+(${DETAIL_KEYWORD}(?:\\s+\\S+)*)$`));
+  const trailingMatch = scan.match(new RegExp(`\\s+(${DETAIL_KEYWORD}(?:\\s+\\S+)*)$`));
   if (trailingMatch) {
-    base = trailingMatch[1].trim();
-    details.unshift(trailingMatch[2].trim());
+    details.unshift(trailingMatch[1].trim());
   }
 
-  return { baseAddress: base, detail: details.join(" / ") };
+  return details.join(" / ").replace(/(\d+)\s*[Ff]\b/g, "$1층");
 }
 
-/** 특기사항으로 옮긴 상세 위치 문구 표시용 정리 — "7F" 같은 표기를 "7층"으로 통일한다. */
-function normalizeFloorNotation(text: string): string {
-  return text.replace(/(\d+)\s*[Ff]\b/g, "$1층");
+/** 한진 파일 "특기사항" 열에 쓸 값 — 원본 주소를 훑어 찾은 층/동/도크 상세 위치와 기존 특기
+ *  문구("던지지마세요" 등)만 합친다. 주소 텍스트 자체(도로명/지번/건물번호)는 절대 포함하지
+ *  않는다. buildAddressColumn과 마찬가지로 원본 주소(rawAddress)를 독립적으로 다시 읽을 뿐,
+ *  buildAddressColumn이 만든 값을 참조하지 않는다. */
+function buildNoteColumn(rawAddress: string, baseNote: string): string {
+  const detail = findLocationDetail(buildAddressColumn(rawAddress));
+  return detail ? `${detail} / ${baseNote}` : baseNote;
 }
 
 /** 한진 파일 "받으시는 분 전화" 열에 쓸 표시 형식 — "+8270..."(국제)과 "070..."(국내, 하이픈
@@ -451,12 +474,11 @@ function resolveGroupDestination(
   }
 
   // 여기서부터는 실제 한진 파일에 쓸 값만 다듬는다 — 위에서 이미 끝난 우편번호 계산/불일치
-  // 판정에는 전혀 영향을 주지 않는다. 주소 열에는 택배수령담당자 안내문구·전화번호를 제거한
-  // 도로명/지번 주소만 남기고, 동/층/도크 같은 상세 위치는 특기사항으로 옮긴다(기존
-  // "던지지마세요" 문구는 지우지 않고 함께 남긴다) — 정보 자체는 하나도 버리지 않는다.
-  const { baseAddress, detail } = splitAddressDetail(sanitizeAddressForOutput(address));
-  const outputAddress = baseAddress || sanitizeAddressForOutput(address) || address;
-  const outputNote = detail ? `${normalizeFloorNotation(detail)} / ${note}` : note;
+  // 판정에는 전혀 영향을 주지 않는다. AE(주소)와 AF(특기사항)는 서로 완전히 독립된 함수로,
+  // 각자 원본 address를 따로 읽어서 만든다 — 한쪽 로직을 바꿔도 다른 쪽 결과는 달라지지
+  // 않는다(2026-08-24 6차).
+  const outputAddress = buildAddressColumn(address);
+  const outputNote = buildNoteColumn(address, note);
   const outputPhone = formatPhoneForDisplay(phone);
 
   return { destination: { phone: outputPhone, zip, address: outputAddress, note: outputNote }, reason: null };
@@ -485,6 +507,22 @@ export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[]): 
   const groups = groupRequestsByCenterAndDate(requests);
 
   for (const group of groups) {
+    // K열 문구("{센터} / {M월D일} / 발주서 번호 ...")는 입고예정일이 반드시 있어야 한다 —
+    // 비어 있거나 형식을 못 알아보면 빈 날짜 구간이 그대로 찍히므로, 목적지 정보 없음과
+    // 같은 방식으로 이 그룹 전체를 건너뛰고 사유를 알려준다(2026-08-24 6차, 합배송
+    // 그룹핑(groupRequestsByCenterAndDate)이나 목적지 판정(resolveGroupDestination)과는
+    // 무관한 별개의 검증이다).
+    if (!parseExpectedDate(group.expectedDate)) {
+      for (const po of group.purchaseOrderNumbers) {
+        skippedMissingDestination.push({
+          purchaseOrderNumber: po,
+          fulfillmentCenter: group.fulfillmentCenter,
+          reason: `입고예정일 확인 안 됨(값: "${group.expectedDate || "비어 있음"}") — K열 문구를 만들 수 없어 건너뜁니다.`,
+        });
+      }
+      continue;
+    }
+
     const { destination, reason } = resolveGroupDestination(group, orderByPoNumber, template.destinationsByCenter);
     if (!destination) {
       for (const po of group.purchaseOrderNumbers) {
