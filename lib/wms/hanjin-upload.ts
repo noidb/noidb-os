@@ -310,7 +310,21 @@ export async function parseTrackingRowsFromBuffer(buffer: Buffer): Promise<Parse
   await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
   const sheet = workbook.getWorksheet(TRACKING_SHEET_NAME);
   const rows: ParsedTrackingRow[] = [];
-  if (!sheet) return rows;
+  if (!sheet) {
+    if (!workbook.getWorksheet("상세내역")) return rows;
+    return (await parseHanjinReprintAssignmentsFromBuffer(buffer)).map(assignment => ({
+      purchaseOrderNumber: assignment.purchaseOrderNumber,
+      fulfillmentCenter: assignment.fulfillmentCenter,
+      transportType: "",
+      expectedDate: "",
+      skuId: "",
+      barcode: "",
+      productName: "",
+      confirmedQuantity: "",
+      trackingNumber: assignment.trackingNumber,
+      shippedQuantity: "",
+    }));
+  }
 
   const cell = (row: number, col: number) => String(sheet.getCell(row, col).value ?? "").trim();
   for (let row = 2; row <= sheet.rowCount; row++) {
@@ -347,6 +361,127 @@ export interface BuildShipmentUploadResult {
   buffer: Buffer;
   includedCount: number;
   excludedUnmatchedCount: number;
+  excludedZeroQuantityCount: number;
+}
+
+export interface HanjinTrackingAssignment {
+  purchaseOrderNumber: string;
+  fulfillmentCenter: string;
+  trackingNumber: string;
+}
+
+/** 한진택배 "재출력_세부내역"의 상세내역 시트에서 내품명1에 적힌 발주번호와
+ * 운송장번호를 읽는다. 한 송장에 여러 발주번호가 묶인 경우에도 각 발주번호로 확장한다. */
+export async function parseHanjinReprintAssignmentsFromBuffer(buffer: Buffer): Promise<HanjinTrackingAssignment[]> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+  const sheet = workbook.getWorksheet("상세내역");
+  if (!sheet) throw new Error("한진 재출력 파일에서 '상세내역' 시트를 찾지 못했습니다.");
+
+  let headerRow = 0;
+  let trackingCol = 0;
+  let itemNameCol = 0;
+  for (let row = 1; row <= Math.min(sheet.rowCount, 5); row++) {
+    for (let col = 1; col <= sheet.columnCount; col++) {
+      const value = String(sheet.getCell(row, col).value ?? "").trim();
+      if (value === "운송장번호") trackingCol = col;
+      if (value === "내품명1") itemNameCol = col;
+    }
+    if (trackingCol && itemNameCol) {
+      headerRow = row;
+      break;
+    }
+  }
+  if (!headerRow) throw new Error("한진 재출력 파일에서 운송장번호/내품명1 열을 찾지 못했습니다.");
+
+  const assignments: HanjinTrackingAssignment[] = [];
+  const byPo = new Map<string, string>();
+  for (let row = headerRow + 1; row <= sheet.rowCount; row++) {
+    const trackingNumber = String(sheet.getCell(row, trackingCol).value ?? "").trim();
+    const itemName = String(sheet.getCell(row, itemNameCol).value ?? "").trim();
+    if (!trackingNumber || !itemName) continue;
+    const marker = itemName.match(/^\s*([^/]+)\s*\/.*?발주서\s*번호\s*(.+)$/);
+    if (!marker) continue;
+    const fulfillmentCenter = marker[1].trim();
+    const purchaseOrderNumbers = marker[2].match(/\b\d{9}\b/g) ?? [];
+    for (const purchaseOrderNumber of purchaseOrderNumbers) {
+      const previous = byPo.get(purchaseOrderNumber);
+      if (previous && previous !== trackingNumber) {
+        throw new Error(`발주서 ${purchaseOrderNumber}에 서로 다른 운송장번호가 중복되어 있습니다.`);
+      }
+      byPo.set(purchaseOrderNumber, trackingNumber);
+      assignments.push({ purchaseOrderNumber, fulfillmentCenter, trackingNumber });
+    }
+  }
+  if (assignments.length === 0) throw new Error("한진 재출력 파일에서 발주번호와 운송장번호를 읽지 못했습니다.");
+  return assignments;
+}
+
+/** 발주확정 완료 파일의 실제 SKU 행을 읽는다. 열 위치를 고정하지 않고 헤더명으로 찾는다. */
+export async function parseConfirmedOrderRowsFromBuffer(buffer: Buffer): Promise<ParsedTrackingRow[]> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+  const sheet = workbook.getWorksheet("상품목록");
+  if (!sheet) throw new Error("확정수량 파일에서 '상품목록' 시트를 찾지 못했습니다.");
+  const headers = new Map<string, number>();
+  for (let col = 1; col <= sheet.columnCount; col++) headers.set(String(sheet.getCell(1, col).value ?? "").trim(), col);
+  const required = ["발주번호", "물류센터", "입고유형", "상품번호", "상품바코드", "상품이름", "확정수량", "입고예정일"];
+  const missing = required.filter(header => !headers.has(header));
+  if (missing.length) throw new Error(`확정수량 파일의 필수 열이 없습니다: ${missing.join(", ")}`);
+  const value = (row: number, header: string) => String(sheet.getCell(row, headers.get(header)!).value ?? "").trim();
+  const rows: ParsedTrackingRow[] = [];
+  for (let row = 2; row <= sheet.rowCount; row++) {
+    const purchaseOrderNumber = value(row, "발주번호");
+    if (!purchaseOrderNumber) continue;
+    rows.push({
+      purchaseOrderNumber,
+      fulfillmentCenter: value(row, "물류센터"),
+      transportType: value(row, "입고유형"),
+      expectedDate: value(row, "입고예정일").replace(/[^0-9]/g, "").slice(0, 8),
+      skuId: value(row, "상품번호"),
+      barcode: value(row, "상품바코드"),
+      productName: value(row, "상품이름"),
+      confirmedQuantity: value(row, "확정수량"),
+      trackingNumber: "",
+      shippedQuantity: value(row, "확정수량"),
+    });
+  }
+  if (!rows.length) throw new Error("확정수량 파일에 발주 SKU 행이 없습니다.");
+  return rows;
+}
+
+/** 완전체 확정수량 + 최신 한진 재출력 파일을 결합한다. 모든 대상 발주번호가 두 원본에
+ * 존재하고 센터까지 일치해야만 결과 버퍼를 만든다. 부분 성공 파일은 만들지 않는다. */
+export async function buildShipmentCreationUploadFileFromSources(
+  confirmedRows: ParsedTrackingRow[],
+  assignments: HanjinTrackingAssignment[],
+  targets: { purchaseOrderNumber: string; fulfillmentCenter: string }[],
+  templateBuffer?: Buffer
+): Promise<BuildShipmentUploadResult> {
+  const targetByPo = new Map(targets.map(target => [target.purchaseOrderNumber.trim(), target.fulfillmentCenter.trim()]));
+  const assignmentByPo = new Map(assignments.map(item => [item.purchaseOrderNumber, item]));
+  const sourceByPo = new Map<string, ParsedTrackingRow[]>();
+  for (const row of confirmedRows) {
+    const rows = sourceByPo.get(row.purchaseOrderNumber) ?? [];
+    rows.push(row);
+    sourceByPo.set(row.purchaseOrderNumber, rows);
+  }
+  const errors: string[] = [];
+  for (const [poNumber, center] of targetByPo) {
+    const sourceRows = sourceByPo.get(poNumber);
+    const assignment = assignmentByPo.get(poNumber);
+    if (!sourceRows?.length) errors.push(`발주서 ${poNumber}: 확정수량 파일에 없음`);
+    else if (sourceRows.some(row => row.fulfillmentCenter !== center)) errors.push(`발주서 ${poNumber}: 확정수량 파일의 물류센터 불일치`);
+    if (!assignment) errors.push(`발주서 ${poNumber}: 한진 재출력 파일에 운송장번호 없음`);
+    else if (assignment.fulfillmentCenter !== center) errors.push(`발주서 ${poNumber}: 한진 재출력 파일의 물류센터 불일치`);
+  }
+  if (errors.length) throw new Error(`쉽먼트 파일 생성을 차단했습니다. ${errors.join("; ")}`);
+
+  const included = confirmedRows
+    .filter(row => targetByPo.has(row.purchaseOrderNumber))
+    .map(row => ({ ...row, trackingNumber: assignmentByPo.get(row.purchaseOrderNumber)!.trackingNumber }));
+  if (!included.length) throw new Error("쉽먼트 파일 생성을 차단했습니다. 대상 SKU 행이 없습니다.");
+  return buildShipmentCreationUploadFile(included, targets, templateBuffer);
 }
 
 /**
@@ -357,31 +492,77 @@ export interface BuildShipmentUploadResult {
  */
 export async function buildShipmentCreationUploadFile(
   allRows: ParsedTrackingRow[],
-  targets: { purchaseOrderNumber: string; fulfillmentCenter: string }[]
+  targets: { purchaseOrderNumber: string; fulfillmentCenter: string }[],
+  templateBuffer?: Buffer
 ): Promise<BuildShipmentUploadResult> {
   const targetKeys = new Set(targets.map(t => trackingKey(t.purchaseOrderNumber, t.fulfillmentCenter)));
   const inTarget = allRows.filter(row => targetKeys.has(trackingKey(row.purchaseOrderNumber, row.fulfillmentCenter)));
-  const included = inTarget.filter(row => row.trackingNumber);
-  const excludedUnmatchedCount = inTarget.length - included.length;
+  const tracked = inTarget.filter(row => row.trackingNumber);
+  const included = tracked.filter(row => Number(row.shippedQuantity) > 0);
+  const excludedUnmatchedCount = inTarget.length - tracked.length;
+  const excludedZeroQuantityCount = tracked.length - included.length;
 
+  if (!templateBuffer) {
+    throw new Error("쿠팡 쉽먼트 원본 양식이 없어 생성을 차단했습니다. ShipmentsUpload_PARCEL 템플릿 경로를 확인해주세요.");
+  }
   const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet(TRACKING_SHEET_NAME);
-  sheet.addRow(TRACKING_HEADERS);
-  for (const row of included) {
-    sheet.addRow([
-      row.purchaseOrderNumber,
-      row.fulfillmentCenter,
-      row.transportType,
-      row.expectedDate,
-      row.skuId,
-      row.barcode,
-      row.productName,
-      row.confirmedQuantity,
-      row.trackingNumber,
-      row.shippedQuantity,
-    ]);
+  await workbook.xlsx.load(templateBuffer as unknown as ExcelJS.Buffer);
+  const sheet = workbook.getWorksheet(TRACKING_SHEET_NAME);
+  const trackingInputSheet = workbook.getWorksheet("송장번호입력");
+  const instructionSheet = workbook.getWorksheet("입력방법");
+  if (!sheet || !trackingInputSheet || !instructionSheet) {
+    throw new Error("쿠팡 쉽먼트 원본 양식의 필수 시트(상품목록/송장번호입력/입력방법)가 없어 생성을 차단했습니다.");
+  }
+  const actualHeaders = TRACKING_HEADERS.map((_, index) => String(sheet.getCell(1, index + 1).value ?? "").trim());
+  if (actualHeaders.some((header, index) => header !== TRACKING_HEADERS[index])) {
+    throw new Error("쿠팡 쉽먼트 원본 양식의 상품목록 헤더가 예상 구조와 달라 생성을 차단했습니다.");
   }
 
+  const rowKey = (poNumber: string, skuId: string) => `${poNumber.trim()}::${skuId.trim()}`;
+  const includedByKey = new Map<string, ParsedTrackingRow>();
+  for (const row of included) {
+    const key = rowKey(row.purchaseOrderNumber, row.skuId);
+    if (includedByKey.has(key)) throw new Error(`쿠팡 쉽먼트 데이터에 발주번호+상품번호가 중복되어 생성을 차단했습니다: ${key}`);
+    includedByKey.set(key, row);
+  }
+  const templateRows: { excelRow: number; key: string }[] = [];
+  for (let excelRow = 2; excelRow <= sheet.rowCount; excelRow++) {
+    const poNumber = String(sheet.getCell(excelRow, 1).value ?? "").trim();
+    const skuId = String(sheet.getCell(excelRow, 5).value ?? "").trim();
+    if (poNumber || skuId) templateRows.push({ excelRow, key: rowKey(poNumber, skuId) });
+  }
+  const templateKeys = new Set(templateRows.map(row => row.key));
+  const missingInTemplate = [...includedByKey.keys()].filter(key => !templateKeys.has(key));
+  const missingInData = [...templateKeys].filter(key => !includedByKey.has(key));
+  if (missingInTemplate.length === 0 && missingInData.length === 0) {
+    // 현재 쿠팡 다운로드 원본과 대상 행이 같으면 A~H와 행 순서를 그대로 두고 입력 허용 열만 채운다.
+    for (const templateRow of templateRows) {
+      const row = includedByKey.get(templateRow.key)!;
+      sheet.getCell(templateRow.excelRow, 9).value = row.trackingNumber;
+      sheet.getCell(templateRow.excelRow, 10).value = row.shippedQuantity;
+    }
+  } else {
+    // 다음 웨이브처럼 대상 행이 달라도 매번 새 양식을 받을 필요가 없도록, 검증된 쿠팡 워크북
+    // 구조(3개 시트/안내 이미지/병합/열 너비)는 유지하고 상품 데이터 영역 A~J만 교체한다.
+    const validationTemplate = { ...sheet.getCell(2, 9).dataValidation };
+    const rowsToClear = Math.max(templateRows.length, included.length);
+    for (let index = 0; index < rowsToClear; index++) {
+      const excelRow = index + 2;
+      for (let col = 1; col <= 10; col++) sheet.getCell(excelRow, col).value = null;
+    }
+    included.forEach((row, index) => {
+      const excelRow = index + 2;
+      const values = [row.purchaseOrderNumber, row.fulfillmentCenter, row.transportType, row.expectedDate, row.skuId, row.barcode, row.productName, row.confirmedQuantity, row.trackingNumber, row.shippedQuantity];
+      values.forEach((value, col) => { sheet.getCell(excelRow, col + 1).value = value; });
+      sheet.getCell(excelRow, 9).dataValidation = { ...validationTemplate };
+    });
+  }
+
+  const uniqueTrackingNumbers = [...new Set(included.map(row => row.trackingNumber))];
+  const trackingRowsToClear = Math.max(100, trackingInputSheet.rowCount - 1);
+  for (let index = 0; index < trackingRowsToClear; index++) trackingInputSheet.getCell(index + 2, 1).value = null;
+  uniqueTrackingNumbers.forEach((trackingNumber, index) => { trackingInputSheet.getCell(index + 2, 1).value = trackingNumber; });
+
   const buffer = (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
-  return { buffer, includedCount: included.length, excludedUnmatchedCount };
+  return { buffer, includedCount: included.length, excludedUnmatchedCount, excludedZeroQuantityCount };
 }

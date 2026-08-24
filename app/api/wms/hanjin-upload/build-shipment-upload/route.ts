@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { parseTrackingRowsFromBuffer, buildShipmentCreationUploadFile } from "@/lib/wms/hanjin-upload";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import {
+  parseTrackingRowsFromBuffer,
+  buildShipmentCreationUploadFile,
+  parseConfirmedOrderRowsFromBuffer,
+  parseHanjinReprintAssignmentsFromBuffer,
+  buildShipmentCreationUploadFileFromSources,
+} from "@/lib/wms/hanjin-upload";
 
 /**
  * 3단계 전용 API — Supplier Hub 쉽먼트 생성 업로드파일을 만든다 (2026-08-19 6차 실사용 테스트
@@ -21,6 +29,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const fileBase64 = String(body.fileBase64 || "");
+    const confirmedFileBase64 = String(body.confirmedFileBase64 || "");
     const waveId = String(body.waveId || "wave");
     const targets: { purchaseOrderNumber: string; fulfillmentCenter: string }[] = Array.isArray(body.targets) ? body.targets : [];
     if (!fileBase64) {
@@ -30,8 +39,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "대상 발주서/물류센터가 없습니다." }, { status: 400 });
     }
 
-    const rows = await parseTrackingRowsFromBuffer(decodeBase64(fileBase64));
-    const result = await buildShipmentCreationUploadFile(rows, targets);
+    const templatePath = process.env.WMS_SHIPMENT_TEMPLATE_PATH || path.join(process.cwd(), "public", "templates", "ShipmentsUpload_PARCEL_template.xlsx");
+    const templateBuffer = await readFile(templatePath);
+
+    const result = confirmedFileBase64
+      ? await buildShipmentCreationUploadFileFromSources(
+          await parseConfirmedOrderRowsFromBuffer(decodeBase64(confirmedFileBase64)),
+          await parseHanjinReprintAssignmentsFromBuffer(decodeBase64(fileBase64)),
+          targets,
+          templateBuffer
+        )
+      : await buildShipmentCreationUploadFile(await parseTrackingRowsFromBuffer(decodeBase64(fileBase64)), targets, templateBuffer);
 
     if (result.includedCount === 0) {
       return NextResponse.json(
@@ -42,6 +60,13 @@ export async function POST(request: NextRequest) {
 
     const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
     const fileName = `쉽먼트생성_업로드파일_${waveId}_${timestamp}.xlsx`;
+    const outputDirectory = process.env.WMS_SHIPMENT_OUTPUT_DIR || (process.platform === "win32" ? "G:\\내 드라이브\\쿠팡데이터\\쉽먼트업로드완성" : "");
+    let savedPath = "";
+    if (outputDirectory) {
+      await mkdir(outputDirectory, { recursive: true });
+      savedPath = path.join(outputDirectory, fileName);
+      await writeFile(savedPath, result.buffer);
+    }
 
     return new NextResponse(result.buffer, {
       headers: {
@@ -49,6 +74,8 @@ export async function POST(request: NextRequest) {
         "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
         "X-Included-Count": String(result.includedCount),
         "X-Excluded-Unmatched-Count": String(result.excludedUnmatchedCount),
+        "X-Excluded-Zero-Quantity-Count": String(result.excludedZeroQuantityCount),
+        ...(savedPath ? { "X-Auto-Saved-Path": encodeURIComponent(savedPath) } : {}),
       },
     });
   } catch (error) {
