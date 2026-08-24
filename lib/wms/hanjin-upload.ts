@@ -341,10 +341,12 @@ function normalizePhoneForComparison(phone: string): string {
  * 2026-08-24 6차 — AE(주소)/AF(특기사항)/K(내품명) 생성 로직이 하나의 함수(splitAddressDetail)
  * 안에서 뒤엉켜 있어서 한쪽을 고치면 다른 쪽이 영향을 받는 문제가 있었다(주소 길이를 줄이려고
  * 상세 위치를 "잘라내" AF로 옮기는 방식이라, AE 자체가 원본과 달라졌다). 지금은 세 열을
- * 완전히 독립된 함수로 나눴다 — buildAddressColumn(AE)과 buildNoteColumn(AF)은 서로 결과를
- * 참조하지 않고 각자 원본 주소(address)를 따로 받아 처리하며, K(buildShipmentLabel)는 애초에
- * 주소/전화 정보를 아예 받지 않는다. 한 열의 로직을 바꿔도 다른 열이 만드는 값은 절대
- * 달라지지 않는다.
+ * 완전히 독립된 함수로 나눴다 — buildAddressColumn(AE), buildNoteColumn(AF), K(buildShipmentLabel)
+ * 는 서로 결과를 참조하지 않는다. 한 열의 로직을 바꿔도 다른 열이 만드는 값은 절대 달라지지
+ * 않는다.
+ *
+ * 2026-08-24 8차 — buildNoteColumn(AF)은 더 이상 주소를 아예 읽지 않는다. 항상 "던지지마세요"
+ * 고정 문구만 쓴다(층/동/도크 등 상세 위치를 AF에 덧붙이던 로직 완전히 제거).
  */
 
 /** 한진 파일 "받는분총주소" 열에 쓸 값 — 택배수령담당자 안내문구·전화번호(+82/0 두 표기 다)·
@@ -362,45 +364,11 @@ function buildAddressColumn(rawAddress: string): string {
   return result.trim();
 }
 
-/** 주소 끝에 붙는 "동/층/도크/게이트" 류 상세 위치 표현 판별 패턴. */
-const DETAIL_KEYWORD = "(?:\\d+\\s*층|\\d+\\s*[Ff]\\b|[A-Za-z0-9]+동|\\d+\\s*번?\\s*(?:도크|Dock)|게이트|Gate)";
-const DETAIL_KEYWORD_RE = new RegExp(DETAIL_KEYWORD);
-
-/** 주소 문자열을 훑어 "동/층/도크/게이트" 같은 상세 위치 표현을 찾기만 하는 순수 조회 함수 —
- *  입력 문자열을 절대 수정하지 않고, 찾은 phrase를 그대로 돌려준다("7F"는 "7층"으로 표시만
- *  통일). 쉼표·슬래시 뒤에 딸린 구간, 괄호 안 문구, 괄호 없이 바로 붙은 끝 토큰 순서로
- *  검사하되, 상세 위치로 보이는 키워드가 실제로 있을 때만 담는다(일반 주소의 쉼표까지 임의로
- *  상세 위치로 오인하지 않는다, 2026-08-24 4차에 확립한 판별 규칙 그대로 재사용). */
-function findLocationDetail(address: string): string {
-  let scan = address.trim();
-  const details: string[] = [];
-
-  const delimiterMatch = scan.match(/^(.*?)\s*(?:,|\/)\s*(.+)$/);
-  if (delimiterMatch && DETAIL_KEYWORD_RE.test(delimiterMatch[2])) {
-    details.push(delimiterMatch[2].trim());
-    scan = delimiterMatch[1].trim();
-  }
-
-  const parenMatch = scan.match(/\(([^)]*)\)\s*$/);
-  if (parenMatch && DETAIL_KEYWORD_RE.test(parenMatch[1])) {
-    details.unshift(parenMatch[1].trim());
-  }
-
-  const trailingMatch = scan.match(new RegExp(`\\s+(${DETAIL_KEYWORD}(?:\\s+\\S+)*)$`));
-  if (trailingMatch) {
-    details.unshift(trailingMatch[1].trim());
-  }
-
-  return details.join(" / ").replace(/(\d+)\s*[Ff]\b/g, "$1층");
-}
-
-/** 한진 파일 "특기사항" 열에 쓸 값 — 원본 주소를 훑어 찾은 층/동/도크 상세 위치와 기존 특기
- *  문구("던지지마세요" 등)만 합친다. 주소 텍스트 자체(도로명/지번/건물번호)는 절대 포함하지
- *  않는다. buildAddressColumn과 마찬가지로 원본 주소(rawAddress)를 독립적으로 다시 읽을 뿐,
- *  buildAddressColumn이 만든 값을 참조하지 않는다. */
-function buildNoteColumn(rawAddress: string, baseNote: string): string {
-  const detail = findLocationDetail(buildAddressColumn(rawAddress));
-  return detail ? `${detail} / ${baseNote}` : baseNote;
+/** 한진 파일 "특기사항" 열에 쓸 값 — 항상 이 문구 하나만 쓴다(2026-08-24 8차). 이전에는 주소에서
+ *  층/동/도크 같은 상세 위치를 찾아 이 문구 앞에 덧붙였는데(findLocationDetail), 그 로직을
+ *  완전히 없앴다 — 주소·기존 서식 값과 무관하게 항상 고정 문구만 반환하는 독립 함수다. */
+function buildNoteColumn(): string {
+  return "던지지마세요";
 }
 
 /** 한진 파일 "받으시는 분 전화" 열에 쓸 표시 형식 — "+8270..."(국제)과 "070..."(국내, 하이픈
@@ -463,7 +431,6 @@ function resolveGroupDestination(
   // 발주서 원본에는 우편번호 항목이 없다 — 기존 서식에 없으면 공식 조회로 검증해 등록해둔
   // verified-postal-codes.ts에서만 보충한다(센터명+주소 정확 일치 시에만 값이 나옴).
   const zip = templateDestination?.zip || findVerifiedPostalCode(group.fulfillmentCenter, address) || "";
-  const note = templateDestination?.note || "던지지마세요";
 
   const missing: string[] = [];
   if (!address) missing.push("주소");
@@ -474,11 +441,10 @@ function resolveGroupDestination(
   }
 
   // 여기서부터는 실제 한진 파일에 쓸 값만 다듬는다 — 위에서 이미 끝난 우편번호 계산/불일치
-  // 판정에는 전혀 영향을 주지 않는다. AE(주소)와 AF(특기사항)는 서로 완전히 독립된 함수로,
-  // 각자 원본 address를 따로 읽어서 만든다 — 한쪽 로직을 바꿔도 다른 쪽 결과는 달라지지
-  // 않는다(2026-08-24 6차).
+  // 판정에는 전혀 영향을 주지 않는다. AE(주소)·AF(특기사항)·AC(전화)는 서로 완전히 독립된
+  // 함수다 — AF는 주소·기존 서식 값과 무관하게 항상 고정 문구만 쓴다(2026-08-24 8차).
   const outputAddress = buildAddressColumn(address);
-  const outputNote = buildNoteColumn(address, note);
+  const outputNote = buildNoteColumn();
   const outputPhone = formatPhoneForDisplay(phone);
 
   return { destination: { phone: outputPhone, zip, address: outputAddress, note: outputNote }, reason: null };
