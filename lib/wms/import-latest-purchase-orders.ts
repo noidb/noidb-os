@@ -143,6 +143,7 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
           ...existing,
           fulfillmentCenter: order.fulfillmentCenter,
           fulfillmentAddress: order.fulfillmentAddress,
+          fulfillmentContactPhone: order.fulfillmentContactPhone,
           expectedDate: order.expectedDate,
           sourceFileName: order.sourceFileName,
           // 일정 변경은 입고예정일/센터만 반영하고 최초 발주일은 보존한다.

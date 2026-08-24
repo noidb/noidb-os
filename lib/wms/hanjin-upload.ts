@@ -9,6 +9,9 @@ import {
   listDriveFilesFromEnv,
   shouldRequireDriveReader,
 } from "./google-drive-reader";
+import { loadSupplierHubPurchaseOrders, type SupplierHubPurchaseOrder } from "./supplier-hub-orders";
+import { normalizeSkuId } from "./sku-normalize";
+import { findVerifiedPostalCode } from "./data/verified-postal-codes";
 
 /**
  * 한진택배 "쿠팡(고정형)" 업로드 서식 파일을 읽고, 새 출고 행을 추가한 사본을 만든다.
@@ -105,6 +108,12 @@ function splitCellRef(ref: string): { col: string; row: number } | null {
   return { col: match[1], row: Number(match[2]) };
 }
 
+/** 물류센터명 비교용 정규화 — 앞뒤 공백 제거 + 내부 공백 전부 제거("인천 14" == "인천14").
+ *  표시용 원본 값은 절대 바꾸지 않고, Map 키/조회에만 쓴다(2026-08-24 신규 — 필수 조사 4번). */
+function normalizeCenterName(value: string): string {
+  return value.trim().replace(/\s+/g, "");
+}
+
 /** sheet1.xml 원문을 SAX로 훑어서 기존 데이터(물류센터별 수취인 정보, 이미 있는 발주번호, 마지막 행 번호)를 뽑아낸다. */
 function parseSheetXml(sheetXml: string): { destinationsByCenter: Map<string, HanjinDestination>; existingPoNumbers: Set<string>; maxRowIndex: number } {
   const destinationsByCenter = new Map<string, HanjinDestination>();
@@ -161,7 +170,7 @@ function parseSheetXml(sheetXml: string): { destinationsByCenter: Map<string, Ha
 
       const centerMatch = abValue.match(/^로켓배송\*(.+)$/);
       if (centerMatch) {
-        destinationsByCenter.set(centerMatch[1], { phone: acValue, zip: adValue, address: aeValue, note: afValue });
+        destinationsByCenter.set(normalizeCenterName(centerMatch[1]), { phone: acValue, zip: adValue, address: aeValue, note: afValue });
       }
     }
   });
@@ -275,20 +284,95 @@ export interface BuildHanjinUploadResult {
   buffer: Buffer;
   addedPurchaseOrderNumbers: string[];
   skippedAlreadyPresent: string[];
-  skippedMissingDestination: { purchaseOrderNumber: string; fulfillmentCenter: string }[];
+  skippedMissingDestination: { purchaseOrderNumber: string; fulfillmentCenter: string; reason: string }[];
   sourceFileName: string;
 }
 
 /**
- * 요청받은 (발주번호, 물류센터) 목록 중, 아직 서식에 없는 것만 새 행으로 추가한 업로드파일을 만든다.
- * 목적지(전화/우편번호/주소) 정보가 원본에 없는 물류센터는 임의로 채우지 않고 건너뛴 뒤 알려준다.
+ * 발주서 원본(실제 데이터, 최우선)과 기존 한진 서식의 과거 행(우편번호 등 원본에 없는 값의 보조
+ * 출처)을 합쳐 목적지를 만든다. 2026-08-24 이전에는 destinationsByCenter(한진 서식 자체의 과거
+ * 행)만 봤기 때문에, 예전에 한 번도 한진 업로드를 해본 적 없는 물류센터는 실제로는 발주서
+ * 원본에 주소·연락처가 멀쩡히 있는데도 "목적지 정보 없음"으로 전부 제외됐다 — 이번에 확인된
+ * 실제 원인이다.
+ *
+ * 우선순위 규칙(사용자 확정):
+ * - 주소/전화번호는 발주서 원본이 있으면 그 값을 최우선 사용한다.
+ * - 원본에 없는 값(우편번호 — 발주서 원본에 우편번호 항목 자체가 없음을 직접 확인함)은
+ *   먼저 기존 한진 서식의 과거 행에서 보충하고, 거기에도 없으면 공식 주소 조회로 검증해
+ *   영구 등록해둔 data/verified-postal-codes.ts에서 보충한다(2026-08-24 신규 — 센터명+주소가
+ *   정확히 일치할 때만 반환되므로 추측/재사용 위험이 없다).
+ * - 원본 값과 기존 서식 값이 서로 다르면(둘 다 있는데 불일치) 임의로 하나를 고르지 않고
+ *   "정보 불일치"로 걸러서 사람이 확인하게 한다 — 절대 덮어쓰지 않는다.
+ * - 그래도 주소/전화번호/우편번호 중 하나라도 못 채우면 운송장을 만들지 않는다(추측 금지).
+ */
+function resolveGroupDestination(
+  group: ShipmentRequestGroup,
+  orderByPoNumber: Map<string, SupplierHubPurchaseOrder>,
+  destinationsByCenter: Map<string, HanjinDestination>
+): { destination: HanjinDestination | null; reason: string | null } {
+  const templateDestination = destinationsByCenter.get(normalizeCenterName(group.fulfillmentCenter));
+
+  // 이 묶음(그룹)에 속한 발주번호 중 실제 발주서 원본을 찾은 것들의 주소/연락처를 모은다.
+  const matchedOrders = group.purchaseOrderNumbers
+    .map(po => orderByPoNumber.get(normalizeSkuId(po)))
+    .filter((order): order is SupplierHubPurchaseOrder => Boolean(order));
+
+  const orderAddresses = new Set(matchedOrders.map(o => o.fulfillmentAddress).filter(Boolean));
+  const orderPhones = new Set(matchedOrders.map(o => o.fulfillmentContactPhone).filter(Boolean));
+
+  if (orderAddresses.size > 1) {
+    return { destination: null, reason: `같은 물류센터인데 발주서 원본 주소가 서로 다릅니다: ${[...orderAddresses].join(" / ")}` };
+  }
+  if (orderPhones.size > 1) {
+    return { destination: null, reason: `같은 물류센터인데 발주서 원본 전화번호가 서로 다릅니다: ${[...orderPhones].join(" / ")}` };
+  }
+
+  const orderAddress = [...orderAddresses][0] || "";
+  const orderPhone = [...orderPhones][0] || "";
+
+  if (orderAddress && templateDestination?.address && orderAddress !== templateDestination.address) {
+    return {
+      destination: null,
+      reason: `주소 불일치(임의로 덮어쓰지 않음) — 발주서 원본: "${orderAddress}" / 기존 한진 서식: "${templateDestination.address}"`,
+    };
+  }
+  if (orderPhone && templateDestination?.phone && orderPhone !== templateDestination.phone) {
+    return {
+      destination: null,
+      reason: `전화번호 불일치(임의로 덮어쓰지 않음) — 발주서 원본: "${orderPhone}" / 기존 한진 서식: "${templateDestination.phone}"`,
+    };
+  }
+
+  const address = orderAddress || templateDestination?.address || "";
+  const phone = orderPhone || templateDestination?.phone || "";
+  // 발주서 원본에는 우편번호 항목이 없다 — 기존 서식에 없으면 공식 조회로 검증해 등록해둔
+  // verified-postal-codes.ts에서만 보충한다(센터명+주소 정확 일치 시에만 값이 나옴).
+  const zip = templateDestination?.zip || findVerifiedPostalCode(group.fulfillmentCenter, address) || "";
+  const note = templateDestination?.note || "던지지마세요";
+
+  const missing: string[] = [];
+  if (!address) missing.push("주소");
+  if (!phone) missing.push("전화번호");
+  if (!zip) missing.push("우편번호");
+  if (missing.length > 0) {
+    return { destination: null, reason: `목적지 정보 없음(${missing.join(", ")} 확인 안 됨) — 발주서 원본/기존 한진 서식 어디에도 없습니다.` };
+  }
+
+  return { destination: { phone, zip, address, note }, reason: null };
+}
+
+/**
+ * 요청받은 (발주번호, 물류센터, 입고예정일) 목록 중, 아직 서식에 없는 것만 새 행으로 추가한
+ * 업로드파일을 만든다. 목적지(전화/우편번호/주소)는 발주서 원본을 최우선으로 쓰고
+ * (resolveGroupDestination 참고), 그래도 못 채우면 임의로 채우지 않고 건너뛴 뒤 정확한 사유를 알려준다.
  */
 export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[]): Promise<BuildHanjinUploadResult> {
-  const template = await loadTemplate();
+  const [template, orders] = await Promise.all([loadTemplate(), loadSupplierHubPurchaseOrders()]);
+  const orderByPoNumber = new Map(orders.map(order => [normalizeSkuId(order.purchaseOrderNumber), order]));
 
   const addedPurchaseOrderNumbers: string[] = [];
   const skippedAlreadyPresent: string[] = [];
-  const skippedMissingDestination: { purchaseOrderNumber: string; fulfillmentCenter: string }[] = [];
+  const skippedMissingDestination: { purchaseOrderNumber: string; fulfillmentCenter: string; reason: string }[] = [];
   const newRowsXml: string[] = [];
   let nextRow = template.maxRowIndex + 1;
 
@@ -306,10 +390,10 @@ export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[]): 
     });
     if (newPoNumbers.length === 0) continue; // 이 묶음의 발주번호가 전부 이미 있으면 행 자체를 만들지 않는다.
 
-    const destination = template.destinationsByCenter.get(group.fulfillmentCenter);
+    const { destination, reason } = resolveGroupDestination(group, orderByPoNumber, template.destinationsByCenter);
     if (!destination) {
       for (const po of newPoNumbers) {
-        skippedMissingDestination.push({ purchaseOrderNumber: po, fulfillmentCenter: group.fulfillmentCenter });
+        skippedMissingDestination.push({ purchaseOrderNumber: po, fulfillmentCenter: group.fulfillmentCenter, reason: reason || "목적지 정보 없음" });
       }
       continue;
     }
@@ -321,7 +405,7 @@ export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[]): 
         [COL_AC]: destination.phone,
         [COL_AD]: destination.zip,
         [COL_AE]: destination.address,
-        [COL_AF]: destination.note || "던지지마세요",
+        [COL_AF]: destination.note,
       })
     );
     addedPurchaseOrderNumbers.push(...newPoNumbers);

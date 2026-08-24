@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
         "X-Added-Po-Numbers": encodeURIComponent(result.addedPurchaseOrderNumbers.join(",")),
         "X-Skipped-Already-Present": encodeURIComponent(result.skippedAlreadyPresent.join(",")),
         "X-Skipped-Missing-Destination": encodeURIComponent(
-          result.skippedMissingDestination.map(s => `${s.purchaseOrderNumber}(${s.fulfillmentCenter})`).join(",")
+          result.skippedMissingDestination.map(s => `${s.purchaseOrderNumber}(${s.fulfillmentCenter}): ${s.reason}`).join(" | ")
         ),
         "X-Source-File-Name": encodeURIComponent(result.sourceFileName),
       },

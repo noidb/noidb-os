@@ -44,6 +44,9 @@ export interface SupplierHubPurchaseOrder {
   orderType: string;
   fulfillmentCenter: string;
   fulfillmentAddress: string;
+  /** 물류센터 "택배수령담당자" 연락처(I13) — 한진택배 운송장 목적지 정보로 쓴다(2026-08-24 신규).
+   *  원본에 우편번호 항목은 없다(직접 확인함) — 이 필드는 주소/전화번호만 제공한다. */
+  fulfillmentContactPhone: string;
   /** YYYY-MM-DD 형식으로 정규화한 입고예정일 */
   expectedDate: string;
   /** 발주서가 발급된 거래처(계정)명 — 노이드비 자신의 쿠팡 계정명 */
@@ -78,10 +81,11 @@ function normalizeDate(value: string): string {
 
 /**
  * 쿠팡 서플라이허브 "발주서리스트" 엑셀 1건(시트 1개)을 파싱한다.
- * 고정 레이아웃 가정: 발주번호=C10, 발주구분=C11, 물류센터=C13, 주소=D13, 입고예정일시=F13,
- * 거래처명=C5. 상품 라인은 22행부터 2행 1세트(상품정보 행 + 바코드 행)로 반복되며, No.열(A)이
- * 숫자가 아니게 되면(합계 행 등) 종료한다. 이 레이아웃은 서플라이허브 엑셀 양식이 바뀌면 함께
- * 갱신해야 한다.
+ * 고정 레이아웃 가정: 발주번호=C10, 발주구분=C11, 물류센터=C13, 주소=D13, 택배수령담당자
+ * 연락처=I13(2026-08-24 추가 — "물류센터 목적지 정보 없음" 오류의 실제 원인이 이 필드를
+ * 읽지 않던 것이었다), 입고예정일시=F13, 거래처명=C5. 상품 라인은 22행부터 2행 1세트(상품정보
+ * 행 + 바코드 행)로 반복되며, No.열(A)이 숫자가 아니게 되면(합계 행 등) 종료한다. 이 레이아웃은
+ * 서플라이허브 엑셀 양식이 바뀌면 함께 갱신해야 한다.
  */
 function parseWorksheet(sheet: ExcelJS.Worksheet, sourceFileName: string, capturedAt: string): SupplierHubPurchaseOrder {
   const cell = (addr: string) => cellText(sheet.getCell(addr).value);
@@ -112,6 +116,7 @@ function parseWorksheet(sheet: ExcelJS.Worksheet, sourceFileName: string, captur
     orderType: cell("C11"),
     fulfillmentCenter: cell("C13"),
     fulfillmentAddress: cell("D13"),
+    fulfillmentContactPhone: cell("I13"),
     expectedDate: normalizeDate(cell("F13")),
     accountName: cell("C5"),
     items,
@@ -216,6 +221,7 @@ export async function loadSupplierHubPurchaseOrdersFromDriveFiles(files: DriveFi
             ...existing,
             fulfillmentCenter: order.fulfillmentCenter,
             fulfillmentAddress: order.fulfillmentAddress,
+            fulfillmentContactPhone: order.fulfillmentContactPhone,
             expectedDate: order.expectedDate,
             sourceFileName: order.sourceFileName,
             // 일정 수정 파일이 나중에 올라와도 최초 감지일(화면의 최초 발주일)은 바꾸지 않는다.

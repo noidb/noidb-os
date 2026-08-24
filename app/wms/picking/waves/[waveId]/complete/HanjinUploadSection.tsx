@@ -53,7 +53,7 @@ export default function HanjinUploadSection({ baskets, onGenerated }: Props) {
         const data = await response.json().catch(() => ({}));
         let message = data.error || "한진택배 업로드파일 생성에 실패했습니다.";
         if (data.skippedMissingDestination?.length > 0) {
-          message += ` (목적지 정보 없음: ${data.skippedMissingDestination.map((s: any) => `${s.purchaseOrderNumber}(${s.fulfillmentCenter})`).join(", ")})`;
+          message += ` (목적지 정보 없음: ${data.skippedMissingDestination.map((s: { purchaseOrderNumber: string; fulfillmentCenter: string; reason?: string }) => `${s.purchaseOrderNumber}(${s.fulfillmentCenter})${s.reason ? `: ${s.reason}` : ""}`).join(" | ")})`;
         }
         setError(message);
         return;
