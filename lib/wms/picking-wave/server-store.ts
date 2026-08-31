@@ -80,6 +80,21 @@ async function writeBlobSnapshot(snapshot: PickingWaveStoreSnapshot, etag?: stri
   });
 }
 
+function isBlobWriteConflict(error: unknown): boolean {
+  if (error instanceof BlobPreconditionFailedError) return true;
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { status?: unknown; statusCode?: unknown; code?: unknown; name?: unknown; message?: unknown };
+  const status = Number(candidate.status ?? candidate.statusCode);
+  const code = String(candidate.code || "").toLowerCase();
+  const name = String(candidate.name || "").toLowerCase();
+  const message = String(candidate.message || "").toLowerCase();
+  return status === 412
+    || code.includes("precondition")
+    || name.includes("precondition")
+    || message.includes("etag mismatch")
+    || message.includes("precondition failed");
+}
+
 async function readLocalSnapshot(): Promise<LoadedSnapshot> {
   try {
     return { snapshot: normalizeSnapshot(JSON.parse(await fs.readFile(LOCAL_STORE_PATH, "utf8"))) };
@@ -213,7 +228,7 @@ export async function mutatePickingWaveStore(mutation: PickingWaveStoreMutation)
       await writeBlobSnapshot(next, etag);
       return next;
     } catch (error) {
-      if (!(error instanceof BlobPreconditionFailedError) || attempt === MAX_RETRIES - 1) throw error;
+      if (!isBlobWriteConflict(error) || attempt === MAX_RETRIES - 1) throw error;
     }
   }
   throw new Error("웨이브 공용 저장소 동시 저장 충돌을 해결하지 못했습니다.");
