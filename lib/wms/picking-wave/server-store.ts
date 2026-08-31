@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { BlobPreconditionFailedError, get, put } from "@vercel/blob";
+import { BlobPreconditionFailedError, get, head, put } from "@vercel/blob";
 import { basketKey, emptyPickingWaveStoreSnapshot, type PickingWaveStoreMutation, type PickingWaveStoreSnapshot } from "./shared-store-types";
 import { mergePoConfirmationRecords, removeTransientPoConfirmationRecordsForWave } from "../po-confirm-state";
 
@@ -66,15 +66,23 @@ function useBlobStore(): boolean {
 }
 
 async function readBlobSnapshot(): Promise<LoadedSnapshot> {
-  const result = await get(BLOB_PATH, { access: "private", useCache: false });
-  if (!result || result.statusCode !== 200) return { snapshot: emptyPickingWaveStoreSnapshot() };
-  return { snapshot: normalizeSnapshot(JSON.parse(await new Response(result.stream).text())), etag: result.blob.etag };
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+    const result = await get(BLOB_PATH, { access: "private", useCache: false });
+    if (!result || result.statusCode !== 200) return { snapshot: emptyPickingWaveStoreSnapshot() };
+    const body = await new Response(result.stream).text();
+    const metadata = await head(BLOB_PATH);
+    if (result.blob.etag === metadata.etag) {
+      return { snapshot: normalizeSnapshot(JSON.parse(body)), etag: metadata.etag };
+    }
+  }
+  throw new Error("웨이브 공용 저장소의 최신 버전을 안정적으로 읽지 못했습니다.");
 }
 
 async function writeBlobSnapshot(snapshot: PickingWaveStoreSnapshot, etag?: string): Promise<void> {
   await put(BLOB_PATH, JSON.stringify(snapshot), {
     access: "private",
     addRandomSuffix: false,
+    allowOverwrite: Boolean(etag),
     contentType: "application/json",
     ...(etag ? { ifMatch: etag } : { allowOverwrite: false }),
   });
