@@ -431,6 +431,29 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 .wms-work-center-stat{padding:16px 12px;border-radius:11px;background:rgba(255,255,255,.72)}
 .wms-work-center-stat-value{font-size:26px;font-weight:800;line-height:1.2}
 .wms-work-center-stat-label{margin-top:5px;font-size:12px;font-weight:700}
+.wms-work-center-active-waves{margin:0 0 18px}
+.wms-active-wave-section-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:10px}
+.wms-active-wave-section-heading h2{margin:0;font-size:18px;line-height:1.3}
+.wms-active-wave-section-heading p{margin:2px 0 0;color:#716d67;font-size:12px}
+.wms-active-wave-section-heading>a{color:#536d78;font-size:13px;font-weight:750;text-decoration:none;white-space:nowrap}
+.wms-active-wave-list{display:grid;gap:10px}
+.wms-active-wave-card{display:grid;grid-template-columns:minmax(0,1fr) auto;overflow:hidden;border:1px solid #d8d3cc;border-radius:14px;background:#fff;box-shadow:0 4px 14px rgba(30,28,25,.04)}
+.wms-active-wave-main{display:block;min-width:0;padding:15px 16px;color:#222;text-decoration:none}
+.wms-active-wave-main:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:-3px}
+.wms-active-wave-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.wms-active-wave-title{display:flex;align-items:baseline;min-width:0;gap:8px;font-size:15px;line-height:1.4}
+.wms-active-wave-title time,.wms-active-wave-title>span{flex:0 0 auto;color:#625d57;font-weight:750}
+.wms-active-wave-title strong{min-width:0;font-size:15px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wms-active-wave-status{flex:0 0 auto;padding:3px 8px;border-radius:999px;background:#f3e8da;color:#9a5c35;font-size:11px;font-weight:800}
+.wms-active-wave-shipping{margin-top:7px;color:#4d6358;font-size:13px;font-weight:750;overflow-wrap:anywhere}
+.wms-active-wave-metrics{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px;color:#716d67;font-size:12px;font-weight:700}
+.wms-active-wave-progress{height:6px;margin-top:9px;overflow:hidden;border-radius:999px;background:#e9e5df}
+.wms-active-wave-progress span{display:block;height:100%;border-radius:inherit;background:#60766a}
+.wms-active-wave-actions{display:flex;flex-direction:column;justify-content:center;gap:7px;width:132px;padding:12px;border-left:1px solid #e4dfd8;background:#faf9f7}
+.wms-active-wave-actions>a,.wms-active-wave-actions>button{display:inline-flex;align-items:center;justify-content:center;min-height:38px!important;width:100%;box-sizing:border-box;border-radius:9px!important;font-size:12px;font-weight:800;text-decoration:none}
+.wms-active-wave-actions>a{background:#536d78;color:#fff}
+.wms-active-wave-empty,.wms-active-wave-error{margin:0;padding:16px;border:1px solid #d8d3cc;border-radius:12px;background:#f8f6f2;color:#716d67;font-size:13px}
+.wms-active-wave-error{margin-bottom:8px;border-color:#dfbdb2;background:#f2dfd8;color:#7f4032}
 @media(min-width:761px){
   .wms-work-center-menu{grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;width:100%;max-width:1080px;margin-inline:auto;gap:12px}
   .wms-work-center-menu>*{min-width:0;width:100%}
@@ -446,6 +469,14 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
   .wms-work-center-stat{padding:12px 5px}
   .wms-work-center-stat-value{font-size:20px}
   .wms-work-center-stat-label{font-size:11px}
+  .wms-active-wave-section-heading h2{font-size:16px}
+  .wms-active-wave-card{grid-template-columns:1fr}
+  .wms-active-wave-main{padding:13px 12px}
+  .wms-active-wave-heading{gap:8px}
+  .wms-active-wave-title{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:6px;font-size:13px}
+  .wms-active-wave-title strong{display:-webkit-box;overflow:hidden;white-space:normal;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-size:14px}
+  .wms-active-wave-shipping{font-size:12px}
+  .wms-active-wave-actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.62fr);width:auto;padding:9px 12px;border-top:1px solid #e4dfd8;border-left:0}
 }
 
 /* 상품 검색 추가 바텀시트 헤더 — 공간이 부족한 폭에서 "제품DB 다시 불러오기"를

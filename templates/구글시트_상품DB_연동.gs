@@ -187,22 +187,16 @@ function doPost(e) {
   }
 }
 
-/** 제품DB의 발주서 연동 필드를 직접 수정하면 발주서 출력을 즉시 갱신합니다. */
-function onEdit(e) {
-  try {
-    const range = e && e.range;
-    if (!range) return;
-    if (range.getSheet().getName() !== '제품DB') return;
-    const watched = ['창고번호','SKU ID','상품명','바코드','원가(부가세포함)','거래처']
-      .map(name => dbColumn_(name) + 1);
-    const editedColumns = [];
-    for (let column = range.getColumn(); column <= range.getLastColumn(); column++) editedColumns.push(column);
-    if (editedColumns.some(column => watched.indexOf(column) >= 0)) {
-      refreshPurchasePrintProductLinks_(range.getSheet().getParent(), range.getSheet());
-    }
-  } catch (error) {
-    console.error(error);
-  }
+// 의도적으로 onEdit 트리거를 두지 않습니다. 사용자 직접 편집 직후 Apps Script가 다른 범위를
+// setValues로 다시 쓰면 Google Sheets의 기본 실행취소 기록이 끊길 수 있습니다. 발주서 출력
+// 갱신은 저장/API 흐름과 아래 명시적 메뉴에서만 실행합니다.
+
+function refreshPurchasePrintProductLinks() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const db = ss.getSheetByName('제품DB');
+  if (!db) throw new Error('제품DB 시트를 찾을 수 없습니다.');
+  const updated = refreshPurchasePrintProductLinks_(ss, db);
+  SpreadsheetApp.getUi().alert('발주서 출력 제품정보 갱신 완료: ' + updated + '행');
 }
 
 function upsertProduct_(db, productInputRow, productDbRows) {
@@ -902,6 +896,7 @@ function restoreProductDbDefaultOrder() {
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('LAURA')
     .addItem('제품DB 기본순서 복원', 'restoreProductDbDefaultOrder')
+    .addItem('발주서 출력 제품정보 새로고침', 'refreshPurchasePrintProductLinks')
     .addToUi();
 }
 
