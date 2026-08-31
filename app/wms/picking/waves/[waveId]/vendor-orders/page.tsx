@@ -369,7 +369,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
       <p style={{ fontSize: "12px", color: wmsColors.muted, margin: "0 0 16px" }}>
         {isManualWorkspace
           ? '웨이브 없이 수동으로 만든 거래처 발주서입니다. "+ 발주서 수동 추가"와 "상품 검색 추가"로 상품을 넣어주세요.'
-          : `${wave.displayName || wave.id}${wave.workerName ? ` · 작업자 ${wave.workerName}` : ""} · 부족 수량을 제품DB "거래처" 기준으로 자동 분리했습니다. 거래처 정보가 없는 SKU는 "${UNASSIGNED_VENDOR_NAME}"로 별도 표시됩니다. 자동 발송은 없으며, 승인은 직접 눌러야 합니다.`}
+          : `${wave.displayName || wave.id} · 부족 수량을 제품DB "거래처" 기준으로 자동 분리했습니다. 거래처 정보가 없는 SKU는 "${UNASSIGNED_VENDOR_NAME}"로 별도 표시됩니다. 자동 발송은 없으며, 승인은 직접 눌러야 합니다.`}
       </p>
 
       {isPreview && (

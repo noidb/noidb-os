@@ -9,6 +9,7 @@ import type { SupplierHubPurchaseOrder } from "@/lib/wms/supplier-hub-orders";
 import { groupPurchaseOrdersForShipping, summarizePurchaseOrder, toggleExpectedDateSelection } from "@/lib/wms/purchase-order-view";
 import type { PickingWave } from "@/lib/wms/picking-wave/types";
 import { PICKING_WAVE_STATUS_LABEL } from "@/lib/wms/picking-wave/status-label";
+import { loadWaveSummaries, WaveSummaryCard, type WaveSummary } from "./ActiveWaveList";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
 import {
   buildScheduleChangeRecommendations,
@@ -42,6 +43,7 @@ export default function WmsPickingWavesPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showByExpectedDate, setShowByExpectedDate] = useState(false);
   const [existingWaves, setExistingWaves] = useState<PickingWave[]>([]);
+  const [waveSummaries, setWaveSummaries] = useState<Map<string, WaveSummary>>(new Map());
   const [creating, setCreating] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [createDisplayName, setCreateDisplayName] = useState("");
@@ -60,6 +62,8 @@ export default function WmsPickingWavesPage() {
   async function refreshWaves() {
     const list = await waveRepository.listWaves();
     setExistingWaves(list);
+    const summaries = await loadWaveSummaries(waveRepository, list);
+    setWaveSummaries(new Map(summaries.map(summary => [summary.wave.id, summary])));
     return list;
   }
 
@@ -205,7 +209,7 @@ export default function WmsPickingWavesPage() {
     const trimmedDisplayName = createDisplayName.trim();
     const trimmedWorkerName = workerName.trim();
     if (selectedOrders.length === 0 || !trimmedDisplayName || !trimmedWorkerName) {
-      setCreateError("웨이브명과 작업자 이름을 모두 입력해주세요.");
+      setCreateError("웨이브명과 생성 기록명을 모두 입력해주세요.");
       return;
     }
     setCreating(true);
@@ -448,8 +452,12 @@ export default function WmsPickingWavesPage() {
       `웨이브 "${wave.displayName || wave.id}"을 삭제할까요?\n포함 발주서 ${wave.sourcePurchaseOrderNumbers.length}건\n연결된 발주서 원본과 다른 웨이브에는 영향이 없습니다. 확정 완료된 발주 이력은 보존됩니다.`
     );
     if (!confirmed) return;
-    await waveRepository.deleteWave(wave.id);
-    await refreshWaves();
+    try {
+      await waveRepository.deleteWave(wave.id);
+      await refreshWaves();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "웨이브 삭제에 실패했습니다.");
+    }
   }
 
   return (
@@ -618,8 +626,8 @@ export default function WmsPickingWavesPage() {
             <label style={{ display: "block", fontSize: "12px", fontWeight: 800, marginBottom: "12px" }}>웨이브명
               <input value={createDisplayName} onChange={event => setCreateDisplayName(event.target.value)} style={{ width: "100%", minWidth: 0, boxSizing: "border-box", minHeight: "44px", marginTop: "5px", padding: "8px 10px", borderRadius: "8px", border: `1px solid ${wmsColors.borderStrong}`, fontSize: "16px" }} />
             </label>
-            <label style={{ display: "block", fontSize: "14px", fontWeight: 900, marginBottom: "12px", color: wmsColors.greenDark }}>작업자 이름 (필수)
-              <input autoFocus value={workerName} onChange={event => setWorkerName(event.target.value)} placeholder="작업자 이름을 입력하세요" style={{ width: "100%", minWidth: 0, boxSizing: "border-box", minHeight: "48px", marginTop: "5px", padding: "9px 10px", borderRadius: "8px", border: `2px solid ${wmsColors.greenDark}`, fontSize: "16px" }} />
+            <label style={{ display: "block", fontSize: "14px", fontWeight: 900, marginBottom: "12px", color: wmsColors.greenDark }}>생성 기록명 (필수)
+              <input autoFocus value={workerName} onChange={event => setWorkerName(event.target.value)} placeholder="생성 기록명을 입력하세요" style={{ width: "100%", minWidth: 0, boxSizing: "border-box", minHeight: "48px", marginTop: "5px", padding: "9px 10px", borderRadius: "8px", border: `2px solid ${wmsColors.greenDark}`, fontSize: "16px" }} />
             </label>
             {createError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{createError}</p>}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
@@ -636,31 +644,26 @@ export default function WmsPickingWavesPage() {
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {existingWaves.map(wave => {
               const isEditing = editingWaveId === wave.id;
+              const summary = waveSummaries.get(wave.id);
               return (
-                <div key={wave.id} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "10px 12px", background: "#ffffff" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
-                    <a href={`/wms/picking/waves/${wave.id}`} style={{ color: wmsColors.ink, textDecoration: "none", fontWeight: 700, fontSize: "13px", flex: 1, minWidth: 0, whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.35 }}>
-                      {wave.displayName || wave.id}
-                    </a>
-                    <span style={{ fontSize: "11px", color: wmsColors.muted, flexShrink: 0 }}>
-                      {PICKING_WAVE_STATUS_LABEL[wave.status]}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: "11px", color: wmsColors.muted, margin: "2px 0 8px" }}>
-                    {wave.id} · 발주서 {wave.sourcePurchaseOrderNumbers.length}건{wave.workerName ? ` · 작업자 ${wave.workerName}` : ""}
-                  </div>
-
-                  {!isEditing ? (
-                    <div style={{ display: "flex", gap: "6px" }}>
+                <div key={wave.id}>
+                  {!isEditing && summary ? (
+                    <WaveSummaryCard summary={summary} actions={(
+                      <>
                       <button onClick={() => openEditWave(wave)} style={{ ...wmsSecondaryButton, minHeight: "30px", fontSize: "11px", flex: 1 }}>
                         수정
                       </button>
                       <button onClick={() => handleDeleteWave(wave)} style={{ ...wmsGhostButton, minHeight: "30px", fontSize: "11px", flex: 1, color: "#c0392b" }}>
                         삭제
                       </button>
-                    </div>
+                      </>
+                    )} />
                   ) : (
-                    <div style={{ borderTop: `1px dashed ${wmsColors.border}`, paddingTop: "8px" }}>
+                    <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "10px 12px", background: "#ffffff" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", marginBottom: "8px" }}>
+                        <strong>{wave.displayName || wave.id}</strong>
+                        <span style={{ fontSize: "11px", color: wmsColors.muted }}>{PICKING_WAVE_STATUS_LABEL[wave.status]}</span>
+                      </div>
                       <label style={{ display: "block", fontSize: "11px", color: wmsColors.muted, marginBottom: "4px" }}>
                         표시 이름
                       </label>
