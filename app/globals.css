@@ -316,6 +316,22 @@ button{font-weight:680!important}.eyebrow{font-weight:650;letter-spacing:.055em}
 .brandLockup>div{display:flex;flex-direction:column;gap:1px}.brandWordmark{margin:0;font-size:21px;font-weight:740;letter-spacing:.055em;color:#252525}.brandLockup>div span{font-size:11px;text-transform:uppercase;letter-spacing:.13em;color:#77716a}
 @media(max-width:760px){.brandMark{width:42px;height:42px;border-radius:10px;font-size:24px}.brandWordmark{font-size:19px}.brandLockup{margin-bottom:14px}}
 
+/* Shared top-level navigation for AI product registration and the WMS work center. */
+.appNavigation{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:26px;padding-bottom:18px;border-bottom:1px solid #ddd8d1}
+.appNavigationBrand{display:flex;align-items:center;gap:12px;min-width:0;color:inherit;text-decoration:none}
+.appNavigationWordmark{display:flex;flex-direction:column;gap:1px;min-width:0}
+.appNavigationWordmark>span{font-size:11px;text-transform:uppercase;letter-spacing:.13em;color:#77716a}
+.appNavigationMenu{display:flex;align-items:center;gap:6px;padding:4px;border:1px solid #ddd8d1;border-radius:12px;background:#ece8e2}
+.appNavigationLink{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:9px 16px;border-radius:9px;color:#625d57;text-decoration:none;font-size:14px;font-weight:750;white-space:nowrap;transition:background-color .15s ease,color .15s ease,box-shadow .15s ease}
+.appNavigationLink:hover{color:var(--brand-ink);background:rgba(255,255,255,.55)}
+.appNavigationLink:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
+.appNavigationLink.isActive{color:#fff;background:var(--brand-ink);box-shadow:0 3px 9px rgba(37,37,37,.16)}
+@media(max-width:760px){
+  .appNavigation{align-items:stretch;flex-direction:column;gap:12px;margin-bottom:18px;padding-bottom:14px}
+  .appNavigationMenu{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
+  .appNavigationLink{width:100%;min-height:44px;padding-inline:8px}
+}
+
 /* Brand accent palette: quiet neutrals with clear action hierarchy */
 :root{
   --brand-ink:#252525;
@@ -406,7 +422,28 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
    건드리지 않았다 — 값은 .field input:focus(333행)가 실제로 쓰는 값을 그대로 재사용했다. */
 .wms-input:focus{outline:0;border-color:var(--brand-slate);box-shadow:0 0 0 3px rgba(83,109,120,.12)}
 .wms-work-center-menu{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-@media(max-width:760px){.wms-work-center-menu{grid-template-columns:1fr}}
+.wms-work-center-shell{max-width:1120px;padding-top:28px;padding-bottom:calc(36px + env(safe-area-inset-bottom))}
+.wms-work-center-hero{margin-bottom:20px}
+.wms-work-center-picking-link{display:block;margin-bottom:18px;text-decoration:none}
+.wms-work-center-picking-button{min-height:56px!important;font-size:16px;border-radius:12px!important}
+.wms-work-center-stats{gap:12px;padding:14px;border-radius:14px}
+.wms-work-center-stat{padding:16px 12px;border-radius:11px;background:rgba(255,255,255,.72)}
+.wms-work-center-stat-value{font-size:26px;font-weight:800;line-height:1.2}
+.wms-work-center-stat-label{margin-top:5px;font-size:12px;font-weight:700}
+@media(min-width:761px){
+  .wms-work-center-menu{gap:14px}
+  .wms-work-center-menu>*,.wms-work-center-menu>button{height:100%}
+  .wms-work-center-menu>*>div{min-height:124px!important;padding:22px 16px!important}
+}
+@media(max-width:760px){
+  .wms-work-center-shell{padding-top:calc(16px + env(safe-area-inset-top));padding-bottom:calc(24px + env(safe-area-inset-bottom))}
+  .wms-work-center-menu{grid-template-columns:1fr}
+  .wms-work-center-picking-button{min-height:52px!important;font-size:15px}
+  .wms-work-center-stats{gap:8px;padding:10px}
+  .wms-work-center-stat{padding:12px 5px}
+  .wms-work-center-stat-value{font-size:20px}
+  .wms-work-center-stat-label{font-size:11px}
+}
 
 /* 상품 검색 추가 바텀시트 헤더 — 공간이 부족한 폭에서 "제품DB 다시 불러오기"를
    "DB 새로고침"으로 짧게 표시(2026-08-20 실기기 추가 확인 3번). */

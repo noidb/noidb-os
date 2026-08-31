@@ -6,7 +6,8 @@ import {
   countBoxesInBatch,
   countOptionsInBatch,
 } from "@/lib/wms/picking-sample-data";
-import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
+import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
+import AppNavigation from "@/app/AppNavigation";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import type { PickingWave } from "@/lib/wms/picking-wave/types";
 import { PICKING_WAVE_STATUS_LABEL } from "@/lib/wms/picking-wave/status-label";
@@ -128,20 +129,17 @@ export default function WmsWorkCenterPage() {
 
   return (
     <main
-      className="shell"
+      className="shell wms-work-center-shell"
       style={{
-        maxWidth: WMS_MOBILE_WIDTH,
-        paddingTop: "12px",
-        paddingBottom: "calc(24px + env(safe-area-inset-bottom))",
         fontFamily: "sans-serif",
         color: wmsColors.ink,
-        minHeight: "100vh",
       }}
     >
+      <AppNavigation active="work-center" />
       {/* AI 상품등록 도우미(app/page.tsx)의 .hero/.hero h1을 그대로 재사용 — 제목을 흰색 박스에
        *  가두지 않고 페이지 기본 배경 위에 직접 표시(2026-08-20 실기기 추가 확인 1번). main도
        *  더 이상 자체 흰색 배경을 칠하지 않아 "각진 흰색 외곽 패널" 인상이 사라진다. */}
-      <div className="hero">
+      <div className="hero wms-work-center-hero">
         <h1>작업센터</h1>
       </div>
 
@@ -164,36 +162,34 @@ export default function WmsWorkCenterPage() {
 
       <ShortageVendorOrdersBanner />
 
-      <a href="/wms/picking/waves" style={{ display: "block", textDecoration: "none", marginBottom: "18px" }}>
-        <button style={{ ...wmsPrimaryButton, width: "100%" }}>통합 피킹 시작 (실제 발주 기준)</button>
+      <a className="wms-work-center-picking-link" href="/wms/picking/waves">
+        <button className="wms-work-center-picking-button" style={{ ...wmsPrimaryButton, width: "100%" }}>통합 피킹 시작 (실제 발주 기준)</button>
       </a>
 
       <ActiveWavesList />
 
       <div
+        className="wms-work-center-stats"
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(3, 1fr)",
-          gap: "8px",
           background: wmsColors.surfaceBeige,
           border: `1px solid ${wmsColors.border}`,
-          borderRadius: "14px",
-          padding: "14px",
           marginBottom: "18px",
           textAlign: "center",
         }}
       >
-        <div>
-          <div style={{ fontSize: "20px", fontWeight: 800 }}>{SAMPLE_WORK_BATCHES.length}</div>
-          <div style={{ fontSize: "11px", color: wmsColors.muted }}>오늘 작업</div>
+        <div className="wms-work-center-stat">
+          <div className="wms-work-center-stat-value">{SAMPLE_WORK_BATCHES.length}</div>
+          <div className="wms-work-center-stat-label" style={{ color: wmsColors.muted }}>오늘 작업</div>
         </div>
-        <div>
-          <div style={{ fontSize: "20px", fontWeight: 800 }}>{totalBoxes}</div>
-          <div style={{ fontSize: "11px", color: wmsColors.muted }}>전체 BOX</div>
+        <div className="wms-work-center-stat">
+          <div className="wms-work-center-stat-value">{totalBoxes}</div>
+          <div className="wms-work-center-stat-label" style={{ color: wmsColors.muted }}>전체 BOX</div>
         </div>
-        <div>
-          <div style={{ fontSize: "20px", fontWeight: 800 }}>{totalSkus}</div>
-          <div style={{ fontSize: "11px", color: wmsColors.muted }}>전체 SKU</div>
+        <div className="wms-work-center-stat">
+          <div className="wms-work-center-stat-value">{totalSkus}</div>
+          <div className="wms-work-center-stat-label" style={{ color: wmsColors.muted }}>전체 SKU</div>
         </div>
       </div>
     </main>
