@@ -180,6 +180,53 @@ export function todayInKorea(now = new Date()): string {
   }).format(now);
 }
 
+/**
+ * 입고예정일이 KST 기준 오늘 또는 미래인지 날짜 단위로 판별한다.
+ * Date 생성/UTC 변환을 사용하지 않고 YYYY-MM-DD 부분만 비교해 서버·브라우저 시간대 차이를 막는다.
+ */
+export function isUpcomingInboundDate(inboundDate: string, today = todayInKorea()): boolean {
+  const match = String(inboundDate || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[ T])/);
+  if (!match || !/^\d{4}-\d{2}-\d{2}$/.test(today)) return false;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]) return false;
+
+  const normalizedInboundDate = `${match[1]}-${match[2]}-${match[3]}`;
+  return normalizedInboundDate >= today;
+}
+
+/** 상단 요약 전용: 고유 발주번호별 오늘 이후 발주만 대상으로 SKU와 실제 발주수량을 집계한다. */
+export function summarizeUpcomingPurchaseOrders(
+  orders: SupplierHubPurchaseOrder[],
+  today = todayInKorea()
+): { totalPurchaseOrders: number; totalSkuTypes: number; totalQuantity: number } {
+  const upcomingByPo = new Map<string, SupplierHubPurchaseOrder>();
+  for (const order of orders) {
+    if (order.purchaseOrderNumber && isUpcomingInboundDate(order.expectedDate, today)) {
+      upcomingByPo.set(order.purchaseOrderNumber, order);
+    }
+  }
+
+  const skuCodes = new Set<string>();
+  let totalQuantity = 0;
+  for (const order of upcomingByPo.values()) {
+    for (const item of order.items) {
+      if (item.productCode) skuCodes.add(item.productCode);
+      totalQuantity += item.orderedQuantity;
+    }
+  }
+
+  return {
+    totalPurchaseOrders: upcomingByPo.size,
+    totalSkuTypes: skuCodes.size,
+    totalQuantity,
+  };
+}
+
 /** 입고예정일이 오늘이거나 미래인 작업 대상만 반환한다. 날짜가 비어 있거나 형식이 이상하면 숨기지 않는다. */
 export function filterCurrentPurchaseOrders(orders: SupplierHubPurchaseOrder[], today = todayInKorea()) {
   return orders.filter(order => !/^\d{4}-\d{2}-\d{2}$/.test(order.expectedDate) || order.expectedDate >= today);

@@ -6,6 +6,7 @@ import {
   loadSupplierHubPurchaseOrders,
   loadSupplierHubPurchaseOrdersFromDriveFiles,
   parseSupplierHubPurchaseOrderBuffer,
+  summarizeUpcomingPurchaseOrders,
 } from "./supplier-hub-orders";
 import {
   isDriveReaderConfigured,
@@ -92,7 +93,7 @@ async function extractXlsxBuffers(filePath: string): Promise<{ name: string; buf
 
 /**
  * 최신 발주 파일을 찾아 신규 발주서만 incoming-purchase-orders 폴더에 복사하고,
- * 반영 후 전체 발주서 기준 요약(총 발주서 수/총 SKU 종류/총 수량)을 반환한다.
+ * 반영 후 KST 오늘 이후 발주서 기준 요약(총 발주서 수/총 SKU 종류/총 수량)을 반환한다.
  */
 export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> {
   if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
@@ -151,23 +152,14 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
       }
     }
     const finalOrders = [...finalByPo.values()];
-    const skuCodes = new Set<string>();
-    let totalQuantity = 0;
-    for (const order of finalOrders) {
-      for (const item of order.items) {
-        skuCodes.add(item.productCode);
-        totalQuantity += item.orderedQuantity;
-      }
-    }
+    const upcomingSummary = summarizeUpcomingPurchaseOrders(finalOrders);
     return {
       sourceFileName: latest.name,
       addedPurchaseOrderNumbers,
       updatedPurchaseOrderNumbers,
       updatedScheduleChanges,
       skippedDuplicatePurchaseOrderNumbers,
-      totalPurchaseOrders: finalOrders.length,
-      totalSkuTypes: skuCodes.size,
-      totalQuantity,
+      ...upcomingSummary,
     };
   }
 
@@ -218,15 +210,8 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
     addedPurchaseOrderNumbers.push(parsed.purchaseOrderNumber);
   }
 
-  const finalOrders = await loadSupplierHubPurchaseOrders();
-  const skuCodes = new Set<string>();
-  let totalQuantity = 0;
-  for (const order of finalOrders) {
-    for (const item of order.items) {
-      skuCodes.add(item.productCode);
-      totalQuantity += item.orderedQuantity;
-    }
-  }
+  const finalOrders = [...existingByPo.values()];
+  const upcomingSummary = summarizeUpcomingPurchaseOrders(finalOrders);
 
   return {
     sourceFileName: latest.fileName,
@@ -234,8 +219,6 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
     updatedPurchaseOrderNumbers,
     updatedScheduleChanges,
     skippedDuplicatePurchaseOrderNumbers,
-    totalPurchaseOrders: finalOrders.length,
-    totalSkuTypes: skuCodes.size,
-    totalQuantity,
+    ...upcomingSummary,
   };
 }
