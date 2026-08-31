@@ -187,9 +187,22 @@ function doPost(e) {
   }
 }
 
-// 의도적으로 onEdit 트리거를 두지 않습니다. 사용자 직접 편집 직후 Apps Script가 다른 범위를
-// setValues로 다시 쓰면 Google Sheets의 기본 실행취소 기록이 끊길 수 있습니다. 발주서 출력
-// 갱신은 저장/API 흐름과 아래 명시적 메뉴에서만 실행합니다.
+// 제품DB 직접 편집에서는 다른 범위를 다시 쓰지 않습니다. 사용자 편집 직후 setValues가 실행되면
+// Google Sheets의 기본 실행취소 기록이 끊길 수 있습니다. 발주서 출력 제품정보 갱신은 저장/API
+// 흐름과 아래 명시적 메뉴에서만 실행합니다. 발주서 출력 수량 편집 연동은 기존대로 유지합니다.
+function onEdit(e) {
+  try {
+    const range = e && e.range;
+    if (!range) return;
+    const editedSheet = range.getSheet();
+    if (editedSheet.getName() !== PO_PICKING_SHEET) return;
+    const touchesAvailableQuantity = range.getRow() <= editedSheet.getLastRow()
+      && range.getLastRow() >= 3 && range.getColumn() <= 13 && range.getLastColumn() >= 13;
+    if (touchesAvailableQuantity) refreshVendorOrderFromPicking_(editedSheet.getParent());
+  } catch (error) {
+    console.error(error);
+  }
+}
 
 function refreshPurchasePrintProductLinks() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
