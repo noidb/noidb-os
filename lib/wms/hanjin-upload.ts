@@ -125,7 +125,7 @@ function splitCellRef(ref: string): { col: string; row: number } | null {
 
 /** 물류센터명 비교용 정규화 — 앞뒤 공백 제거 + 내부 공백 전부 제거("인천 14" == "인천14").
  *  표시용 원본 값은 절대 바꾸지 않고, Map 키/조회에만 쓴다(2026-08-24 신규 — 필수 조사 4번). */
-function normalizeCenterName(value: string): string {
+export function normalizeCenterName(value: string): string {
   return value.trim().replace(/\s+/g, "");
 }
 
@@ -227,7 +227,7 @@ function parseExpectedDate(expectedDate: string): { month: number; day: number }
 /** 입고예정일을 "M월D일"로 바꾼다 — 형식을 못 알아보면 임의로 바꾸지 않고 원본 문자열을
  *  그대로 돌려준다(호출 전에 buildHanjinUploadFile이 parseExpectedDate로 이미 유효성을
  *  걸러내므로, 이 함수가 실제로 폴백 값을 돌려주는 경우는 없다). */
-function formatMonthDay(expectedDate: string): string {
+export function formatMonthDay(expectedDate: string): string {
   const parsed = parseExpectedDate(expectedDate);
   return parsed ? `${parsed.month}월${parsed.day}일` : expectedDate;
 }
@@ -249,7 +249,7 @@ function buildShipmentLabel(fulfillmentCenter: string, expectedDate: string, pur
   return `${prefix}\n발주서 번호 ${purchaseOrderNumbers.join(" / ")}`;
 }
 
-interface ShipmentRequestGroup {
+export interface ShipmentRequestGroup {
   fulfillmentCenter: string;
   expectedDate: string;
   purchaseOrderNumbers: string[];
@@ -257,7 +257,7 @@ interface ShipmentRequestGroup {
 
 /** 같은 물류센터+같은 입고예정일 요청을 한 그룹(=한 운송장 행)으로 묶는다. 발주번호 중복은
  *  제거하되, 서로 다른 물류센터나 입고예정일은 절대 같은 그룹으로 합치지 않는다. */
-function groupRequestsByCenterAndDate(requests: HanjinShipmentRequest[]): ShipmentRequestGroup[] {
+export function groupRequestsByCenterAndDate(requests: HanjinShipmentRequest[]): ShipmentRequestGroup[] {
   const groups = new Map<string, ShipmentRequestGroup>();
   for (const request of requests) {
     const key = `${request.fulfillmentCenter} ${request.expectedDate}`;

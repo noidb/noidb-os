@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { useRouter } from "next/navigation";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
-import { resolveGroup, type PickingGroup } from "@/lib/wms/picking-wave/grouping";
+import { resolveGroup, sortPickingWaveItems, type PickingGroup } from "@/lib/wms/picking-wave/grouping";
 import { fetchLiveCatalogLookup, resolveLiveFields, type LiveCatalogLookup } from "@/lib/wms/picking-wave/live-catalog";
 import { proposeShortageAllocation, sumFulfilledQuantity } from "@/lib/wms/picking-wave/allocate";
 import { buildBasketDisplayNames } from "@/lib/wms/picking-wave/basket-display";
@@ -42,9 +42,7 @@ interface SectionGroup {
  *  liveCatalogByProductCode를 넘기면 웨이브 생성 시점 카테고리 대신 최신 제품DB 카테고리로
  *  창고 동선 순서를 계산한다(2026-08-19 사용자 확정 — 구글시트 카테고리 수정이 새로고침 시 반영). */
 function buildSections(items: PickingWaveItem[], liveCatalogByProductCode?: LiveCatalogLookup): SectionGroup[] {
-  const sorted = [...items].sort((a, b) =>
-    resolveGroup(a, liveCatalogByProductCode).sortKey.localeCompare(resolveGroup(b, liveCatalogByProductCode).sortKey)
-  );
+  const sorted = sortPickingWaveItems(items, liveCatalogByProductCode);
   const sectionOrder: string[] = [];
   const sectionMap = new Map<string, SectionGroup>();
 
@@ -287,9 +285,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
     const nextCompletedGroupIds = allGroupsNow
       .filter(bucket => bucket.items.every(item => item.status !== "pending"))
       .map(bucket => bucket.group.groupId);
-    const sortedItems = [...nextItems].sort((a, b) =>
-      resolveGroup(a, liveCatalogByProductCode).sortKey.localeCompare(resolveGroup(b, liveCatalogByProductCode).sortKey)
-    );
+    const sortedItems = sortPickingWaveItems(nextItems, liveCatalogByProductCode);
     const currentIndex = sortedItems.findIndex(item => item.id === updated.id);
     const nextPending = [
       ...sortedItems.slice(currentIndex + 1),
@@ -610,6 +606,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
                 const isDone = wave.completedGroupIds.includes(group.groupId);
                 const logisticsLabels = Array.from(new Set(groupItems.flatMap(item => logisticsLabelsForItem(item))));
                 const firstLive = resolveLiveFields(groupItems[0], liveCatalogByProductCode);
+                const modelLabel = firstLive.catalogModelName || groupItems[0].modelName || groupItems[0].modelSku || groupItems[0].productCode;
                 return (
                   <button
                     key={group.groupId}
@@ -635,6 +632,9 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
                       <div style={{ minWidth: 0, textAlign: "left" }}>
                         <div style={{ fontWeight: 800, fontSize: "16px", whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.35 }}>
                           {group.groupLabel}
+                        </div>
+                        <div style={{ marginTop: "3px", fontSize: "12px", fontWeight: 900, color: wmsColors.greenDark }}>
+                          모델 · {modelLabel}
                         </div>
                         <div style={{ marginTop: "3px", fontSize: "11px", fontWeight: 800, color: wmsColors.slateDark, whiteSpace: "normal", lineHeight: 1.35 }}>
                           {logisticsLabels.join(" / ")}
@@ -805,9 +805,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   // resolveLiveFields를 다시 계산하지 않는다.
   const selectedItemLive = resolveLiveFields(selectedItem, liveCatalogByProductCode);
   // 화살표 이동은 현재 그룹 안에서만 돌지 않고 웨이브 전체 상품 순서를 사용한다.
-  const detailItems = [...items].sort((a, b) =>
-    resolveGroup(a, liveCatalogByProductCode).sortKey.localeCompare(resolveGroup(b, liveCatalogByProductCode).sortKey)
-  );
+  const detailItems = sortPickingWaveItems(items, liveCatalogByProductCode);
   const detailIndex = detailItems.findIndex(item => item.productCode === selectedItem.productCode);
   const selectedCenterDateKeys = new Set(selectedItem.sources.map(source =>
     centerDateKey(source.basketNumber, source.purchaseOrderNumber)
@@ -1045,9 +1043,7 @@ function ChecklistView({
   const [stockDrafts, setStockDrafts] = useState<Record<string, string>>({});
   const [stockSaving, setStockSaving] = useState(false);
   const [stockMessage, setStockMessage] = useState<string | null>(null);
-  const sortedItems = [...allItems].sort((a, b) =>
-    resolveGroup(a, liveCatalogByProductCode).sortKey.localeCompare(resolveGroup(b, liveCatalogByProductCode).sortKey)
-  );
+  const sortedItems = sortPickingWaveItems(allItems, liveCatalogByProductCode);
 
   function selectAll() {
     onSetChecked(new Set(allItems.map(item => item.productCode)));

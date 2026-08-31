@@ -1,7 +1,7 @@
 import type { SupplierHubPurchaseOrder } from "../supplier-hub-orders";
 import type { ProductCatalogItem } from "../product-catalog";
 import { normalizeSkuId } from "../sku-normalize";
-import { sortWarehouseProducts } from "../category-order";
+import { sortPickingWaveItems } from "./grouping";
 import type { ModelLocation, Shelf, SkuLocation, WarehouseBox, WarehouseZone } from "../types";
 import type { BasketAssignment, PickingWave, PickingWaveItem, PickingWaveSourceRef } from "./types";
 
@@ -10,8 +10,7 @@ import type { BasketAssignment, PickingWave, PickingWaveItem, PickingWaveSourceR
  * - 여러 발주서의 같은 상품코드(SKU)를 하나로 합산한다.
  * - 발주서 = 바구니 1:1 임시 배정(발주서번호 오름차순 → 바구니 1,2,3...).
  * - 위치는 SKU 예외 → 모델 위치 순으로 해석하고, 못 찾으면 locationStatus:"unlocated".
- * - 정렬 기준은 모델 모드(카테고리→모델명→SKU→발주수량)/위치 모드 둘 다 계산해둔다
- *   (lib/wms/picking-wave/grouping.ts가 현재 모드에 맞는 쪽을 골라 쓴다).
+ * - 저장 순서도 피킹 화면과 같은 공통 기준(위치/창고번호→모델명→옵션→SKU)을 사용한다.
  * 이 함수는 저장소에 쓰지 않는다 — 호출한 쪽(화면)이 결과를 PickingWaveRepository로 저장한다.
  */
 
@@ -148,8 +147,7 @@ export function buildPickingWave(input: BuildWaveInput): BuildWaveResult {
       }
     }
 
-    // 정렬: 카테고리 → 창고번호/BOX번호(제품DB 자유 텍스트, 위치 미등록이어도 참고 가능) → 모델명 → SKU
-    // (2026-08-19 사용자 확정). 값이 없으면 빈 문자열로 취급해 정렬 맨 앞쪽에 모인다.
+    // 하위 호환용 저장 키. 실제 생성/화면 정렬은 grouping.ts의 공통 comparator를 사용한다.
     const modelSortKey = `${category || "￿"}::${catalogWarehouseNumber || ""}::${catalogBoxNumber || ""}::${modelName || accum.productCode}::${accum.productCode}::${padQuantity(accum.totalQuantity)}`;
 
     const item: PickingWaveItem = {
@@ -207,5 +205,5 @@ export function buildPickingWave(input: BuildWaveInput): BuildWaveResult {
     updatedAt: now,
   }));
 
-  return { wave, items: sortWarehouseProducts(items), baskets };
+  return { wave, items: sortPickingWaveItems(items), baskets };
 }

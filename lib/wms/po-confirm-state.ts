@@ -103,6 +103,28 @@ export function serializePoConfirmationRecords(records: readonly PoConfirmationR
   return JSON.stringify(normalized);
 }
 
+export function replaceLocalPoConfirmationRecords(records: readonly PoConfirmationRecord[]): void {
+  if (!isBrowser()) return;
+  window.localStorage.setItem(PO_CONFIRMATION_STORAGE_KEY, serializePoConfirmationRecords(records));
+}
+
+async function syncPoConfirmationMutation(mutation: Record<string, unknown>): Promise<void> {
+  if (!isBrowser()) return;
+  try {
+    const response = await fetch("/api/wms/picking-waves", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(mutation),
+      cache: "no-store",
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok || !result.snapshot) throw new Error(result.error || `HTTP ${response.status}`);
+    replaceLocalPoConfirmationRecords(result.snapshot.poConfirmationRecords || []);
+  } catch (error) {
+    if (process.env.NODE_ENV !== "production") console.warn("[po-confirm-sync] 서버 저장 실패 — localStorage 복구본을 유지합니다.", error);
+  }
+}
+
 /**
  * 발주번호당 최신 레코드 하나만 유지한다. confirmed는 외부 업로드 확인까지 끝난 종결상태이므로
  * 비확정 상태로 실수로 되돌리는 쓰기는 무시한다. confirmed 레코드끼리는 최신 메타데이터로 갱신한다.
@@ -152,6 +174,7 @@ export function upsertPoConfirmationRecords(
   const incoming = Array.isArray(records) ? records : [records];
   const next = mergePoConfirmationRecords(listPoConfirmationRecords(), incoming);
   window.localStorage.setItem(PO_CONFIRMATION_STORAGE_KEY, serializePoConfirmationRecords(next));
+  void syncPoConfirmationMutation({ action: "upsertPoConfirmationRecords", records: incoming });
   return next;
 }
 
@@ -177,6 +200,7 @@ export function clearPoConfirmationErrors(
     return Boolean(targetWaveId) && record.waveId !== targetWaveId;
   });
   window.localStorage.setItem(PO_CONFIRMATION_STORAGE_KEY, serializePoConfirmationRecords(next));
+  void syncPoConfirmationMutation({ action: "clearPoConfirmationErrors", poNumbers: [...targets], waveId: targetWaveId, deletedAt: new Date().toISOString() });
   return next;
 }
 

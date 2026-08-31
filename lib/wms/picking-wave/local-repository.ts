@@ -13,11 +13,12 @@ import {
  * 겹치지 않게 한다.
  */
 
-const KEYS = {
+export const PICKING_WAVE_LOCAL_STORAGE_KEYS = {
   waves: "noidb_picking_wave_waves",
   items: "noidb_picking_wave_items",
   baskets: "noidb_picking_wave_baskets",
 } as const;
+const KEYS = PICKING_WAVE_LOCAL_STORAGE_KEYS;
 
 function isBrowser(): boolean {
   return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
@@ -38,6 +39,21 @@ function readList<T>(key: string): T[] {
 function writeList<T>(key: string, list: T[]): void {
   if (!isBrowser()) return;
   window.localStorage.setItem(key, JSON.stringify(list));
+}
+
+export function readLocalPickingWaveSnapshot(): { waves: PickingWave[]; items: PickingWaveItem[]; baskets: BasketAssignment[] } {
+  return {
+    waves: readList<PickingWave>(KEYS.waves),
+    items: readList<PickingWaveItem>(KEYS.items),
+    baskets: readList<BasketAssignment>(KEYS.baskets),
+  };
+}
+
+export function replaceLocalPickingWaveSnapshot(snapshot: { waves: PickingWave[]; items: PickingWaveItem[]; baskets: BasketAssignment[] }): void {
+  if (!isBrowser()) return;
+  writeList(KEYS.waves, snapshot.waves);
+  writeList(KEYS.items, snapshot.items);
+  writeList(KEYS.baskets, snapshot.baskets);
 }
 
 function isObjectWithStringFields(value: unknown, fields: readonly string[]): boolean {

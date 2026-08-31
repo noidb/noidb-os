@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import type { WarehouseRepository } from "./repository";
-import { LocalWarehouseRepository } from "./local-repository";
+import { SharedWarehouseRepository } from "./shared-repository";
 
 /**
  * 창고 설정/위치 등록 화면들이 공유하는 저장소 컨텍스트.
@@ -12,7 +12,7 @@ import { LocalWarehouseRepository } from "./local-repository";
 const WarehouseRepositoryContext = createContext<WarehouseRepository | null>(null);
 
 export function WarehouseRepositoryProvider({ children }: { children: ReactNode }) {
-  const repository = useMemo<WarehouseRepository>(() => new LocalWarehouseRepository(), []);
+  const repository = useMemo<WarehouseRepository>(() => new SharedWarehouseRepository(), []);
   return <WarehouseRepositoryContext.Provider value={repository}>{children}</WarehouseRepositoryContext.Provider>;
 }
 

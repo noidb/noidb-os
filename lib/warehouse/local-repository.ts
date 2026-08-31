@@ -14,7 +14,7 @@ import { DEFAULT_ZONES, SAMPLE_CATALOG } from "./sample-data";
  * 키는 전부 noidb_warehouse_ 접두어를 써서 다른 기능(WMS 피킹 등)의 저장 공간과 겹치지 않게 한다.
  */
 
-const KEYS = {
+export const WAREHOUSE_LOCAL_STORAGE_KEYS = {
   zones: "noidb_warehouse_zones",
   shelves: "noidb_warehouse_shelves",
   boxes: "noidb_warehouse_boxes",
@@ -23,6 +23,7 @@ const KEYS = {
   migrationMappings: "noidb_warehouse_migration_mappings",
   seeded: "noidb_warehouse_seeded_v1",
 } as const;
+const KEYS = WAREHOUSE_LOCAL_STORAGE_KEYS;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -81,6 +82,29 @@ function ensureSeeded(): void {
   writeList<ModelLocation>(KEYS.modelLocations, []);
   writeList<SkuLocation>(KEYS.skuExceptions, []);
   writeList<WarehouseMigrationMapping>(KEYS.migrationMappings, buildSeedMigrationMappings());
+  window.localStorage.setItem(KEYS.seeded, "1");
+}
+
+export function readLocalWarehouseSnapshot() {
+  ensureSeeded();
+  return {
+    warehouseZones: readList<WarehouseZone>(KEYS.zones),
+    warehouseShelves: readList<Shelf>(KEYS.shelves),
+    warehouseBoxes: readList<WarehouseBox>(KEYS.boxes),
+    warehouseModelLocations: readList<ModelLocation>(KEYS.modelLocations),
+    warehouseSkuExceptions: readList<SkuLocation>(KEYS.skuExceptions),
+    warehouseMigrationMappings: readList<WarehouseMigrationMapping>(KEYS.migrationMappings),
+  };
+}
+
+export function replaceLocalWarehouseSnapshot(snapshot: ReturnType<typeof readLocalWarehouseSnapshot>): void {
+  if (!isBrowser()) return;
+  writeList(KEYS.zones, snapshot.warehouseZones);
+  writeList(KEYS.shelves, snapshot.warehouseShelves);
+  writeList(KEYS.boxes, snapshot.warehouseBoxes);
+  writeList(KEYS.modelLocations, snapshot.warehouseModelLocations);
+  writeList(KEYS.skuExceptions, snapshot.warehouseSkuExceptions);
+  writeList(KEYS.migrationMappings, snapshot.warehouseMigrationMappings);
   window.localStorage.setItem(KEYS.seeded, "1");
 }
 

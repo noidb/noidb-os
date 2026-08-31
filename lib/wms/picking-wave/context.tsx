@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import type { PickingWaveRepository } from "./repository";
-import { LocalPickingWaveRepository } from "./local-repository";
+import { SharedPickingWaveRepository } from "./shared-repository";
 import type { StockLevelProvider } from "./stock-level";
 import { UnavailableStockLevelProvider } from "./stock-level";
 
@@ -20,7 +20,7 @@ const PickingWaveContext = createContext<PickingWaveContextValue | null>(null);
 export function PickingWaveRepositoryProvider({ children }: { children: ReactNode }) {
   const value = useMemo<PickingWaveContextValue>(
     () => ({
-      repository: new LocalPickingWaveRepository(),
+      repository: new SharedPickingWaveRepository(),
       stockLevelProvider: new UnavailableStockLevelProvider(),
     }),
     []

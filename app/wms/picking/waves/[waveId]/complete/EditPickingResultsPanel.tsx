@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { proposeShortageAllocation } from "@/lib/wms/picking-wave/allocate";
-import { resolveGroup } from "@/lib/wms/picking-wave/grouping";
+import { sortPickingWaveItems } from "@/lib/wms/picking-wave/grouping";
 import { resolveLiveFields, type LiveCatalogLookup } from "@/lib/wms/picking-wave/live-catalog";
 import type { PickingWaveItem, PickingWaveItemStatus } from "@/lib/wms/picking-wave/types";
 import { wmsColors, wmsPrimaryButton, wmsGhostButton, wmsOuterCard } from "@/lib/wms/ui-tokens";
@@ -46,7 +46,7 @@ export default function EditPickingResultsPanel({ items, liveCatalogByProductCod
   const [error, setError] = useState<string | null>(null);
 
   const sortedItems = useMemo(
-    () => [...items].sort((a, b) => resolveGroup(a, liveCatalogByProductCode).sortKey.localeCompare(resolveGroup(b, liveCatalogByProductCode).sortKey)),
+    () => sortPickingWaveItems(items, liveCatalogByProductCode),
     [items, liveCatalogByProductCode]
   );
 

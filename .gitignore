@@ -36,5 +36,9 @@ credentials/
 secrets/
 # 로컬 전용 Google Drive OAuth refresh token 저장 파일 (2026-08-20) — 절대 커밋하지 않음
 .secrets/
+.tmp/
+env/
 # Google Cloud 콘솔이 기본으로 내려주는 "<project-id>-<12자리 hex>.json" 형식의 키 파일명 패턴
 *-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].json
+.vercel
+.env*

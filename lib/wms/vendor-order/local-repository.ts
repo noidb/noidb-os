@@ -3,10 +3,11 @@ import type { VendorOrderRepository } from "./repository";
 
 /** localStorage 기반 임시 저장소. lib/wms/picking-wave/local-repository.ts와 동일한 패턴. */
 
-const KEYS = {
+export const VENDOR_ORDER_LOCAL_STORAGE_KEYS = {
   drafts: "noidb_vendor_order_drafts",
   lines: "noidb_vendor_order_lines",
 } as const;
+const KEYS = VENDOR_ORDER_LOCAL_STORAGE_KEYS;
 
 function isBrowser(): boolean {
   return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
@@ -27,6 +28,16 @@ function readList<T>(key: string): T[] {
 function writeList<T>(key: string, list: T[]): void {
   if (!isBrowser()) return;
   window.localStorage.setItem(key, JSON.stringify(list));
+}
+
+export function readLocalVendorOrderSnapshot(): { vendorOrderDrafts: VendorOrderDraft[]; vendorOrderLines: VendorOrderDraftLine[] } {
+  return { vendorOrderDrafts: readList<VendorOrderDraft>(KEYS.drafts), vendorOrderLines: readList<VendorOrderDraftLine>(KEYS.lines) };
+}
+
+export function replaceLocalVendorOrderSnapshot(snapshot: { vendorOrderDrafts: VendorOrderDraft[]; vendorOrderLines: VendorOrderDraftLine[] }): void {
+  if (!isBrowser()) return;
+  writeList(KEYS.drafts, snapshot.vendorOrderDrafts);
+  writeList(KEYS.lines, snapshot.vendorOrderLines);
 }
 
 export class LocalVendorOrderRepository implements VendorOrderRepository {
