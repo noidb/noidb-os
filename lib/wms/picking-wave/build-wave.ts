@@ -58,7 +58,7 @@ export function buildPickingWave(input: BuildWaveInput): BuildWaveResult {
   sortedOrders.forEach((order, index) => basketNumberByPo.set(order.purchaseOrderNumber, String(index + 1)));
 
   const catalogBySkuId = new Map<string, ProductCatalogItem>();
-  for (const item of catalog.items) catalogBySkuId.set(item.skuId, item);
+  for (const item of catalog.items) catalogBySkuId.set(normalizeSkuId(item.skuId), item);
 
   const skuExceptionByProductCode = new Map<string, string>();
   for (const exception of warehouse.skuExceptions) skuExceptionByProductCode.set(exception.skuId, exception.boxId);

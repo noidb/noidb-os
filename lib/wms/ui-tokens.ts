@@ -15,6 +15,7 @@
  */
 
 export const WMS_MOBILE_WIDTH = 390;
+export const WMS_DESKTOP_WIDTH = 1120;
 
 export const wmsColors = {
   background: "#ffffff",

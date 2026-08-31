@@ -1,6 +1,6 @@
 import type { ProductCatalogItem } from "../product-catalog";
 import { normalizeModelSkuKey, normalizeSkuId } from "../sku-normalize";
-import { resolveDisplayNameAndOption } from "../display-name";
+import { cleanDisplayProductName, resolveDisplayNameAndOption } from "../display-name";
 import type { PickingWaveItem } from "./types";
 
 /**
@@ -18,9 +18,55 @@ import type { PickingWaveItem } from "./types";
  * 호출부(예: vendor-orders 제품링크 조회)는 전혀 영향받지 않는다 — resolveLiveFields만 두 키를
  * 순서대로 시도한다.
  */
-export type LiveCatalogLookup = Map<string, ProductCatalogItem>;
+type LiveCatalogItem = ProductCatalogItem & { derivedOptionLabel?: string };
+export type LiveCatalogLookup = Map<string, LiveCatalogItem>;
 
 const MODEL_SKU_KEY_PREFIX = "model:";
+
+function commonProductNameBase(items: ProductCatalogItem[]): string {
+  const names = items.map(item => cleanDisplayProductName(item.productName)).filter(Boolean);
+  if (names.length < 2) return "";
+  let prefix = names[0];
+  for (const name of names.slice(1)) {
+    let index = 0;
+    while (index < prefix.length && index < name.length && prefix[index] === name[index]) index += 1;
+    prefix = prefix.slice(0, index);
+    if (!prefix) return "";
+  }
+  const boundary = Math.max(prefix.lastIndexOf(" "), prefix.lastIndexOf(","));
+  return boundary >= 12 ? prefix.slice(0, boundary).trim() : "";
+}
+
+/** 제품DB 옵션 열이 빈 구형 행은 같은 모델의 실제 상품명 공통부 뒤 문자열만 표시용 옵션 후보로 쓴다. */
+export function buildLiveCatalogLookup(items: ProductCatalogItem[]): LiveCatalogLookup {
+  const groups = new Map<string, ProductCatalogItem[]>();
+  for (const item of items) {
+    const key = item.modelName.trim().toLocaleLowerCase();
+    if (!key) continue;
+    groups.set(key, [...(groups.get(key) || []), item]);
+  }
+
+  const derivedOptions = new Map<string, string>();
+  for (const group of groups.values()) {
+    const base = commonProductNameBase(group);
+    if (!base) continue;
+    for (const item of group) {
+      const cleanedName = cleanDisplayProductName(item.productName);
+      if (item.optionLabel.trim() || cleanedName.includes(",") || !cleanedName.startsWith(base)) continue;
+      const suffix = cleanedName.slice(base.length).replace(/^[\s,\/\-–—]+/, "").trim();
+      if (suffix && suffix.length <= 80) derivedOptions.set(normalizeSkuId(item.skuId), suffix);
+    }
+  }
+
+  const map: LiveCatalogLookup = new Map();
+  for (const item of items) {
+    const normalizedSkuId = normalizeSkuId(item.skuId);
+    const enriched: LiveCatalogItem = { ...item, derivedOptionLabel: derivedOptions.get(normalizedSkuId) };
+    if (normalizedSkuId) map.set(normalizedSkuId, enriched);
+    if (item.modelSku) map.set(`${MODEL_SKU_KEY_PREFIX}${normalizeModelSkuKey(item.modelSku)}`, enriched);
+  }
+  return map;
+}
 
 export async function fetchLiveCatalogLookup(): Promise<LiveCatalogLookup> {
   const map: LiveCatalogLookup = new Map();
@@ -28,10 +74,7 @@ export async function fetchLiveCatalogLookup(): Promise<LiveCatalogLookup> {
     const response = await fetch("/api/wms/product-catalog", { cache: "no-store" });
     const data = await response.json();
     if (response.ok && data.configured) {
-      for (const item of (data.items || []) as ProductCatalogItem[]) {
-        if (item.skuId) map.set(item.skuId, item);
-        if (item.modelSku) map.set(`${MODEL_SKU_KEY_PREFIX}${normalizeModelSkuKey(item.modelSku)}`, item);
-      }
+      return buildLiveCatalogLookup((data.items || []) as ProductCatalogItem[]);
     }
   } catch {
     // 조회 실패 시 빈 맵을 돌려준다 — 호출한 화면은 저장된 웨이브 아이템 값을 그대로 보여준다.
@@ -102,7 +145,7 @@ type LiveResolvableItem = Pick<
  * 3) 상품명만으로 매칭하지 않는다 — 못 찾으면 matchedBy:"none"으로 웨이브 저장값을 그대로 쓴다.
  */
 export function resolveLiveFields(item: LiveResolvableItem, liveCatalogByProductCode?: LiveCatalogLookup): LiveResolvedFields {
-  let live: ProductCatalogItem | undefined;
+  let live: LiveCatalogItem | undefined;
   let matchedBy: "modelSku" | "skuId" | "none" = "none";
 
   if (item.modelSku && liveCatalogByProductCode) {
@@ -120,7 +163,22 @@ export function resolveLiveFields(item: LiveResolvableItem, liveCatalogByProduct
     }
   }
 
-  const { name, option } = resolveDisplayNameAndOption(item.productName, item.optionLabel, live?.optionLabel);
+  let { name, option } = resolveDisplayNameAndOption(item.productName, item.optionLabel, live?.optionLabel);
+  if (!option && live?.derivedOptionLabel) {
+    ({ name, option } = resolveDisplayNameAndOption(item.productName, live.derivedOptionLabel));
+  }
+  if (process.env.NODE_ENV !== "production" && !option) {
+    console.debug("[WMS option mapping]", {
+      sourceSkuId: item.productCode,
+      normalizedSkuId: normalizeSkuId(item.productCode),
+      matchedBy,
+      catalogMatched: Boolean(live),
+      storedOption: item.optionLabel || "",
+      catalogOption: live?.optionLabel || "",
+      derivedOption: live?.derivedOptionLabel || "",
+      finalOption: option,
+    });
+  }
   return {
     category: live ? live.category : item.category,
     gender: live ? live.gender : item.gender,

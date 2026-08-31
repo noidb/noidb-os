@@ -30,11 +30,37 @@ export default function WmsLayout({ children }: { children: ReactNode }) {
               <div className="wms-rounded-page-shell">{children}</div>
             </WmsUndoProvider>
             <style jsx global>{`
-              .wms-rounded-page-shell > main {
+              .wms-rounded-page-shell main {
+                width: 100% !important;
+                max-width: none !important;
+                margin-left: 0 !important;
+                margin-right: 0 !important;
+                box-sizing: border-box;
                 border: 1px solid #ddd7cd;
                 border-radius: 18px;
                 overflow: hidden;
                 box-shadow: 0 4px 16px rgba(30, 28, 25, 0.045);
+              }
+              .wms-rounded-page-shell {
+                width: 100%;
+                max-width: 1120px;
+                margin: 0 auto;
+                box-sizing: border-box;
+              }
+              @media (min-width: 761px) {
+                .wms-rounded-page-shell {
+                  padding: 0 24px 32px;
+                }
+                .wms-rounded-page-shell main {
+                  min-height: 0 !important;
+                  height: auto !important;
+                }
+              }
+              @media (max-width: 760px) {
+                .wms-rounded-page-shell {
+                  padding: 0;
+                  overflow-x: clip;
+                }
               }
             `}</style>
           </VendorOrderRepositoryProvider>
