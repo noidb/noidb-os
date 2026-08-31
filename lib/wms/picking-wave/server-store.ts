@@ -11,6 +11,10 @@ const LOCAL_STORE_PATH = process.env.WMS_PICKING_WAVE_STORE_FILE || path.join(pr
 type LoadedSnapshot = { snapshot: PickingWaveStoreSnapshot; etag?: string };
 let localMutationQueue: Promise<unknown> = Promise.resolve();
 
+function normalizeEtag(value: string): string {
+  return value.trim().replace(/^W\//i, "").replace(/^\"|\"$/g, "");
+}
+
 function recordTime(value: { updatedAt?: string; createdAt?: string }): string {
   return value.updatedAt || value.createdAt || new Date(0).toISOString();
 }
@@ -71,7 +75,7 @@ async function readBlobSnapshot(): Promise<LoadedSnapshot> {
     if (!result || result.statusCode !== 200) return { snapshot: emptyPickingWaveStoreSnapshot() };
     const body = await new Response(result.stream).text();
     const metadata = await head(BLOB_PATH);
-    if (result.blob.etag === metadata.etag) {
+    if (normalizeEtag(result.blob.etag) === normalizeEtag(metadata.etag)) {
       return { snapshot: normalizeSnapshot(JSON.parse(body)), etag: metadata.etag };
     }
   }
