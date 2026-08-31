@@ -19,30 +19,32 @@ interface Props {
  * href가 있으면 페이지 이동(<a>), 없으면 onClick 액션 버튼(<button>)으로 렌더링한다.
  */
 export default function WorkCenterMenuButton({ icon, title, tint, borderTint, textColor, href, onClick, disabled }: Props) {
-  const boxStyle: CSSProperties = {
+  const boxStyle = {
+    "--wms-work-center-menu-background": tint,
+    "--wms-work-center-menu-border": borderTint,
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
     gap: "8px",
+    width: "100%",
     minHeight: "96px",
     padding: "16px 10px",
-    border: `1px solid ${borderTint}`,
     borderRadius: "14px",
-    background: tint,
     opacity: disabled ? 0.55 : 1,
-  };
+    boxSizing: "border-box",
+  } as CSSProperties;
 
   const content = (
-    <div style={boxStyle}>
-      <div style={{ width: "32px", height: "32px", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{icon}</div>
-      <div style={{ fontSize: "14px", fontWeight: 800, color: textColor, textAlign: "center", lineHeight: 1.3 }}>{title}</div>
-    </div>
+    <>
+      <div className="wms-work-center-menu-icon" style={{ width: "32px", height: "32px", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{icon}</div>
+      <div className="wms-work-center-menu-title" style={{ fontSize: "14px", fontWeight: 800, color: textColor, textAlign: "center", lineHeight: 1.3 }}>{title}</div>
+    </>
   );
 
   if (href) {
     return (
-      <a href={href} style={{ display: "block", textDecoration: "none" }}>
+      <a className="wms-work-center-menu-control" href={href} style={{ ...boxStyle, textDecoration: "none" }}>
         {content}
       </a>
     );
@@ -51,9 +53,10 @@ export default function WorkCenterMenuButton({ icon, title, tint, borderTint, te
   return (
     <button
       type="button"
+      className="wms-work-center-menu-control"
       onClick={onClick}
       disabled={disabled}
-      style={{ display: "block", width: "100%", padding: 0, margin: 0, border: "none", background: "none", cursor: disabled ? "default" : "pointer" }}
+      style={{ ...boxStyle, margin: 0, cursor: disabled ? "default" : "pointer" }}
     >
       {content}
     </button>
