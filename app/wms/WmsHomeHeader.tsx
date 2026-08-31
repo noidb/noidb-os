@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { WMS_MOBILE_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
+import { WMS_DESKTOP_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
 import { HomeIcon } from "./icons";
 import { useWmsUndo } from "@/lib/wms/undo-context";
 
@@ -29,7 +29,9 @@ export default function WmsHomeHeader() {
   return (
     <div
       style={{
-        maxWidth: WMS_MOBILE_WIDTH,
+        width: "100%",
+        maxWidth: WMS_DESKTOP_WIDTH,
+        boxSizing: "border-box",
         margin: "0 auto",
         padding: "calc(env(safe-area-inset-top) + 8px) 12px 0",
       }}

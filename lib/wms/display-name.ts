@@ -92,7 +92,7 @@ export function resolveDisplayNameAndOption(
   const commaIndex = cleanedName.indexOf(",");
   if (commaIndex >= 0) {
     const name = cleanedName.slice(0, commaIndex).trim();
-    const optionParts = [cleanedName.slice(commaIndex + 1), knownOption]
+    const optionParts = [knownOption, cleanedName.slice(commaIndex + 1)]
       .flatMap(value => value.split(","))
       .map(value => value.trim())
       .filter(Boolean);

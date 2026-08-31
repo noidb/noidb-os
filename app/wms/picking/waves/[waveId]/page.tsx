@@ -79,6 +79,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   const [basketDisplayNames, setBasketDisplayNames] = useState<Record<string, string>>({});
   const [basketsByNumber, setBasketsByNumber] = useState<Record<string, BasketAssignment>>({});
   const [expectedDatesByPo, setExpectedDatesByPo] = useState<Record<string, string>>({});
+  const [fulfillmentCentersByPo, setFulfillmentCentersByPo] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [liveCatalogByProductCode, setLiveCatalogByProductCode] = useState<LiveCatalogLookup>(new Map());
@@ -197,8 +198,12 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
     refreshProductCatalog();
     fetch("/api/wms/supplier-hub-orders", { cache: "no-store" })
       .then(response => response.json())
-      .then(data => setExpectedDatesByPo(Object.fromEntries((data.orders || []).map((order: { purchaseOrderNumber: string; expectedDate?: string }) => [order.purchaseOrderNumber, order.expectedDate || ""]))))
-      .catch(() => setExpectedDatesByPo({}));
+      .then(data => {
+        const orders = (data.orders || []) as { purchaseOrderNumber: string; expectedDate?: string; fulfillmentCenter?: string }[];
+        setExpectedDatesByPo(Object.fromEntries(orders.map(order => [order.purchaseOrderNumber, order.expectedDate || ""])));
+        setFulfillmentCentersByPo(Object.fromEntries(orders.map(order => [order.purchaseOrderNumber, order.fulfillmentCenter || ""])));
+      })
+      .catch(() => { setExpectedDatesByPo({}); setFulfillmentCentersByPo({}); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.waveId]);
 
@@ -219,26 +224,29 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   }, [selectedItem, liveCatalogByProductCode]);
 
   function fulfillmentCentersForItem(item: PickingWaveItem): string[] {
-    return Array.from(new Set(item.sources.map(source => basketDisplayNames[source.basketNumber] || `바구니 ${source.basketNumber}`)));
+    return logisticsLabelsForItem(item);
   }
 
-  function actualFulfillmentCenter(basketNumber: string): string {
-    return basketsByNumber[basketNumber]?.fulfillmentCenter || basketDisplayNames[basketNumber] || `바구니 ${basketNumber}`;
+  function actualFulfillmentCenter(basketNumber: string, purchaseOrderNumber: string): string {
+    return fulfillmentCentersByPo[purchaseOrderNumber]
+      || basketsByNumber[basketNumber]?.fulfillmentCenter
+      || basketDisplayNames[basketNumber]
+      || `바구니 ${basketNumber}`;
   }
 
   function centerDateKey(basketNumber: string, purchaseOrderNumber: string): string {
-    return `${actualFulfillmentCenter(basketNumber)}\u0000${expectedDatesByPo[purchaseOrderNumber] || ""}`;
+    return `${actualFulfillmentCenter(basketNumber, purchaseOrderNumber)}\u0000${expectedDatesByPo[purchaseOrderNumber] || ""}`;
   }
 
   function centerDateLabel(basketNumber: string, purchaseOrderNumber: string): string {
-    const center = actualFulfillmentCenter(basketNumber);
+    const center = actualFulfillmentCenter(basketNumber, purchaseOrderNumber);
     const expectedDate = expectedDatesByPo[purchaseOrderNumber];
     return expectedDate ? `${center} - ${expectedDate}` : center;
   }
 
   function logisticsLabelsForItem(item: PickingWaveItem): string[] {
     return Array.from(new Set(item.sources.map(source => {
-      const center = actualFulfillmentCenter(source.basketNumber);
+      const center = actualFulfillmentCenter(source.basketNumber, source.purchaseOrderNumber);
       const expectedDate = expectedDatesByPo[source.purchaseOrderNumber];
       return expectedDate ? `${center} · 입고예정일 ${expectedDate}` : center;
     })));
@@ -746,7 +754,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
               {allocationDraft.map((row, index) => (
                 <tr key={row.purchaseOrderNumber} style={{ borderBottom: "1px solid #eee" }}>
                   <td>
-                    {basketDisplayNames[row.basketNumber] || `바구니 ${row.basketNumber}`}
+                    {centerDateLabel(row.basketNumber, row.purchaseOrderNumber)}
                     <span style={{ color: wmsColors.muted, fontSize: "11px" }}> (발주서 {row.purchaseOrderNumber})</span>
                   </td>
                   <td>{row.requestedQuantity}</td>
@@ -889,7 +897,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
           {selectedItem.sources.map(source => (
             <div key={source.purchaseOrderNumber} style={{ fontSize: "12px", display: "flex", justifyContent: "space-between" }}>
               <span>
-                {actualFulfillmentCenter(source.basketNumber)}
+                {actualFulfillmentCenter(source.basketNumber, source.purchaseOrderNumber)}
                 {expectedDatesByPo[source.purchaseOrderNumber] && <span style={{ color: wmsColors.greenDark, fontSize: "10px", fontWeight: 800 }}> · 입고예정일 {expectedDatesByPo[source.purchaseOrderNumber]}</span>}
                 <span style={{ color: wmsColors.muted, fontSize: "10px" }}> (발주서 {source.purchaseOrderNumber})</span>
               </span>

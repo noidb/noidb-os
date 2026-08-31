@@ -1,13 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { WMS_MOBILE_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
+import { WMS_DESKTOP_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
 
 /** 모든 WMS 화면에서 실제 브라우저 직전 화면으로 돌아가는 공통 버튼. */
 export default function WmsHistoryBackButton() {
   const router = useRouter();
   return (
-    <div style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "8px 12px 0" }}>
+    <div style={{ width: "100%", maxWidth: WMS_DESKTOP_WIDTH, boxSizing: "border-box", margin: "0 auto", padding: "8px 12px 0" }}>
       <button
         type="button"
         onClick={() => window.history.length > 1 ? router.back() : router.push("/wms")}

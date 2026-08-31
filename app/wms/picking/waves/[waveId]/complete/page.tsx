@@ -32,6 +32,7 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   const [editMode, setEditMode] = useState(false);
   const [confirmingResult, setConfirmingResult] = useState(false);
   const [catalogRefreshing, setCatalogRefreshing] = useState(false);
+  const [orderLogisticsByPo, setOrderLogisticsByPo] = useState<Record<string, { fulfillmentCenter: string; expectedDate: string }>>({});
 
   /** 카테고리/옵션명/대표이미지/거래처/창고번호/BOX번호/쿠팡바코드만 다시 불러온다 — 피킹 수량이나
    *  웨이브 진행상태는 건드리지 않는다 (2026-08-19 2차 실사용 테스트 반영). 구글시트(외부 네트워크)
@@ -78,6 +79,13 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   useEffect(() => {
     reload();
     refreshCatalog();
+    fetch("/api/wms/supplier-hub-orders", { cache: "no-store" })
+      .then(response => response.json())
+      .then(data => setOrderLogisticsByPo(Object.fromEntries((data.orders || []).map((order: { purchaseOrderNumber: string; fulfillmentCenter?: string; expectedDate?: string }) => [
+        order.purchaseOrderNumber,
+        { fulfillmentCenter: order.fulfillmentCenter || "", expectedDate: order.expectedDate || "" },
+      ]))))
+      .catch(() => setOrderLogisticsByPo({}));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.waveId]);
 
@@ -213,7 +221,10 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
               }}
             >
               <span>
-                <strong>{basketDisplayNames[basket.basketNumber] || `바구니 ${basket.basketNumber}`}</strong>
+                <strong>{orderLogisticsByPo[basket.purchaseOrderNumber]?.fulfillmentCenter || basket.fulfillmentCenter || basketDisplayNames[basket.basketNumber] || `바구니 ${basket.basketNumber}`}</strong>
+                {orderLogisticsByPo[basket.purchaseOrderNumber]?.expectedDate && (
+                  <span style={{ color: wmsColors.greenDark, fontSize: "11px", fontWeight: 800 }}> · 입고예정일 {orderLogisticsByPo[basket.purchaseOrderNumber].expectedDate}</span>
+                )}
                 <span style={{ color: wmsColors.muted, fontSize: "11px" }}> (발주서 {basket.purchaseOrderNumber})</span>
                 {basket.shipmentNumber ? ` / 쉽먼트 ${basket.shipmentNumber}` : ""}
               </span>
