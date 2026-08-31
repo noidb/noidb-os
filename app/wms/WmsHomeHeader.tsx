@@ -22,6 +22,10 @@ export default function WmsHomeHeader() {
     else router.push("/wms/work-center");
   }
 
+  // 작업센터는 AI 상품등록 화면과 공유하는 AppNavigation을 직접 렌더링한다.
+  // 다른 WMS 화면의 뒤로가기/HOME/되돌리기 헤더는 기존대로 유지한다.
+  if (isHome) return null;
+
   return (
     <div
       style={{
@@ -44,8 +48,7 @@ export default function WmsHomeHeader() {
       {/* 작업센터(HOME) 화면에서는 "HOME (현재 위치)" 배지와 그 전용 줄 자체를 렌더링하지 않는다
        *  — 브랜드 헤더 바로 아래 제목이 오도록(2026-08-20 실기기 추가 확인 1번). 다른 화면에서는
        *  실제 이동 기능이 있는 HOME 버튼을 그대로 유지한다. */}
-      {!isHome && (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
           <button
             type="button"
             onClick={goBack}
@@ -77,8 +80,7 @@ export default function WmsHomeHeader() {
             HOME
           </button>
           </a>
-        </div>
-      )}
+      </div>
     </div>
   );
 }

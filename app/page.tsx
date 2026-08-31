@@ -2,6 +2,7 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import AppNavigation from "./AppNavigation";
 import {
   ensureReadWritePermission,
   loadDirectoryHandle,
@@ -1738,12 +1739,9 @@ export default function Home() {
 
   return (
     <main className="shell">
+      <AppNavigation active="product-registration" />
       <header className="hero">
         <div className="heroBrandArea">
-          <div className="brandLockup">
-            <img className="brandMark" src="/icons/noidb-icon-192-v3.png" alt="" aria-hidden="true" />
-            <div><p className="brandWordmark">NOID-B OS</p><span>Seller Workspace</span></div>
-          </div>
           <h1>AI 상품등록 도우미</h1>
           <div className="heroUtilityActions">
             <Link className="imageGeneratorLink" href="/image-generator">이미지 자동생성</Link>
