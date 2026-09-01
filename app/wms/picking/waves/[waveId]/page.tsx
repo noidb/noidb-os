@@ -100,6 +100,8 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   const [checklistMode, setChecklistMode] = useState(false);
   const [checkedProductCodes, setCheckedProductCodes] = useState<Set<string>>(new Set());
   const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [decisionSaving, setDecisionSaving] = useState(false);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
   /** 하단 일괄처리 영역(미처리 SKU만 선택 + 선택 전량찾음/전량없음)의 DOM — 일괄처리 직후
    *  화면 위치가 튀는 문제를 고치기 위해, 처리 직전/직후 이 영역의 뷰포트 내 위치를 비교해
    *  같은 자리로 스크롤을 보정하는 기준점으로 쓴다 (2026-08-20 신규). */
@@ -272,11 +274,21 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   }
 
   async function persistItem(item: PickingWaveItem, patch: Partial<PickingWaveItem>) {
-    const updated: PickingWaveItem = { ...item, ...patch, updatedAt: new Date().toISOString() };
-    await waveRepository.saveItem(updated);
-    const nextItems = items.map(existing => (existing.id === updated.id ? updated : existing));
-    setItems(nextItems);
-    await afterDecision(updated, nextItems);
+    if (!wave || decisionSaving) return;
+    setDecisionSaving(true);
+    setDecisionError(null);
+    try {
+      const updated: PickingWaveItem = { ...item, ...patch, updatedAt: new Date().toISOString() };
+      await waveRepository.saveItem(updated);
+      const nextItems = items.map(existing => (existing.id === updated.id ? updated : existing));
+      await afterDecision(updated, nextItems);
+      // 아이템과 웨이브가 공용 저장소에 모두 저장된 뒤에만 현재 화면을 완료 상태로 바꾼다.
+      setItems(nextItems);
+    } catch (error) {
+      setDecisionError(error instanceof Error ? error.message : "피킹 결과 저장에 실패했습니다. 다시 시도해주세요.");
+    } finally {
+      setDecisionSaving(false);
+    }
   }
 
   async function afterDecision(updated: PickingWaveItem, nextItems: PickingWaveItem[]) {
@@ -922,17 +934,22 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       <div style={{ flexShrink: 0, paddingTop: "8px" }}>
         {!showPartialInput ? (
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            <button onClick={() => handleFull(selectedItem)} style={{ ...wmsPrimaryButton, width: "100%" }}>
-              전량찾음
+            <button
+              onClick={() => handleFull(selectedItem)}
+              disabled={decisionSaving}
+              style={{ ...wmsPrimaryButton, width: "100%", opacity: decisionSaving ? 0.55 : 1 }}
+            >
+              {decisionSaving ? "저장 중..." : "전량찾음"}
             </button>
             <div style={{ display: "flex", gap: "8px" }}>
-              <button onClick={() => startPartial()} style={{ ...wmsSecondaryButton, flex: 1 }}>
+              <button disabled={decisionSaving} onClick={() => startPartial()} style={{ ...wmsSecondaryButton, flex: 1, opacity: decisionSaving ? 0.55 : 1 }}>
                 부분찾음
               </button>
-              <button onClick={() => handleNotFound(selectedItem)} style={{ ...wmsWarnButton, flex: 1 }}>
+              <button disabled={decisionSaving} onClick={() => handleNotFound(selectedItem)} style={{ ...wmsWarnButton, flex: 1, opacity: decisionSaving ? 0.55 : 1 }}>
                 못 찾음
               </button>
             </div>
+            {decisionError && <p role="alert" style={{ margin: 0, color: "#b42318", fontSize: "13px", fontWeight: 700 }}>{decisionError}</p>}
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>

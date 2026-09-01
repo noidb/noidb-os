@@ -23,18 +23,48 @@ export type LiveCatalogLookup = Map<string, LiveCatalogItem>;
 
 const MODEL_SKU_KEY_PREFIX = "model:";
 
+function pairProductNameBase(a: string, b: string): string {
+  let prefix = a;
+  let index = 0;
+  while (index < prefix.length && index < b.length && prefix[index] === b[index]) index += 1;
+  prefix = prefix.slice(0, index);
+  const boundary = Math.max(prefix.lastIndexOf(" "), prefix.lastIndexOf(","));
+  return boundary >= 12 ? prefix.slice(0, boundary).trim() : "";
+}
+
 function commonProductNameBase(items: ProductCatalogItem[]): string {
   const names = items.map(item => cleanDisplayProductName(item.productName)).filter(Boolean);
   if (names.length < 2) return "";
-  let prefix = names[0];
-  for (const name of names.slice(1)) {
-    let index = 0;
-    while (index < prefix.length && index < name.length && prefix[index] === name[index]) index += 1;
-    prefix = prefix.slice(0, index);
-    if (!prefix) return "";
+  const candidates = new Set<string>();
+  for (let left = 0; left < names.length - 1; left += 1) {
+    for (let right = left + 1; right < names.length; right += 1) {
+      const base = pairProductNameBase(names[left], names[right]);
+      if (base) candidates.add(base);
+    }
   }
-  const boundary = Math.max(prefix.lastIndexOf(" "), prefix.lastIndexOf(","));
-  return boundary >= 12 ? prefix.slice(0, boundary).trim() : "";
+  return Array.from(candidates)
+    .map(base => ({ base, support: names.filter(name => name.startsWith(base)).length }))
+    .filter(candidate => candidate.support >= 2)
+    .sort((a, b) => b.support - a.support || b.base.length - a.base.length)[0]?.base || "";
+}
+
+interface ModelSignature {
+  modelName: string;
+  base: string;
+  warehouseNumbers: Set<string>;
+  boxNumbers: Set<string>;
+}
+
+function normalizedLocation(value: string | undefined): string {
+  return (value || "").trim().toLocaleLowerCase("ko");
+}
+
+function matchesKnownModelLocation(item: ProductCatalogItem, signature: ModelSignature): boolean {
+  const boxNumber = normalizedLocation(item.boxNumber);
+  if (boxNumber && signature.boxNumbers.size > 0) return signature.boxNumbers.has(boxNumber);
+  const warehouseNumber = normalizedLocation(item.warehouseNumber);
+  if (warehouseNumber && signature.warehouseNumbers.size > 0) return signature.warehouseNumbers.has(warehouseNumber);
+  return true;
 }
 
 /** 제품DB 옵션 열이 빈 구형 행은 같은 모델의 실제 상품명 공통부 뒤 문자열만 표시용 옵션 후보로 쓴다. */
@@ -46,10 +76,17 @@ export function buildLiveCatalogLookup(items: ProductCatalogItem[]): LiveCatalog
     groups.set(key, [...(groups.get(key) || []), item]);
   }
 
+  const signatures: ModelSignature[] = [];
   const derivedOptions = new Map<string, string>();
   for (const group of groups.values()) {
     const base = commonProductNameBase(group);
     if (!base) continue;
+    signatures.push({
+      modelName: group[0].modelName,
+      base,
+      warehouseNumbers: new Set(group.map(row => normalizedLocation(row.warehouseNumber)).filter(Boolean)),
+      boxNumbers: new Set(group.map(row => normalizedLocation(row.boxNumber)).filter(Boolean)),
+    });
     for (const item of group) {
       const cleanedName = cleanDisplayProductName(item.productName);
       if (item.optionLabel.trim() || cleanedName.includes(",") || !cleanedName.startsWith(base)) continue;
@@ -58,10 +95,37 @@ export function buildLiveCatalogLookup(items: ProductCatalogItem[]): LiveCatalog
     }
   }
 
+  // 일부 구형 제품DB 행은 SKU·상품명·창고가 정상인데 모델명/모델SKU만 비어 있다. 이 행을 SKU로
+  // 정렬하면 같은 모델 옵션 사이에 다른 모델이 끼므로, 같은 위치에서 상품명 공통부가 정확히 맞는
+  // 기존 모델이 하나뿐일 때만 표시/정렬용 모델명을 복원한다. 충돌하거나 위치가 다르면 추론하지 않는다.
+  const inferredModels = new Map<string, { modelName: string; derivedOptionLabel?: string }>();
+  for (const item of items) {
+    if (item.modelName.trim() || item.modelSku.trim()) continue;
+    const normalizedSkuId = normalizeSkuId(item.skuId);
+    const cleanedName = cleanDisplayProductName(item.productName);
+    if (!normalizedSkuId || !cleanedName) continue;
+    const candidates = signatures.filter(signature =>
+      cleanedName.startsWith(signature.base) && matchesKnownModelLocation(item, signature)
+    );
+    const modelNames = Array.from(new Set(candidates.map(candidate => candidate.modelName)));
+    if (modelNames.length !== 1) continue;
+    const signature = candidates.find(candidate => candidate.modelName === modelNames[0])!;
+    const suffix = cleanedName.slice(signature.base.length).replace(/^[\s,\/\-–—]+/, "").trim();
+    inferredModels.set(normalizedSkuId, {
+      modelName: signature.modelName,
+      derivedOptionLabel: suffix && suffix.length <= 80 ? suffix : undefined,
+    });
+  }
+
   const map: LiveCatalogLookup = new Map();
   for (const item of items) {
     const normalizedSkuId = normalizeSkuId(item.skuId);
-    const enriched: LiveCatalogItem = { ...item, derivedOptionLabel: derivedOptions.get(normalizedSkuId) };
+    const inferred = inferredModels.get(normalizedSkuId);
+    const enriched: LiveCatalogItem = {
+      ...item,
+      modelName: item.modelName || inferred?.modelName || "",
+      derivedOptionLabel: derivedOptions.get(normalizedSkuId) || inferred?.derivedOptionLabel,
+    };
     if (normalizedSkuId) map.set(normalizedSkuId, enriched);
     if (item.modelSku) map.set(`${MODEL_SKU_KEY_PREFIX}${normalizeModelSkuKey(item.modelSku)}`, enriched);
   }
