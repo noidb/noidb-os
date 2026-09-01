@@ -12,17 +12,32 @@ function isBrowser(): boolean {
 }
 
 async function requestSnapshot(mutation?: PickingWaveStoreMutation): Promise<PickingWaveStoreSnapshot> {
-  const response = await fetch("/api/wms/picking-waves", mutation ? {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(mutation),
-    cache: "no-store",
-  } : { cache: "no-store" });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok || !result.ok || !result.snapshot) {
+  const maxAttempts = mutation ? 2 : 1;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const response = await fetch("/api/wms/picking-waves", mutation ? {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(mutation),
+      cache: "no-store",
+    } : { cache: "no-store" });
+    const result = await response.json().catch(() => ({}));
+    if (response.ok && result.ok && result.snapshot) return result.snapshot as PickingWaveStoreSnapshot;
+    if (mutation && response.status === 503 && attempt + 1 < maxAttempts) {
+      const seconds = Math.max(1, Math.min(60, Number(response.headers.get("Retry-After")) || 2));
+      await new Promise(resolve => setTimeout(resolve, seconds * 1000));
+      continue;
+    }
     throw new Error(result.error || `웨이브 공용 저장소 요청 실패(HTTP ${response.status})`);
   }
-  return result.snapshot as PickingWaveStoreSnapshot;
+  throw new Error("웨이브 공용 저장소 요청에 실패했습니다.");
+}
+
+function friendlyStoreError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (/429|too many requests|rate.?limit|conditional|conflict|precondition|412|409/i.test(message)) {
+    return new Error("저장 서버가 잠시 혼잡합니다. 자동 재시도 후에도 저장하지 못했습니다. 기존 데이터는 변경되지 않았습니다. 잠시 후 다시 시도해주세요.");
+  }
+  return error instanceof Error ? error : new Error("웨이브를 저장하지 못했습니다. 기존 데이터는 변경되지 않았습니다. 잠시 후 다시 시도해주세요.");
 }
 
 function mirrorServerSnapshot(snapshot: PickingWaveStoreSnapshot): void {
@@ -101,6 +116,18 @@ export class SharedPickingWaveRepository implements PickingWaveRepository {
 
   async saveWave(wave: PickingWave): Promise<void> {
     await this.saveLocalThenServer(() => this.local.saveWave(wave), { action: "saveWave", wave });
+  }
+
+  async createWaveBatch(operationId: string, wave: PickingWave, items: PickingWaveItem[], baskets: BasketAssignment[]): Promise<string> {
+    try {
+      await this.ensureMigrated();
+      const snapshot = await requestSnapshot({ action: "createWaveBatch", operationId, wave, items, baskets });
+      mirrorServerSnapshot(snapshot);
+      return snapshot.completedCreateOperations?.[operationId]?.waveId || wave.id;
+    } catch (error) {
+      if (process.env.NODE_ENV !== "production") console.error("[create-wave-batch]", error);
+      throw friendlyStoreError(error);
+    }
   }
 
   async deleteWave(waveId: string): Promise<void> {

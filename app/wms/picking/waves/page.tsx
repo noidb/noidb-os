@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useWarehouseRepository } from "@/lib/warehouse/context";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
@@ -49,6 +49,7 @@ export default function WmsPickingWavesPage() {
   const [createDisplayName, setCreateDisplayName] = useState("");
   const [workerName, setWorkerName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
+  const createOperationIdRef = useRef<string | null>(null);
   const [creatingLabels, setCreatingLabels] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
 
@@ -224,9 +225,10 @@ export default function WmsPickingWavesPage() {
         warehouseRepository.listSkuExceptions(),
       ]);
 
-      const waves = await waveRepository.listWaves();
       const now = new Date().toISOString();
-      const waveId = generateWaveId(waves.map(wave => wave.id), now);
+      const operationId = createOperationIdRef.current || `create-wave-${crypto.randomUUID()}`;
+      createOperationIdRef.current = operationId;
+      const waveId = generateWaveId(existingWaves.map(wave => wave.id), now, operationId);
 
       const { wave, items, baskets } = buildPickingWave({
         waveId,
@@ -242,11 +244,11 @@ export default function WmsPickingWavesPage() {
         fulfillmentCenter: group.fulfillmentCenter,
         purchaseOrderNumbers: group.orders.map(order => order.purchaseOrderNumber),
       }));
-      await waveRepository.saveWave({ ...wave, displayName: trimmedDisplayName, workerName: trimmedWorkerName, shippingGroups });
-      await Promise.all(items.map(item => waveRepository.saveItem(item)));
-      await Promise.all(baskets.map(basket => waveRepository.saveBasket(basket)));
+      const completeWave = { ...wave, displayName: trimmedDisplayName, workerName: trimmedWorkerName, shippingGroups };
+      const committedWaveId = await waveRepository.createWaveBatch(operationId, completeWave, items, baskets);
 
-      router.push(`/wms/picking/waves/${waveId}`);
+      createOperationIdRef.current = null;
+      router.push(`/wms/picking/waves/${committedWaveId}`);
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : "통합 피킹 작업 생성 중 오류가 발생했습니다.");
       setCreating(false);
@@ -609,6 +611,7 @@ export default function WmsPickingWavesPage() {
 
       <button
         onClick={() => {
+          createOperationIdRef.current = `create-wave-${crypto.randomUUID()}`;
           setCreateError(null);
           setCreateDisplayName(defaultWaveDisplayName());
           setShowCreateDialog(true);

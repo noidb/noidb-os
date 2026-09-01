@@ -26,6 +26,7 @@ export interface PickingWaveStoreSnapshot {
   deletedVendorDraftIds: Record<string, string>;
   deletedVendorLineIds: Record<string, string>;
   deletedWarehouseSkuIds: Record<string, string>;
+  completedCreateOperations: Record<string, { waveId: string; completedAt: string }>;
 }
 
 export type PickingWaveStoreMutation =
@@ -34,6 +35,7 @@ export type PickingWaveStoreMutation =
   | { action: "deleteWave"; waveId: string; deletedAt: string }
   | { action: "saveItem"; item: PickingWaveItem }
   | { action: "saveProgress"; items: PickingWaveItem[]; wave: PickingWave }
+  | { action: "createWaveBatch"; operationId: string; wave: PickingWave; items: PickingWaveItem[]; baskets: BasketAssignment[] }
   | { action: "deleteItem"; itemId: string; deletedAt: string }
   | { action: "saveBasket"; basket: BasketAssignment }
   | { action: "deleteBasket"; waveId: string; basketNumber: string; deletedAt: string }
@@ -75,6 +77,7 @@ export function emptyPickingWaveStoreSnapshot(): PickingWaveStoreSnapshot {
     deletedVendorDraftIds: {},
     deletedVendorLineIds: {},
     deletedWarehouseSkuIds: {},
+    completedCreateOperations: {},
   };
 }
 
@@ -103,6 +106,11 @@ export function isPickingWaveStoreMutation(value: unknown): value is PickingWave
   if (value.action === "saveProgress") return hasText(value.wave, "id") && hasText(value.wave, "updatedAt")
     && Array.isArray(value.items) && value.items.length <= 10_000
     && value.items.every(item => hasText(item, "id") && hasText(item, "waveId") && hasText(item, "updatedAt"));
+  if (value.action === "createWaveBatch") {
+    if (!hasText(value, "operationId") || !hasText(value.wave, "id") || !hasText(value.wave, "updatedAt")) return false;
+    if (!Array.isArray(value.items) || value.items.length > 10_000 || !value.items.every(item => hasText(item, "id") && hasText(item, "waveId") && hasText(item, "updatedAt"))) return false;
+    return Array.isArray(value.baskets) && value.baskets.length <= 10_000 && value.baskets.every(basket => hasText(basket, "waveId") && hasText(basket, "basketNumber") && hasText(basket, "updatedAt"));
+  }
   if (value.action === "deleteItem") return hasText(value, "itemId") && hasText(value, "deletedAt");
   if (value.action === "saveBasket") return hasText(value.basket, "waveId") && hasText(value.basket, "basketNumber") && hasText(value.basket, "updatedAt");
   if (value.action === "deleteBasket") return hasText(value, "waveId") && hasText(value, "basketNumber") && hasText(value, "deletedAt");

@@ -42,8 +42,9 @@ function padQuantity(quantity: number): string {
   return String(Math.max(0, Math.round(quantity))).padStart(6, "0");
 }
 
-export function generateWaveId(existingWaveIds: string[], now: string): string {
+export function generateWaveId(existingWaveIds: string[], now: string, uniqueSuffix?: string): string {
   const datePart = now.slice(0, 10).replace(/-/g, "");
+  if (uniqueSuffix) return `WAVE-${datePart}-${uniqueSuffix.replace(/[^a-zA-Z0-9]/g, "").slice(-8)}`;
   const todayIds = existingWaveIds.filter(id => id.startsWith(`WAVE-${datePart}-`));
   const nextIndex = todayIds.length + 1;
   return `WAVE-${datePart}-${nextIndex}`;

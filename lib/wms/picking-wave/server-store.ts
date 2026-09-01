@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { BlobPreconditionFailedError, get, head, put } from "@vercel/blob";
+import { BlobPreconditionFailedError, get, put } from "@vercel/blob";
 import { basketKey, emptyPickingWaveStoreSnapshot, type PickingWaveStoreMutation, type PickingWaveStoreSnapshot } from "./shared-store-types";
 import { mergePoConfirmationRecords, removeTransientPoConfirmationRecordsForWave } from "../po-confirm-state";
 
@@ -10,6 +10,19 @@ const LOCAL_STORE_PATH = process.env.WMS_PICKING_WAVE_STORE_FILE || path.join(pr
 
 type LoadedSnapshot = { snapshot: PickingWaveStoreSnapshot; etag?: string };
 let localMutationQueue: Promise<unknown> = Promise.resolve();
+let blobMutationQueue: Promise<unknown> = Promise.resolve();
+
+export interface PickingWaveStoreIoStats {
+  blobGets: number;
+  blobHeads: number;
+  blobPuts: number;
+  conflicts: number;
+  rateLimits: number;
+  retries: number;
+}
+const ioStats: PickingWaveStoreIoStats = { blobGets: 0, blobHeads: 0, blobPuts: 0, conflicts: 0, rateLimits: 0, retries: 0 };
+export function resetPickingWaveStoreIoStats(): void { Object.assign(ioStats, { blobGets: 0, blobHeads: 0, blobPuts: 0, conflicts: 0, rateLimits: 0, retries: 0 }); }
+export function getPickingWaveStoreIoStats(): PickingWaveStoreIoStats { return { ...ioStats }; }
 
 function normalizeEtag(value: string): string {
   return value.trim().replace(/^W\//i, "").replace(/^\"|\"$/g, "");
@@ -62,6 +75,7 @@ function normalizeSnapshot(value: unknown): PickingWaveStoreSnapshot {
     deletedVendorDraftIds: raw.deletedVendorDraftIds && typeof raw.deletedVendorDraftIds === "object" ? raw.deletedVendorDraftIds : {},
     deletedVendorLineIds: raw.deletedVendorLineIds && typeof raw.deletedVendorLineIds === "object" ? raw.deletedVendorLineIds : {},
     deletedWarehouseSkuIds: raw.deletedWarehouseSkuIds && typeof raw.deletedWarehouseSkuIds === "object" ? raw.deletedWarehouseSkuIds : {},
+    completedCreateOperations: raw.completedCreateOperations && typeof raw.completedCreateOperations === "object" ? raw.completedCreateOperations : {},
   };
 }
 
@@ -70,19 +84,15 @@ function useBlobStore(): boolean {
 }
 
 async function readBlobSnapshot(): Promise<LoadedSnapshot> {
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
-    const result = await get(BLOB_PATH, { access: "private", useCache: false });
-    if (!result || result.statusCode !== 200) return { snapshot: emptyPickingWaveStoreSnapshot() };
-    const body = await new Response(result.stream).text();
-    const metadata = await head(BLOB_PATH);
-    if (normalizeEtag(result.blob.etag) === normalizeEtag(metadata.etag)) {
-      return { snapshot: normalizeSnapshot(JSON.parse(body)), etag: metadata.etag };
-    }
-  }
-  throw new Error("웨이브 공용 저장소의 최신 버전을 안정적으로 읽지 못했습니다.");
+  ioStats.blobGets += 1;
+  const result = await get(BLOB_PATH, { access: "private", useCache: false });
+  if (!result || result.statusCode !== 200) return { snapshot: emptyPickingWaveStoreSnapshot() };
+  const body = await new Response(result.stream).text();
+  return { snapshot: normalizeSnapshot(JSON.parse(body)), etag: result.blob.etag };
 }
 
 async function writeBlobSnapshot(snapshot: PickingWaveStoreSnapshot, etag?: string): Promise<void> {
+  ioStats.blobPuts += 1;
   await put(BLOB_PATH, JSON.stringify(snapshot), {
     access: "private",
     addRandomSuffix: false,
@@ -92,7 +102,7 @@ async function writeBlobSnapshot(snapshot: PickingWaveStoreSnapshot, etag?: stri
   });
 }
 
-function isBlobWriteConflict(error: unknown): boolean {
+export function isBlobWriteConflict(error: unknown): boolean {
   if (error instanceof BlobPreconditionFailedError) return true;
   if (!error || typeof error !== "object") return false;
   const candidate = error as { status?: unknown; statusCode?: unknown; code?: unknown; name?: unknown; message?: unknown };
@@ -100,11 +110,33 @@ function isBlobWriteConflict(error: unknown): boolean {
   const code = String(candidate.code || "").toLowerCase();
   const name = String(candidate.name || "").toLowerCase();
   const message = String(candidate.message || "").toLowerCase();
-  return status === 412
+  return status === 409 || status === 412
     || code.includes("precondition")
     || name.includes("precondition")
     || message.includes("etag mismatch")
-    || message.includes("precondition failed");
+    || message.includes("precondition failed")
+    || message.includes("conflicting operation")
+    || message.includes("conditional request");
+}
+
+export function isRateLimit(error: unknown): boolean {
+  if (!error || typeof error !== "object") return /too many requests|rate.?limit|429/i.test(String(error));
+  const candidate = error as { status?: unknown; statusCode?: unknown; code?: unknown; message?: unknown };
+  return Number(candidate.status ?? candidate.statusCode) === 429 || /too many requests|rate.?limit|429/i.test(`${candidate.code || ""} ${candidate.message || ""}`);
+}
+
+export function retryAfterMs(error: unknown): number | null {
+  const candidate = error && typeof error === "object" ? error as { retryAfter?: unknown; message?: unknown } : {};
+  const direct = Number(candidate.retryAfter);
+  if (Number.isFinite(direct) && direct > 0) return direct > 1000 ? direct : direct * 1000;
+  const match = String(candidate.message || error || "").match(/(?:try again in|retry after)\s+(\d+)\s*seconds?/i);
+  return match ? Number(match[1]) * 1000 : null;
+}
+
+function wait(ms: number): Promise<void> { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+export class PickingWaveStoreBusyError extends Error {
+  constructor(message: string, public readonly retryAfterSeconds: number) { super(message); this.name = "PickingWaveStoreBusyError"; }
 }
 
 async function readLocalSnapshot(): Promise<LoadedSnapshot> {
@@ -169,6 +201,16 @@ function applyMutation(current: PickingWaveStoreSnapshot, mutation: PickingWaveS
     if (mutation.items.some(item => item.waveId !== mutation.wave.id)) throw new Error("다른 웨이브의 피킹 아이템이 섞여 있습니다.");
     next.items = mergeByKey(next.items, mutation.items, value => value.id, next.deletedItemIds, true);
     next.waves = mergeByKey(next.waves, [mutation.wave], value => value.id, next.deletedWaveIds, true);
+  } else if (mutation.action === "createWaveBatch") {
+    if (next.completedCreateOperations[mutation.operationId]) return current;
+    if (mutation.items.some(item => item.waveId !== mutation.wave.id) || mutation.baskets.some(basket => basket.waveId !== mutation.wave.id)) {
+      throw new Error("신규 웨이브 batch에 다른 웨이브 데이터가 섞여 있습니다.");
+    }
+    if (next.waves.some(value => value.id === mutation.wave.id)) throw new Error("같은 웨이브 ID가 이미 존재합니다.");
+    next.waves = mergeByKey(next.waves, [mutation.wave], value => value.id, next.deletedWaveIds, true);
+    next.items = mergeByKey(next.items, mutation.items, value => value.id, next.deletedItemIds, true);
+    next.baskets = mergeByKey(next.baskets, mutation.baskets, value => basketKey(value.waveId, value.basketNumber), next.deletedBasketKeys, true);
+    next.completedCreateOperations[mutation.operationId] = { waveId: mutation.wave.id, completedAt: new Date().toISOString() };
   } else if (mutation.action === "deleteItem") {
     next.deletedItemIds[mutation.itemId] = mutation.deletedAt;
     next.items = next.items.filter(value => value.id !== mutation.itemId);
@@ -238,15 +280,32 @@ export async function mutatePickingWaveStore(mutation: PickingWaveStoreMutation)
     localMutationQueue = task.catch(() => undefined);
     return task;
   }
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
-    const { snapshot, etag } = await readBlobSnapshot();
-    const next = applyMutation(snapshot, mutation);
-    try {
-      await writeBlobSnapshot(next, etag);
-      return next;
-    } catch (error) {
-      if (!isBlobWriteConflict(error) || attempt === MAX_RETRIES - 1) throw error;
+  const task = blobMutationQueue.then(async () => {
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+      try {
+        const { snapshot, etag } = await readBlobSnapshot();
+        if (mutation.action === "createWaveBatch" && snapshot.completedCreateOperations[mutation.operationId]) return snapshot;
+        const next = applyMutation(snapshot, mutation);
+        await writeBlobSnapshot(next, etag);
+        return next;
+      } catch (error) {
+        if (isRateLimit(error)) {
+          ioStats.rateLimits += 1;
+          const requestedDelay = retryAfterMs(error);
+          if (requestedDelay && requestedDelay > 5_000) throw new PickingWaveStoreBusyError("저장 서버가 잠시 혼잡합니다.", Math.ceil(requestedDelay / 1000));
+          if (attempt === MAX_RETRIES - 1) throw error;
+          ioStats.retries += 1;
+          await wait(requestedDelay || Math.min(2_000, 250 * (2 ** attempt)) + Math.floor(Math.random() * 120));
+          continue;
+        }
+        if (!isBlobWriteConflict(error) || attempt === MAX_RETRIES - 1) throw error;
+        ioStats.conflicts += 1;
+        ioStats.retries += 1;
+        await wait(Math.min(1_000, 40 * (2 ** attempt)) + Math.floor(Math.random() * 80));
+      }
     }
-  }
-  throw new Error("웨이브 공용 저장소 동시 저장 충돌을 해결하지 못했습니다.");
+    throw new Error("웨이브 공용 저장소 동시 저장 충돌을 해결하지 못했습니다.");
+  });
+  blobMutationQueue = task.catch(() => undefined);
+  return task;
 }

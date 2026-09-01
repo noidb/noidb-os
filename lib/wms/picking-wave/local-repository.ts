@@ -112,6 +112,28 @@ export class LocalPickingWaveRepository implements PickingWaveRepository {
     writeList(KEYS.waves, list);
   }
 
+  async createWaveBatch(_operationId: string, wave: PickingWave, items: PickingWaveItem[], baskets: BasketAssignment[]): Promise<string> {
+    if (!isBrowser()) return wave.id;
+    const snapshots = [
+      [KEYS.waves, window.localStorage.getItem(KEYS.waves)],
+      [KEYS.items, window.localStorage.getItem(KEYS.items)],
+      [KEYS.baskets, window.localStorage.getItem(KEYS.baskets)],
+    ] as const;
+    const waves = readListStrict<PickingWave>(snapshots[0][1], KEYS.waves, value => isObjectWithStringFields(value, ["id"]));
+    const oldItems = readListStrict<PickingWaveItem>(snapshots[1][1], KEYS.items, value => isObjectWithStringFields(value, ["id", "waveId"]));
+    const oldBaskets = readListStrict<BasketAssignment>(snapshots[2][1], KEYS.baskets, value => isObjectWithStringFields(value, ["waveId", "basketNumber"]));
+    try {
+      writeList(KEYS.waves, [...waves.filter(value => value.id !== wave.id), wave]);
+      writeList(KEYS.items, [...oldItems.filter(value => value.waveId !== wave.id), ...items]);
+      writeList(KEYS.baskets, [...oldBaskets.filter(value => value.waveId !== wave.id), ...baskets]);
+    } catch (error) {
+      const rollbackFailures = restoreStorageSnapshot(snapshots);
+      if (rollbackFailures.length > 0) throw new Error(`로컬 복구 캐시 저장 실패 후 복원에도 실패했습니다(${rollbackFailures.join(", ")}).`);
+      throw error;
+    }
+    return wave.id;
+  }
+
   async deleteWave(waveId: string): Promise<void> {
     if (!isBrowser()) return;
     const targetWaveId = waveId.trim();
