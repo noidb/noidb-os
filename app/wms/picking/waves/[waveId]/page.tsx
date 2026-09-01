@@ -935,7 +935,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   }
 
   return (
-    <main style={{ ...pageStyle, display: "flex", flexDirection: "column", minHeight: 0, height: "calc(100dvh - 42px)", padding: "12px 12px calc(12px + env(safe-area-inset-bottom))" }}>
+    <main style={{ ...pageStyle, display: "flex", flexDirection: "column", minHeight: 0, height: "calc(100dvh - 72px)", padding: "12px 12px calc(12px + env(safe-area-inset-bottom))" }}>
       <button onClick={() => setSelectedProductCode(null)} style={{ ...wmsGhostButton, marginBottom: "8px", flexShrink: 0 }}>
         ← 그룹 안 목록으로
       </button>
