@@ -178,6 +178,43 @@ export async function createStatusRequest(input: {
   return record;
 }
 
+/** 피킹 목록에서 단종 후보만 Supply Hub 처리대기 목록에 넣는다.
+ * 제품DB 현재상태는 건드리지 않으며, 실제 단종 처리는 기존 단종/해제 화면에서 별도로 수행한다. */
+export async function queueDiscontinueCandidate(input: {
+  skuId: string; operator: string; purchaseOrderNumber?: string;
+}): Promise<StatusRequestRecord> {
+  const skuId = requiredText(input.skuId, "SKU ID");
+  const operator = requiredText(input.operator, "처리자");
+  const [requests, product] = await Promise.all([listStatusRequests(), readProductSnapshot(skuId)]);
+  if (requests.some(request => normalizeSkuId(request.skuId) === normalizeSkuId(skuId) && request.supplyHubStatus === "처리대기")) {
+    throw new Error(`SKU ${skuId}에 이미 처리대기 요청이 있습니다.`);
+  }
+  const headerIndex = (header: string) => {
+    const index = product.headers.indexOf(header);
+    if (index < 0) throw new Error(`제품DB에 '${header}' 헤더가 없습니다.`);
+    return index;
+  };
+  const currentStatus = String(product.values[headerIndex("현재상태")] ?? "").trim();
+  if (currentStatus === "단종") throw new Error(`SKU ${skuId}는 이미 단종 상태입니다.`);
+  const productName = String(product.values[headerIndex("상품명")] ?? "").trim();
+  const display = resolveDisplayNameAndOption(productName, String(product.values[product.headers.indexOf("색상")] ?? "").trim());
+  const record: StatusRequestRecord = {
+    id: makeId("status"), skuId: normalizeSkuId(skuId),
+    modelSku: String(product.values[headerIndex("모델SKU")] ?? "").trim(),
+    productName: display.name, optionLabel: display.option,
+    currentStatus: "단종", requestType: "단종", requestedAt: new Date().toISOString(), supplyHubStatus: "처리대기",
+    completedAt: "", requester: operator, processor: "", previousStatus: currentStatus,
+    productLink: String(product.values[product.headers.indexOf("제품링크")] ?? "").trim(),
+    purchaseOrderNumber: String(input.purchaseOrderNumber || "").trim(), sheetRow: 0,
+  };
+  await appendSheetRow(STATUS_REQUEST_SHEET, [
+    record.id, record.skuId, record.modelSku, record.productName, record.optionLabel, record.currentStatus,
+    record.requestType, record.requestedAt, record.supplyHubStatus, "", record.requester, "",
+    currentStatus || EMPTY_STATUS_TOKEN, record.productLink, record.purchaseOrderNumber,
+  ]);
+  return record;
+}
+
 export async function completeStatusRequests(ids: string[], operatorValue: string): Promise<number> {
   const operator = requiredText(operatorValue, "처리자");
   const targets = new Set(ids.map(value => String(value || "").trim()).filter(Boolean));

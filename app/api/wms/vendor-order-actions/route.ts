@@ -3,6 +3,7 @@ import {
   applyReceivingCost,
   completeStatusRequests,
   createStatusRequest,
+  queueDiscontinueCandidate,
   listReceivingDelaySummaries,
   listStatusRequests,
   recordReceivingDelay,
@@ -25,6 +26,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     if (body.action === "status") {
       const record = await createStatusRequest(body);
+      return NextResponse.json({ success: true, record });
+    }
+    if (body.action === "queue-discontinue") {
+      const record = await queueDiscontinueCandidate(body);
       return NextResponse.json({ success: true, record });
     }
     if (body.action === "complete-status") {

@@ -164,6 +164,11 @@ function applyMutation(current: PickingWaveStoreSnapshot, mutation: PickingWaveS
   } else if (mutation.action === "saveItem") {
     if (next.deletedWaveIds[mutation.item.waveId]) throw new Error("삭제된 웨이브에는 피킹 아이템을 저장할 수 없습니다.");
     next.items = mergeByKey(next.items, [mutation.item], value => value.id, next.deletedItemIds, true);
+  } else if (mutation.action === "saveProgress") {
+    if (next.deletedWaveIds[mutation.wave.id]) throw new Error("삭제된 웨이브에는 피킹 진행상태를 저장할 수 없습니다.");
+    if (mutation.items.some(item => item.waveId !== mutation.wave.id)) throw new Error("다른 웨이브의 피킹 아이템이 섞여 있습니다.");
+    next.items = mergeByKey(next.items, mutation.items, value => value.id, next.deletedItemIds, true);
+    next.waves = mergeByKey(next.waves, [mutation.wave], value => value.id, next.deletedWaveIds, true);
   } else if (mutation.action === "deleteItem") {
     next.deletedItemIds[mutation.itemId] = mutation.deletedAt;
     next.items = next.items.filter(value => value.id !== mutation.itemId);

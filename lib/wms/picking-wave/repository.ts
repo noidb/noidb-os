@@ -17,6 +17,8 @@ export interface PickingWaveRepository {
 
   listItems(waveId: string): Promise<PickingWaveItem[]>;
   saveItem(item: PickingWaveItem): Promise<void>;
+  /** 피킹 판정으로 함께 바뀐 아이템과 웨이브 진행상태를 한 번에 저장한다. */
+  saveProgress(items: PickingWaveItem[], wave: PickingWave): Promise<void>;
   deleteItem(itemId: string): Promise<void>;
 
   listBaskets(waveId: string): Promise<BasketAssignment[]>;

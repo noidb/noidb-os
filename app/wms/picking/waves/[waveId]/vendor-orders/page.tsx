@@ -54,6 +54,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
   const [newVendorNameInput, setNewVendorNameInput] = useState("");
   const [liveCatalogByProductCode, setLiveCatalogByProductCode] = useState<LiveCatalogLookup>(new Map());
   const [pendingReorderLines, setPendingReorderLines] = useState<VendorOrderDraftLine[]>([]);
+  const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(new Set());
 
   /** 제품링크는 발주서 라인에 저장하지 않고 항상 제품DB에서 SKU 기준으로 최신값을 읽는다 —
    *  기존 웨이브/라인은 이 필드가 생기기 전에 만들어졌을 수 있어, 저장된 스냅샷 대신 실시간
@@ -169,6 +170,14 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
     if (!window.confirm(message)) return;
     setLines(prev => prev.filter(existing => existing.id !== line.id));
     setRemovedLineIds(prev => new Set(prev).add(line.id));
+    setDirty(true);
+  }
+
+  function removeSelectedLines() {
+    if (!selectedLineIds.size || !window.confirm(`선택한 ${selectedLineIds.size}개 품목을 발주 초안에서 삭제할까요?`)) return;
+    setLines(prev => prev.filter(line => !selectedLineIds.has(line.id)));
+    setRemovedLineIds(prev => new Set([...prev, ...selectedLineIds]));
+    setSelectedLineIds(new Set());
     setDirty(true);
   }
 
@@ -409,6 +418,12 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
           {"현재 자동 생성된 부족분이 없습니다.\n위 [발주서 수동 추가]로 새 거래처 발주서를 만들 수 있습니다."}
         </p>
       ) : (
+        <>
+        <div style={{ display: "flex", gap: "6px", marginBottom: "10px", position: "sticky", top: 0, zIndex: 5, background: "rgba(255,255,255,.96)", padding: "6px 0" }}>
+          <button type="button" onClick={() => setSelectedLineIds(new Set(lines.map(line => line.id)))} style={{ ...wmsGhostButton, flex: 1, minHeight: "40px" }}>전체체크</button>
+          <button type="button" onClick={() => setSelectedLineIds(new Set())} style={{ ...wmsSecondaryButton, flex: 1, minHeight: "40px" }}>전체해제</button>
+          <button type="button" disabled={!selectedLineIds.size} onClick={removeSelectedLines} style={{ ...wmsWarnButton, flex: 1, minHeight: "40px", opacity: selectedLineIds.size ? 1 : .5 }}>선택삭제 {selectedLineIds.size}</button>
+        </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "16px", marginBottom: "20px" }}>
           {groups.map(group => {
             const status = statusOf(group.vendorName);
@@ -435,8 +450,9 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
 
                 <div style={{ marginBottom: "10px" }}>
                   {group.lines.map(line => (
+                    <div key={line.id} style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "6px", alignItems: "start" }}>
+                    <input type="checkbox" aria-label={`${line.productName} 선택`} checked={selectedLineIds.has(line.id)} onChange={() => setSelectedLineIds(prev => { const next = new Set(prev); if (next.has(line.id)) next.delete(line.id); else next.add(line.id); return next; })} style={{ width: "24px", height: "24px", marginTop: "12px" }} />
                     <VendorOrderLineCard
-                      key={line.id}
                       line={line}
                       editable={editable}
                       knownVendorNames={knownVendorNames}
@@ -445,6 +461,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                       onStep={delta => stepQuantity(line, delta)}
                       onRemove={() => removeLine(line)}
                     />
+                    </div>
                   ))}
                 </div>
 
@@ -505,6 +522,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
             );
           })}
         </div>
+        </>
       )}
 
       {dirty && (

@@ -33,6 +33,7 @@ export type PickingWaveStoreMutation =
   | { action: "saveWave"; wave: PickingWave }
   | { action: "deleteWave"; waveId: string; deletedAt: string }
   | { action: "saveItem"; item: PickingWaveItem }
+  | { action: "saveProgress"; items: PickingWaveItem[]; wave: PickingWave }
   | { action: "deleteItem"; itemId: string; deletedAt: string }
   | { action: "saveBasket"; basket: BasketAssignment }
   | { action: "deleteBasket"; waveId: string; basketNumber: string; deletedAt: string }
@@ -99,6 +100,9 @@ export function isPickingWaveStoreMutation(value: unknown): value is PickingWave
   if (value.action === "saveWave") return hasText(value.wave, "id") && hasText(value.wave, "updatedAt");
   if (value.action === "deleteWave") return hasText(value, "waveId") && hasText(value, "deletedAt");
   if (value.action === "saveItem") return hasText(value.item, "id") && hasText(value.item, "waveId") && hasText(value.item, "updatedAt");
+  if (value.action === "saveProgress") return hasText(value.wave, "id") && hasText(value.wave, "updatedAt")
+    && Array.isArray(value.items) && value.items.length <= 10_000
+    && value.items.every(item => hasText(item, "id") && hasText(item, "waveId") && hasText(item, "updatedAt"));
   if (value.action === "deleteItem") return hasText(value, "itemId") && hasText(value, "deletedAt");
   if (value.action === "saveBasket") return hasText(value.basket, "waveId") && hasText(value.basket, "basketNumber") && hasText(value.basket, "updatedAt");
   if (value.action === "deleteBasket") return hasText(value, "waveId") && hasText(value, "basketNumber") && hasText(value, "deletedAt");

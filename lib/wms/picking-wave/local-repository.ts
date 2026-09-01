@@ -167,6 +167,14 @@ export class LocalPickingWaveRepository implements PickingWaveRepository {
     writeList(KEYS.items, list);
   }
 
+  async saveProgress(items: PickingWaveItem[], wave: PickingWave): Promise<void> {
+    const existingItems = readList<PickingWaveItem>(KEYS.items);
+    const byId = new Map(existingItems.map(item => [item.id, item]));
+    for (const item of items) byId.set(item.id, item);
+    writeList(KEYS.items, Array.from(byId.values()));
+    await this.saveWave(wave);
+  }
+
   async deleteItem(itemId: string): Promise<void> {
     writeList(KEYS.items, readList<PickingWaveItem>(KEYS.items).filter(item => item.id !== itemId));
   }

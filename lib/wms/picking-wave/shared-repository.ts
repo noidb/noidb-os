@@ -122,6 +122,13 @@ export class SharedPickingWaveRepository implements PickingWaveRepository {
     await this.saveLocalThenServer(() => this.local.saveItem(item), { action: "saveItem", item });
   }
 
+  async saveProgress(items: PickingWaveItem[], wave: PickingWave): Promise<void> {
+    await this.saveLocalThenServer(
+      () => this.local.saveProgress(items, wave),
+      { action: "saveProgress", items, wave }
+    );
+  }
+
   async deleteItem(itemId: string): Promise<void> {
     await this.ensureMigrated();
     const snapshot = await requestSnapshot({ action: "deleteItem", itemId, deletedAt: new Date().toISOString() });
