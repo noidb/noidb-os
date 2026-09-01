@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import { backupSheetWithinSpreadsheet, fetchSheetRows, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
 import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
+import { coupangSupplyMatchPriority } from "../coupang-option-name";
 import {
   downloadDriveFile,
   isDriveReaderConfigured,
@@ -18,10 +19,9 @@ import {
  * 2026-08-19 실사용 데이터로 확인한 사실 — 실제로 이 폴더에 저장되는 파일
  * ("noidb2017_sku_download_*.xlsx")에는 판매자상품코드/옵션 판매자상품코드/모델SKU와
  * 동일한 의미의 열이 존재하지 않는다(실제 헤더: SKU ID, 요청, 상품명, 바코드, 발주가능상태,
- * 담당 BM, 발주담당자, 치수류, MOQ, 중량, Box 바코드, Pallet 정보). 그래서 아래 CANDIDATE_KEY_HEADERS
- * 중 실제로 존재하는 열이 없으면 자동 매칭 건수는 항상 0건이 된다 — 상품명+색상 같은 프록시로
- * 임의 대체하지 않는다(사용자 지시, 2026-08-20). 나중에 쿠팡이 이 리포트에 실제 매칭키 열을
- * 추가하면 이 목록에 헤더명만 추가하면 자동으로 동작한다.
+ * 담당 BM, 발주담당자, 치수류, MOQ, 중량, Box 바코드, Pallet 정보). 명시 모델SKU 열이 있으면
+ * 최우선으로 사용하고, 없으면 신규 `모델SKU | 옵션` 및 기존 `옵션 모델SKU` 형식을 순서대로
+ * 해석한다. 어떤 형식도 정확히 맞지 않을 때만 기존 SKU ID/상품명 보조 매칭으로 후퇴한다.
  */
 
 const SUPPLY_STATUS_FOLDER = "G:\\내 드라이브\\쿠팡데이터\\상품공급상태관리 다운로드";
@@ -33,7 +33,8 @@ const PENDING_STATUS_VALUES = new Set(["기존상품승인대기", "신상승인
  *  실행마다 이 값이 여전히 유효한지 실데이터로 재확인한다 — 더 이상 맞지 않으면 예외를 던진다. */
 const APPROVED_STATUS_CANDIDATE = "완료";
 
-const CANDIDATE_KEY_HEADERS = ["옵션 판매자상품코드", "판매자상품코드", "모델SKU", "모델 SKU", "Vendor Item ID", "Option Item Name"];
+const EXPLICIT_MODEL_SKU_HEADERS = ["옵션 판매자상품코드", "판매자상품코드", "모델SKU", "모델 SKU"];
+const OPTION_NAME_HEADERS = ["색상옵션명", "옵션명", "Option Item Name", "색상"];
 
 /** 헤더명 → { "승인/공급 가능"으로 볼 값들 }. 실제 발견되는 첫 번째 헤더만 쓴다. */
 const APPROVAL_HEADER_APPROVED_VALUES: [string, string[]][] = [
@@ -120,6 +121,8 @@ export async function findLatestSupplyStatusFile(): Promise<LatestSupplyStatusFi
 
 interface DownloadRow {
   matchKey: string;
+  explicitModelSku: string;
+  optionName: string;
   skuId: string;
   productName: string;
   barcode: string;
@@ -146,7 +149,8 @@ async function parseSupplyStatusFile(fileInfo: LatestSupplyStatusFile): Promise<
     headers[colNumber] = String(cell.value ?? "").trim();
   });
 
-  const matchKeyCol = findHeaderIndex(headers, CANDIDATE_KEY_HEADERS);
+  const explicitModelSkuCol = findHeaderIndex(headers, EXPLICIT_MODEL_SKU_HEADERS);
+  const optionNameCol = findHeaderIndex(headers, OPTION_NAME_HEADERS);
   const skuIdCol = findHeaderIndex(headers, SKU_ID_HEADERS);
   const productNameCol = findHeaderIndex(headers, ["상품명"]);
   const barcodeCol = findHeaderIndex(headers, ["바코드", "쿠팡 바코드", "쿠팡바코드"]);
@@ -165,17 +169,19 @@ async function parseSupplyStatusFile(fileInfo: LatestSupplyStatusFile): Promise<
   sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
     if (rowNumber === 1) return;
     const skuId = skuIdCol ? String(row.getCell(skuIdCol.index).value ?? "").trim() : "";
-    const matchKey = matchKeyCol ? String(row.getCell(matchKeyCol.index).value ?? "").trim() : "";
+    const explicitModelSku = explicitModelSkuCol ? String(row.getCell(explicitModelSkuCol.index).value ?? "").trim() : "";
+    const optionName = optionNameCol ? String(row.getCell(optionNameCol.index).value ?? "").trim() : "";
+    const matchKey = explicitModelSku || optionName;
     const productName = productNameCol ? String(row.getCell(productNameCol.index).value ?? "").trim() : "";
     const barcode = barcodeCol ? String(row.getCell(barcodeCol.index).value ?? "").trim() : "";
     const approvalRaw = approvalCol ? String(row.getCell(approvalCol.index).value ?? "").trim() : "";
     const approved = approvalCol ? approvedValues.includes(approvalRaw) : false;
     if (!matchKey && !skuId) return;
-    rows.push({ matchKey, skuId, productName, barcode, approvalRaw, approved });
+    rows.push({ matchKey, explicitModelSku, optionName, skuId, productName, barcode, approvalRaw, approved });
   });
 
   return {
-    matchKeyColumnHeader: matchKeyCol?.header ?? null,
+    matchKeyColumnHeader: explicitModelSkuCol?.header ?? optionNameCol?.header ?? null,
     approvalColumnHeader: approvalCol?.header ?? null,
     skuIdColumnHeader: skuIdCol?.header ?? null,
     rows,
@@ -270,6 +276,21 @@ function findProductNameColorCandidates(rows: DownloadRow[], productName: string
   });
 }
 
+/** 명시 모델SKU → 신규 구분자 → 구형 접미사 → 기존 SKU ID → 기존 상품명/색상 보조 매칭. */
+function findSupplyStatusCandidates(
+  rows: DownloadRow[],
+  modelSku: string,
+  currentSkuId: string,
+  productName: string,
+  color: string
+): DownloadRow[] {
+  const ranked = rows.map(row => ({ row, priority: coupangSupplyMatchPriority(row, modelSku, currentSkuId) }));
+  const bestPriority = ranked.reduce<number>((best, candidate) => candidate.priority > 0 && candidate.priority < best ? candidate.priority : best, 5);
+  if (bestPriority < 5) return ranked.filter(candidate => candidate.priority === bestPriority).map(candidate => candidate.row);
+
+  return findProductNameColorCandidates(rows, productName, color, modelSku);
+}
+
 export interface SupplyStatusPreview {
   fileFound: true;
   fileName: string;
@@ -329,17 +350,6 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
     .map((row, i) => ({ row, sheetRowNumber: i + 2 }))
     .filter(({ row }) => PENDING_STATUS_VALUES.has(String(row[idx.status] ?? "").trim()));
 
-  const byKey = new Map<string, DownloadRow[]>();
-  if (parsed.matchKeyColumnHeader) {
-    for (const r of parsed.rows) {
-      if (!r.matchKey) continue;
-      const key = norm(r.matchKey);
-      const list = byKey.get(key) || [];
-      list.push(r);
-      byKey.set(key, list);
-    }
-  }
-
   const matchedRows: MatchedRow[] = [];
   for (const { row, sheetRowNumber } of pendingRows) {
     const modelSku = String(row[idx.modelSku] ?? "").trim();
@@ -356,14 +366,13 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
     if (!modelSku) {
       reasons.push("제품DB 모델SKU가 비어 있습니다.");
     } else {
-      const candidates = parsed.matchKeyColumnHeader
-        ? (byKey.get(norm(modelSku)) || [])
-        : findProductNameColorCandidates(
-            parsed.rows,
-            String(row[idx.productName] ?? "").trim(),
-            String(row[idx.color] ?? "").trim(),
-            modelSku
-          );
+      const candidates = findSupplyStatusCandidates(
+        parsed.rows,
+        modelSku,
+        String(row[idx.skuId] ?? "").trim(),
+        String(row[idx.productName] ?? "").trim(),
+        String(row[idx.color] ?? "").trim()
+      );
       matchCandidateCount = candidates.length;
       if (candidates.length === 0) {
         reasons.push("다운로드 파일에서 일치하는 행을 찾지 못했습니다.");

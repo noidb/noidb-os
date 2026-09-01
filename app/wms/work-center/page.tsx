@@ -1,11 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  SAMPLE_WORK_BATCHES,
-  countBoxesInBatch,
-  countOptionsInBatch,
-} from "@/lib/wms/picking-sample-data";
 import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import AppNavigation from "@/app/AppNavigation";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
@@ -16,6 +11,7 @@ import { TruckIcon } from "../icons";
 import WorkCenterMenuButton from "./WorkCenterMenuButton";
 import SupplyStatusUpdateButton from "./SupplyStatusUpdateButton";
 import NewPurchaseOrdersUpdateButton from "./NewPurchaseOrdersUpdateButton";
+import UpcomingInboundSummary from "./UpcomingInboundSummary";
 
 /**
  * 작업센터 첫 화면의 "부족분 거래처별 발주서" 진입 배너 (2026-08-19 신규).
@@ -81,9 +77,6 @@ function ShortageVendorOrdersBanner() {
 }
 
 export default function WmsWorkCenterPage() {
-  const totalBoxes = SAMPLE_WORK_BATCHES.reduce((sum, batch) => sum + countBoxesInBatch(batch), 0);
-  const totalSkus = SAMPLE_WORK_BATCHES.reduce((sum, batch) => sum + countOptionsInBatch(batch), 0);
-
   return (
     <main
       className="shell wms-work-center-shell"
@@ -125,30 +118,7 @@ export default function WmsWorkCenterPage() {
         <button className="wms-work-center-picking-button" style={{ ...wmsPrimaryButton, width: "100%" }}>통합 피킹 시작 (실제 발주 기준)</button>
       </a>
 
-      <div
-        className="wms-work-center-stats"
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          background: wmsColors.surfaceBeige,
-          border: `1px solid ${wmsColors.border}`,
-          marginBottom: "18px",
-          textAlign: "center",
-        }}
-      >
-        <div className="wms-work-center-stat">
-          <div className="wms-work-center-stat-value">{SAMPLE_WORK_BATCHES.length}</div>
-          <div className="wms-work-center-stat-label" style={{ color: wmsColors.muted }}>오늘 작업</div>
-        </div>
-        <div className="wms-work-center-stat">
-          <div className="wms-work-center-stat-value">{totalBoxes}</div>
-          <div className="wms-work-center-stat-label" style={{ color: wmsColors.muted }}>전체 BOX</div>
-        </div>
-        <div className="wms-work-center-stat">
-          <div className="wms-work-center-stat-value">{totalSkus}</div>
-          <div className="wms-work-center-stat-label" style={{ color: wmsColors.muted }}>전체 SKU</div>
-        </div>
-      </div>
+      <UpcomingInboundSummary />
     </main>
   );
 }

@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { filterCurrentPurchaseOrders, loadSupplierHubPurchaseOrders } from "@/lib/wms/supplier-hub-orders";
+import {
+  filterCurrentPurchaseOrders,
+  loadSupplierHubPurchaseOrders,
+  summarizeUpcomingInboundByDate,
+} from "@/lib/wms/supplier-hub-orders";
 
 /**
  * NOID WMS 서플라이어 허브 발주서 읽기 전용 API. 기존 app/api/wms/purchase-orders(구글시트 기반)와
@@ -12,12 +16,14 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const orders = filterCurrentPurchaseOrders(await loadSupplierHubPurchaseOrders());
-    return NextResponse.json({ orders });
+    const allOrders = await loadSupplierHubPurchaseOrders();
+    const orders = filterCurrentPurchaseOrders(allOrders);
+    return NextResponse.json({ orders, upcomingInboundSummary: summarizeUpcomingInboundByDate(allOrders) });
   } catch (error) {
     return NextResponse.json(
       {
         orders: [],
+        upcomingInboundSummary: [],
         error: error instanceof Error ? error.message : "발주서 파일을 읽는 중 오류가 발생했습니다.",
       },
       { status: 500 }

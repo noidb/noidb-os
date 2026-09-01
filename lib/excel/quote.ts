@@ -3,7 +3,7 @@ import path from "path";
 import {
   altText,
   buildSkuRows,
-  colorOptionWithSku,
+  formatCoupangOptionName,
   categoryPath,
   detectStone,
   dimensionText,
@@ -144,7 +144,7 @@ export async function buildQuoteWorkbook(input: ExportPayload | ExportPayload[])
 
     skus.forEach((sku, index) => {
     const row = sheet.getRow(9 + totalSkuCount + index);
-    const colorOption = colorOptionWithSku(sku.color, sku.sku);
+    const colorOption = formatCoupangOptionName(sku.sku, sku.color);
     const optionValues = [colorOption, sku.size]
       .map(value => String(value || "").trim())
       .filter(value => value && value.toLowerCase() !== "free");

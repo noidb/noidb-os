@@ -1,5 +1,6 @@
 import path from "path";
 import type { ExportPayload, SkuRow } from "./types";
+export { formatCoupangOptionName } from "../coupang-option-name";
 
 export const ALT_TEXT_FOOTER =
   "저희 악세사리는 일반 악세사리에 비해 변색과 알러지가 적고\n심플하면서도 개성있는 감각있는 디자인이 특징입니다.\n아름다운 컬러와 디자인, 가격 또한 훌륭합니다.\n사랑하는 사람에게 선물하세요";
@@ -86,11 +87,6 @@ export function buildSkuRows(payload: ExportPayload): SkuRow[] {
     generated.add(row.sku);
   });
   return rows;
-}
-
-/** 쿠팡 옵션값에서 사람이 읽는 색상명과 옵션별 모델SKU를 함께 보존한다. */
-export function colorOptionWithSku(color: string, sku: string) {
-  return `${color.trim()} ${sku.trim()}`.trim();
 }
 
 export function templateFileForCategory(category: string) {

@@ -232,6 +232,83 @@ export function summarizeUpcomingPurchaseOrders(
   };
 }
 
+export interface UpcomingInboundCenterSummary {
+  fulfillmentCenter: string;
+  totalSkuTypes: number;
+  totalQuantity: number;
+}
+
+export interface UpcomingInboundDateSummary {
+  expectedDate: string;
+  totalSkuTypes: number;
+  totalQuantity: number;
+  centers: UpcomingInboundCenterSummary[];
+}
+
+/**
+ * 작업센터 하단 요약 전용. 고유 발주번호별 최신 한 건만 남긴 뒤 KST 오늘 이후 발주를
+ * 입고예정일과 물류센터로 묶는다. SKU 종류는 productCode 중복을 제거하고 수량은 원본
+ * orderedQuantity를 모두 더한다.
+ */
+export function summarizeUpcomingInboundByDate(
+  orders: SupplierHubPurchaseOrder[],
+  today = todayInKorea()
+): UpcomingInboundDateSummary[] {
+  const uniqueUpcomingOrders = new Map<string, SupplierHubPurchaseOrder>();
+  for (const order of orders) {
+    if (order.purchaseOrderNumber && isUpcomingInboundDate(order.expectedDate, today)) {
+      uniqueUpcomingOrders.set(order.purchaseOrderNumber, order);
+    }
+  }
+
+  const dates = new Map<string, {
+    skuCodes: Set<string>;
+    totalQuantity: number;
+    centers: Map<string, { skuCodes: Set<string>; totalQuantity: number }>;
+  }>();
+
+  for (const order of uniqueUpcomingOrders.values()) {
+    const date = order.expectedDate.slice(0, 10);
+    const center = order.fulfillmentCenter.trim() || "물류센터 미정";
+    const dateSummary = dates.get(date) ?? {
+      skuCodes: new Set<string>(),
+      totalQuantity: 0,
+      centers: new Map<string, { skuCodes: Set<string>; totalQuantity: number }>(),
+    };
+    const centerSummary = dateSummary.centers.get(center) ?? {
+      skuCodes: new Set<string>(),
+      totalQuantity: 0,
+    };
+
+    for (const item of order.items) {
+      const sku = item.productCode.trim();
+      if (sku) {
+        dateSummary.skuCodes.add(sku);
+        centerSummary.skuCodes.add(sku);
+      }
+      dateSummary.totalQuantity += item.orderedQuantity;
+      centerSummary.totalQuantity += item.orderedQuantity;
+    }
+    dateSummary.centers.set(center, centerSummary);
+    dates.set(date, dateSummary);
+  }
+
+  return [...dates.entries()]
+    .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+    .map(([expectedDate, summary]) => ({
+      expectedDate,
+      totalSkuTypes: summary.skuCodes.size,
+      totalQuantity: summary.totalQuantity,
+      centers: [...summary.centers.entries()]
+        .sort(([centerA], [centerB]) => centerA.localeCompare(centerB, "ko"))
+        .map(([fulfillmentCenter, center]) => ({
+          fulfillmentCenter,
+          totalSkuTypes: center.skuCodes.size,
+          totalQuantity: center.totalQuantity,
+        })),
+    }));
+}
+
 /** 입고예정일이 오늘이거나 미래인 작업 대상만 반환한다. 날짜가 비어 있거나 형식이 이상하면 숨기지 않는다. */
 export function filterCurrentPurchaseOrders(orders: SupplierHubPurchaseOrder[], today = todayInKorea()) {
   return orders.filter(order => !/^\d{4}-\d{2}-\d{2}$/.test(order.expectedDate) || order.expectedDate >= today);

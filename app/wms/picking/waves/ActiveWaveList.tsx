@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import { PICKING_WAVE_STATUS_LABEL } from "@/lib/wms/picking-wave/status-label";
 import type { PickingWave, PickingWaveItem } from "@/lib/wms/picking-wave/types";
+import { summarizeShippingByDate, type ShippingDateSummary } from "@/lib/wms/picking-wave/wave-card-summary";
 import { wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
 
 export interface WaveSummary {
@@ -11,6 +12,7 @@ export interface WaveSummary {
   skuCount: number;
   totalQuantity: number;
   completedSkuCount: number;
+  shippingByDate: ShippingDateSummary[];
 }
 
 function formatKstDateTime(value: string): string {
@@ -28,12 +30,29 @@ function formatKstDateTime(value: string): string {
   return `${part("month")}/${part("day")} ${part("hour")}:${part("minute")}`;
 }
 
+function formatKstFullDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(item => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}`;
+}
+
 function summarizeWave(wave: PickingWave, items: PickingWaveItem[]): WaveSummary {
   return {
     wave,
     skuCount: items.length,
     totalQuantity: items.reduce((sum, item) => sum + item.totalQuantity, 0),
     completedSkuCount: items.filter(item => item.status !== "pending").length,
+    shippingByDate: summarizeShippingByDate(wave, items),
   };
 }
 
@@ -44,13 +63,8 @@ export async function loadWaveSummaries(
   return Promise.all(waves.map(async wave => summarizeWave(wave, await repository.listItems(wave.id))));
 }
 
-function shippingLabels(wave: PickingWave): string[] {
-  return [...new Set((wave.shippingGroups ?? []).map(group => {
-    const center = group.fulfillmentCenter.trim();
-    const date = group.expectedDate.trim();
-    if (center && date) return `${center} · 입고예정일 ${date}`;
-    return center || (date ? `입고예정일 ${date}` : "");
-  }).filter(Boolean))];
+function waveTitle(wave: PickingWave): string {
+  return wave.displayName?.trim() || wave.id.trim() || `웨이브 ${formatKstDateTime(wave.createdAt)}`;
 }
 
 export function WaveSummaryCard({
@@ -60,22 +74,30 @@ export function WaveSummaryCard({
   summary: WaveSummary;
   actions?: ReactNode;
 }) {
-  const { wave, skuCount, totalQuantity, completedSkuCount } = summary;
+  const { wave, skuCount, totalQuantity, completedSkuCount, shippingByDate } = summary;
   const progress = skuCount > 0 ? Math.round((completedSkuCount / skuCount) * 100) : 0;
-  const labels = shippingLabels(wave);
 
   return (
     <article className="wms-active-wave-card">
       <a className="wms-active-wave-main" href={`/wms/picking/waves/${encodeURIComponent(wave.id)}`}>
         <div className="wms-active-wave-heading">
           <div className="wms-active-wave-title">
-            <time dateTime={wave.updatedAt}>{formatKstDateTime(wave.updatedAt)}</time>
-            <span aria-hidden="true">|</span>
-            <strong>{wave.displayName || wave.id}</strong>
+            <strong>{waveTitle(wave)}</strong>
+            <div className="wms-active-wave-time">
+              <time dateTime={wave.updatedAt}>{formatKstDateTime(wave.updatedAt)}</time>
+              <span>· 생성 {formatKstFullDateTime(wave.createdAt)}</span>
+            </div>
           </div>
           <span className="wms-active-wave-status">{PICKING_WAVE_STATUS_LABEL[wave.status]}</span>
         </div>
-        {labels.length > 0 && <div className="wms-active-wave-shipping">{labels.join(" / ")}</div>}
+        {shippingByDate.length > 0 && <div className="wms-active-wave-shipping">
+          {shippingByDate.map(group => <div className="wms-active-wave-shipping-group" key={group.expectedDate}>
+            <div className="wms-active-wave-expected-date">{group.expectedDate === "입고예정일 미정" ? group.expectedDate : `입고예정일 ${group.expectedDate}`}</div>
+            <div className="wms-active-wave-centers">
+              {group.centers.map(center => <span key={center.fulfillmentCenter}>{center.fulfillmentCenter} {center.totalQuantity}개</span>)}
+            </div>
+          </div>)}
+        </div>}
         <div className="wms-active-wave-metrics">
           <span>SKU {skuCount}개</span>
           <span>총 수량 {totalQuantity}개</span>
