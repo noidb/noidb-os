@@ -85,7 +85,14 @@ function useBlobStore(): boolean {
 
 async function readBlobSnapshot(): Promise<LoadedSnapshot> {
   ioStats.blobGets += 1;
-  const result = await get(BLOB_PATH, { access: "private", useCache: false });
+  let result;
+  try {
+    result = await get(BLOB_PATH, { access: "private", useCache: false });
+  } catch (error) {
+    if (!isForbiddenConsistentRead(error)) throw error;
+    ioStats.blobGets += 1;
+    result = await get(BLOB_PATH, { access: "private" });
+  }
   if (!result || result.statusCode !== 200) return { snapshot: emptyPickingWaveStoreSnapshot() };
   const body = await new Response(result.stream).text();
   return { snapshot: normalizeSnapshot(JSON.parse(body)), etag: result.blob.etag };
@@ -123,6 +130,12 @@ export function isRateLimit(error: unknown): boolean {
   if (!error || typeof error !== "object") return /too many requests|rate.?limit|429/i.test(String(error));
   const candidate = error as { status?: unknown; statusCode?: unknown; code?: unknown; message?: unknown };
   return Number(candidate.status ?? candidate.statusCode) === 429 || /too many requests|rate.?limit|429/i.test(`${candidate.code || ""} ${candidate.message || ""}`);
+}
+
+function isForbiddenConsistentRead(error: unknown): boolean {
+  if (!error || typeof error !== "object") return /403 forbidden/i.test(String(error));
+  const candidate = error as { status?: unknown; statusCode?: unknown; message?: unknown };
+  return Number(candidate.status ?? candidate.statusCode) === 403 || /403 forbidden/i.test(String(candidate.message || ""));
 }
 
 export function retryAfterMs(error: unknown): number | null {
