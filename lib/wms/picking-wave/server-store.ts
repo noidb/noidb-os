@@ -24,7 +24,7 @@ const ioStats: PickingWaveStoreIoStats = { blobGets: 0, blobHeads: 0, blobPuts: 
 export function resetPickingWaveStoreIoStats(): void { Object.assign(ioStats, { blobGets: 0, blobHeads: 0, blobPuts: 0, conflicts: 0, rateLimits: 0, retries: 0 }); }
 export function getPickingWaveStoreIoStats(): PickingWaveStoreIoStats { return { ...ioStats }; }
 
-function normalizeEtag(value: string): string {
+export function normalizeEtag(value: string): string {
   return value.trim().replace(/^W\//i, "").replace(/^\"|\"$/g, "");
 }
 
@@ -99,13 +99,14 @@ async function readBlobSnapshot(): Promise<LoadedSnapshot> {
 }
 
 async function writeBlobSnapshot(snapshot: PickingWaveStoreSnapshot, etag?: string): Promise<void> {
+  const ifMatch = etag ? normalizeEtag(etag) : undefined;
   ioStats.blobPuts += 1;
   await put(BLOB_PATH, JSON.stringify(snapshot), {
     access: "private",
     addRandomSuffix: false,
-    allowOverwrite: Boolean(etag),
+    allowOverwrite: Boolean(ifMatch),
     contentType: "application/json",
-    ...(etag ? { ifMatch: etag } : { allowOverwrite: false }),
+    ...(ifMatch ? { ifMatch } : { allowOverwrite: false }),
   });
 }
 

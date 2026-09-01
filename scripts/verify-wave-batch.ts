@@ -23,7 +23,10 @@ function fixtures(id: string, poCount: number, skuCount: number, updatedAt: stri
 }
 
 async function main() {
-  const { mutatePickingWaveStore, readPickingWaveStore, isBlobWriteConflict, isRateLimit, retryAfterMs } = await import("../lib/wms/picking-wave/server-store");
+  const { mutatePickingWaveStore, readPickingWaveStore, isBlobWriteConflict, isRateLimit, normalizeEtag, retryAfterMs } = await import("../lib/wms/picking-wave/server-store");
+  assert.equal(normalizeEtag('  "abc123"  '), "abc123", "quoted ETag 정규화");
+  assert.equal(normalizeEtag("abc123"), "abc123", "unquoted ETag 유지");
+  assert.equal(normalizeEtag('W/"abc123"'), "abc123", "weak quoted ETag 정규화");
   assert.equal(isBlobWriteConflict(new Error("The conditional request cannot succeed due to a conflicting operation against this resource.")), true, "운영 412 문구 분류");
   assert.equal(isRateLimit(new Error("Too many requests - try again in 60 seconds.")), true, "운영 429 문구 분류");
   assert.equal(retryAfterMs(new Error("Too many requests - try again in 60 seconds.")), 60_000, "Retry-After 60초 존중");
