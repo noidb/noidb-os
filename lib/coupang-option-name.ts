@@ -40,10 +40,10 @@ export function coupangSupplyMatchPriority(
 ): 0 | 1 | 2 | 3 | 4 {
   const normalizedModelSku = modelSku.trim().toLocaleLowerCase();
   if (!normalizedModelSku) return 0;
-  if (candidate.explicitModelSku?.trim().toLocaleLowerCase() === normalizedModelSku) return 1;
+  if (currentSkuId && candidate.skuId?.trim().toLocaleLowerCase() === currentSkuId.trim().toLocaleLowerCase()) return 1;
+  if (candidate.explicitModelSku?.trim().toLocaleLowerCase() === normalizedModelSku) return 2;
   const optionSources = [candidate.optionName || "", candidate.productName || ""];
-  if (optionSources.some(value => extractModelSkuFromCoupangOptionName(value).toLocaleLowerCase() === normalizedModelSku)) return 2;
-  if (optionSources.some(value => hasLegacyModelSkuSuffix(value, modelSku))) return 3;
-  if (currentSkuId && candidate.skuId?.trim().toLocaleLowerCase() === currentSkuId.trim().toLocaleLowerCase()) return 4;
+  if (optionSources.some(value => extractModelSkuFromCoupangOptionName(value).toLocaleLowerCase() === normalizedModelSku)) return 3;
+  if (optionSources.some(value => hasLegacyModelSkuSuffix(value, modelSku))) return 4;
   return 0;
 }

@@ -232,63 +232,79 @@ export interface MatchedRow {
   currentSkuId: string;
   downloadSkuId: string | null;
   downloadProductName: string | null;
+  downloadOptionName: string | null;
   downloadBarcode: string | null;
   downloadOrderAvailability: string | null;
   matchCandidateCount: number;
   conflict: boolean;
   alreadySame: boolean;
+  awaitingApproval: boolean;
   eligible: boolean;
+  matchRule: SupplyStatusMatchRule | null;
   reasons: string[];
 }
 
-function normProductText(value: unknown): string {
+function normalizeExactProductText(value: unknown): string {
   return String(value ?? "")
+    .trim()
+    .replace(/^[\"']+/, "")
+    .replace(/\s+/g, " ")
     .toLowerCase()
-    .replace(/노이드비/g, "")
-    .replace(/free|프리/g, "")
-    .replace(/[^0-9a-z가-힣]/g, "");
+    .trim();
 }
 
-/** 모델SKU가 없는 쿠팡 다운로드 양식은 상품명+색상이 모두 포함된 승인완료 행만 후보로 삼는다. */
-function inferRingSize(productName: string, modelSku: string): string {
-  if (!productName.includes("반지")) return "";
-  const match = modelSku.trim().match(/(?:BK|GO|RG|SI)(\d+)$/i);
-  return match ? `${match[1]}호` : "";
+function supplyOptionName(fullProductName: string): string {
+  const separatorIndex = fullProductName.indexOf(",");
+  return separatorIndex >= 0 ? fullProductName.slice(separatorIndex + 1).trim() : "";
 }
 
-function findProductNameColorCandidates(rows: DownloadRow[], productName: string, color: string, modelSku: string): DownloadRow[] {
-  const productKey = normProductText(productName);
-  const colorKey = normProductText(color);
-  const modelSkuKey = normProductText(modelSku);
-  const sizeKey = normProductText(inferRingSize(productName, modelSku));
-  if (!productKey || !colorKey) return [];
+/** 과거 상품은 상품명+옵션으로 만들 수 있는 두 개의 쿠팡 전체 표기와만 정확히 비교한다. */
+function findExactProductNameOptionCandidates(rows: DownloadRow[], productName: string, optionName: string): DownloadRow[] {
+  const normalizedProductName = normalizeExactProductText(productName);
+  const normalizedOptionName = normalizeExactProductText(optionName);
+  if (!normalizedProductName || !normalizedOptionName) return [];
 
-  // 새 견적서부터 옵션 상품명에 모델SKU가 포함된다. 해당 키가 있으면 다른 추정 없이 우선 사용한다.
-  const exactModelSkuMatches = rows.filter(row => row.approved && normProductText(row.productName).includes(modelSkuKey));
-  if (modelSkuKey && exactModelSkuMatches.length > 0) return exactModelSkuMatches;
-
-  return rows.filter(row => {
-    const downloadName = normProductText(row.productName);
-    const productIndex = downloadName.indexOf(productKey);
-    if (!row.approved || productIndex < 0) return false;
-    const optionSuffix = downloadName.slice(productIndex + productKey.length);
-    return optionSuffix.startsWith(`${colorKey}${sizeKey}`);
-  });
+  const exactNames = new Set([
+    normalizeExactProductText(`${productName}, ${optionName}`),
+    normalizeExactProductText(`${productName}, ${optionName} 혼합색상`),
+  ]);
+  return rows.filter(row => exactNames.has(normalizeExactProductText(row.productName)));
 }
 
-/** 명시 모델SKU → 신규 구분자 → 구형 접미사 → 기존 SKU ID → 기존 상품명/색상 보조 매칭. */
+type SupplyStatusMatchRule = "sku_id" | "explicit_model_sku" | "new_option_model_sku" | "legacy_option_model_sku" | "product_name_option";
+
+interface CandidateMatch {
+  candidates: DownloadRow[];
+  rule: SupplyStatusMatchRule | null;
+}
+
+/** SKU ID → 명시 모델SKU → 신규 구분자 → 구형 접미사 → 승인대기 상품명+옵션 정확 일치. */
 function findSupplyStatusCandidates(
   rows: DownloadRow[],
   modelSku: string,
   currentSkuId: string,
   productName: string,
   color: string
-): DownloadRow[] {
+): CandidateMatch {
   const ranked = rows.map(row => ({ row, priority: coupangSupplyMatchPriority(row, modelSku, currentSkuId) }));
   const bestPriority = ranked.reduce<number>((best, candidate) => candidate.priority > 0 && candidate.priority < best ? candidate.priority : best, 5);
-  if (bestPriority < 5) return ranked.filter(candidate => candidate.priority === bestPriority).map(candidate => candidate.row);
+  if (bestPriority < 5) {
+    const rules: Record<number, SupplyStatusMatchRule> = {
+      1: "sku_id",
+      2: "explicit_model_sku",
+      3: "new_option_model_sku",
+      4: "legacy_option_model_sku",
+    };
+    return {
+      candidates: ranked.filter(candidate => candidate.priority === bestPriority).map(candidate => candidate.row),
+      rule: rules[bestPriority],
+    };
+  }
 
-  return findProductNameColorCandidates(rows, productName, color, modelSku);
+  return {
+    candidates: findExactProductNameOptionCandidates(rows, productName, color),
+    rule: "product_name_option",
+  };
 }
 
 export interface SupplyStatusPreview {
@@ -299,6 +315,8 @@ export interface SupplyStatusPreview {
   approvalColumnHeader: string | null;
   approvedStatusValue: string;
   pendingCount: number;
+  awaitingApprovalCount: number;
+  approvedMatchCount: number;
   exactMatchCount: number;
   eligibleCount: number;
   duplicateCount: number;
@@ -325,10 +343,13 @@ function createDryRunToken(preview: Omit<SupplyStatusPreview, "dryRunToken">): s
     currentSkuId: row.currentSkuId,
     downloadSkuId: row.downloadSkuId,
     downloadProductName: row.downloadProductName,
+    downloadOptionName: row.downloadOptionName,
     downloadBarcode: row.downloadBarcode,
     downloadOrderAvailability: row.downloadOrderAvailability,
     eligible: row.eligible,
     conflict: row.conflict,
+    awaitingApproval: row.awaitingApproval,
+    matchRule: row.matchRule,
   }));
   return createHash("sha256").update(JSON.stringify({ fileName: preview.fileName, fileMtime: preview.fileMtime, target })).digest("hex");
 }
@@ -357,37 +378,45 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
     let eligible = false;
     let downloadSkuId: string | null = null;
     let downloadProductName: string | null = null;
+    let downloadOptionName: string | null = null;
     let downloadBarcode: string | null = null;
     let downloadOrderAvailability: string | null = null;
     let alreadySame = false;
+    let awaitingApproval = false;
     let conflict = false;
     let matchCandidateCount = 0;
+    let matchRule: SupplyStatusMatchRule | null = null;
 
     if (!modelSku) {
       reasons.push("제품DB 모델SKU가 비어 있습니다.");
     } else {
-      const candidates = findSupplyStatusCandidates(
+      const matchResult = findSupplyStatusCandidates(
         parsed.rows,
         modelSku,
         String(row[idx.skuId] ?? "").trim(),
         String(row[idx.productName] ?? "").trim(),
         String(row[idx.color] ?? "").trim()
       );
+      const candidates = matchResult.candidates;
+      matchRule = matchResult.rule;
       matchCandidateCount = candidates.length;
       if (candidates.length === 0) {
-        reasons.push("다운로드 파일에서 일치하는 행을 찾지 못했습니다.");
+        awaitingApproval = true;
+        reasons.push("상품공급상태 파일에 승인 완료 데이터가 아직 없습니다.");
       } else if (candidates.length > 1) {
         reasons.push(`다운로드 파일에서 ${candidates.length}개 행이 발견되어 중복입니다.`);
       } else {
         const match = candidates[0];
         if (!match.approved) {
-          reasons.push(`다운로드 승인/공급 상태가 승인완료가 아닙니다(실제: "${match.approvalRaw || "-"}").`);
+          awaitingApproval = true;
+          reasons.push(`아직 승인 전입니다(현재 발주가능상태: "${match.approvalRaw || "-"}").`);
         } else if (!match.skuId) {
           reasons.push("다운로드 SKU ID가 비어 있습니다.");
         } else {
           const currentSkuId = String(row[idx.skuId] ?? "").trim();
           downloadSkuId = match.skuId;
           downloadProductName = match.productName || null;
+          downloadOptionName = supplyOptionName(match.productName) || match.optionName || null;
           downloadBarcode = match.barcode || null;
           downloadOrderAvailability = match.approvalRaw || null;
           if (currentSkuId === "") {
@@ -412,12 +441,15 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
       currentSkuId: String(row[idx.skuId] ?? "").trim(),
       downloadSkuId,
       downloadProductName,
+      downloadOptionName,
       downloadBarcode,
       downloadOrderAvailability,
       matchCandidateCount,
       conflict,
       alreadySame,
+      awaitingApproval,
       eligible,
+      matchRule,
       reasons,
     });
   }
@@ -445,10 +477,12 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
     approvalColumnHeader: parsed.approvalColumnHeader,
     approvedStatusValue,
     pendingCount: pendingRows.length,
+    awaitingApprovalCount: matchedRows.filter(r => r.awaitingApproval).length,
+    approvedMatchCount: matchedRows.filter(r => r.eligible).length,
     exactMatchCount: matchedRows.filter(r => r.matchCandidateCount === 1).length,
     eligibleCount: matchedRows.filter(r => r.eligible).length,
     duplicateCount: matchedRows.filter(r => r.matchCandidateCount > 1).length,
-    unmatchedCount: matchedRows.filter(r => r.matchCandidateCount === 0).length,
+    unmatchedCount: matchedRows.filter(r => !r.eligible && !r.awaitingApproval && !r.conflict && r.matchCandidateCount === 0).length,
     conflictCount: matchedRows.filter(r => r.conflict).length,
     alreadySameCount: matchedRows.filter(r => r.alreadySame).length,
     rows: matchedRows,
