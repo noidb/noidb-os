@@ -64,11 +64,13 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const waveId = String(body.waveId || "").trim();
-    const dateToken = String(body.dateToken || "").replace(/\D/g, "");
+    const dateTokens = [...new Set<string>((Array.isArray(body.dateTokens) ? body.dateTokens : [body.dateToken])
+      .map((value: unknown) => String(value || "").replace(/\D/g, ""))
+      .filter((value: string) => /^20\d{6}$/.test(value)))];
     const expectedWorkbookName = String(body.expectedWorkbookName || "").trim().normalize("NFC");
     const expectedPurchaseOrders = new Set<string>((Array.isArray(body.expectedPurchaseOrderNumbers) ? body.expectedPurchaseOrderNumbers : []).map((value: unknown) => String(value).trim()).filter((value: string) => Boolean(value)));
     if (!waveId) return NextResponse.json({ error: "웨이브 ID가 없습니다." }, { status: 400 });
-    if (!/^20\d{6}$/.test(dateToken)) return NextResponse.json({ error: "출력 PDF 날짜가 올바르지 않습니다." }, { status: 400 });
+    if (!dateTokens.length) return NextResponse.json({ error: "출력 PDF 입고예정일이 올바르지 않습니다." }, { status: 400 });
 
     let pdfFiles: SourceFile[];
     let workbookFiles: SourceFile[];
@@ -86,23 +88,23 @@ export async function POST(request: NextRequest) {
     } else {
       const root = process.env.WMS_SHIPMENT_PRINT_SOURCE_DIR || "G:\\내 드라이브\\쿠팡데이터\\쉽먼트업로드완성\\쉽먼트출력세트";
       const outputRoot = process.env.WMS_SHIPMENT_OUTPUT_DIR || "G:\\내 드라이브\\쿠팡데이터\\쉽먼트업로드완성";
-      pdfFiles = await localFiles(path.join(root, dateToken));
+      pdfFiles = (await Promise.all(dateTokens.map(dateToken => localFiles(path.join(root, dateToken))))).flat();
       workbookFiles = await localFiles(outputRoot);
     }
 
-    const pdfDate = dateParts(dateToken);
-    const labels = pdfFiles.filter(file => file.name.startsWith("shipment_Label_document(") && file.name.includes(`_${pdfDate}.pdf`));
-    const manifests = pdfFiles.filter(file => file.name.startsWith("shipment_ManiFest_document(") && file.name.includes(`_${pdfDate}.pdf`));
+    const pdfDates = dateTokens.map(dateParts);
+    const labels = pdfFiles.filter(file => file.name.startsWith("shipment_Label_document(") && pdfDates.some(pdfDate => file.name.includes(`_${pdfDate}.pdf`)));
+    const manifests = pdfFiles.filter(file => file.name.startsWith("shipment_ManiFest_document(") && pdfDates.some(pdfDate => file.name.includes(`_${pdfDate}.pdf`)));
     const workbooks = workbookFiles.filter(file => {
       const normalizedName = file.name.normalize("NFC").toLocaleLowerCase("ko");
       return normalizedName.startsWith("쉽먼트생성_업로드파일_") && normalizedName.endsWith(".xlsx");
     })
       .sort((a, b) => b.modifiedTime.localeCompare(a.modifiedTime));
     if (!labels.length || !manifests.length) {
-      return NextResponse.json({ error: `${dateToken} 폴더에서 Label PDF와 ManiFest PDF를 모두 찾지 못했습니다.` }, { status: 400 });
+      return NextResponse.json({ error: `입고예정일 ${dateTokens.join(", ")}의 Label PDF와 ManiFest PDF를 모두 찾지 못했습니다.` }, { status: 400 });
     }
     if (!workbooks.length) {
-      return NextResponse.json({ error: `${dateToken}에 생성된 쉽먼트 업로드 XLSX를 찾지 못했습니다.` }, { status: 400 });
+      return NextResponse.json({ error: "생성된 쉽먼트 업로드 XLSX를 찾지 못했습니다." }, { status: 400 });
     }
     let selectedWorkbook = workbooks[0];
     if (expectedPurchaseOrders.size) {
@@ -121,7 +123,7 @@ export async function POST(request: NextRequest) {
       labels: labels.map(encode),
       manifests: manifests.map(encode),
       workbook: encode(selectedWorkbook),
-      sourceSummary: `${dateToken} PDF ${labels.length + manifests.length}개 / ${selectedWorkbook.name}`,
+      sourceSummary: `${dateTokens.join(",")} PDF ${labels.length + manifests.length}개 / ${selectedWorkbook.name}`,
     });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "출력세트 원본을 자동으로 불러오지 못했습니다." }, { status: 500 });

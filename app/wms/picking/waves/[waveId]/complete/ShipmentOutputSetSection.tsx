@@ -41,11 +41,16 @@ export default function ShipmentOutputSetSection({ waveId, items, generation, ge
 
   async function generateFullSet(downloadTarget: ReturnType<typeof reserveDownloadTarget>) {
     const expected = new Set(activeGeneration.purchaseOrderNumbers.map(String));
+    const expectedDateTokens = [...new Set(items.flatMap(item => item.sources)
+      .filter(source => expected.has(source.purchaseOrderNumber))
+      .map(source => String(source.shippingGroupKey || "").split("\u0000")[0].replace(/\D/g, ""))
+      .filter(value => /^20\d{6}$/.test(value)))];
+    if (expectedDateTokens.length === 0) throw new Error("현재 묶음의 입고예정일을 확인할 수 없습니다.");
     const sourceResponse = await fetch("/api/wms/shipment-print/auto-source", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         waveId,
-        dateToken: outputDateToken,
+        dateTokens: expectedDateTokens,
         expectedPurchaseOrderNumbers: [...expected],
         expectedWorkbookName: activeGeneration.shipmentFileName,
       }),
