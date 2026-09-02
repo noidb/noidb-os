@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AutoShipmentBlockedError, buildAutoShipmentFile } from "@/lib/wms/hanjin-shipment-auto";
-import type { HanjinShipmentRequest } from "@/lib/wms/hanjin-upload";
 import { buildShipmentOutputContext, ShipmentOutputValidationError } from "@/lib/wms/shipment-output-context";
 
 /**
@@ -15,13 +14,16 @@ export const runtime = "nodejs";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const requests: HanjinShipmentRequest[] = Array.isArray(body.requests) ? body.requests : [];
-    if (requests.length === 0) {
+    const purchaseOrderNumbers = Array.isArray(body.purchaseOrderNumbers) ? body.purchaseOrderNumbers.map(String) : [];
+    if (purchaseOrderNumbers.length === 0) {
       return NextResponse.json({ error: "대상 발주서/물류센터가 없습니다." }, { status: 400 });
     }
 
-    const context = await buildShipmentOutputContext(requests.map(item => item.purchaseOrderNumber), { requireDestination: false });
+    const context = await buildShipmentOutputContext(purchaseOrderNumbers, { requireDestination: false });
     if (!context.preview.canGenerate) throw new ShipmentOutputValidationError(context.preview);
+    if (context.purchaseOrderNumbers.length !== new Set(purchaseOrderNumbers).size) {
+      return NextResponse.json({ error: "generation 발주번호 집합을 정확히 확인하지 못했습니다." }, { status: 409 });
+    }
     const sourceRequests = context.documents.map(document => ({ purchaseOrderNumber: document.purchaseOrderNumber, fulfillmentCenter: document.fulfillmentCenterName, expectedDate: document.expectedArrivalDate }));
     const result = await buildAutoShipmentFile(sourceRequests, context.records);
 
@@ -33,6 +35,7 @@ export async function POST(request: NextRequest) {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
         "X-Included-Count": String(result.includedCount),
+        "X-Included-Po-Numbers": encodeURIComponent(result.includedPurchaseOrderNumbers.join(",")),
         "X-Tracking-Numbers-Used": encodeURIComponent(result.trackingNumbersUsed.join(", ")),
         "X-Reprint-File-Names": encodeURIComponent(result.reprintFileNames.join(", ")),
         "X-Confirmed-Quantity-File-Names": encodeURIComponent(result.confirmedQuantityFileNames.join(", ")),

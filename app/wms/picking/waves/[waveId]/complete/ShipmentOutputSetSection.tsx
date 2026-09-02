@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { ShipmentOutputGeneration } from "@/lib/wms/picking-wave/types";
 import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 
-export default function ShipmentOutputSetSection({ generation }: { generation?: ShipmentOutputGeneration }) {
+export default function ShipmentOutputSetSection({ generation, generationLabel }: { generation?: ShipmentOutputGeneration; generationLabel?: string }) {
   const [generating, setGenerating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +49,7 @@ export default function ShipmentOutputSetSection({ generation }: { generation?: 
 
   return <div>
     <div style={{ marginBottom: "8px", padding: "9px", borderRadius: "8px", background: wmsColors.surfaceBeige, fontSize: "12px", fontWeight: 800 }}>
-      현재 출력세트: 발주 {generation.purchaseOrderNumbers.length}건 · 물류센터 라벨 포함
+      현재 출력세트: {generationLabel || "현재 묶음"} · 발주 {generation.purchaseOrderNumbers.length}건 · 물류센터 라벨 포함
     </div>
     {error && <p style={{ margin: "0 0 8px", color: "#c0392b", fontSize: "11px" }}>{error}</p>}
     {message && <p style={{ margin: "0 0 8px", color: wmsColors.greenDark, fontSize: "11px" }}>{message}</p>}

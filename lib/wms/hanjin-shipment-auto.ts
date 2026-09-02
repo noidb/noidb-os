@@ -40,7 +40,7 @@ const CONFIRMED_QUANTITY_ENV = "GOOGLE_DRIVE_PO_CONFIRMED_QUANTITY_FOLDER_ID";
 const CONFIRMED_QUANTITY_LOCAL_DIR =
   process.env.WMS_PO_CONFIRMED_QUANTITY_DIR || "G:\\내 드라이브\\쿠팡데이터\\발주서업로드완성";
 
-interface ReprintDetailRow {
+export interface ReprintDetailRow {
   trackingNumber: string;
   fulfillmentCenter: string;
   kLabel: string;
@@ -133,6 +133,63 @@ async function loadReprintDetailRows(): Promise<{ rows: ReprintDetailRow[]; file
     fileNames.push(file.name);
   }
   return { rows, fileNames };
+}
+
+function indexReprintRowsByPurchaseOrder(rows: ReprintDetailRow[]) {
+  const result = new Map<string, { trackingNumber: string; fulfillmentCenter: string; monthDayText: string }[]>();
+  for (const row of rows) {
+    const parsed = parseShipmentLabel(row.kLabel);
+    if (!parsed) continue;
+    for (const po of parsed.purchaseOrderNumbers) {
+      const key = normalizeSkuId(po);
+      if (!result.has(key)) result.set(key, []);
+      result.get(key)!.push({ trackingNumber: row.trackingNumber, fulfillmentCenter: parsed.fulfillmentCenter, monthDayText: parsed.monthDayText });
+    }
+  }
+  return result;
+}
+
+export interface AutoShipmentTrackingPreview {
+  requestedPurchaseOrderCount: number;
+  matchedPurchaseOrderCount: number;
+  missingPurchaseOrderNumbers: string[];
+  conflictPurchaseOrderNumbers: string[];
+  canGenerate: boolean;
+}
+
+/** 현재 generation의 PO 집합만 운송장 원본과 대조한다. 웨이브의 다른 PO는 검사하지 않는다. */
+export function inspectAutoShipmentTrackingRows(requests: HanjinShipmentRequest[], rows: ReprintDetailRow[]): AutoShipmentTrackingPreview {
+  const uniqueRequests = [...new Map(requests.map(request => [normalizeSkuId(request.purchaseOrderNumber), request])).values()];
+  const reprintByPo = indexReprintRowsByPurchaseOrder(rows);
+  const matched: string[] = [];
+  const missing: string[] = [];
+  const conflicts: string[] = [];
+
+  for (const request of uniqueRequests) {
+    const po = normalizeSkuId(request.purchaseOrderNumber);
+    const exactMatches = (reprintByPo.get(po) || []).filter(entry =>
+      normalizeCenterName(entry.fulfillmentCenter) === normalizeCenterName(request.fulfillmentCenter)
+      && entry.monthDayText === formatMonthDay(request.expectedDate)
+      && Boolean(entry.trackingNumber)
+    );
+    const trackingNumbers = new Set(exactMatches.map(entry => entry.trackingNumber));
+    if (trackingNumbers.size === 1) matched.push(po);
+    else if (trackingNumbers.size > 1) conflicts.push(po);
+    else missing.push(po);
+  }
+
+  return {
+    requestedPurchaseOrderCount: uniqueRequests.length,
+    matchedPurchaseOrderCount: matched.length,
+    missingPurchaseOrderNumbers: missing,
+    conflictPurchaseOrderNumbers: conflicts,
+    canGenerate: uniqueRequests.length > 0 && missing.length === 0 && conflicts.length === 0,
+  };
+}
+
+export async function inspectAutoShipmentTracking(requests: HanjinShipmentRequest[]): Promise<AutoShipmentTrackingPreview> {
+  const reprint = await loadReprintDetailRows();
+  return inspectAutoShipmentTrackingRows(requests, reprint.rows);
 }
 
 /** 우리가 1단계에서 buildShipmentLabel로 만든 K열 문구를 되읽어 물류센터/입고예정일 표시문구/
@@ -289,6 +346,7 @@ export class AutoShipmentBlockedError extends Error {
 export interface AutoShipmentResult {
   buffer: Buffer;
   includedCount: number;
+  includedPurchaseOrderNumbers: string[];
   trackingNumbersUsed: string[];
   reprintFileNames: string[];
   confirmedQuantityFileNames: string[];
@@ -330,16 +388,7 @@ export async function buildAutoShipmentFile(
     confirmedByPo.get(key)!.push(row);
   }
 
-  const reprintByPo = new Map<string, { trackingNumber: string; fulfillmentCenter: string; monthDayText: string }[]>();
-  for (const row of reprint.rows) {
-    const parsed = parseShipmentLabel(row.kLabel);
-    if (!parsed) continue;
-    for (const po of parsed.purchaseOrderNumbers) {
-      const key = normalizeSkuId(po);
-      if (!reprintByPo.has(key)) reprintByPo.set(key, []);
-      reprintByPo.get(key)!.push({ trackingNumber: row.trackingNumber, fulfillmentCenter: parsed.fulfillmentCenter, monthDayText: parsed.monthDayText });
-    }
-  }
+  const reprintByPo = indexReprintRowsByPurchaseOrder(reprint.rows);
 
   const blockingReasons: string[] = [];
   const resolvedRows: ParsedTrackingRow[] = [];
@@ -425,12 +474,19 @@ export async function buildAutoShipmentFile(
     throw new AutoShipmentBlockedError(blockingReasons);
   }
 
+  const expectedPoSet = new Set(requests.map(request => normalizeSkuId(request.purchaseOrderNumber)));
+  const resolvedPoSet = new Set(resolvedRows.map(row => normalizeSkuId(row.purchaseOrderNumber)));
+  if (expectedPoSet.size !== resolvedPoSet.size || [...expectedPoSet].some(po => !resolvedPoSet.has(po))) {
+    throw new AutoShipmentBlockedError(["generation 발주번호 집합과 Shipment 출력 발주번호 집합이 일치하지 않습니다."]);
+  }
+
   const targets = requests.map(r => ({ purchaseOrderNumber: r.purchaseOrderNumber, fulfillmentCenter: r.fulfillmentCenter }));
   const result = await buildShipmentCreationUploadFile(resolvedRows, targets);
 
   return {
     buffer: result.buffer,
     includedCount: result.includedCount,
+    includedPurchaseOrderNumbers: [...resolvedPoSet].sort(),
     trackingNumbersUsed: [...trackingNumbersUsed],
     reprintFileNames: reprint.fileNames,
     confirmedQuantityFileNames: [...new Set(sourceRecords.map(record => record.sourceContainerFile))],

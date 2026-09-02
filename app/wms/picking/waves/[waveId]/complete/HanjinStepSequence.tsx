@@ -79,7 +79,7 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
   const activeGeneration = generations.find(generation => generation.generationId === activeGenerationId) || generations.at(-1);
 
   const step1Status: StepStatus = step1Done ? "done" : "current";
-  const currentStepLabel = step1Done ? "2단계(쉽먼트파일 생성) 진행 가능" : "1단계 진행 가능";
+  const currentStepLabel = step1Done ? "3단계(Shipment 파일 생성) 진행 가능" : "2단계(송장파일 생성) 진행 가능";
 
   return (
     <div style={{ marginTop: "20px" }}>
@@ -88,7 +88,7 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
         <div style={{ fontSize: "13px", fontWeight: 800, color: wmsColors.ink }}>{currentStepLabel}</div>
       </div>
 
-      <StepCard step={1} title="송장출력용 업로드파일 생성" subtitle="한진택배 업로드용 — 로켓입고 요청" status={step1Status}>
+      <StepCard step={2} title="송장출력용 업로드파일 생성" subtitle="한진택배 업로드용 — 로켓입고 요청" status={step1Status}>
         <HanjinUploadSection baskets={baskets} items={items} generations={generations} onGenerated={saveGeneration} />
       </StepCard>
 
@@ -101,12 +101,21 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
         </div>
       </div>}
 
-      <StepCard step={2} title="쉽먼트파일 생성" subtitle="한진 운송장파일 자동 탐색 + 발주서 원본 SKU·바코드·수량 사용" status="current">
-        <HanjinAutoShipmentSection baskets={baskets} generation={activeGeneration} onGenerated={markShipmentGenerated} />
+      <StepCard step={3} title="Shipment 파일 생성" subtitle="현재 generation의 운송장 자동 확인 + 발주서 원본 SKU·바코드·수량 사용" status="current">
+        <HanjinAutoShipmentSection
+          generation={activeGeneration}
+          generationLabel={activeGeneration ? `묶음 ${generations.findIndex(item => item.generationId === activeGeneration.generationId) + 1}` : undefined}
+          blockedByGeneration={activeGeneration ? (() => {
+            const poSet = new Set(activeGeneration.purchaseOrderNumbers);
+            const overlap = generations.find(item => item.generationId !== activeGeneration.generationId && item.status === "shipment_generated" && item.purchaseOrderNumbers.some(po => poSet.has(po)));
+            return overlap ? "이미 다른 Shipment 묶음에 포함된 발주번호가 있어 신규 생성을 차단했습니다. 동일 generation 재생성만 허용됩니다." : undefined;
+          })() : undefined}
+          onGenerated={markShipmentGenerated}
+        />
       </StepCard>
 
-      <StepCard step={3} title="Shipment 출력세트 생성" subtitle="현재 선택 묶음의 발주번호가 표시된 물류센터 라벨" status="current">
-        <ShipmentOutputSetSection generation={activeGeneration} />
+      <StepCard step={4} title="Shipment 출력세트 생성" subtitle="현재 generation 발주만 표시한 물류센터 라벨 포함" status="current">
+        <ShipmentOutputSetSection generation={activeGeneration} generationLabel={activeGeneration ? `묶음 ${generations.findIndex(item => item.generationId === activeGeneration.generationId) + 1}` : undefined} />
       </StepCard>
     </div>
   );
