@@ -120,6 +120,20 @@ export interface PickingWave {
   resultConfirmedAt?: string;
   /** "최종 발주확정" 버튼을 누른 시각 — 있으면 order_confirmed */
   orderConfirmedAt?: string;
+  /** 송장 생성 당시의 선택 발주 집합. 기존 웨이브에는 없을 수 있으며 출력 재생성에만 사용한다. */
+  outputGenerations?: ShipmentOutputGeneration[];
+}
+
+export interface ShipmentOutputGeneration {
+  generationId: string;
+  waveId: string;
+  purchaseOrderNumbers: string[];
+  createdAt: string;
+  updatedAt: string;
+  expectedShippingGroupCount: number;
+  invoiceFileName: string;
+  shipmentFileName?: string;
+  status: "invoice_generated" | "shipment_generated";
 }
 
 export interface BasketAssignment {
