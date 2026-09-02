@@ -7,7 +7,7 @@ import { searchAndVerifyPostalCode } from "../center-address/address-search";
 import { loadCenterAddressLedger, saveCenterAddressLedgerEntries } from "../center-address/ledger-store";
 import type { CenterAddressLedgerEntry, CenterAddressResolution } from "../center-address/types";
 
-const TEMPLATE = path.join(process.cwd(), "lib", "wms", "data", "hanjin-template-static", "한진택배_쿠팡_고정형_기준서식.xlsx");
+const TEMPLATE = path.join(process.cwd(), "lib", "wms", "data", "hanjin-template-static", "hanjin-coupang-fixed-template.xlsx");
 
 export interface DestinationSupplement { postalCode: string; source: CenterAddressResolution["source"]; matchedAddress?: string; }
 

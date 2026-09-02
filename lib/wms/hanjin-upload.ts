@@ -62,7 +62,7 @@ const STATIC_TEMPLATE_PATH = path.join(
   "wms",
   "data",
   "hanjin-template-static",
-  "한진택배_쿠팡_고정형_기준서식.xlsx"
+  "hanjin-coupang-fixed-template.xlsx"
 );
 const SHEET_PATH = "xl/worksheets/sheet1.xml";
 
@@ -82,7 +82,7 @@ export class HanjinTemplateNotFoundError extends Error {
   constructor() {
     super(
       "한진택배 업로드 서식 원본을 찾지 못했습니다. " +
-        "lib/wms/data/hanjin-template-static/한진택배_쿠팡_고정형_기준서식.xlsx 파일이 " +
+        "lib/wms/data/hanjin-template-static/hanjin-coupang-fixed-template.xlsx 파일이 " +
         "저장소에 있는지 확인해주세요."
     );
     this.name = "HanjinTemplateNotFoundError";
