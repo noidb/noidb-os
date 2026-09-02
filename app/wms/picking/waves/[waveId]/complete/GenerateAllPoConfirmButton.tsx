@@ -14,6 +14,7 @@ import {
 } from "@/lib/wms/po-confirm-state";
 import { wmsColors, wmsGhostButton, wmsOuterCard, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import PoConfirmSection, { type PoConfirmCardStage, type PoConfirmSourceSummary } from "./PoConfirmSection";
+import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
 
 interface Props {
   wave: PickingWave;
@@ -53,17 +54,6 @@ interface CardState {
   stage: PoConfirmCardStage;
   errors: string[];
   eligible: boolean;
-}
-
-function downloadFile(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
 }
 
 function responseFileName(response: Response, fallback: string): string {
@@ -327,6 +317,7 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
       return;
     }
 
+    const downloadTarget = reserveDownloadTarget();
     setGenerating(true);
     setActionError(null);
     setSuccessMessage(null);
@@ -350,6 +341,7 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
       });
 
       if (!response.ok) {
+        closeReservedDownloadTarget(downloadTarget);
         const data = await response.json().catch(() => ({}));
         const message = data.error || `발주확정 통합 파일 생성에 실패했습니다(HTTP ${response.status}).`;
         const now = new Date().toISOString();
@@ -360,7 +352,7 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
 
       const fallback = `PO_FOR_CONFIRM_선택발주_${selectedPoNumbers.length}건.xlsx`;
       const fileName = responseFileName(response, fallback);
-      downloadFile(await response.blob(), fileName);
+      downloadBlobPreservingPage(await response.blob(), fileName, downloadTarget);
 
       const now = new Date().toISOString();
       setRecords(
@@ -372,6 +364,7 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
       );
       setSuccessMessage(`${selectedPoNumbers.length}개 발주의 통합 파일 1개가 생성되었습니다. 쿠팡 업로드 전까지 발주확정 완료로 처리되지 않습니다.`);
     } catch (error) {
+      closeReservedDownloadTarget(downloadTarget);
       const message = error instanceof Error ? error.message : "발주확정 통합 파일 생성 중 오류가 발생했습니다.";
       const now = new Date().toISOString();
       const selectedPoNumbers = [...selected];

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import ExcelJS from "exceljs";
 import { buildAutoShipmentFile, inspectAutoShipmentTracking, inspectAutoShipmentTrackingRows, type ReprintDetailRow } from "../lib/wms/hanjin-shipment-auto";
 import { summarizeFulfillmentCenterLabels } from "../lib/wms/fulfillment-center-label-summary";
@@ -51,7 +53,8 @@ async function verifyActualFiles() {
   const generationPreview = await inspectAutoShipmentTracking(generationRequests);
   assert.equal(generationPreview.matchedPurchaseOrderCount, generation.purchaseOrderNumbers.length);
   assert.equal(generationPreview.canGenerate, true);
-  const shipment = await buildAutoShipmentFile(generationRequests, generationContext.records);
+  const templateBuffer = await readFile(path.join(process.cwd(), "public", "templates", "ShipmentsUpload_PARCEL_template.xlsx"));
+  const shipment = await buildAutoShipmentFile(generationRequests, generationContext.records, templateBuffer);
   assert.deepEqual(shipment.includedPurchaseOrderNumbers, [...generation.purchaseOrderNumbers].sort());
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(shipment.buffer as unknown as ExcelJS.Buffer);

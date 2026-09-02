@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { BasketAssignment, PickingWaveItem, ShipmentOutputGeneration } from "@/lib/wms/picking-wave/types";
 import { wmsColors, wmsGhostButton, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import type { ShipmentOutputPreview } from "@/lib/wms/shipment-output-context";
+import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
 
 export interface HanjinGenerationResult { purchaseOrderNumbers: string[]; preview: ShipmentOutputPreview; fileName: string; }
 
@@ -43,8 +44,29 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
   const [preview, setPreview] = useState<ShipmentOutputPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const previewCacheRef = useRef(new Map<string, ShipmentOutputPreview>());
+  const [stateHydrated, setStateHydrated] = useState(false);
+  const persistenceKey = baskets[0]?.waveId ? `noidb:wms:hanjin-selection:${baskets[0].waveId}` : "";
 
-  useEffect(() => setSelected(new Set(allPoNumbers)), [allPoNumbers]);
+  useEffect(() => {
+    if (!persistenceKey) return;
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(persistenceKey) || "null") as { selected?: string[]; openCenters?: string[] } | null;
+      const validPoNumbers = new Set(allPoNumbers);
+      const restoredSelection = Array.isArray(stored?.selected)
+        ? stored.selected.filter(po => validPoNumbers.has(po))
+        : allPoNumbers;
+      setSelected(new Set(restoredSelection));
+      setOpenCenters(new Set(stored?.openCenters || []));
+    } catch {
+      setSelected(new Set(allPoNumbers));
+    } finally {
+      setStateHydrated(true);
+    }
+  }, [allPoNumbers, persistenceKey]);
+  useEffect(() => {
+    if (!persistenceKey || !stateHydrated) return;
+    sessionStorage.setItem(persistenceKey, JSON.stringify({ selected: [...selected], openCenters: [...openCenters] }));
+  }, [openCenters, persistenceKey, selected, stateHydrated]);
   const selectedPoNumbers = useMemo(() => allPoNumbers.filter(po => selected.has(po)), [allPoNumbers, selected]);
   const selectionFingerprint = useMemo(() => [...selectedPoNumbers].sort().join("|"), [selectedPoNumbers]);
 
@@ -102,6 +124,7 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
     const exact = generations.find(generation => samePoSet(generation.purchaseOrderNumbers, selectedPoNumbers));
     const overlap = generations.find(generation => !samePoSet(generation.purchaseOrderNumbers, selectedPoNumbers) && generation.purchaseOrderNumbers.some(po => selected.has(po)));
     if (overlap && !window.confirm("이전에 만든 다른 출력 묶음과 일부 발주가 겹칩니다. 새 묶음으로 계속 생성하시겠습니까?")) return;
+    const downloadTarget = reserveDownloadTarget();
     setGenerating(true); setError(null); setResultMessage(null);
     try {
       const response = await fetch("/api/wms/hanjin-upload/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purchaseOrderNumbers: selectedPoNumbers }) });
@@ -111,11 +134,10 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
       const disposition = response.headers.get("Content-Disposition") || "";
       const fileNameMatch = disposition.match(/filename\*=UTF-8''(.+)$/);
       const fileName = fileNameMatch ? decodeURIComponent(fileNameMatch[1]) : "한진택배_업로드.xlsx";
-      const url = URL.createObjectURL(await response.blob());
-      const anchor = document.createElement("a"); anchor.href = url; anchor.download = fileName; document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
+      downloadBlobPreservingPage(await response.blob(), fileName, downloadTarget);
       await onGenerated?.({ purchaseOrderNumbers: selectedPoNumbers, preview, fileName });
       setResultMessage(exact ? `동일한 발주 ${selectedPoNumbers.length}건 기준으로 다시 생성했습니다.` : `새 출력 묶음: 발주 ${selectedPoNumbers.length}건 · 송장 ${preview.shippingGroupCount}행`);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "한진택배 업로드파일 생성 중 오류가 발생했습니다."); }
+    } catch (cause) { closeReservedDownloadTarget(downloadTarget); setError(cause instanceof Error ? cause.message : "한진택배 업로드파일 생성 중 오류가 발생했습니다."); }
     finally { setGenerating(false); }
   }
 

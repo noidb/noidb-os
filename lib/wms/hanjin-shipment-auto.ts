@@ -352,6 +352,18 @@ export interface AutoShipmentResult {
   confirmedQuantityFileNames: string[];
 }
 
+export function findTrackingNumbersReusedAcrossShippingGroups(rows: readonly ParsedTrackingRow[]): string[] {
+  const shippingKeysByTracking = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (!row.trackingNumber) continue;
+    const shippingKey = `${normalizeCenterName(row.fulfillmentCenter)}::${row.expectedDate.replace(/\D/g, "")}`;
+    const keys = shippingKeysByTracking.get(row.trackingNumber) || new Set<string>();
+    keys.add(shippingKey);
+    shippingKeysByTracking.set(row.trackingNumber, keys);
+  }
+  return [...shippingKeysByTracking.entries()].filter(([, keys]) => keys.size > 1).map(([trackingNumber]) => trackingNumber);
+}
+
 /** 웨이브의 (발주번호+물류센터+입고예정일)마다: (1) 확정수량 파일에서 SKU 행을 찾고, (2) 재출력
  *  세부내역에서 운송장번호를 찾아, 물류센터·입고예정일까지 전부 정확히 일치할 때만 합친다.
  *  하나라도 어긋나면 그 사유를 모아 AutoShipmentBlockedError로 던지고, 전체 생성을 만들지 않는다
@@ -360,7 +372,8 @@ export interface AutoShipmentResult {
  *  파일은 buildShipmentCreationUploadFile(기존 3단계 로직 그대로, 수정 없음)로 만든다. */
 export async function buildAutoShipmentFile(
   requests: HanjinShipmentRequest[],
-  sourceRecords: PurchaseOrderSourceRecord[]
+  sourceRecords: PurchaseOrderSourceRecord[],
+  templateBuffer?: Buffer
 ): Promise<AutoShipmentResult> {
   const groups = groupRequestsByCenterAndDate(requests);
 
@@ -474,6 +487,13 @@ export async function buildAutoShipmentFile(
     throw new AutoShipmentBlockedError(blockingReasons);
   }
 
+  const reusedAcrossGroups = findTrackingNumbersReusedAcrossShippingGroups(resolvedRows);
+  if (reusedAcrossGroups.length > 0) {
+    throw new AutoShipmentBlockedError(reusedAcrossGroups.map(trackingNumber =>
+      `서로 다른 물류센터/입고예정일에 같은 운송장번호가 연결되어 생성을 차단했습니다: ${trackingNumber}`
+    ));
+  }
+
   const expectedPoSet = new Set(requests.map(request => normalizeSkuId(request.purchaseOrderNumber)));
   const resolvedPoSet = new Set(resolvedRows.map(row => normalizeSkuId(row.purchaseOrderNumber)));
   if (expectedPoSet.size !== resolvedPoSet.size || [...expectedPoSet].some(po => !resolvedPoSet.has(po))) {
@@ -481,7 +501,7 @@ export async function buildAutoShipmentFile(
   }
 
   const targets = requests.map(r => ({ purchaseOrderNumber: r.purchaseOrderNumber, fulfillmentCenter: r.fulfillmentCenter }));
-  const result = await buildShipmentCreationUploadFile(resolvedRows, targets);
+  const result = await buildShipmentCreationUploadFile(resolvedRows, targets, templateBuffer);
 
   return {
     buffer: result.buffer,

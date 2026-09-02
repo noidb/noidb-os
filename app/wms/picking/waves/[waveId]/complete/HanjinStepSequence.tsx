@@ -36,15 +36,24 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
   const [step1Done, setStep1Done] = useState(false);
   const [generations, setGenerations] = useState<ShipmentOutputGeneration[]>([]);
   const [activeGenerationId, setActiveGenerationId] = useState<string | null>(null);
+  const activeGenerationStorageKey = `noidb:wms:active-output-generation:${waveId}`;
 
   useEffect(() => {
     repository.getWave(waveId).then(wave => {
       const stored = wave?.outputGenerations || [];
       setGenerations(stored);
-      setActiveGenerationId(current => current || stored.at(-1)?.generationId || null);
+      setActiveGenerationId(current => {
+        if (current) return current;
+        const saved = sessionStorage.getItem(activeGenerationStorageKey);
+        return stored.some(item => item.generationId === saved) ? saved : stored.at(-1)?.generationId || null;
+      });
       setStep1Done(stored.length > 0);
     }).catch(() => undefined);
-  }, [repository, waveId]);
+  }, [activeGenerationStorageKey, repository, waveId]);
+
+  useEffect(() => {
+    if (activeGenerationId) sessionStorage.setItem(activeGenerationStorageKey, activeGenerationId);
+  }, [activeGenerationId, activeGenerationStorageKey]);
 
   async function saveGeneration(result: HanjinGenerationResult) {
     const wave = await repository.getWave(waveId);

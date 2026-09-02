@@ -625,7 +625,8 @@ export interface BuildShipmentUploadResult {
  */
 export async function buildShipmentCreationUploadFile(
   allRows: ParsedTrackingRow[],
-  targets: { purchaseOrderNumber: string; fulfillmentCenter: string }[]
+  targets: { purchaseOrderNumber: string; fulfillmentCenter: string }[],
+  templateBuffer?: Buffer
 ): Promise<BuildShipmentUploadResult> {
   const targetKeys = new Set(targets.map(t => trackingKey(t.purchaseOrderNumber, t.fulfillmentCenter)));
   const inTarget = allRows.filter(row => targetKeys.has(trackingKey(row.purchaseOrderNumber, row.fulfillmentCenter)));
@@ -640,24 +641,79 @@ export async function buildShipmentCreationUploadFile(
       reason: "송장번호 없음 — 2단계 파일에 이 발주번호/상품의 송장번호가 아직 채워지지 않았습니다.",
     }));
 
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet(TRACKING_SHEET_NAME);
-  sheet.addRow(TRACKING_HEADERS);
+  if (!templateBuffer) {
+    throw new Error("쿠팡 Shipment 원본 양식이 없어 생성을 차단했습니다. ShipmentsUpload_PARCEL 템플릿을 확인해주세요.");
+  }
+
+  const zip = await JSZip.loadAsync(templateBuffer);
+  const workbookXml = await zip.file("xl/workbook.xml")?.async("string");
+  const sheetXml = await zip.file("xl/worksheets/sheet1.xml")?.async("string");
+  const trackingInputXml = await zip.file("xl/worksheets/sheet2.xml")?.async("string");
+  const instructionXml = await zip.file("xl/worksheets/sheet3.xml")?.async("string");
+  if (!workbookXml?.includes(`name="${TRACKING_SHEET_NAME}"`) || !workbookXml.includes('name="송장번호입력"') || !workbookXml.includes('name="입력방법"') || !sheetXml || !trackingInputXml || !instructionXml) {
+    throw new Error("쿠팡 Shipment 원본 양식의 필수 시트(상품목록/송장번호입력/입력방법)가 없어 생성을 차단했습니다.");
+  }
+
+  if (TRACKING_HEADERS.some(header => !sheetXml.includes(`<t>${escapeXml(header)}</t>`))) {
+    throw new Error("쿠팡 Shipment 원본 양식의 상품목록 헤더가 확정 양식과 다릅니다.");
+  }
+
+  const rowKey = (poNumber: string, skuId: string) => `${normalizeSkuId(poNumber)}::${normalizeSkuId(skuId)}`;
+  const includedByKey = new Map<string, ParsedTrackingRow>();
   for (const row of included) {
-    sheet.addRow([
+    const key = rowKey(row.purchaseOrderNumber, row.skuId);
+    if (includedByKey.has(key)) throw new Error(`Shipment 데이터에 발주번호+SKU가 중복되어 생성을 차단했습니다: ${key}`);
+    includedByKey.set(key, row);
+  }
+
+  const compactDate = (value: string) => {
+    const digits = value.replace(/\D/g, "");
+    return digits.length === 8 ? digits : value;
+  };
+  const headerRow = sheetXml.match(/<row r="1">[\s\S]*?<\/row>/)?.[0];
+  const trackingHeaderRow = trackingInputXml.match(/<row r="1">[\s\S]*?<\/row>/)?.[0];
+  if (!headerRow || !trackingHeaderRow) throw new Error("쿠팡 Shipment 원본 양식의 헤더 행을 읽지 못했습니다.");
+  const columnNames = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
+  const dataRows = included.map((row, index) => {
+    const excelRow = index + 2;
+    const values: Array<string | number> = [
       row.purchaseOrderNumber,
       row.fulfillmentCenter,
       row.transportType,
-      row.expectedDate,
+      compactDate(row.expectedDate),
       row.skuId,
       row.barcode,
       row.productName,
       row.confirmedQuantity,
       row.trackingNumber,
       row.shippedQuantity,
-    ]);
+    ];
+    const cells = values.map((value, column) => `<c r="${columnNames[column]}${excelRow}" s="${column < 8 ? 9 : 10}" t="inlineStr"><is><t>${escapeXml(String(value))}</t></is></c>`).join("");
+    return `<row r="${excelRow}">${cells}</row>`;
+  });
+  const maxProductRow = Math.max(113, included.length + 1);
+  for (let excelRow = included.length + 2; excelRow <= maxProductRow; excelRow += 1) {
+    dataRows.push(`<row r="${excelRow}">${columnNames.map((column, index) => `<c r="${column}${excelRow}" s="${index < 8 ? 9 : 10}"></c>`).join("")}</row>`);
   }
+  const updatedSheetXml = sheetXml
+    .replace(/<dimension ref="[^"]+"\/>/, `<dimension ref="A1:L${maxProductRow}"/>`)
+    .replace(/<sheetData>[\s\S]*?<\/sheetData>/, `<sheetData>${headerRow}${dataRows.join("")}</sheetData>`)
+    .replace(/<dataValidations count="\d+">[\s\S]*?<\/dataValidations>/, `<dataValidations count="1"><dataValidation type="list" sqref="I2:I${maxProductRow}" allowBlank="true" errorStyle="stop" showDropDown="false" showErrorMessage="true" errorTitle="ERROR" error="잘못된 값을 입력하였습니다."><formula1>송장번호입력!$A$2:$A$${Math.max(101, included.length + 1)}</formula1></dataValidation></dataValidations>`);
 
-  const buffer = (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
+  const uniqueTrackingNumbers = [...new Set(included.map(row => row.trackingNumber).filter(Boolean))];
+  const maxTrackingRow = Math.max(201, uniqueTrackingNumbers.length + 1);
+  const trackingRows = Array.from({ length: maxTrackingRow - 1 }, (_, index) => {
+    const excelRow = index + 2;
+    const trackingNumber = uniqueTrackingNumbers[index];
+    return trackingNumber
+      ? `<row r="${excelRow}"><c r="A${excelRow}" s="10" t="inlineStr"><is><t>${escapeXml(trackingNumber)}</t></is></c></row>`
+      : `<row r="${excelRow}"><c r="A${excelRow}" s="10"></c></row>`;
+  });
+  const updatedTrackingInputXml = trackingInputXml
+    .replace(/<dimension ref="[^"]+"\/>/, `<dimension ref="A1:F${maxTrackingRow}"/>`)
+    .replace(/<sheetData>[\s\S]*?<\/sheetData>/, `<sheetData>${trackingHeaderRow}${trackingRows.join("")}</sheetData>`);
+  zip.file("xl/worksheets/sheet1.xml", updatedSheetXml);
+  zip.file("xl/worksheets/sheet2.xml", updatedTrackingInputXml);
+  const buffer = await zip.generateAsync({ type: "nodebuffer" });
   return { buffer, includedCount: included.length, excludedUnmatchedCount: excludedRows.length, excludedRows };
 }

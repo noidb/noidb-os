@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { ShipmentOutputGeneration } from "@/lib/wms/picking-wave/types";
 import type { AutoShipmentTrackingPreview } from "@/lib/wms/hanjin-shipment-auto";
 import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
+import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
 
 interface Props {
   generation?: ShipmentOutputGeneration;
@@ -42,6 +43,7 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
 
   async function handleGenerate() {
     if (!generation || !preview?.canGenerate || blockedByGeneration) return;
+    const downloadTarget = reserveDownloadTarget();
     setGenerating(true); setError(null); setReasons(null); setResultMessage(null);
     try {
       const response = await fetch("/api/wms/hanjin-upload/build-shipment-auto", {
@@ -50,6 +52,7 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
         body: JSON.stringify({ purchaseOrderNumbers: generation.purchaseOrderNumbers }),
       });
       if (!response.ok) {
+        closeReservedDownloadTarget(downloadTarget);
         const data = await response.json().catch(() => ({}));
         setError(data.error || "쉽먼트파일 생성에 실패했습니다.");
         setReasons(Array.isArray(data.reasons) ? data.reasons : null);
@@ -61,11 +64,11 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
       const disposition = response.headers.get("Content-Disposition") || "";
       const fileNameMatch = disposition.match(/filename\*=UTF-8''(.+)$/);
       const fileName = fileNameMatch ? decodeURIComponent(fileNameMatch[1]) : "쉽먼트생성_업로드파일.xlsx";
-      const url = URL.createObjectURL(await response.blob());
-      const anchor = document.createElement("a"); anchor.href = url; anchor.download = fileName; document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
+      downloadBlobPreservingPage(await response.blob(), fileName, downloadTarget);
       setResultMessage(`${generationLabel || "현재 묶음"}의 발주 ${generation.purchaseOrderNumbers.length}건만 Shipment로 생성했습니다.`);
       await onGenerated?.(generation.generationId, fileName);
     } catch (cause) {
+      closeReservedDownloadTarget(downloadTarget);
       setError(cause instanceof Error ? cause.message : "쉽먼트파일 생성 중 오류가 발생했습니다.");
     } finally { setGenerating(false); }
   }

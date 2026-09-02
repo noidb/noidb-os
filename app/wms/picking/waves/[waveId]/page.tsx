@@ -262,7 +262,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
     return fulfillmentCentersByPo[purchaseOrderNumber]
       || basketsByNumber[basketNumber]?.fulfillmentCenter
       || basketDisplayNames[basketNumber]
-      || `바구니 ${basketNumber}`;
+      || `발주서 ${purchaseOrderNumber}`;
   }
 
   function centerDateKey(basketNumber: string, purchaseOrderNumber: string): string {
@@ -816,7 +816,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       <main style={pageStyle}>
         <h1 style={{ fontSize: "16px", margin: "0 0 4px" }}>부족 배분 확인</h1>
         <p style={{ fontSize: "12px", color: wmsColors.muted, margin: "0 0 12px" }}>
-          {selectedItem.productName} · 찾은 수량 {pickedTotal}개 — 발주서/바구니별 배정수량을 확인하거나 직접 고쳐주세요.
+          {selectedItem.productName} · 찾은 수량 {pickedTotal}개 — 발주서별 배정수량을 확인하거나 직접 고쳐주세요.
         </p>
         <div style={{ overflowX: "auto", marginBottom: "12px" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>

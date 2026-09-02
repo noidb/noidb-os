@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { AutoShipmentBlockedError, buildAutoShipmentFile } from "@/lib/wms/hanjin-shipment-auto";
 import { buildShipmentOutputContext, ShipmentOutputValidationError } from "@/lib/wms/shipment-output-context";
 
@@ -25,7 +27,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "generation 발주번호 집합을 정확히 확인하지 못했습니다." }, { status: 409 });
     }
     const sourceRequests = context.documents.map(document => ({ purchaseOrderNumber: document.purchaseOrderNumber, fulfillmentCenter: document.fulfillmentCenterName, expectedDate: document.expectedArrivalDate }));
-    const result = await buildAutoShipmentFile(sourceRequests, context.records);
+    const templatePath = process.env.WMS_SHIPMENT_TEMPLATE_PATH || path.join(process.cwd(), "public", "templates", "ShipmentsUpload_PARCEL_template.xlsx");
+    const templateBuffer = await readFile(templatePath);
+    const result = await buildAutoShipmentFile(sourceRequests, context.records, templateBuffer);
 
     const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
     const fileName = `쉽먼트생성_업로드파일_${timestamp}.xlsx`;
