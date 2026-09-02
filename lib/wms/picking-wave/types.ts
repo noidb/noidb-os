@@ -22,17 +22,17 @@
 export type PickingWaveStatus = "in_progress" | "completed" | "result_confirmed" | "order_confirmed";
 export type PickingWaveItemStatus = "pending" | "full" | "partial" | "notfound";
 
-/** 아이템 합산 전, 발주서(=현재는 바구니 1:1)별 원본 요청 수량 */
+/** 아이템 합산 전, 발주서별 원본 요청 수량 */
 export interface PickingWaveSourceRef {
   purchaseOrderNumber: string;
-  /** 현재는 발주서=바구니 1:1 임시 배정. 나중에 쉽먼트 번호가 생기면 BasketAssignment.shipmentNumber만 갱신한다. */
+  /** 현재는 발주서별 1:1 임시 배정. 나중에 쉽먼트 번호가 생기면 BasketAssignment.shipmentNumber만 갱신한다. */
   basketNumber: string;
   requestedQuantity: number;
   /** 입고예정일+물류센터가 같은 화면상 합배송 그룹. 수량 병합에는 사용하지 않는다. */
   shippingGroupKey?: string;
 }
 
-/** 피킹 결과(찾은/부족)를 발주서·바구니별로 나눈 확정 값 */
+/** 피킹 결과(찾은/부족)를 발주서별로 나눈 확정 값 */
 export interface PickingAllocationResult {
   purchaseOrderNumber: string;
   basketNumber: string;
@@ -139,8 +139,8 @@ export interface ShipmentOutputGeneration {
 export interface BasketAssignment {
   basketNumber: string;
   purchaseOrderNumber: string;
-  /** 이 발주서의 물류센터 — 화면에 바구니명 대신 물류센터명을 표시하기 위해 저장해둔다 (2026-08-19).
-   *  바구니 번호/분배 로직 자체는 그대로 유지되고, 이 필드는 표시 전용이다. */
+  /** 이 발주서의 물류센터 — 화면에 물류센터명을 표시하기 위해 저장해둔다 (2026-08-19).
+   *  내부 배정 번호/분배 로직 자체는 그대로 유지되고, 이 필드는 표시 전용이다. */
   fulfillmentCenter: string;
   /** 나중에 쉽먼트 번호가 생기면 이 필드만 갱신한다 (웨이브 재생성 불필요) */
   shipmentNumber?: string;

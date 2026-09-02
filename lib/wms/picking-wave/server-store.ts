@@ -229,7 +229,7 @@ function applyMutation(current: PickingWaveStoreSnapshot, mutation: PickingWaveS
     next.deletedItemIds[mutation.itemId] = mutation.deletedAt;
     next.items = next.items.filter(value => value.id !== mutation.itemId);
   } else if (mutation.action === "saveBasket") {
-    if (next.deletedWaveIds[mutation.basket.waveId]) throw new Error("삭제된 웨이브에는 바구니를 저장할 수 없습니다.");
+    if (next.deletedWaveIds[mutation.basket.waveId]) throw new Error("삭제된 웨이브에는 발주서 배정을 저장할 수 없습니다.");
     next.baskets = mergeByKey(next.baskets, [mutation.basket], value => basketKey(value.waveId, value.basketNumber), next.deletedBasketKeys, true);
   } else if (mutation.action === "deleteBasket") {
     const key = basketKey(mutation.waveId, mutation.basketNumber);

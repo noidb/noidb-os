@@ -8,7 +8,7 @@ import type { BasketAssignment, PickingWave, PickingWaveItem, PickingWaveSourceR
 /**
  * 실제 발주(들)로부터 통합 피킹 웨이브를 만드는 순수 함수.
  * - 여러 발주서의 같은 상품코드(SKU)를 하나로 합산한다.
- * - 발주서 = 바구니 1:1 임시 배정(발주서번호 오름차순 → 바구니 1,2,3...).
+ * - 발주서별 1:1 임시 배정(발주서번호 오름차순 → 내부 배정번호 1,2,3...).
  * - 위치는 SKU 예외 → 모델 위치 순으로 해석하고, 못 찾으면 locationStatus:"unlocated".
  * - 저장 순서도 피킹 화면과 같은 공통 기준(위치/창고번호→모델명→옵션→SKU)을 사용한다.
  * 이 함수는 저장소에 쓰지 않는다 — 호출한 쪽(화면)이 결과를 PickingWaveRepository로 저장한다.

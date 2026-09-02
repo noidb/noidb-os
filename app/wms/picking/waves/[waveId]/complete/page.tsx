@@ -12,6 +12,7 @@ import type { BasketAssignment, PickingWave, PickingWaveItem } from "@/lib/wms/p
 import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
 import GenerateAllPoConfirmButton from "./GenerateAllPoConfirmButton";
 import HanjinStepSequence from "./HanjinStepSequence";
+import ShipmentWorkflowStepCard from "./ShipmentWorkflowStepCard";
 import EditPickingResultsPanel from "./EditPickingResultsPanel";
 import WmsExitNav from "../../WmsExitNav";
 import RefreshCatalogButton from "../../RefreshCatalogButton";
@@ -49,7 +50,7 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
     }
   }
 
-  /** 웨이브/아이템/바구니/거래처발주서 라인처럼 localStorage에서 즉시 읽히는 값만 불러온다.
+  /** 웨이브/아이템/발주서 배정/거래처발주서 라인처럼 localStorage에서 즉시 읽히는 값만 불러온다.
    *  2026-08-19 3차 실사용 테스트에서 확인된 버그: 예전에는 이 함수가 구글시트 제품DB 조회
    *  (fetchLiveCatalogLookup)까지 같은 Promise.all에 묶어서, 그 네트워크 호출이 느려지거나
    *  응답이 없으면 로컬 데이터는 이미 다 있는데도 "불러오는 중..."에서 화면이 멈췄다. 이제
@@ -196,15 +197,20 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
           </p>
         </div>
 
-        <h2 style={{ fontSize: "15px", margin: "0 0 8px" }}>1. 발주확정 서류</h2>
-        <GenerateAllPoConfirmButton
-          wave={wave}
-          items={items}
-          baskets={baskets}
-          onWaveChange={async updatedWave => { await waveRepository.saveWave(updatedWave); setWave(updatedWave); }}
-        />
+        <ShipmentWorkflowStepCard
+          step={1}
+          title="발주확정 파일 생성"
+          subtitle="선택한 발주만 쿠팡 업로드용 XLSX 한 개로 생성"
+          status="done"
+        >
+          <GenerateAllPoConfirmButton
+            wave={wave}
+            items={items}
+            baskets={baskets}
+            onWaveChange={async updatedWave => { await waveRepository.saveWave(updatedWave); setWave(updatedWave); }}
+          />
+        </ShipmentWorkflowStepCard>
 
-        <h2 style={{ fontSize: "15px", margin: "18px 0 8px" }}>2. 송장·Shipment 출력</h2>
         <HanjinStepSequence waveId={wave.id} baskets={baskets} items={items} />
 
         <details style={{ marginTop: "16px", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: wmsColors.surfaceBeige }}>
@@ -340,30 +346,24 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
         </div>
       )}
 
-      {/* 7단계: 선택 발주 통합 서류 생성 → 쿠팡 업로드 → 발주별 완료 확인 */}
-      {wave.status !== "in_progress" && (
-        <a href={`/wms/picking/waves/${wave.id}/packing`} style={{ display: "block", textDecoration: "none", marginTop: "20px" }}>
-          <button style={{ ...wmsPrimaryButton, width: "100%" }}>포장 / 박스배분 시작</button>
-        </a>
-      )}
-
       {reachedResultConfirm && (
         <div style={{ marginTop: "20px" }}>
-          <h2 style={{ fontSize: "14px", margin: "0 0 8px" }}>발주확정 선택 / 통합 서류 생성</h2>
-          <p style={{ fontSize: "11px", color: wmsColors.muted, margin: "0 0 10px" }}>
-            원본 엑셀 내부의 발주번호 전체를 확인한 뒤, 선택한 발주만 쿠팡 업로드용 XLSX 한 개로 만듭니다.
-            외부 Supplier Hub에는 자동 업로드하지 않으며, 사용자가 업로드 성공을 확인해야만 완료 처리됩니다.
-          </p>
-
-          <GenerateAllPoConfirmButton
-            wave={wave}
-            items={items}
-            baskets={baskets}
-            onWaveChange={async updatedWave => {
-              await waveRepository.saveWave(updatedWave);
-              setWave(updatedWave);
-            }}
-          />
+          <ShipmentWorkflowStepCard
+            step={1}
+            title="발주확정 파일 생성"
+            subtitle="선택한 발주만 쿠팡 업로드용 XLSX 한 개로 생성"
+            status="current"
+          >
+            <GenerateAllPoConfirmButton
+              wave={wave}
+              items={items}
+              baskets={baskets}
+              onWaveChange={async updatedWave => {
+                await waveRepository.saveWave(updatedWave);
+                setWave(updatedWave);
+              }}
+            />
+          </ShipmentWorkflowStepCard>
 
           <HanjinStepSequence waveId={wave.id} baskets={baskets} items={items} />
         </div>

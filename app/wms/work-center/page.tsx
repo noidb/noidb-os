@@ -112,13 +112,13 @@ export default function WmsWorkCenterPage() {
 
       <ShortageVendorOrdersBanner />
 
-      <ActiveWaveList className="wms-work-center-active-waves" />
+      <UpcomingInboundSummary />
 
       <a className="wms-work-center-picking-link" href="/wms/picking/waves">
         <button className="wms-work-center-picking-button" style={{ ...wmsPrimaryButton, width: "100%" }}>통합 피킹 시작 (실제 발주 기준)</button>
       </a>
 
-      <UpcomingInboundSummary />
+      <ActiveWaveList className="wms-work-center-active-waves" />
     </main>
   );
 }

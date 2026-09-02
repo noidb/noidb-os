@@ -12,7 +12,7 @@ import {
   upsertPoConfirmationRecords,
   type PoConfirmationRecord,
 } from "@/lib/wms/po-confirm-state";
-import { wmsColors, wmsGhostButton, wmsOuterCard, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
+import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import PoConfirmSection, { type PoConfirmCardStage, type PoConfirmSourceSummary } from "./PoConfirmSection";
 import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
 
@@ -425,40 +425,14 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
   const manualUploadNeeded = !inspecting && (!source || !folderAccessible || Boolean(inspectError) || sourceHasInspectionErrors);
 
   return (
-    <section style={{ ...wmsOuterCard, padding: "14px", marginBottom: "16px", background: wmsColors.surfaceBeige }}>
-      <h3 style={{ margin: "0 0 6px", fontSize: "16px" }}>발주확정 통합 파일</h3>
-      <p style={{ margin: "0 0 10px", fontSize: "11px", color: wmsColors.muted, lineHeight: 1.5 }}>
-        엑셀 내부 발주번호를 기준으로 선택한 발주만 쿠팡 업로드용 XLSX 한 개에 담습니다. 파일 생성만으로 발주확정 완료가 되지 않습니다.
-      </p>
-
-      <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: "#ffffff", padding: "10px", marginBottom: "10px" }}>
-        {inspecting ? (
-          <p style={{ margin: 0, fontSize: "12px", color: wmsColors.muted }}>통합 원본 파일의 내부 발주번호를 확인 중...</p>
-        ) : source ? (
-          <div style={{ fontSize: "11px", lineHeight: 1.6, overflowWrap: "anywhere" }}>
-            <strong style={{ display: "block", fontSize: "12px" }}>{manualFile?.fileName || source.fileName}</strong>
-            <span>내부 발주 {source.totalPurchaseOrderCount}건 · 전체 {source.totalRowCount}행</span>
-            <br />
-            <span style={{ color: wmsColors.muted }}>파일 식별값 {source.fileHash.slice(0, 12)}… · {source.source}</span>
-          </div>
-        ) : (
-          <p style={{ margin: 0, fontSize: "12px", color: wmsColors.warnText, lineHeight: 1.5 }}>
-            {inspectError || "통합 원본 파일을 찾지 못했습니다."}
-          </p>
-        )}
-        {primaryDir ? <p style={{ margin: "7px 0 0", fontSize: "10px", color: wmsColors.muted, overflowWrap: "anywhere" }}>자동 검색 위치: {primaryDir}</p> : null}
-
-        <button type="button" onClick={() => void inspectCombinedSource()} disabled={inspecting} style={{ ...wmsGhostButton, width: "100%", minHeight: "40px", marginTop: "9px", fontSize: "12px", opacity: inspecting ? 0.5 : 1 }}>
-          원본 파일 다시 확인
-        </button>
-
-        {manualUploadNeeded ? (
-          <label style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "46px", marginTop: "8px", border: `1px dashed ${wmsColors.warnSoftBorder}`, borderRadius: "8px", background: wmsColors.warnSoft, color: wmsColors.warnText, fontSize: "12px", fontWeight: 800, cursor: "pointer", textAlign: "center", padding: "4px 8px", overflowWrap: "anywhere" }}>
-            {manualFile?.fileName || "통합 원본 PO_FOR_CONFIRM 파일 1개 선택"}
-            <input type="file" accept=".xlsx" onChange={handleManualFileSelected} style={{ display: "none" }} />
-          </label>
-        ) : null}
-      </div>
+    <div>
+      {manualUploadNeeded ? <div style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: "9px", background: wmsColors.warnSoft, padding: "10px", marginBottom: "10px" }}>
+        <p style={{ margin: "0 0 8px", fontSize: "11px", color: wmsColors.warnText, lineHeight: 1.5 }}>{inspecting ? "통합 원본 파일을 확인 중입니다." : inspectError || "통합 원본 파일을 찾지 못했습니다."}</p>
+        <label style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "44px", border: `1px dashed ${wmsColors.warnSoftBorder}`, borderRadius: "8px", background: "#fff", color: wmsColors.warnText, fontSize: "12px", fontWeight: 800, cursor: "pointer", textAlign: "center", padding: "4px 8px", overflowWrap: "anywhere" }}>
+          {manualFile?.fileName || "통합 원본 PO_FOR_CONFIRM 파일 선택"}
+          <input type="file" accept=".xlsx" onChange={handleManualFileSelected} style={{ display: "none" }} />
+        </label>
+      </div> : null}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: "7px", marginBottom: "10px" }}>
         <SummaryTile label="전체 발주" value={cardStates.length} />
@@ -480,7 +454,11 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
       {actionError ? <p style={{ margin: "0 0 10px", padding: "9px", borderRadius: "8px", background: wmsColors.warnSoft, color: "#c0392b", fontSize: "11px", lineHeight: 1.5 }}>{actionError}</p> : null}
       {successMessage ? <p style={{ margin: "0 0 10px", padding: "9px", borderRadius: "8px", background: wmsColors.greenSoft, color: wmsColors.greenDark, fontSize: "11px", fontWeight: 700, lineHeight: 1.5 }}>{successMessage}</p> : null}
 
-      <div>
+      <details style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "9px", background: "#fff", overflow: "hidden" }}>
+        <summary style={{ cursor: "pointer", padding: "12px", fontSize: "13px", fontWeight: 800, listStylePosition: "inside" }}>
+          발주서 목록 · {cardStates.length}건
+        </summary>
+        <div style={{ padding: "0 8px 8px" }}>
         {cardStates.map(card => (
           <PoConfirmSection
             key={card.poNumber}
@@ -499,7 +477,8 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
             onConfirmCompleted={() => void handleConfirmCompleted(card.poNumber)}
           />
         ))}
-      </div>
-    </section>
+        </div>
+      </details>
+    </div>
   );
 }

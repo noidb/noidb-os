@@ -8,14 +8,13 @@ import HanjinUploadSection from "./HanjinUploadSection";
 import HanjinAutoShipmentSection from "./HanjinAutoShipmentSection";
 import type { HanjinGenerationResult } from "./HanjinUploadSection";
 import ShipmentOutputSetSection from "./ShipmentOutputSetSection";
+import ShipmentWorkflowStepCard from "./ShipmentWorkflowStepCard";
 
 interface Props {
   waveId: string;
   baskets: BasketAssignment[];
   items: PickingWaveItem[];
 }
-
-type StepStatus = "done" | "current";
 
 /**
  * 발주확정 다음 단계(한진택배 후속 업무)를 순서대로 보여주는 화면 (2026-08-19 5차 실사용 테스트
@@ -87,19 +86,13 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
 
   const activeGeneration = generations.find(generation => generation.generationId === activeGenerationId) || generations.at(-1);
 
-  const step1Status: StepStatus = step1Done ? "done" : "current";
-  const currentStepLabel = step1Done ? "3단계(Shipment 파일 생성) 진행 가능" : "2단계(송장파일 생성) 진행 가능";
+  const step1Status = step1Done ? "done" as const : "current" as const;
 
   return (
-    <div style={{ marginTop: "20px" }}>
-      <div style={{ background: wmsColors.surfaceBeige, border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "10px", padding: "10px 12px", marginBottom: "14px" }}>
-        <div style={{ fontSize: "11px", color: wmsColors.muted, marginBottom: "2px" }}>한진택배 후속 업무 — 현재 단계</div>
-        <div style={{ fontSize: "13px", fontWeight: 800, color: wmsColors.ink }}>{currentStepLabel}</div>
-      </div>
-
-      <StepCard step={2} title="송장출력용 업로드파일 생성" subtitle="한진택배 업로드용 — 로켓입고 요청" status={step1Status}>
+    <div>
+      <ShipmentWorkflowStepCard step={2} title="송장출력용 업로드파일 생성" subtitle="한진택배 업로드용 — 로켓입고 요청" status={step1Status}>
         <HanjinUploadSection baskets={baskets} items={items} generations={generations} onGenerated={saveGeneration} />
-      </StepCard>
+      </ShipmentWorkflowStepCard>
 
       {generations.length > 0 && <div style={{ marginBottom: "10px", fontSize: "11px" }}>
         <strong>저장된 출력 묶음</strong>
@@ -110,7 +103,7 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
         </div>
       </div>}
 
-      <StepCard step={3} title="Shipment 파일 생성" subtitle="현재 generation의 운송장 자동 확인 + 발주서 원본 SKU·바코드·수량 사용" status="current">
+      <ShipmentWorkflowStepCard step={3} title="Shipment 파일 생성" subtitle="현재 generation의 운송장 자동 확인 + 발주서 원본 SKU·바코드·수량 사용" status="current">
         <HanjinAutoShipmentSection
           generation={activeGeneration}
           generationLabel={activeGeneration ? `묶음 ${generations.findIndex(item => item.generationId === activeGeneration.generationId) + 1}` : undefined}
@@ -121,45 +114,11 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
           })() : undefined}
           onGenerated={markShipmentGenerated}
         />
-      </StepCard>
+      </ShipmentWorkflowStepCard>
 
-      <StepCard step={4} title="Shipment 출력세트 생성" subtitle="현재 generation 발주만 표시한 물류센터 라벨 포함" status="current">
+      <ShipmentWorkflowStepCard step={4} title="Shipment 출력세트 생성" subtitle="현재 generation 발주만 표시한 물류센터 라벨 포함" status="current">
         <ShipmentOutputSetSection generation={activeGeneration} generationLabel={activeGeneration ? `묶음 ${generations.findIndex(item => item.generationId === activeGeneration.generationId) + 1}` : undefined} />
-      </StepCard>
-    </div>
-  );
-}
-
-function StepCard({
-  step,
-  title,
-  subtitle,
-  status,
-  children,
-}: {
-  step: number;
-  title: string;
-  subtitle?: string;
-  status: StepStatus;
-  children: React.ReactNode;
-}) {
-  const badge =
-    status === "done"
-      ? { label: "완료", bg: wmsColors.greenSoft, color: wmsColors.greenDark }
-      : { label: "진행 가능", bg: "rgba(83,109,120,0.12)", color: wmsColors.slateDark };
-
-  return (
-    <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "12px", marginBottom: "10px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: subtitle ? "2px" : "8px" }}>
-        <h3 style={{ margin: 0, fontSize: "14px" }}>
-          {step}. {title}
-        </h3>
-        <span style={{ fontSize: "10px", fontWeight: 700, padding: "3px 8px", borderRadius: "999px", background: badge.bg, color: badge.color, flexShrink: 0 }}>
-          {badge.label}
-        </span>
-      </div>
-      {subtitle && <p style={{ fontSize: "10px", color: wmsColors.muted, margin: "0 0 8px" }}>{subtitle}</p>}
-      {children}
+      </ShipmentWorkflowStepCard>
     </div>
   );
 }

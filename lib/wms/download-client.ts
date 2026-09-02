@@ -1,20 +1,8 @@
 export type ReservedDownloadTarget = Window | null;
 
-function isAppleMobileBrowser(): boolean {
-  if (typeof navigator === "undefined") return false;
-  return /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-}
-
-/** iOS가 비동기 Blob 다운로드를 현재 탭 미리보기로 바꾸지 않도록 클릭 순간 새 탭을 확보한다. */
+/** 호출부 호환용. iOS에서 빈 탭을 선점하면 Blob 이동이 실패할 때 about:blank에 갇히므로 사용하지 않는다. */
 export function reserveDownloadTarget(): ReservedDownloadTarget {
-  if (typeof window === "undefined" || !isAppleMobileBrowser()) return null;
-  const target = window.open("about:blank", "_blank");
-  if (target) {
-    target.opener = null;
-    target.document.title = "파일 생성 중";
-    target.document.body.textContent = "파일을 생성하고 있습니다. 잠시만 기다려주세요.";
-  }
-  return target;
+  return null;
 }
 
 export function closeReservedDownloadTarget(target: ReservedDownloadTarget) {
