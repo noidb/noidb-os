@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseTrackingRowsFromBuffer, buildTrackingMapFromRows, trackingKey } from "@/lib/wms/hanjin-upload";
+import { buildShipmentOutputContext, ShipmentOutputValidationError } from "@/lib/wms/shipment-output-context";
 
 /**
  * 사용자가 한진택배에서 받은 "송장번호 입력 완료" 파일을 업로드하면, 현재 웨이브의
@@ -33,6 +34,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "업로드한 파일이 없습니다." }, { status: 400 });
     }
 
+    const context = await buildShipmentOutputContext(targets.map(target => target.purchaseOrderNumber), { requireDestination: false });
+    if (!context.preview.canGenerate) throw new ShipmentOutputValidationError(context.preview);
+    const sourceTargets = context.documents.map(document => ({ purchaseOrderNumber: document.purchaseOrderNumber, fulfillmentCenter: document.fulfillmentCenterName }));
     const rows = await parseTrackingRowsFromBuffer(decodeBase64(fileBase64));
     if (rows.length === 0) {
       return NextResponse.json(
@@ -50,14 +54,14 @@ export async function POST(request: NextRequest) {
     }
 
     const trackingByKey = buildTrackingMapFromRows(rows);
-    const results = targets.map(target => {
+    const results = sourceTargets.map(target => {
       const key = trackingKey(target.purchaseOrderNumber, target.fulfillmentCenter);
       const trackingNumber = trackingByKey.get(key) || null;
       return { ...target, trackingNumber, matched: Boolean(trackingNumber) };
     });
     const matchedCount = results.filter(r => r.matched).length;
 
-    if (matchedCount === 0) {
+    if (matchedCount !== results.length) {
       return NextResponse.json(
         { error: "현재 웨이브와 일치하지 않습니다. (이 파일에서 현재 웨이브의 발주번호/물류센터를 찾지 못했습니다.)", errorCode: "NO_WAVE_MATCH", results, matchedCount: 0, totalCount: results.length },
         { status: 400 }
@@ -66,6 +70,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ results, matchedCount, totalCount: results.length });
   } catch (error) {
+    if (error instanceof ShipmentOutputValidationError) return NextResponse.json({ error: error.message, preview: error.preview }, { status: 409 });
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "송장번호 파일을 확인하는 중 오류가 발생했습니다. 실제 한진택배 결과 파일이 맞는지 확인해주세요." },
       { status: 400 }

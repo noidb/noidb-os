@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AutoShipmentBlockedError, buildAutoShipmentFile } from "@/lib/wms/hanjin-shipment-auto";
 import type { HanjinShipmentRequest } from "@/lib/wms/hanjin-upload";
+import { buildShipmentOutputContext, ShipmentOutputValidationError } from "@/lib/wms/shipment-output-context";
 
 /**
  * "쉽먼트파일 생성" 버튼 하나로 끝내는 자동화 API(2026-08-24 9차). 사용자가 파일을 직접 고르지
@@ -19,7 +20,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "대상 발주서/물류센터가 없습니다." }, { status: 400 });
     }
 
-    const result = await buildAutoShipmentFile(requests);
+    const context = await buildShipmentOutputContext(requests.map(item => item.purchaseOrderNumber), { requireDestination: false });
+    if (!context.preview.canGenerate) throw new ShipmentOutputValidationError(context.preview);
+    const sourceRequests = context.documents.map(document => ({ purchaseOrderNumber: document.purchaseOrderNumber, fulfillmentCenter: document.fulfillmentCenterName, expectedDate: document.expectedArrivalDate }));
+    const result = await buildAutoShipmentFile(sourceRequests);
 
     const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
     const fileName = `쉽먼트생성_업로드파일_${timestamp}.xlsx`;
@@ -35,6 +39,7 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
+    if (error instanceof ShipmentOutputValidationError) return NextResponse.json({ error: error.message, preview: error.preview }, { status: 409 });
     if (error instanceof AutoShipmentBlockedError) {
       return NextResponse.json({ error: "쉽먼트파일을 생성할 수 없습니다.", reasons: error.reasons }, { status: 400 });
     }

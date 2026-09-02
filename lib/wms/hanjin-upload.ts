@@ -6,6 +6,7 @@ import { SaxesParser, type SaxesTagPlain } from "saxes";
 import { loadSupplierHubPurchaseOrders, type SupplierHubPurchaseOrder } from "./supplier-hub-orders";
 import { normalizeSkuId } from "./sku-normalize";
 import { findVerifiedPostalCode } from "./data/verified-postal-codes";
+import { assertOutputPurchaseOrderSet, buildShipmentOutputContext, ShipmentOutputValidationError } from "./shipment-output-context";
 
 /**
  * 한진택배 "쿠팡(고정형)" 업로드 서식 파일을 읽고, 새 출고 행을 추가한 사본을 만든다.
@@ -459,57 +460,31 @@ function resolveGroupDestination(
  * 발주서 원본을 최우선으로 쓰고(resolveGroupDestination 참고), 그래도 못 채우면 임의로 채우지
  * 않고 건너뛴 뒤 정확한 사유를 알려준다.
  */
-export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[]): Promise<BuildHanjinUploadResult> {
-  const [template, orders] = await Promise.all([loadTemplate(), loadSupplierHubPurchaseOrders()]);
-  const orderByPoNumber = new Map(orders.map(order => [normalizeSkuId(order.purchaseOrderNumber), order]));
+export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[] | string[]): Promise<BuildHanjinUploadResult> {
+  const purchaseOrderNumbers = requests.map(item => typeof item === "string" ? item : item.purchaseOrderNumber);
+  const [template, context] = await Promise.all([loadTemplate(), buildShipmentOutputContext(purchaseOrderNumbers)]);
+  if (!context.preview.canGenerate) throw new ShipmentOutputValidationError(context.preview);
 
   const addedPurchaseOrderNumbers: string[] = [];
   const skippedMissingDestination: { purchaseOrderNumber: string; fulfillmentCenter: string; reason: string }[] = [];
   const newRowsXml: string[] = [];
   let nextRow = 2; // 결과 파일에는 과거 데이터 행이 없으므로 항상 헤더(1행) 바로 다음부터 새로 쓴다.
 
-  // 같은 물류센터+같은 입고예정일은 한 행(=한 운송장)으로 합배송 처리한다 — 서로 다른 물류센터나
-  // 입고예정일은 절대 합치지 않는다(groupRequestsByCenterAndDate가 키로 분리해서 보장).
-  const groups = groupRequestsByCenterAndDate(requests);
-
-  for (const group of groups) {
-    // K열 문구("{센터} / {M월D일} / 발주서 번호 ...")는 입고예정일이 반드시 있어야 한다 —
-    // 비어 있거나 형식을 못 알아보면 빈 날짜 구간이 그대로 찍히므로, 목적지 정보 없음과
-    // 같은 방식으로 이 그룹 전체를 건너뛰고 사유를 알려준다(2026-08-24 6차, 합배송
-    // 그룹핑(groupRequestsByCenterAndDate)이나 목적지 판정(resolveGroupDestination)과는
-    // 무관한 별개의 검증이다).
-    if (!parseExpectedDate(group.expectedDate)) {
-      for (const po of group.purchaseOrderNumbers) {
-        skippedMissingDestination.push({
-          purchaseOrderNumber: po,
-          fulfillmentCenter: group.fulfillmentCenter,
-          reason: `입고예정일 확인 안 됨(값: "${group.expectedDate || "비어 있음"}") — K열 문구를 만들 수 없어 건너뜁니다.`,
-        });
-      }
-      continue;
-    }
-
-    const { destination, reason } = resolveGroupDestination(group, orderByPoNumber, template.destinationsByCenter);
-    if (!destination) {
-      for (const po of group.purchaseOrderNumbers) {
-        skippedMissingDestination.push({ purchaseOrderNumber: po, fulfillmentCenter: group.fulfillmentCenter, reason: reason || "목적지 정보 없음" });
-      }
-      continue;
-    }
-
+  for (const group of context.groups) {
     newRowsXml.push(
       buildRowXml(nextRow, {
-        [COL_K]: buildShipmentLabel(group.fulfillmentCenter, group.expectedDate, group.purchaseOrderNumbers),
-        [COL_AB]: `로켓배송*${group.fulfillmentCenter}`,
-        [COL_AC]: destination.phone,
-        [COL_AD]: destination.zip,
-        [COL_AE]: destination.address,
-        [COL_AF]: destination.note,
+        [COL_K]: buildShipmentLabel(group.fulfillmentCenterName, group.expectedArrivalDate, group.purchaseOrderNumbers),
+        [COL_AB]: group.recipientName,
+        [COL_AC]: formatPhoneForDisplay(group.phone),
+        [COL_AD]: group.postalCode,
+        [COL_AE]: buildAddressColumn(group.address),
+        [COL_AF]: buildNoteColumn(),
       })
     );
     addedPurchaseOrderNumbers.push(...group.purchaseOrderNumbers);
     nextRow += 1;
   }
+  assertOutputPurchaseOrderSet(context, addedPurchaseOrderNumbers);
 
   const updatedSheetXml = template.sheetXml.replace(
     /<x:sheetData([^>]*)>[\s\S]*?<\/x:sheetData>/,

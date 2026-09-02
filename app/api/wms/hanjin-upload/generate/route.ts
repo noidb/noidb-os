@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildHanjinUploadFile, HanjinTemplateNotFoundError, type HanjinShipmentRequest } from "@/lib/wms/hanjin-upload";
+import { ShipmentOutputValidationError } from "@/lib/wms/shipment-output-context";
 
 /**
  * 운송장 출력용(한진택배 고정형) 업로드파일 생성 API. 원본 서식은 절대 수정하지 않고
@@ -8,18 +9,21 @@ import { buildHanjinUploadFile, HanjinTemplateNotFoundError, type HanjinShipment
 export const runtime = "nodejs";
 
 interface RequestBody {
-  requests: HanjinShipmentRequest[];
+  requests?: HanjinShipmentRequest[];
+  purchaseOrderNumbers?: string[];
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as RequestBody;
-    const requests = Array.isArray(body.requests) ? body.requests : [];
-    if (requests.length === 0) {
+    const purchaseOrderNumbers = Array.isArray(body.purchaseOrderNumbers)
+      ? body.purchaseOrderNumbers.map(String)
+      : Array.isArray(body.requests) ? body.requests.map(item => item.purchaseOrderNumber) : [];
+    if (purchaseOrderNumbers.length === 0) {
       return NextResponse.json({ error: "생성할 발주서/물류센터 목록이 없습니다." }, { status: 400 });
     }
 
-    const result = await buildHanjinUploadFile(requests);
+    const result = await buildHanjinUploadFile(purchaseOrderNumbers);
     if (result.addedPurchaseOrderNumbers.length === 0) {
       return NextResponse.json(
         {
@@ -47,6 +51,9 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
+    if (error instanceof ShipmentOutputValidationError) {
+      return NextResponse.json({ error: error.message, preview: error.preview }, { status: 409 });
+    }
     if (error instanceof HanjinTemplateNotFoundError) {
       return NextResponse.json({ error: error.message }, { status: 404 });
     }

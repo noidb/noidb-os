@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
+import { buildShipmentOutputContext, ShipmentOutputValidationError } from "@/lib/wms/shipment-output-context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,22 +25,26 @@ function text(value: unknown): string {
 /** 선택한 발주서에서 물류센터당 한 행을 만들어 BarTender 데이터 원본 XLSX로 내려준다. */
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json() as { orders?: LabelInput[] };
-    const orders = Array.isArray(body.orders) ? body.orders : [];
+    const body = await req.json() as { orders?: LabelInput[]; purchaseOrderNumbers?: string[] };
+    const purchaseOrderNumbers = Array.isArray(body.purchaseOrderNumbers)
+      ? body.purchaseOrderNumbers.map(String)
+      : Array.isArray(body.orders) ? body.orders.map(order => text(order.purchaseOrderNumber)).filter(Boolean) : [];
+    const context = await buildShipmentOutputContext(purchaseOrderNumbers, { requireDestination: false });
+    if (!context.preview.canGenerate) throw new ShipmentOutputValidationError(context.preview);
     const byCenterAndDate = new Map<string, { center: string; date: string; poNumbers: Set<string>; skuIds: Set<string>; totalQuantity: number }>();
 
-    for (const order of orders) {
-      const center = text(order.fulfillmentCenter);
+    for (const order of context.documents) {
+      const center = order.fulfillmentCenterName;
       if (!center) continue;
-      const date = text(order.expectedDate);
+      const date = order.expectedArrivalDate;
       const key = `${center}\u0000${date}`;
       const entry = byCenterAndDate.get(key) || { center, date, poNumbers: new Set<string>(), skuIds: new Set<string>(), totalQuantity: 0 };
-      const poNumber = text(order.purchaseOrderNumber);
+      const poNumber = order.purchaseOrderNumber;
       if (poNumber) entry.poNumbers.add(poNumber);
-      for (const item of Array.isArray(order.items) ? order.items : []) {
-        const skuId = text(item.productCode || item.skuId);
+      for (const item of order.records) {
+        const skuId = item.skuId;
         if (skuId) entry.skuIds.add(skuId);
-        const quantity = Number(item.vendorConfirmedQuantity ?? item.orderedQuantity ?? item.quantity ?? 0);
+        const quantity = item.orderedQuantity;
         if (Number.isFinite(quantity) && quantity > 0) entry.totalQuantity += quantity;
       }
       byCenterAndDate.set(key, entry);
@@ -89,6 +94,7 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (error) {
+    if (error instanceof ShipmentOutputValidationError) return NextResponse.json({ error: error.message, preview: error.preview }, { status: 409 });
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "물류센터 라벨 파일 생성에 실패했습니다." },
       { status: 500 }

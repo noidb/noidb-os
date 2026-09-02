@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseTrackingRowsFromBuffer, buildShipmentCreationUploadFile } from "@/lib/wms/hanjin-upload";
+import { buildShipmentOutputContext, ShipmentOutputValidationError } from "@/lib/wms/shipment-output-context";
 
 /**
  * 3단계 전용 API — Supplier Hub 쉽먼트 생성 업로드파일을 만든다 (2026-08-19 6차 실사용 테스트
@@ -29,11 +30,13 @@ export async function POST(request: NextRequest) {
     if (targets.length === 0) {
       return NextResponse.json({ error: "대상 발주서/물류센터가 없습니다." }, { status: 400 });
     }
+    const context = await buildShipmentOutputContext(targets.map(target => target.purchaseOrderNumber), { requireDestination: false });
+    if (!context.preview.canGenerate) throw new ShipmentOutputValidationError(context.preview);
 
     const rows = await parseTrackingRowsFromBuffer(decodeBase64(fileBase64));
     const result = await buildShipmentCreationUploadFile(rows, targets);
 
-    if (result.includedCount === 0) {
+    if (result.includedCount === 0 || result.excludedUnmatchedCount > 0) {
       return NextResponse.json(
         {
           error: "송장번호가 채워진 대상 행이 없습니다 — 2단계 매칭 결과를 다시 확인해주세요.",
@@ -59,6 +62,7 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
+    if (error instanceof ShipmentOutputValidationError) return NextResponse.json({ error: error.message, preview: error.preview }, { status: 409 });
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "쉽먼트 생성 업로드파일을 만드는 중 오류가 발생했습니다." },
       { status: 500 }
