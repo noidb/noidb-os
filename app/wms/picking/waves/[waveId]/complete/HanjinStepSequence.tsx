@@ -117,7 +117,7 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
       </ShipmentWorkflowStepCard>
 
       <ShipmentWorkflowStepCard step={4} title="Shipment 출력세트 생성" subtitle="현재 generation 발주만 표시한 물류센터 라벨 포함" status="current">
-        <ShipmentOutputSetSection generation={activeGeneration} generationLabel={activeGeneration ? `묶음 ${generations.findIndex(item => item.generationId === activeGeneration.generationId) + 1}` : undefined} />
+        <ShipmentOutputSetSection waveId={waveId} items={items} generation={activeGeneration} generationLabel={activeGeneration ? `묶음 ${generations.findIndex(item => item.generationId === activeGeneration.generationId) + 1}` : undefined} />
       </ShipmentWorkflowStepCard>
     </div>
   );

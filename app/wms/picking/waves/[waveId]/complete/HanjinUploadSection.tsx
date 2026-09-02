@@ -32,6 +32,19 @@ function samePoSet(left: string[], right: string[]): boolean {
   return left.every(value => rightSet.has(value));
 }
 
+const PREVIEW_SESSION_TTL_MS = 5 * 60 * 1000;
+
+function readSessionPreview(key: string): ShipmentOutputPreview | null {
+  try {
+    const cached = JSON.parse(sessionStorage.getItem(key) || "null") as { savedAt?: number; preview?: ShipmentOutputPreview } | null;
+    return cached?.preview && Date.now() - Number(cached.savedAt || 0) < PREVIEW_SESSION_TTL_MS ? cached.preview : null;
+  } catch { return null; }
+}
+
+function writeSessionPreview(key: string, preview: ShipmentOutputPreview) {
+  try { sessionStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), preview })); } catch { /* 메모리 캐시만 사용 */ }
+}
+
 export default function HanjinUploadSection({ baskets, items, generations, onGenerated }: Props) {
   const allPoNumbers = useMemo(() => [...new Set(baskets.map(basket => basket.purchaseOrderNumber).filter(Boolean))], [baskets]);
   const basketByPo = useMemo(() => new Map(baskets.map(basket => [basket.purchaseOrderNumber, basket])), [baskets]);
@@ -82,8 +95,16 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
 
   useEffect(() => {
     if (!selectedPoNumbers.length) { setPreview(null); setPreviewLoading(false); return; }
+    const sessionKey = `noidb:wms:hanjin-preview:${selectionFingerprint}`;
     const cached = previewCacheRef.current.get(selectionFingerprint);
     if (cached) { setPreview(cached); setPreviewLoading(false); return; }
+    const sessionCached = readSessionPreview(sessionKey);
+    if (sessionCached) {
+      previewCacheRef.current.set(selectionFingerprint, sessionCached);
+      setPreview(sessionCached);
+      setPreviewLoading(false);
+      return;
+    }
     const controller = new AbortController();
     let active = true;
     setPreview(null);
@@ -93,7 +114,7 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
     const timer = window.setTimeout(() => {
       fetch("/api/wms/hanjin-upload/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purchaseOrderNumbers: selectedPoNumbers }), signal: controller.signal })
         .then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.error || "완전성 검사 실패"); return data.preview as ShipmentOutputPreview; })
-        .then(nextPreview => { previewCacheRef.current.set(selectionFingerprint, nextPreview); if (active) setPreview(nextPreview); })
+        .then(nextPreview => { previewCacheRef.current.set(selectionFingerprint, nextPreview); writeSessionPreview(sessionKey, nextPreview); if (active) setPreview(nextPreview); })
         .catch(cause => { if (active && !(cause instanceof DOMException && cause.name === "AbortError")) setError(cause instanceof Error ? cause.message : "송장 완전성 검사에 실패했습니다."); })
         .finally(() => { if (active) setPreviewLoading(false); });
     }, 120);

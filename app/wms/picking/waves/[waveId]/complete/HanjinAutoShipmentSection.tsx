@@ -13,6 +13,19 @@ interface Props {
   onGenerated?: (generationId: string, fileName: string) => Promise<void> | void;
 }
 
+const TRACKING_PREVIEW_SESSION_TTL_MS = 60 * 1000;
+
+function trackingPreviewKey(generation: ShipmentOutputGeneration) {
+  return `noidb:wms:shipment-preview:${[...generation.purchaseOrderNumbers].sort().join("|")}`;
+}
+
+function readTrackingPreview(key: string): AutoShipmentTrackingPreview | null {
+  try {
+    const cached = JSON.parse(sessionStorage.getItem(key) || "null") as { savedAt?: number; preview?: AutoShipmentTrackingPreview } | null;
+    return cached?.preview && Date.now() - Number(cached.savedAt || 0) < TRACKING_PREVIEW_SESSION_TTL_MS ? cached.preview : null;
+  } catch { return null; }
+}
+
 export default function HanjinAutoShipmentSection({ generation, generationLabel, blockedByGeneration, onGenerated }: Props) {
   const [generating, setGenerating] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -23,6 +36,14 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
 
   useEffect(() => {
     if (!generation) { setPreview(null); return; }
+    const sessionKey = trackingPreviewKey(generation);
+    const cached = readTrackingPreview(sessionKey);
+    if (cached) {
+      setPreview(cached);
+      setChecking(false);
+      setError(null);
+      return;
+    }
     const controller = new AbortController();
     let active = true;
     setChecking(true); setError(null); setPreview(null);
@@ -34,7 +55,11 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
     }).then(async response => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "운송장 확인에 실패했습니다.");
-      if (active) setPreview(data.preview as AutoShipmentTrackingPreview);
+      if (active) {
+        const nextPreview = data.preview as AutoShipmentTrackingPreview;
+        setPreview(nextPreview);
+        try { sessionStorage.setItem(sessionKey, JSON.stringify({ savedAt: Date.now(), preview: nextPreview })); } catch { /* 다음 진입 때 다시 확인 */ }
+      }
     }).catch(cause => {
       if (active && !(cause instanceof DOMException && cause.name === "AbortError")) setError(cause instanceof Error ? cause.message : "운송장 확인에 실패했습니다.");
     }).finally(() => { if (active) setChecking(false); });
