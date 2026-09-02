@@ -50,8 +50,6 @@ export default function WmsPickingWavesPage() {
   const [workerName, setWorkerName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const createOperationIdRef = useRef<string | null>(null);
-  const [creatingLabels, setCreatingLabels] = useState(false);
-  const [labelError, setLabelError] = useState<string | null>(null);
 
   const [editingWaveId, setEditingWaveId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
@@ -257,41 +255,6 @@ export default function WmsPickingWavesPage() {
 
   function selectOnlyExpectedDate(dateOrders: SupplierHubPurchaseOrder[]) {
     setSelected(prev => toggleExpectedDateSelection(prev, dateOrders));
-  }
-
-  async function handleCreateCenterLabels() {
-    if (selectedOrders.length === 0 || creatingLabels) return;
-    setCreatingLabels(true);
-    setLabelError(null);
-    try {
-      const response = await fetch("/api/wms/fulfillment-center-labels", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          purchaseOrderNumbers: selectedOrders.map(order => order.purchaseOrderNumber),
-        }),
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || "물류센터 라벨 파일 생성에 실패했습니다.");
-      }
-      const blob = await response.blob();
-      const disposition = response.headers.get("Content-Disposition") || "";
-      const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
-      const fileName = encodedName ? decodeURIComponent(encodedName) : "물류센터_바구니라벨.xlsx";
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      setLabelError(error instanceof Error ? error.message : "물류센터 라벨 파일 생성에 실패했습니다.");
-    } finally {
-      setCreatingLabels(false);
-    }
   }
 
   async function openEditWave(wave: PickingWave) {
@@ -594,15 +557,6 @@ export default function WmsPickingWavesPage() {
       )}
 
       {createError && <p style={{ color: "#c0392b", fontSize: "13px" }}>{createError}</p>}
-
-      <button
-        onClick={handleCreateCenterLabels}
-        disabled={selectedOrders.length === 0 || creatingLabels}
-        style={{ ...wmsSecondaryButton, width: "100%", marginBottom: "8px", opacity: selectedOrders.length === 0 || creatingLabels ? 0.5 : 1 }}
-      >
-        {creatingLabels ? "라벨 파일 생성 중..." : "물류센터 라벨 생성"}
-      </button>
-      {labelError && <p style={{ color: "#c0392b", fontSize: "12px", marginTop: 0 }}>{labelError}</p>}
 
       <button
         onClick={() => {

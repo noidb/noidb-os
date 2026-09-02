@@ -7,6 +7,7 @@ import { wmsColors } from "@/lib/wms/ui-tokens";
 import HanjinUploadSection from "./HanjinUploadSection";
 import HanjinAutoShipmentSection from "./HanjinAutoShipmentSection";
 import type { HanjinGenerationResult } from "./HanjinUploadSection";
+import ShipmentOutputSetSection from "./ShipmentOutputSetSection";
 
 interface Props {
   waveId: string;
@@ -100,8 +101,12 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
         </div>
       </div>}
 
-      <StepCard step={2} title="쉽먼트파일 생성" subtitle="재출력 세부내역·확정수량 파일 자동 탐색 — 파일 직접 선택 불필요" status="current">
+      <StepCard step={2} title="쉽먼트파일 생성" subtitle="한진 운송장파일 자동 탐색 + 발주서 원본 SKU·바코드·수량 사용" status="current">
         <HanjinAutoShipmentSection baskets={baskets} generation={activeGeneration} onGenerated={markShipmentGenerated} />
+      </StepCard>
+
+      <StepCard step={3} title="Shipment 출력세트 생성" subtitle="현재 선택 묶음의 발주번호가 표시된 물류센터 라벨" status="current">
+        <ShipmentOutputSetSection generation={activeGeneration} />
       </StepCard>
     </div>
   );

@@ -18,6 +18,7 @@ import {
   type ParsedTrackingRow,
 } from "./hanjin-upload";
 import { normalizeSkuId } from "./sku-normalize";
+import type { PurchaseOrderSourceRecord } from "./purchase-order-source/types";
 
 /**
  * "쉽먼트파일 생성" 자동화(2026-08-24 9차) — 사용자가 매번 파일을 직접 골라 올리던 2단계(운송장번호
@@ -299,22 +300,31 @@ export interface AutoShipmentResult {
  *  (부분 생성 금지 — 발주번호가 여러 개인 합배송 그룹은 grouping.ts가 아니라 여기서도
  *  groupRequestsByCenterAndDate를 그대로 재사용해 결정하므로 절대 재분리되지 않는다). 최종
  *  파일은 buildShipmentCreationUploadFile(기존 3단계 로직 그대로, 수정 없음)로 만든다. */
-export async function buildAutoShipmentFile(requests: HanjinShipmentRequest[]): Promise<AutoShipmentResult> {
+export async function buildAutoShipmentFile(
+  requests: HanjinShipmentRequest[],
+  sourceRecords: PurchaseOrderSourceRecord[]
+): Promise<AutoShipmentResult> {
   const groups = groupRequestsByCenterAndDate(requests);
 
-  const [confirmedQuantity, reprint] = await Promise.all([loadConfirmedQuantityRows(), loadReprintDetailRows()]);
-
-  if (confirmedQuantity.rows.length === 0) {
-    throw new AutoShipmentBlockedError([
-      "쉽먼트 원본 필수 헤더 없음 — 발주서업로드완성 폴더에서 확정수량 파일(PO_FOR_CONFIRM*.xlsx)을 찾지 못했거나 필수 헤더가 없습니다.",
-    ]);
-  }
+  const reprint = await loadReprintDetailRows();
   if (reprint.rows.length === 0) {
     throw new AutoShipmentBlockedError(["현재 웨이브와 일치하는 재출력 파일을 찾지 못했습니다."]);
   }
 
   const confirmedByPo = new Map<string, ParsedTrackingRow[]>();
-  for (const row of confirmedQuantity.rows) {
+  for (const source of sourceRecords) {
+    const row: ParsedTrackingRow = {
+      purchaseOrderNumber: source.purchaseOrderNumber,
+      fulfillmentCenter: source.fulfillmentCenterName,
+      transportType: "쉽먼트",
+      expectedDate: source.expectedArrivalDate,
+      skuId: source.skuId,
+      barcode: source.barcode,
+      productName: source.optionName ? `${source.productName}, ${source.optionName}` : source.productName,
+      confirmedQuantity: String(source.orderedQuantity),
+      trackingNumber: "",
+      shippedQuantity: String(source.orderedQuantity),
+    };
     const key = normalizeSkuId(row.purchaseOrderNumber);
     if (!confirmedByPo.has(key)) confirmedByPo.set(key, []);
     confirmedByPo.get(key)!.push(row);
@@ -345,18 +355,18 @@ export async function buildAutoShipmentFile(requests: HanjinShipmentRequest[]): 
 
       const confirmedRows = confirmedByPo.get(key) || [];
       if (confirmedRows.length === 0) {
-        blockingReasons.push(`현재 웨이브 발주번호가 확정수량 파일에 없습니다: ${po}(${group.fulfillmentCenter})`);
+        blockingReasons.push(`현재 선택 발주번호가 발주서 원본에 없습니다: ${po}(${group.fulfillmentCenter})`);
         continue;
       }
       if (confirmedRows.some(row => normalizeCenterName(row.fulfillmentCenter) !== normalizeCenterName(group.fulfillmentCenter))) {
         blockingReasons.push(
-          `물류센터 불일치(확정수량 파일) — 발주번호 ${po}: 웨이브=${group.fulfillmentCenter}, 파일=${[...new Set(confirmedRows.map(r => r.fulfillmentCenter))].join(", ")}`
+          `물류센터 불일치(발주서 원본) — 발주번호 ${po}: 웨이브=${group.fulfillmentCenter}, 원본=${[...new Set(confirmedRows.map(r => r.fulfillmentCenter))].join(", ")}`
         );
         continue;
       }
       if (confirmedRows.some(row => row.expectedDate.replace(/[^\d]/g, "") !== expectedDateDigits)) {
         blockingReasons.push(
-          `입고예정일 불일치(확정수량 파일) — 발주번호 ${po}: 웨이브=${group.expectedDate}, 파일=${[...new Set(confirmedRows.map(r => r.expectedDate))].join(", ")}`
+          `입고예정일 불일치(발주서 원본) — 발주번호 ${po}: 웨이브=${group.expectedDate}, 원본=${[...new Set(confirmedRows.map(r => r.expectedDate))].join(", ")}`
         );
         continue;
       }
@@ -423,6 +433,6 @@ export async function buildAutoShipmentFile(requests: HanjinShipmentRequest[]): 
     includedCount: result.includedCount,
     trackingNumbersUsed: [...trackingNumbersUsed],
     reprintFileNames: reprint.fileNames,
-    confirmedQuantityFileNames: confirmedQuantity.fileNames,
+    confirmedQuantityFileNames: [...new Set(sourceRecords.map(record => record.sourceContainerFile))],
   };
 }

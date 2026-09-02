@@ -702,8 +702,6 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
           />
         </div>
 
-        <PoConfirmEntryButton itemCount={items.length} />
-
         {catalogRefreshError && (
           <p style={{ fontSize: "11px", color: "#c0392b", margin: "0 0 10px" }}>{catalogRefreshError}</p>
         )}
@@ -725,6 +723,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
             onOpenDetail={openProductDetail}
             logisticsLabelsForItem={logisticsLabelsForItem}
             actionMessage={vendorActionMessage || statusActionMessage}
+            poConfirmAction={<PoConfirmEntryButton waveId={wave.id} itemCount={items.length} />}
           />
         )}
 
@@ -1108,6 +1107,7 @@ function ChecklistView({
   onOpenDetail,
   logisticsLabelsForItem,
   actionMessage,
+  poConfirmAction,
 }: {
   allItems: PickingWaveItem[];
   checkedProductCodes: Set<string>;
@@ -1123,11 +1123,12 @@ function ChecklistView({
   onOpenDetail: (item: PickingWaveItem) => void;
   logisticsLabelsForItem: (item: PickingWaveItem) => string[];
   actionMessage: string | null;
+  poConfirmAction: React.ReactNode;
 }) {
   const sortedItems = sortPickingWaveItems(allItems, liveCatalogByProductCode);
 
   function selectAll() {
-    onSetChecked(new Set(allItems.filter(item => item.status === "pending").map(item => item.productCode)));
+    onSetChecked(new Set(allItems.map(item => item.productCode)));
   }
   function deselectAll() {
     onSetChecked(new Set());
@@ -1164,6 +1165,16 @@ function ChecklistView({
       </div>
       <p style={{ fontSize: "12px", color: wmsColors.muted, margin: "0 0 10px" }}>선택된 상품 {checkedProductCodes.size}개</p>
 
+      <button
+        type="button"
+        onClick={onBulkFull}
+        disabled={checkedProductCodes.size === 0 || bulkProcessing}
+        style={{ ...wmsGreenDarkButton, width: "100%", minHeight: "50px", marginBottom: "8px", opacity: checkedProductCodes.size === 0 || bulkProcessing ? 0.5 : 1 }}
+      >
+        {bulkProcessing ? "처리 중..." : `선택 전량찾음 (${checkedProductCodes.size}개)`}
+      </button>
+      {poConfirmAction}
+
       <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "14px" }}>
         {sortedItems.map(item => {
           const checked = checkedProductCodes.has(item.productCode);
@@ -1191,7 +1202,7 @@ function ChecklistView({
                 onChange={() => onToggle(item.productCode)}
                 style={{ width: "22px", height: "22px", flexShrink: 0, cursor: "pointer" }}
               />
-              <button type="button" aria-label={live.productLink ? "제품 링크 열기" : "제품 링크 없음"} disabled={!live.productLink} onClick={() => live.productLink && openProductLinkPreview(live.productLink)} style={{ border: 0, padding: 0, background: "transparent", lineHeight: 0, cursor: live.productLink ? "pointer" : "default" }}>
+              <button type="button" aria-label={live.productLink ? "제품 링크 열기" : "제품 링크 없음"} disabled={!live.productLink} onClick={() => live.productLink && openProductLinkPreview(live.productLink)} style={{ width: "44px", height: "44px", flex: "0 0 44px", display: "grid", placeItems: "center", border: 0, padding: 0, background: "transparent", lineHeight: 0, cursor: live.productLink ? "pointer" : "default" }}>
                 <ItemThumbnail imageUrl={live.imageUrl} size={44} />
               </button>
               <button type="button" onClick={() => onOpenDetail(item)} style={{ minWidth: 0, flex: 1, border: 0, padding: 0, background: "transparent", textAlign: "left", cursor: "pointer" }}>
@@ -1227,13 +1238,6 @@ function ChecklistView({
           미처리 SKU만 선택
         </button>
 
-        <button
-          onClick={onBulkFull}
-          disabled={checkedProductCodes.size === 0 || bulkProcessing}
-          style={{ ...wmsGreenDarkButton, width: "100%", minHeight: "48px", opacity: checkedProductCodes.size === 0 || bulkProcessing ? 0.5 : 1 }}
-        >
-          {bulkProcessing ? "처리 중..." : `선택 전량찾음 (${checkedProductCodes.size}개)`}
-        </button>
         <button type="button" onClick={onBulkVendorOrder} disabled={checkedProductCodes.size === 0 || bulkProcessing} style={{ ...wmsBronzeButton, width: "100%", minHeight: "44px", marginTop: "8px", opacity: checkedProductCodes.size ? 1 : .5 }}>
           선택 거래처발주서 이동 ({checkedProductCodes.size}개)
         </button>

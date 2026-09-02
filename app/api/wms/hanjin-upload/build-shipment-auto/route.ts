@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
     const context = await buildShipmentOutputContext(requests.map(item => item.purchaseOrderNumber), { requireDestination: false });
     if (!context.preview.canGenerate) throw new ShipmentOutputValidationError(context.preview);
     const sourceRequests = context.documents.map(document => ({ purchaseOrderNumber: document.purchaseOrderNumber, fulfillmentCenter: document.fulfillmentCenterName, expectedDate: document.expectedArrivalDate }));
-    const result = await buildAutoShipmentFile(sourceRequests);
+    const result = await buildAutoShipmentFile(sourceRequests, context.records);
 
     const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
     const fileName = `쉽먼트생성_업로드파일_${timestamp}.xlsx`;
