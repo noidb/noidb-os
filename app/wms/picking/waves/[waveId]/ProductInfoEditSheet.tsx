@@ -23,6 +23,7 @@ interface FieldRow {
 }
 
 const TEXT_FIELDS: FieldRow[] = [
+  { field: "modelSku", label: "모델SKU" },
   { field: "productName", label: "상품명" },
   { field: "optionLabel", label: "옵션명" },
   { field: "modelName", label: "모델명" },
@@ -32,6 +33,8 @@ const TEXT_FIELDS: FieldRow[] = [
   { field: "boxNumber", label: "BOX번호" },
   { field: "currentStock", label: "현재고" },
   { field: "barcode", label: "쿠팡 바코드" },
+  { field: "countryOfOrigin", label: "제조국명" },
+  { field: "productLink", label: "제품링크" },
 ];
 
 /**
@@ -44,6 +47,7 @@ const TEXT_FIELDS: FieldRow[] = [
  */
 function initialValues(item: PickingWaveItem, live: LiveResolvedFields): Record<ProductCatalogWritableField, string> {
   return {
+    modelSku: live.liveModelSku || item.modelSku || "",
     modelName: live.catalogModelName || "",
     productName: live.name || item.productName || "",
     optionLabel: live.optionLabel || "",
@@ -55,6 +59,8 @@ function initialValues(item: PickingWaveItem, live: LiveResolvedFields): Record<
     currentStatus: live.catalogCurrentStatus || "",
     costVatIncluded: live.catalogCostVatIncluded || "",
     barcode: live.catalogBarcode || "",
+    countryOfOrigin: live.countryOfOrigin || "",
+    productLink: live.productLink || "",
     imageUrl: live.imageUrl || "",
   };
 }

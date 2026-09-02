@@ -16,6 +16,7 @@ import { FIELD_HEADER_CANDIDATES, PRODUCT_DB_SHEET_NAME, normalizeSkuId } from "
  */
 
 export type ProductCatalogWritableField =
+  | "modelSku"
   | "modelName"
   | "productName"
   | "optionLabel"
@@ -27,6 +28,8 @@ export type ProductCatalogWritableField =
   | "currentStatus"
   | "costVatIncluded"
   | "barcode"
+  | "countryOfOrigin"
+  | "productLink"
   | "imageUrl";
 
 export type ProductCatalogUpdatePatch = Partial<Record<ProductCatalogWritableField, string>>;

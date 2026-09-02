@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { PoConfirmRow } from "@/lib/wms/picking-wave/po-confirm-rows";
 import type { PoConfirmationStage } from "@/lib/wms/po-confirm-state";
 import { cleanDisplayProductName } from "@/lib/wms/display-name";
@@ -76,6 +77,7 @@ export default function PoConfirmSection({
   onMarkUploaded,
   onConfirmCompleted,
 }: Props) {
+  const [expanded, setExpanded] = useState(false);
   const badgeColor = stage === "error"
     ? "#c0392b"
     : stage === "confirmed"
@@ -94,13 +96,13 @@ export default function PoConfirmSection({
         background: disabled ? wmsColors.surfaceBeige : "#ffffff",
       }}
     >
-      <label
+      <div
         style={{
           display: "flex",
           alignItems: "flex-start",
           gap: "10px",
           minHeight: "48px",
-          cursor: disabled ? "default" : "pointer",
+          cursor: "default",
         }}
       >
         <input
@@ -123,21 +125,24 @@ export default function PoConfirmSection({
               : " · 통합 원본에서 찾지 못함"}
           </span>
         </span>
-      </label>
+        <button type="button" onClick={() => setExpanded(value => !value)} aria-expanded={expanded} aria-label={`발주서 ${purchaseOrderNumber} 상세 ${expanded ? "접기" : "펼치기"}`} style={{ border: 0, background: "transparent", width: "36px", height: "36px", fontSize: "18px", cursor: "pointer", flexShrink: 0 }}>
+          {expanded ? "▲" : "▼"}
+        </button>
+      </div>
 
-      {sourceSummary?.sourceConfirmed ? (
+      {expanded && sourceSummary?.sourceConfirmed ? (
         <p style={{ margin: "4px 0 8px 32px", fontSize: "11px", color: wmsColors.greenDark, fontWeight: 800 }}>
           원본 발주상태에서 이미 확정된 발주입니다.
         </p>
       ) : null}
 
-      {errorMessages.length > 0 ? (
+      {expanded && errorMessages.length > 0 ? (
         <ul style={{ margin: "4px 0 10px 32px", paddingLeft: "16px", color: "#c0392b", fontSize: "11px", lineHeight: 1.5 }}>
           {errorMessages.map(message => <li key={message}>{message}</li>)}
         </ul>
       ) : null}
 
-      {rows.length > 0 ? (
+      {expanded && rows.length > 0 ? (
         <div style={{ width: "100%", minWidth: 0, marginTop: "4px", fontSize: "11px" }}>
           <div
             style={{
@@ -194,12 +199,12 @@ export default function PoConfirmSection({
         </div>
       ) : null}
 
-      {stage === "document_generated" ? (
+      {expanded && stage === "document_generated" ? (
         <button type="button" onClick={onMarkUploaded} style={{ ...wmsSageButton, width: "100%", minHeight: "44px", marginTop: "10px" }}>
           쿠팡에 업로드함
         </button>
       ) : null}
-      {stage === "uploaded" ? (
+      {expanded && stage === "uploaded" ? (
         <button type="button" onClick={onConfirmCompleted} style={{ ...wmsPrimaryButton, width: "100%", minHeight: "44px", marginTop: "10px" }}>
           발주확정 완료 확인
         </button>

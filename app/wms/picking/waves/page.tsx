@@ -268,12 +268,7 @@ export default function WmsPickingWavesPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          orders: selectedOrders.map(order => ({
-            purchaseOrderNumber: order.purchaseOrderNumber,
-            fulfillmentCenter: order.fulfillmentCenter,
-            expectedDate: order.expectedDate,
-            items: order.items,
-          })),
+          purchaseOrderNumbers: selectedOrders.map(order => order.purchaseOrderNumber),
         }),
       });
       if (!response.ok) {

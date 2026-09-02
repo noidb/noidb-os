@@ -10,6 +10,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const WRITABLE_FIELDS: ProductCatalogWritableField[] = [
+  "modelSku",
   "modelName",
   "productName",
   "optionLabel",
@@ -21,6 +22,8 @@ const WRITABLE_FIELDS: ProductCatalogWritableField[] = [
   "currentStatus",
   "costVatIncluded",
   "barcode",
+  "countryOfOrigin",
+  "productLink",
   "imageUrl",
 ];
 

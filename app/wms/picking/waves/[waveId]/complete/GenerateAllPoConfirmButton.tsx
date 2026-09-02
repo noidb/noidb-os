@@ -224,7 +224,9 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
         : errors.length > 0
           ? "error"
           : record?.stage || "eligible";
-      const eligible = inWave.has(poNumber) && Boolean(sourceSummary) && rows.length > 0 && errors.length === 0 && !confirmed;
+      // 이미 확정된 발주도 같은 원본으로 파일을 잃어버렸을 때 재생성할 수 있다.
+      // 입력 필드는 stage=confirmed에서 계속 잠그므로 확정수량/업무상태는 바뀌지 않는다.
+      const eligible = inWave.has(poNumber) && Boolean(sourceSummary) && rows.length > 0 && errors.length === 0;
       const basketCenter = baskets.find(basket => basket.purchaseOrderNumber === poNumber)?.fulfillmentCenter || "";
 
       return {
@@ -247,7 +249,10 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
 
   useEffect(() => {
     const eligible = new Set(eligiblePoNumbers);
-    setSelected(previous => new Set([...previous].filter(poNumber => eligible.has(poNumber))));
+    setSelected(previous => {
+      const retained = new Set([...previous].filter(poNumber => eligible.has(poNumber)));
+      return previous.size === 0 ? eligible : retained;
+    });
   }, [eligiblePoNumbers]);
 
   const allEligibleSelected = eligiblePoNumbers.length > 0 && eligiblePoNumbers.every(poNumber => selected.has(poNumber));
@@ -365,7 +370,6 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
           )
         )
       );
-      setSelected(new Set());
       setSuccessMessage(`${selectedPoNumbers.length}개 발주의 통합 파일 1개가 생성되었습니다. 쿠팡 업로드 전까지 발주확정 완료로 처리되지 않습니다.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "발주확정 통합 파일 생성 중 오류가 발생했습니다.";
@@ -467,13 +471,13 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
         <SummaryTile label="전체 발주" value={cardStates.length} />
         <SummaryTile label="확정 가능" value={eligiblePoNumbers.length} />
         <SummaryTile label="선택됨" value={selected.size} />
-        <SummaryTile label="이미 확정되어 제외됨" value={confirmedCount} />
+        <SummaryTile label="이미 확정됨(재생성 가능)" value={confirmedCount} />
         <div style={{ gridColumn: "1 / -1" }}><SummaryTile label="오류 발주" value={errorCount} highlight /></div>
       </div>
 
       <label style={{ display: "flex", alignItems: "center", gap: "10px", minHeight: "48px", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "10px", background: "#ffffff", padding: "0 12px", marginBottom: "8px", cursor: eligiblePoNumbers.length === 0 ? "default" : "pointer", opacity: eligiblePoNumbers.length === 0 ? 0.55 : 1 }}>
         <input type="checkbox" checked={allEligibleSelected} disabled={eligiblePoNumbers.length === 0} onChange={toggleAllEligible} style={{ width: "22px", height: "22px", flexShrink: 0 }} />
-        <strong style={{ fontSize: "13px" }}>확정 가능한 발주 전체 선택/해제</strong>
+        <strong style={{ fontSize: "13px" }}>발주 전체 선택/해제</strong>
       </label>
 
       <button type="button" onClick={handleGenerateSelected} disabled={generating || selected.size === 0 || !source} style={{ ...wmsPrimaryButton, width: "100%", minHeight: "50px", marginBottom: "10px", opacity: generating || selected.size === 0 || !source ? 0.5 : 1 }}>

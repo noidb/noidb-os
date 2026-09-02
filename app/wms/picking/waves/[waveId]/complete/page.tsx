@@ -165,6 +165,45 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   const canEdit = wave.status === "completed" || wave.status === "result_confirmed";
   const reachedResultConfirm = wave.status === "result_confirmed" || wave.status === "order_confirmed";
 
+  if (wave.status === "order_confirmed") {
+    return (
+      <main style={pageStyle}>
+        <WmsExitNav />
+        <div style={{ padding: "10px 0 14px" }}>
+          <WaveIdentityEditor wave={wave} onSave={async updated => { await waveRepository.saveWave(updated); setWave(updated); }} />
+          <p style={{ margin: "5px 0 0", color: wmsColors.greenDark, fontSize: "12px", fontWeight: 800 }}>
+            발주확정 · 발주 {wave.sourcePurchaseOrderNumbers.length}건 · SKU {items.length}종 · 총수량 {totalQuantity}개
+          </p>
+        </div>
+
+        <h2 style={{ fontSize: "15px", margin: "0 0 8px" }}>1. 발주확정 서류</h2>
+        <GenerateAllPoConfirmButton
+          wave={wave}
+          items={items}
+          baskets={baskets}
+          onWaveChange={async updatedWave => { await waveRepository.saveWave(updatedWave); setWave(updatedWave); }}
+        />
+
+        <h2 style={{ fontSize: "15px", margin: "18px 0 8px" }}>2. 송장·Shipment 출력</h2>
+        <HanjinStepSequence waveId={wave.id} baskets={baskets} items={items} />
+
+        <details style={{ marginTop: "16px", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: wmsColors.surfaceBeige }}>
+          <summary style={{ cursor: "pointer", padding: "13px", fontSize: "13px", fontWeight: 800 }}>피킹 결과 보기</summary>
+          <div style={{ padding: "0 13px 13px", fontSize: "12px", lineHeight: 1.7, color: wmsColors.muted }}>
+            찾은 수량 {pickedQuantity}개 · 부족 {shortageQuantity}개 · 바구니 {basketStatuses.length}개
+            <div style={{ marginTop: "8px" }}>
+              {basketStatuses.map(basket => <div key={basket.basketNumber}>{basket.fulfillmentCenter || basketDisplayNames[basket.basketNumber] || `바구니 ${basket.basketNumber}`} · 발주서 {basket.purchaseOrderNumber} · {basket.done ? "완료" : "미완료"}</div>)}
+            </div>
+          </div>
+        </details>
+
+        <a href="/wms/work-center" style={{ display: "block", textDecoration: "none", marginTop: "16px" }}>
+          <button style={{ ...wmsGhostButton, width: "100%" }}>작업센터로</button>
+        </a>
+      </main>
+    );
+  }
+
   if (editMode) {
     return (
       <main style={pageStyle}>
@@ -298,13 +337,7 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
             }}
           />
 
-          {wave.status === "order_confirmed" && (
-            <p style={{ fontSize: "12px", color: wmsColors.greenDark, fontWeight: 700, textAlign: "center" }}>
-              발주확정 완료됨 ({wave.orderConfirmedAt ? new Date(wave.orderConfirmedAt).toLocaleString("ko-KR") : ""})
-            </p>
-          )}
-
-          <HanjinStepSequence waveId={wave.id} baskets={baskets} />
+          <HanjinStepSequence waveId={wave.id} baskets={baskets} items={items} />
         </div>
       )}
 

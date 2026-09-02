@@ -1,6 +1,6 @@
 import type { PickingWaveItem } from "./types";
 import { cleanDisplayProductName } from "../display-name";
-import { resolveWarehouseCategoryBucket } from "../category-order";
+import { compareWarehouseNumbers, resolveWarehouseNumberIdentity } from "../category-order";
 import { resolveLiveFields, type LiveCatalogLookup } from "./live-catalog";
 import { normalizeSkuId } from "../sku-normalize";
 
@@ -36,7 +36,7 @@ export interface PickingGroup {
 export type { LiveCatalogLookup } from "./live-catalog";
 
 export interface PickingItemSortIdentity {
-  location: readonly string[];
+  warehouseNumber: string;
   model: string;
   option: string;
   skuId: string;
@@ -59,14 +59,10 @@ export function resolvePickingItemSortIdentity(
   liveCatalogByProductCode?: LiveCatalogLookup
 ): PickingItemSortIdentity {
   const live = resolveLiveFields(item, liveCatalogByProductCode);
-  const catalogLocation = live.catalogBoxNumber || live.catalogWarehouseNumber
-    || item.catalogBoxNumber || item.catalogWarehouseNumber;
-  const location = item.locationStatus === "located"
-    ? [item.zoneId || "￿", item.shelfId || "￿", item.boxId || catalogLocation || "￿"]
-    : ["￿", "￿", catalogLocation || "￿"];
+  const warehouseNumber = live.catalogWarehouseNumber || item.catalogWarehouseNumber || "";
 
   return {
-    location,
+    warehouseNumber,
     // 모델명/품번은 여러 옵션이 공유하는 기준이다. 모델SKU는 옵션별 고유값이므로 모델명이
     // 없는 구형 웨이브에서만 안전한 차선 키로 사용한다.
     model: live.catalogModelName || item.modelName || item.modelSku || item.productCode,
@@ -82,11 +78,8 @@ export function comparePickingWaveItems(
 ): number {
   const ak = resolvePickingItemSortIdentity(a, liveCatalogByProductCode);
   const bk = resolvePickingItemSortIdentity(b, liveCatalogByProductCode);
-  for (let index = 0; index < Math.max(ak.location.length, bk.location.length); index += 1) {
-    const diff = compareNatural(ak.location[index], bk.location[index]);
-    if (diff) return diff;
-  }
-  return compareNatural(ak.model, bk.model)
+  return compareWarehouseNumbers(ak.warehouseNumber, bk.warehouseNumber)
+    || compareNatural(ak.model, bk.model)
     || compareNatural(ak.option, bk.option)
     || compareNatural(ak.skuId, bk.skuId);
 }
@@ -123,14 +116,12 @@ export function resolveGroup(
   // — "모델명처럼 보이는 값" 대신 실제 상품명이 보여야 함).
   const live = resolveLiveFields(item, liveCatalogByProductCode);
   const modelKey = live.catalogModelName || item.modelName || item.modelSku || item.productCode;
-  const effectiveCategory = live.category;
-  const effectiveGender = live.gender;
-  const bucket = resolveWarehouseCategoryBucket(effectiveCategory, effectiveGender, item.productName);
+  const bucket = resolveWarehouseNumberIdentity(live.catalogWarehouseNumber || item.catalogWarehouseNumber).category;
   // 섹션 라벨은 기존 창고 카테고리를 유지한다. 실제 아이템 순서는 공통 comparator가
   // 위치/창고번호 → 모델명 → 옵션 → SKU 순으로 결정한다.
   const identity = resolvePickingItemSortIdentity(item, liveCatalogByProductCode);
   // 기존 PickingGroup 계약은 유지하되 실제 정렬 소비자는 comparePickingWaveItems를 사용한다.
-  const sortKey = `${identity.location.join("::")}::${identity.model}::${identity.option}::${identity.skuId}`;
+  const sortKey = `${identity.warehouseNumber}::${identity.model}::${identity.option}::${identity.skuId}`;
 
   return {
     groupId: `model:${modelKey}`,

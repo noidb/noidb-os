@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
-import { PICKING_WAVE_STATUS_LABEL } from "@/lib/wms/picking-wave/status-label";
 import type { PickingWave, PickingWaveItem } from "@/lib/wms/picking-wave/types";
 import { summarizeShippingByDate, type ShippingDateSummary } from "@/lib/wms/picking-wave/wave-card-summary";
 import { wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
@@ -67,6 +66,10 @@ function waveTitle(wave: PickingWave): string {
   return wave.displayName?.trim() || wave.id.trim() || `웨이브 ${formatKstDateTime(wave.createdAt)}`;
 }
 
+function businessStatus(wave: PickingWave): "진행중" | "발주확정" {
+  return wave.status === "order_confirmed" ? "발주확정" : "진행중";
+}
+
 export function WaveSummaryCard({
   summary,
   actions,
@@ -79,7 +82,7 @@ export function WaveSummaryCard({
 
   return (
     <article className="wms-active-wave-card">
-      <a className="wms-active-wave-main" href={`/wms/picking/waves/${encodeURIComponent(wave.id)}`}>
+      <a className="wms-active-wave-main" href={wave.status === "order_confirmed" ? `/wms/picking/waves/${encodeURIComponent(wave.id)}/complete` : `/wms/picking/waves/${encodeURIComponent(wave.id)}`}>
         <div className="wms-active-wave-heading">
           <div className="wms-active-wave-title">
             <strong>{waveTitle(wave)}</strong>
@@ -88,7 +91,7 @@ export function WaveSummaryCard({
               <span>· 생성 {formatKstFullDateTime(wave.createdAt)}</span>
             </div>
           </div>
-          <span className="wms-active-wave-status">{PICKING_WAVE_STATUS_LABEL[wave.status]}</span>
+          <span className="wms-active-wave-status">{businessStatus(wave)}</span>
         </div>
         {shippingByDate.length > 0 && <div className="wms-active-wave-shipping">
           {shippingByDate.map(group => <div className="wms-active-wave-shipping-group" key={group.expectedDate}>
@@ -120,7 +123,6 @@ export default function ActiveWaveList({ className }: { className?: string }) {
 
   const refresh = useCallback(async () => {
     const waves = (await repository.listWaves())
-      .filter(wave => wave.status === "in_progress")
       .sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
     const next = await loadWaveSummaries(repository, waves);
     setSummaries(next);
@@ -148,20 +150,19 @@ export default function ActiveWaveList({ className }: { className?: string }) {
     }
   }
 
-  if (summaries === null) return <section className={className}><p style={{ color: wmsColors.muted, fontSize: "13px" }}>작업중인 웨이브를 불러오는 중...</p></section>;
+  if (summaries === null) return <section className={className}><p style={{ color: wmsColors.muted, fontSize: "13px" }}>웨이브 목록을 불러오는 중...</p></section>;
 
   return (
     <section className={className} aria-labelledby="active-wave-heading">
       <div className="wms-active-wave-section-heading">
         <div>
-          <h2 id="active-wave-heading">작업중인 웨이브</h2>
-          <p>{summaries.length}개의 피킹 작업</p>
+          <h2 id="active-wave-heading">웨이브 목록</h2>
+          <p>진행중·발주확정 포함 {summaries.length}개</p>
         </div>
-        <a href="/wms/picking/waves">전체 웨이브</a>
       </div>
       {error && <p role="alert" className="wms-active-wave-error">{error}</p>}
       {summaries.length === 0 ? (
-        <div className="wms-active-wave-empty">현재 작업중인 웨이브가 없습니다.</div>
+        <div className="wms-active-wave-empty">저장된 웨이브가 없습니다.</div>
       ) : (
         <div className="wms-active-wave-list">
           {summaries.map(summary => (
@@ -170,15 +171,15 @@ export default function ActiveWaveList({ className }: { className?: string }) {
               summary={summary}
               actions={(
                 <>
-                  <a href={`/wms/picking/waves/${encodeURIComponent(summary.wave.id)}`}>다시 들어가기</a>
-                  <button
+                  <a href={summary.wave.status === "order_confirmed" ? `/wms/picking/waves/${encodeURIComponent(summary.wave.id)}/complete` : `/wms/picking/waves/${encodeURIComponent(summary.wave.id)}`}>열기</a>
+                  {summary.wave.status === "in_progress" && <button
                     type="button"
                     disabled={deletingWaveId === summary.wave.id}
                     onClick={() => deleteWave(summary.wave)}
                     style={{ ...wmsGhostButton, color: "#a4382f" }}
                   >
                     {deletingWaveId === summary.wave.id ? "삭제 중..." : "삭제"}
-                  </button>
+                  </button>}
                 </>
               )}
             />

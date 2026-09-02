@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { BasketAssignment } from "@/lib/wms/picking-wave/types";
+import type { BasketAssignment, ShipmentOutputGeneration } from "@/lib/wms/picking-wave/types";
 import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 
 interface Props {
   baskets: BasketAssignment[];
+  generation?: ShipmentOutputGeneration;
+  onGenerated?: (generationId: string, fileName: string) => Promise<void> | void;
 }
 
 /**
@@ -15,7 +17,7 @@ interface Props {
  * 확정수량 파일을 자동으로 찾아 현재 웨이브와 대조한다(lib/wms/hanjin-shipment-auto.ts 참고).
  * 하나라도 어긋나면 아무 파일도 만들지 않고 사유를 전부 보여준다 — 임의로 부분 생성하지 않는다.
  */
-export default function HanjinAutoShipmentSection({ baskets }: Props) {
+export default function HanjinAutoShipmentSection({ baskets, generation, onGenerated }: Props) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reasons, setReasons] = useState<string[] | null>(null);
@@ -35,7 +37,8 @@ export default function HanjinAutoShipmentSection({ baskets }: Props) {
       .catch(() => setExpectedDatesByPo({}));
   }, []);
 
-  const requests = baskets.map(basket => ({
+  const selectedPoNumbers = new Set(generation?.purchaseOrderNumbers || []);
+  const requests = baskets.filter(basket => selectedPoNumbers.has(basket.purchaseOrderNumber)).map(basket => ({
     purchaseOrderNumber: basket.purchaseOrderNumber,
     fulfillmentCenter: basket.fulfillmentCenter,
     expectedDate: expectedDatesByPo[basket.purchaseOrderNumber] || "",
@@ -77,6 +80,7 @@ export default function HanjinAutoShipmentSection({ baskets }: Props) {
       URL.revokeObjectURL(url);
 
       setResultMessage(`SKU ${includedCount}개 행, 운송장번호(${trackingNumbers})로 생성했습니다.`);
+      if (generation) await onGenerated?.(generation.generationId, fileName);
     } catch (err) {
       setError(err instanceof Error ? err.message : "쉽먼트파일 생성 중 오류가 발생했습니다.");
     } finally {
@@ -84,10 +88,14 @@ export default function HanjinAutoShipmentSection({ baskets }: Props) {
     }
   }
 
+  if (!generation) return <p style={{ margin: 0, fontSize: "11px", color: wmsColors.muted }}>먼저 송장파일을 생성하면 그때 선택한 발주 집합이 Shipment 대상으로 연결됩니다.</p>;
   if (requests.length === 0) return null;
 
   return (
     <div>
+      <div style={{ marginBottom: "8px", padding: "9px", borderRadius: "8px", background: wmsColors.surfaceBeige, fontSize: "12px", fontWeight: 800 }}>
+        현재 Shipment 대상: 발주 {requests.length}건 · 예상 송장 {generation.expectedShippingGroupCount}건
+      </div>
       <p style={{ fontSize: "11px", color: wmsColors.muted, margin: "0 0 10px" }}>
         한진택배 재출력 세부내역과 발주서업로드완성 확정수량 파일을 자동으로 찾아, 현재 웨이브의
         송장번호가 입력된 Supplier Hub 쉽먼트파일을 만듭니다. 파일을 직접 고를 필요가 없습니다.

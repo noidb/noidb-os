@@ -168,6 +168,8 @@ export interface LiveResolvedFields {
   catalogCostVatIncluded?: string;
   /** 제품DB 현재상태. 단종해제 시 임의값을 쓰지 않고 실제 상태를 표시한다. */
   catalogCurrentStatus?: string;
+  /** 제품DB 제조국명. 상품정보 수정 화면에서 같은 live catalog 값을 재사용한다. */
+  countryOfOrigin?: string;
   /** 제품DB "제품링크" — 웨이브 아이템에는 애초에 저장되지 않는 필드라 대체값 없이 최신
    *  제품DB 값만 그대로 쓴다(2026-08-20 신규, 임의 URL 생성 금지). */
   productLink?: string;
@@ -257,6 +259,7 @@ export function resolveLiveFields(item: LiveResolvableItem, liveCatalogByProduct
     catalogCurrentStock: live?.currentStock || item.catalogCurrentStock,
     catalogCostVatIncluded: live?.costVatIncluded || undefined,
     catalogCurrentStatus: live?.currentStatus || undefined,
+    countryOfOrigin: live?.countryOfOrigin || undefined,
     productLink: live?.productLink || undefined,
     liveModelSku: live?.modelSku || undefined,
     liveSkuId: live?.skuId || undefined,

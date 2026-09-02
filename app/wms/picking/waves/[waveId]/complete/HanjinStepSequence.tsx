@@ -1,14 +1,17 @@
 "use client";
 
-import { useState } from "react";
-import type { BasketAssignment } from "@/lib/wms/picking-wave/types";
+import { useEffect, useState } from "react";
+import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
+import type { BasketAssignment, PickingWaveItem, ShipmentOutputGeneration } from "@/lib/wms/picking-wave/types";
 import { wmsColors } from "@/lib/wms/ui-tokens";
 import HanjinUploadSection from "./HanjinUploadSection";
 import HanjinAutoShipmentSection from "./HanjinAutoShipmentSection";
+import type { HanjinGenerationResult } from "./HanjinUploadSection";
 
 interface Props {
   waveId: string;
   baskets: BasketAssignment[];
+  items: PickingWaveItem[];
 }
 
 type StepStatus = "done" | "current";
@@ -27,8 +30,52 @@ type StepStatus = "done" | "current";
  * 그리고 그 API들)는 삭제하지 않고 그대로 남겨뒀다 — 기존 쉽먼트 생성 로직 자체는 바뀐 게
  * 없고, 이 화면에 다시 연결해야 할 경우를 대비한 것뿐이다.
  */
-export default function HanjinStepSequence({ waveId: _waveId, baskets }: Props) {
+export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
+  const repository = usePickingWaveRepository();
   const [step1Done, setStep1Done] = useState(false);
+  const [generations, setGenerations] = useState<ShipmentOutputGeneration[]>([]);
+  const [activeGenerationId, setActiveGenerationId] = useState<string | null>(null);
+
+  useEffect(() => {
+    repository.getWave(waveId).then(wave => {
+      const stored = wave?.outputGenerations || [];
+      setGenerations(stored);
+      setActiveGenerationId(current => current || stored.at(-1)?.generationId || null);
+      setStep1Done(stored.length > 0);
+    }).catch(() => undefined);
+  }, [repository, waveId]);
+
+  async function saveGeneration(result: HanjinGenerationResult) {
+    const wave = await repository.getWave(waveId);
+    if (!wave) throw new Error("웨이브를 찾을 수 없어 출력 묶음을 저장하지 못했습니다.");
+    const now = new Date().toISOString();
+    const existing = (wave.outputGenerations || []).find(generation => {
+      if (generation.purchaseOrderNumbers.length !== result.purchaseOrderNumbers.length) return false;
+      const selected = new Set(result.purchaseOrderNumbers);
+      return generation.purchaseOrderNumbers.every(po => selected.has(po));
+    });
+    const generation: ShipmentOutputGeneration = existing
+      ? { ...existing, updatedAt: now, expectedShippingGroupCount: result.preview.shippingGroupCount, invoiceFileName: result.fileName }
+      : { generationId: crypto.randomUUID(), waveId, purchaseOrderNumbers: [...result.purchaseOrderNumbers], createdAt: now, updatedAt: now, expectedShippingGroupCount: result.preview.shippingGroupCount, invoiceFileName: result.fileName, status: "invoice_generated" };
+    const outputGenerations = existing
+      ? (wave.outputGenerations || []).map(item => item.generationId === existing.generationId ? generation : item)
+      : [...(wave.outputGenerations || []), generation];
+    await repository.saveWave({ ...wave, outputGenerations, updatedAt: now });
+    setGenerations(outputGenerations);
+    setActiveGenerationId(generation.generationId);
+    setStep1Done(true);
+  }
+
+  async function markShipmentGenerated(generationId: string, fileName: string) {
+    const wave = await repository.getWave(waveId);
+    if (!wave) return;
+    const now = new Date().toISOString();
+    const outputGenerations = (wave.outputGenerations || []).map(generation => generation.generationId === generationId ? { ...generation, shipmentFileName: fileName, status: "shipment_generated" as const, updatedAt: now } : generation);
+    await repository.saveWave({ ...wave, outputGenerations, updatedAt: now });
+    setGenerations(outputGenerations);
+  }
+
+  const activeGeneration = generations.find(generation => generation.generationId === activeGenerationId) || generations.at(-1);
 
   const step1Status: StepStatus = step1Done ? "done" : "current";
   const currentStepLabel = step1Done ? "2단계(쉽먼트파일 생성) 진행 가능" : "1단계 진행 가능";
@@ -41,11 +88,20 @@ export default function HanjinStepSequence({ waveId: _waveId, baskets }: Props) 
       </div>
 
       <StepCard step={1} title="송장출력용 업로드파일 생성" subtitle="한진택배 업로드용 — 로켓입고 요청" status={step1Status}>
-        <HanjinUploadSection baskets={baskets} onGenerated={() => setStep1Done(true)} />
+        <HanjinUploadSection baskets={baskets} items={items} generations={generations} onGenerated={saveGeneration} />
       </StepCard>
 
+      {generations.length > 0 && <div style={{ marginBottom: "10px", fontSize: "11px" }}>
+        <strong>저장된 출력 묶음</strong>
+        <div style={{ display: "flex", gap: "6px", overflowX: "auto", paddingTop: "6px" }}>
+          {generations.map((generation, index) => <button key={generation.generationId} type="button" onClick={() => setActiveGenerationId(generation.generationId)} style={{ border: `1px solid ${generation.generationId === activeGeneration?.generationId ? wmsColors.slate : wmsColors.border}`, borderRadius: "999px", background: generation.generationId === activeGeneration?.generationId ? "rgba(83,109,120,0.12)" : "#fff", padding: "7px 10px", whiteSpace: "nowrap" }}>
+            묶음 {index + 1} · 발주 {generation.purchaseOrderNumbers.length}건
+          </button>)}
+        </div>
+      </div>}
+
       <StepCard step={2} title="쉽먼트파일 생성" subtitle="재출력 세부내역·확정수량 파일 자동 탐색 — 파일 직접 선택 불필요" status="current">
-        <HanjinAutoShipmentSection baskets={baskets} />
+        <HanjinAutoShipmentSection baskets={baskets} generation={activeGeneration} onGenerated={markShipmentGenerated} />
       </StepCard>
     </div>
   );

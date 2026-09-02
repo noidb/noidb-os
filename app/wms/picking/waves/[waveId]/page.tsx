@@ -22,6 +22,7 @@ import { openProductLinkPreview } from "@/lib/wms/product-link-preview";
 import { ExternalLinkIcon } from "../../../icons";
 import WaveIdentityEditor from "../WaveIdentityEditor";
 import PoConfirmEntryButton from "./PoConfirmEntryButton";
+import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 
 interface CatalogRefreshSummary {
   catalogCount: number;
@@ -101,7 +102,8 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   const [currentStockDraft, setCurrentStockDraft] = useState("");
   const [catalogQuickSaving, setCatalogQuickSaving] = useState(false);
   const [catalogQuickMessage, setCatalogQuickMessage] = useState<string | null>(null);
-  const [checklistMode, setChecklistMode] = useState(true);
+  // 실제 피킹 방식은 전체 SKU 체크리스트 한 가지로 고정한다. 그룹 데이터는 완료상태 계산에만 유지한다.
+  const checklistMode = true;
   const [checkedProductCodes, setCheckedProductCodes] = useState<Set<string>>(new Set());
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [decisionError, setDecisionError] = useState<string | null>(null);
@@ -114,6 +116,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
    *  화면 위치가 튀는 문제를 고치기 위해, 처리 직전/직후 이 영역의 뷰포트 내 위치를 비교해
    *  같은 자리로 스크롤을 보정하는 기준점으로 쓴다 (2026-08-20 신규). */
   const bulkAreaRef = useRef<HTMLDivElement>(null);
+  const listPositionRestoredRef = useRef(false);
 
   async function reload() {
     try {
@@ -215,6 +218,25 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       .catch(() => { setExpectedDatesByPo({}); setFulfillmentCentersByPo({}); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.waveId]);
+
+  useEffect(() => {
+    if (loading || items.length === 0 || liveCatalogByProductCode.size === 0 || listPositionRestoredRef.current) return;
+    const raw = sessionStorage.getItem(`noidb_picking_list_state:${params.waveId}`);
+    if (!raw) return;
+    try {
+      const saved = JSON.parse(raw) as { scrollY?: number; anchorProductCode?: string };
+      listPositionRestoredRef.current = true;
+      requestAnimationFrame(() => {
+        const anchor = saved.anchorProductCode
+          ? document.querySelector<HTMLElement>(`[data-picking-sku="${CSS.escape(saved.anchorProductCode)}"]`)
+          : null;
+        if (anchor) anchor.scrollIntoView({ block: "center", behavior: "auto" });
+        else window.scrollTo({ top: Math.max(0, saved.scrollY || 0), behavior: "auto" });
+      });
+    } catch {
+      sessionStorage.removeItem(`noidb_picking_list_state:${params.waveId}`);
+    }
+  }, [items.length, liveCatalogByProductCode.size, loading, params.waveId]);
 
   // 섹션(카테고리) → 그룹(모델) → 아이템 순서로 정렬해 구성한다. 최신 제품DB 카테고리 기준.
   const sections: SectionGroup[] = useMemo(() => buildSections(items, liveCatalogByProductCode), [items, liveCatalogByProductCode]);
@@ -498,6 +520,72 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
     });
   }
 
+  function openProductDetail(item: PickingWaveItem) {
+    sessionStorage.setItem(`noidb_picking_list_state:${params.waveId}`, JSON.stringify({
+      scrollY: window.scrollY,
+      anchorProductCode: item.productCode,
+    }));
+    router.push(`/wms/products/${encodeURIComponent(item.productCode)}?fromWave=${encodeURIComponent(params.waveId)}`);
+  }
+
+  async function removeSelectedImageLinks() {
+    if (checkedProductCodes.size === 0) return;
+    const selected = items.filter(item => checkedProductCodes.has(item.productCode));
+    if (!window.confirm(`선택한 ${selected.length}개 SKU의 제품DB 이미지 연결을 제거합니다.\n원본 이미지 파일은 삭제하지 않습니다.`)) return;
+    setBulkProcessing(true);
+    setStatusActionMessage(null);
+    const snapshots = selected.map(item => {
+      const live = resolveLiveFields(item, liveCatalogByProductCode);
+      return { skuId: live.liveSkuId || item.productCode, imageUrl: live.imageUrl || "", deletedAt: new Date().toISOString() };
+    });
+    try {
+      const dryRuns = await Promise.all(snapshots.map(async snapshot => {
+        const response = await fetch("/api/wms/product-catalog/update", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ skuId: snapshot.skuId, imageUrl: "", dryRun: true }),
+        });
+        const data = await response.json().catch(() => ({}));
+        return { snapshot, ok: response.ok && data.success, error: data.error as string | undefined };
+      }));
+      const writable = dryRuns.filter(result => result.ok && result.snapshot.imageUrl);
+      const alreadyEmpty = dryRuns.filter(result => result.ok && !result.snapshot.imageUrl).length;
+      const failedDryRun = dryRuns.filter(result => !result.ok);
+      const writes = await Promise.all(writable.map(async result => {
+        const response = await fetch("/api/wms/product-catalog/update", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ skuId: result.snapshot.skuId, imageUrl: "" }),
+        });
+        const data = await response.json().catch(() => ({}));
+        return { ...result.snapshot, ok: response.ok && data.success, error: data.error as string | undefined };
+      }));
+      const succeeded = writes.filter(result => result.ok);
+      const failed = failedDryRun.length + writes.filter(result => !result.ok).length;
+      if (succeeded.length) {
+        const historyKey = "noidb_product_image_unlink_history";
+        let previous: typeof snapshots = [];
+        try {
+          const parsed = JSON.parse(localStorage.getItem(historyKey) || "[]");
+          if (Array.isArray(parsed)) previous = parsed as typeof snapshots;
+        } catch {
+          // 손상된 브라우저 복구기록이 제품DB 이미지 연결 해제 결과에 영향을 주지 않게 새 기록으로 시작한다.
+        }
+        localStorage.setItem(historyKey, JSON.stringify([...succeeded.map(({ ok: _ok, error: _error, ...snapshot }) => snapshot), ...previous].slice(0, 100)));
+        const succeededIds = new Set(succeeded.map(result => normalizeSkuId(result.skuId)));
+        const nextCatalog = new Map(liveCatalogByProductCode);
+        for (const [key, value] of nextCatalog) {
+          if (succeededIds.has(normalizeSkuId(value.skuId))) nextCatalog.set(key, { ...value, imageUrl: "" });
+        }
+        setLiveCatalogByProductCode(nextCatalog);
+      }
+      setCheckedProductCodes(new Set());
+      setStatusActionMessage(`이미지 연결 삭제 ${succeeded.length}개 · 이미 빈 이미지 ${alreadyEmpty}개 · 실패 ${failed}개`);
+    } catch (error) {
+      setStatusActionMessage(error instanceof Error ? error.message : "이미지 연결 삭제에 실패했습니다.");
+    } finally {
+      setBulkProcessing(false);
+    }
+  }
+
   function handleFull(item: PickingWaveItem) {
     const allocations: PickingAllocationResult[] = item.sources.map(source => ({
       purchaseOrderNumber: source.purchaseOrderNumber,
@@ -604,21 +692,13 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
         <p style={{ color: wmsColors.muted, fontSize: "13px", margin: "4px 0" }}>발주서 {wave.sourcePurchaseOrderNumbers.length}건</p>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 0 10px" }}>
           <p style={{ color: wmsColors.green, fontSize: "13px", fontWeight: 700, margin: 0 }}>
-            전체 그룹 진행률 {doneGroupCount} / {totalGroups}
+            전체 SKU 진행률 {items.filter(item => item.status !== "pending").length} / {items.length}
           </p>
           <RefreshCatalogButton
             onClick={refreshProductCatalog}
             loading={catalogRefreshing}
             error={Boolean(catalogRefreshError)}
-            label={
-              catalogRefreshing
-                ? "새로고침 중..."
-                : catalogRefreshError
-                  ? "제품DB 새로고침 실패 · 다시 시도"
-                  : catalogRefreshSummary
-                    ? "제품DB 최신 정보 반영 완료"
-                    : "제품DB 새로고침"
-            }
+            label={catalogRefreshing ? "새로고침 중..." : catalogRefreshError ? "새로고침 실패 · 다시 시도" : "제품DB 새로고침"}
           />
         </div>
 
@@ -628,53 +708,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
           <p style={{ fontSize: "11px", color: "#c0392b", margin: "0 0 10px" }}>{catalogRefreshError}</p>
         )}
 
-        {catalogRefreshSummary && !catalogRefreshError && (
-          <div
-            style={{
-              border: `1px solid ${wmsColors.border}`,
-              borderRadius: "10px",
-              padding: "10px 12px",
-              marginBottom: "12px",
-              background: wmsColors.surfaceBeige,
-              fontSize: "12px",
-            }}
-          >
-            <div style={{ fontWeight: 800, marginBottom: "6px" }}>제품DB 최신 정보 반영 완료</div>
-            <ul style={{ margin: 0, paddingLeft: "16px", lineHeight: 1.7 }}>
-              <li>제품DB 조회: {catalogRefreshSummary.catalogCount.toLocaleString()}개</li>
-              <li>웨이브 매칭: {catalogRefreshSummary.matchedCount}개</li>
-              <li>이미지 URL 갱신: {catalogRefreshSummary.imageUpdatedCount}개 (URL이 바뀐 개수 — 실제 로드 성공 여부는 별도)</li>
-              <li>SKU ID 갱신: {catalogRefreshSummary.skuIdUpdatedCount}개</li>
-              <li>미매칭: {catalogRefreshSummary.unmatchedCount}개</li>
-              <li>이미지 미등록: {catalogRefreshSummary.noImageCount}개</li>
-            </ul>
-            {catalogRefreshSummary.unmatchedModelSkus.length > 0 && (
-              <button
-                onClick={() => setShowCatalogRefreshDetail(prev => !prev)}
-                style={{ ...wmsGhostButton, minHeight: "28px", fontSize: "11px", padding: "0 10px", marginTop: "6px" }}
-              >
-                {showCatalogRefreshDetail ? "미매칭 목록 숨기기" : "미매칭 목록 보기"}
-              </button>
-            )}
-            {showCatalogRefreshDetail && catalogRefreshSummary.unmatchedModelSkus.length > 0 && (
-              <div style={{ marginTop: "6px", fontSize: "11px", color: wmsColors.muted }}>
-                {catalogRefreshSummary.unmatchedModelSkus.join(", ")}
-              </div>
-            )}
-          </div>
-        )}
-
-        <button
-          onClick={() => {
-            setChecklistMode(prev => !prev);
-            setCheckedProductCodes(new Set());
-          }}
-          style={{ ...wmsSecondaryButton, width: "100%", marginBottom: "16px" }}
-        >
-          {checklistMode ? "그룹별로 보기" : "전체 목록으로 보기 (체크박스로 한 번에 처리)"}
-        </button>
-
-        {checklistMode ? (
+        {checklistMode && (
           <ChecklistView
             key={wave.id}
             allItems={items}
@@ -682,74 +716,17 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
             onToggle={toggleChecked}
             onSetChecked={setCheckedProductCodes}
             onBulkFull={handleBulkFull}
-            onBulkNotFound={handleBulkNotFound}
             onBulkVendorOrder={() => addItemsToVendorDraft(items.filter(item => checkedProductCodes.has(item.productCode)))}
             onBulkDiscontinue={() => moveItemsToDiscontinueList(items.filter(item => checkedProductCodes.has(item.productCode)))}
+            onBulkDeleteImages={removeSelectedImageLinks}
             bulkProcessing={bulkProcessing}
             liveCatalogByProductCode={liveCatalogByProductCode}
             bulkAreaRef={bulkAreaRef}
-            onOpenDetail={item => {
-              setSelectedGroupId(resolveGroup(item, liveCatalogByProductCode).groupId);
-              setSelectedProductCode(item.productCode);
-            }}
-            onStockSaved={refreshProductCatalog}
+            onOpenDetail={openProductDetail}
             logisticsLabelsForItem={logisticsLabelsForItem}
             actionMessage={vendorActionMessage || statusActionMessage}
           />
-        ) : (
-        sections.map(section => (
-          <div key={section.sectionId} style={{ marginBottom: "20px" }}>
-            <h2 style={{ fontSize: "13px", color: wmsColors.muted, margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-              {section.sectionLabel}
-            </h2>
-            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-              {section.groups.map(({ group, items: groupItems }) => {
-                const done = groupItems.filter(item => item.status !== "pending").length;
-                const total = groupItems.length;
-                const isDone = wave.completedGroupIds.includes(group.groupId);
-                const logisticsLabels = Array.from(new Set(groupItems.flatMap(item => logisticsLabelsForItem(item))));
-                const firstLive = resolveLiveFields(groupItems[0], liveCatalogByProductCode);
-                return (
-                  <button
-                    key={group.groupId}
-                    onClick={() => {
-                      setSelectedGroupId(group.groupId);
-                      setSelectedProductCode(groupItems.length === 1 ? groupItems[0].productCode : null);
-                    }}
-                    style={{
-                      ...wmsSecondaryButton,
-                      minHeight: "64px",
-                      width: "100%",
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      gap: "10px",
-                      padding: "10px 16px",
-                      background: isDone ? wmsColors.greenSoft : "#ffffff",
-                      border: isDone ? `2px solid ${wmsColors.green}` : `1px solid ${wmsColors.border}`,
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
-                      <ItemThumbnail imageUrl={firstLive.imageUrl || catalogImageFallback(firstLive.catalogModelName, firstLive.liveModelSku || groupItems[0].modelSku, firstLive.productLink)} size={40} />
-                      <div style={{ minWidth: 0, textAlign: "left" }}>
-                        <div style={{ fontWeight: 800, fontSize: "16px", whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.35 }}>
-                          {group.groupLabel}
-                        </div>
-                        <div style={{ marginTop: "3px", fontSize: "11px", fontWeight: 800, color: wmsColors.slateDark, whiteSpace: "normal", lineHeight: 1.35 }}>
-                          {logisticsLabels.join(" / ")}
-                        </div>
-                      </div>
-                    </div>
-                    <span style={{ fontWeight: 700, fontSize: "15px", flexShrink: 0 }}>
-                      {done} / {total}
-                      {isDone && <span style={{ marginLeft: "6px", color: wmsColors.greenDark }}>완료</span>}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )))}
+        )}
 
         <PickingListBottomBar wave={wave} items={items} />
       </main>
@@ -1122,14 +1099,13 @@ function ChecklistView({
   onToggle,
   onSetChecked,
   onBulkFull,
-  onBulkNotFound,
   onBulkVendorOrder,
   onBulkDiscontinue,
+  onBulkDeleteImages,
   bulkProcessing,
   liveCatalogByProductCode,
   bulkAreaRef,
   onOpenDetail,
-  onStockSaved,
   logisticsLabelsForItem,
   actionMessage,
 }: {
@@ -1138,21 +1114,16 @@ function ChecklistView({
   onToggle: (productCode: string) => void;
   onSetChecked: (next: Set<string>) => void;
   onBulkFull: () => void;
-  onBulkNotFound: () => void;
   onBulkVendorOrder: () => void | Promise<void>;
   onBulkDiscontinue: () => void | Promise<void>;
+  onBulkDeleteImages: () => void | Promise<void>;
   bulkProcessing: boolean;
   liveCatalogByProductCode: LiveCatalogLookup;
   bulkAreaRef: RefObject<HTMLDivElement>;
   onOpenDetail: (item: PickingWaveItem) => void;
-  onStockSaved: () => void | Promise<void>;
   logisticsLabelsForItem: (item: PickingWaveItem) => string[];
   actionMessage: string | null;
 }) {
-  const [showStockEditor, setShowStockEditor] = useState(false);
-  const [stockDrafts, setStockDrafts] = useState<Record<string, string>>({});
-  const [stockSaving, setStockSaving] = useState(false);
-  const [stockMessage, setStockMessage] = useState<string | null>(null);
   const sortedItems = sortPickingWaveItems(allItems, liveCatalogByProductCode);
 
   function selectAll() {
@@ -1201,6 +1172,7 @@ function ChecklistView({
           return (
             <div
               key={item.productCode}
+              data-picking-sku={item.productCode}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -1209,6 +1181,8 @@ function ChecklistView({
                 borderRadius: "10px",
                 padding: "8px 10px",
                 background: isDone ? wmsColors.greenSoft : "#ffffff",
+                contentVisibility: "auto",
+                containIntrinsicSize: "76px",
               }}
             >
               <input
@@ -1218,7 +1192,7 @@ function ChecklistView({
                 style={{ width: "22px", height: "22px", flexShrink: 0, cursor: "pointer" }}
               />
               <button type="button" aria-label={live.productLink ? "제품 링크 열기" : "제품 링크 없음"} disabled={!live.productLink} onClick={() => live.productLink && openProductLinkPreview(live.productLink)} style={{ border: 0, padding: 0, background: "transparent", lineHeight: 0, cursor: live.productLink ? "pointer" : "default" }}>
-                <ItemThumbnail imageUrl={live.imageUrl || catalogImageFallback(live.catalogModelName, live.liveModelSku || item.modelSku, live.productLink)} size={44} />
+                <ItemThumbnail imageUrl={live.imageUrl} size={44} />
               </button>
               <button type="button" onClick={() => onOpenDetail(item)} style={{ minWidth: 0, flex: 1, border: 0, padding: 0, background: "transparent", textAlign: "left", cursor: "pointer" }}>
                 <div style={{ fontSize: "14px", fontWeight: 800, color: wmsColors.ink, whiteSpace: "normal", overflow: "visible", wordBreak: "keep-all", lineHeight: 1.4 }}>
@@ -1247,79 +1221,30 @@ function ChecklistView({
        *  (2026-08-20 신규, WmsPickingWaveDetailPage.applyBulkStatus 참고). */}
       <div ref={bulkAreaRef} style={{ position: "sticky", bottom: 0, zIndex: 20, padding: "8px", margin: "0 -8px", background: "rgba(255,255,255,.96)", borderTop: `1px solid ${wmsColors.border}` }}>
         <button
-          type="button"
-          disabled={checkedProductCodes.size === 0}
-          onClick={() => { setShowStockEditor(true); setStockMessage(null); }}
-          style={{ ...wmsPrimaryButton, width: "100%", minHeight: "44px", marginBottom: "8px", opacity: checkedProductCodes.size === 0 ? 0.5 : 1 }}
-        >
-          선택 제품 재고 입력하기 ({checkedProductCodes.size}개)
-        </button>
-        <button
           onClick={selectUnprocessed}
           style={{ ...wmsSageButton, width: "100%", minHeight: "44px", fontSize: "13px", marginBottom: "8px" }}
         >
           미처리 SKU만 선택
         </button>
 
-        <div style={{ display: "flex", gap: "8px" }}>
-          <button
-            onClick={onBulkFull}
-            disabled={checkedProductCodes.size === 0 || bulkProcessing}
-            style={{ ...wmsGreenDarkButton, flex: 1, minHeight: "48px", opacity: checkedProductCodes.size === 0 || bulkProcessing ? 0.5 : 1 }}
-          >
-            {bulkProcessing ? "처리 중..." : `선택 전량찾음 (${checkedProductCodes.size}개)`}
-          </button>
-          <button
-            onClick={onBulkNotFound}
-            disabled={checkedProductCodes.size === 0 || bulkProcessing}
-            style={{ ...wmsWarnButton, flex: 1, minHeight: "48px", opacity: checkedProductCodes.size === 0 || bulkProcessing ? 0.5 : 1 }}
-          >
-            {bulkProcessing ? "처리 중..." : `선택 전량없음 (${checkedProductCodes.size}개)`}
-          </button>
-        </div>
+        <button
+          onClick={onBulkFull}
+          disabled={checkedProductCodes.size === 0 || bulkProcessing}
+          style={{ ...wmsGreenDarkButton, width: "100%", minHeight: "48px", opacity: checkedProductCodes.size === 0 || bulkProcessing ? 0.5 : 1 }}
+        >
+          {bulkProcessing ? "처리 중..." : `선택 전량찾음 (${checkedProductCodes.size}개)`}
+        </button>
         <button type="button" onClick={onBulkVendorOrder} disabled={checkedProductCodes.size === 0 || bulkProcessing} style={{ ...wmsBronzeButton, width: "100%", minHeight: "44px", marginTop: "8px", opacity: checkedProductCodes.size ? 1 : .5 }}>
           선택 거래처발주서 이동 ({checkedProductCodes.size}개)
         </button>
         <button type="button" onClick={onBulkDiscontinue} disabled={checkedProductCodes.size === 0 || bulkProcessing} style={{ ...wmsWarnButton, width: "100%", minHeight: "44px", marginTop: "6px", opacity: checkedProductCodes.size ? 1 : .5 }}>
           선택 단종리스트 이동 ({checkedProductCodes.size}개)
         </button>
+        <button type="button" onClick={onBulkDeleteImages} disabled={checkedProductCodes.size === 0 || bulkProcessing} style={{ ...wmsSecondaryButton, width: "100%", minHeight: "44px", marginTop: "6px", opacity: checkedProductCodes.size ? 1 : .5 }}>
+          선택 이미지 삭제 ({checkedProductCodes.size}개)
+        </button>
         {actionMessage && <p role="status" style={{ margin: "6px 0 0", fontSize: "11px", fontWeight: 700, color: actionMessage.includes("실패") || actionMessage.includes("제외") ? "#b42318" : wmsColors.greenDark }}>{actionMessage}</p>}
       </div>
-
-      {showStockEditor && (
-        <div role="dialog" aria-modal="true" style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,.38)", padding: "20px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div style={{ width: "min(520px,100%)", maxHeight: "82vh", overflowY: "auto", background: "#fff", borderRadius: "16px", padding: "16px" }}>
-            <h2 style={{ margin: "0 0 12px", fontSize: "17px" }}>선택 제품 현재고 일괄 입력</h2>
-            {sortedItems.filter(item => checkedProductCodes.has(item.productCode)).map(item => {
-              const live = resolveLiveFields(item, liveCatalogByProductCode);
-              const skuId = live.liveSkuId || item.productCode;
-              return <label key={item.productCode} style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: "8px", alignItems: "center", marginBottom: "8px", fontSize: "12px" }}>
-                <span style={{ minWidth: 0 }}>{live.name}<br /><small style={{ color: wmsColors.muted }}>SKU {skuId}</small></span>
-                <input type="number" min={0} inputMode="numeric" value={stockDrafts[skuId] ?? live.catalogCurrentStock ?? ""} onChange={event => setStockDrafts(prev => ({ ...prev, [skuId]: event.target.value }))} placeholder="현재고" style={{ minHeight: "40px", width: "100%", textAlign: "center", borderRadius: "8px", border: `1px solid ${wmsColors.borderStrong}`, fontSize: "16px" }} />
-              </label>;
-            })}
-            {stockMessage && <p style={{ fontSize: "12px", color: stockMessage.includes("완료") ? wmsColors.greenDark : "#c0392b" }}>{stockMessage}</p>}
-            <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
-              <button type="button" disabled={stockSaving} onClick={() => setShowStockEditor(false)} style={{ ...wmsSecondaryButton, flex: 1 }}>취소</button>
-              <button type="button" disabled={stockSaving} onClick={async () => {
-                setStockSaving(true); setStockMessage(null);
-                const entries = Object.entries(stockDrafts).filter(([, value]) => value !== "");
-                const results = await Promise.all(entries.map(async ([skuId, value]) => {
-                  try {
-                    const response = await fetch("/api/wms/product-catalog/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuId, currentStock: String(Math.max(0, Number(value) || 0)) }) });
-                    const data = await response.json();
-                    return { skuId, ok: response.ok && data.success };
-                  } catch { return { skuId, ok: false }; }
-                }));
-                const failed = results.filter(result => !result.ok).map(result => result.skuId);
-                if (failed.length) setStockMessage(`저장 실패 ${failed.length}개: ${failed.join(", ")}`);
-                else { setStockMessage(`${results.length}개 현재고 저장완료`); await onStockSaved(); }
-                setStockSaving(false);
-              }} style={{ ...wmsPrimaryButton, flex: 2 }}>{stockSaving ? "저장 중..." : "선택 재고 일괄 저장"}</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
