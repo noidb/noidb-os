@@ -36,10 +36,6 @@ function sameSet(left: Set<string>, right: Set<string>): boolean {
   return left.size === right.size && [...left].every(value => right.has(value));
 }
 
-function dateParts(token: string): string {
-  return `${token.slice(0, 4)}_${token.slice(4, 6)}_${token.slice(6, 8)}`;
-}
-
 async function localFiles(directory: string): Promise<SourceFile[]> {
   const names = await readdir(directory);
   const files = await Promise.all(names.filter(name => !name.startsWith("~$")).map(async name => {
@@ -92,9 +88,11 @@ export async function POST(request: NextRequest) {
       workbookFiles = await localFiles(outputRoot);
     }
 
-    const pdfDates = dateTokens.map(dateParts);
-    const labels = pdfFiles.filter(file => file.name.startsWith("shipment_Label_document(") && pdfDates.some(pdfDate => file.name.includes(`_${pdfDate}.pdf`)));
-    const manifests = pdfFiles.filter(file => file.name.startsWith("shipment_ManiFest_document(") && pdfDates.some(pdfDate => file.name.includes(`_${pdfDate}.pdf`)));
+    // 로컬은 입고예정일 폴더(dateTokens)에서 이미 범위를 제한한다. Drive에서는 파일명 날짜가
+    // 입고예정일이 아니라 다운로드일로 저장되므로 날짜 문자열로 다시 거르면 정상 PDF가 누락된다.
+    // 최종 범위는 클라이언트가 PDF 내부 발주번호와 generation PO 집합을 정확히 대조해 제한한다.
+    const labels = pdfFiles.filter(file => file.name.startsWith("shipment_Label_document(") && file.name.toLocaleLowerCase("ko").endsWith(".pdf"));
+    const manifests = pdfFiles.filter(file => file.name.startsWith("shipment_ManiFest_document(") && file.name.toLocaleLowerCase("ko").endsWith(".pdf"));
     const workbooks = workbookFiles.filter(file => {
       const normalizedName = file.name.normalize("NFC").toLocaleLowerCase("ko");
       return normalizedName.startsWith("쉽먼트생성_업로드파일_") && normalizedName.endsWith(".xlsx");
