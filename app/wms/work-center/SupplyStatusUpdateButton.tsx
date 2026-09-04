@@ -52,7 +52,7 @@ export default function SupplyStatusUpdateButton() {
         setState("idle");
         setMessage(
           `승인대기 ${preview.pendingCount}개 중 승인 완료 항목이 없습니다` +
-            ` (아직 승인 전 ${preview.awaitingApprovalCount}, 실제 미매칭 ${preview.unmatchedCount}, 충돌 ${preview.conflictCount}).`
+            ` (WIMS 등록상태 확인 필요 ${preview.awaitingApprovalCount}, 실제 미매칭 ${preview.unmatchedCount}, 충돌 ${preview.conflictCount}).`
         );
         setResult({ applied: false, preview, writtenCount: 0, statusOnlyCount: 0 });
         return;
@@ -61,7 +61,7 @@ export default function SupplyStatusUpdateButton() {
       const confirmed = window.confirm(
         `최신 상품공급상태관리 파일(${preview.fileName})을 기준으로\n` +
           `승인 완료 ${preview.eligibleCount}개 상품의 상품명·SKU ID·바코드·발주가능상태·현재상태를 업데이트합니다.\n\n` +
-          `(아직 승인 전 ${preview.awaitingApprovalCount}건, 실제 미매칭 ${preview.unmatchedCount}건, 충돌 ${preview.conflictCount}건은 건드리지 않습니다)`
+          `(WIMS 등록상태 확인 필요 ${preview.awaitingApprovalCount}건, 실제 미매칭 ${preview.unmatchedCount}건, 충돌 ${preview.conflictCount}건은 건드리지 않습니다)`
       );
       if (!confirmed) {
         setState("idle");
@@ -129,7 +129,7 @@ export default function SupplyStatusUpdateButton() {
             <li>상품명 갱신: {result.writtenCount}개</li>
             <li>바코드·발주가능상태 갱신: {result.writtenCount}개</li>
             <li>이미 동일한 SKU ID: {result.statusOnlyCount}개</li>
-            <li>아직 승인 전: {result.preview.awaitingApprovalCount}개</li>
+            <li>WIMS 등록상태 확인 필요: {result.preview.awaitingApprovalCount}개</li>
             <li>실제 미매칭: {result.preview.unmatchedCount}개</li>
             <li>충돌: {result.preview.conflictCount}개</li>
           </ul>
@@ -143,7 +143,7 @@ export default function SupplyStatusUpdateButton() {
               {result.preview.rows.map((row: MatchedRow) => (
                 <div key={row.sheetRowNumber} style={{ background: "#ffffff", borderRadius: "6px", padding: "6px 8px", fontSize: "11px" }}>
                   <div style={{ fontWeight: 700 }}>
-                    {row.modelSku} {row.eligible ? <span style={{ color: wmsColors.greenDark }}>· 반영됨</span> : row.awaitingApproval ? <span style={{ color: wmsColors.muted }}>· 아직 승인 전</span> : <span style={{ color: wmsColors.warn }}>· 미반영</span>}
+                    {row.modelSku} {row.eligible ? <span style={{ color: wmsColors.greenDark }}>· 반영됨</span> : row.awaitingApproval ? <span style={{ color: wmsColors.muted }}>· WIMS 확인 필요</span> : <span style={{ color: wmsColors.warn }}>· 미반영</span>}
                   </div>
                   {row.eligible && row.downloadSkuId && <div>입력 SKU ID: {row.downloadSkuId}</div>}
                   {row.matchRule && <div>매칭 규칙: {row.matchRule}</div>}

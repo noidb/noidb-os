@@ -514,3 +514,14 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
    "DB 새로고침"으로 짧게 표시(2026-08-20 실기기 추가 확인 3번). */
 .wms-refresh-label-short{display:none}
 @media(max-width:359px){.wms-refresh-label-full{display:none}.wms-refresh-label-short{display:inline}}
+.wms-supply-audit-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+@media (max-width: 760px) {
+  .wms-supply-audit-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

@@ -7,11 +7,12 @@ import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import ActiveWaveList from "@/app/wms/picking/waves/ActiveWaveList";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import { UNASSIGNED_VENDOR_NAME } from "@/lib/wms/vendor-order/types";
-import { TruckIcon } from "../icons";
+import { RefreshIcon, TruckIcon } from "../icons";
 import WorkCenterMenuButton from "./WorkCenterMenuButton";
-import SupplyStatusUpdateButton from "./SupplyStatusUpdateButton";
 import NewPurchaseOrdersUpdateButton from "./NewPurchaseOrdersUpdateButton";
 import UpcomingInboundSummary from "./UpcomingInboundSummary";
+import SupplyStatusAuditPanel from "./SupplyStatusAuditPanel";
+import WimsRegistrationImportPanel from "./WimsRegistrationImportPanel";
 
 /**
  * 작업센터 첫 화면의 "부족분 거래처별 발주서" 진입 배너 (2026-08-19 신규).
@@ -106,9 +107,19 @@ export default function WmsWorkCenterPage() {
           borderTint="rgba(83,109,120,0.35)"
           textColor={wmsColors.slateDark}
         />
-        <SupplyStatusUpdateButton />
+        <WorkCenterMenuButton
+          href="#supply-status-audit"
+          icon={<RefreshIcon size={26} color={wmsColors.greenDark} />}
+          title="상품공급상태 진단·업데이트"
+          tint={wmsColors.greenSoft}
+          borderTint={wmsColors.green}
+          textColor={wmsColors.greenDark}
+        />
         <NewPurchaseOrdersUpdateButton />
       </div>
+
+      <WimsRegistrationImportPanel />
+      <SupplyStatusAuditPanel />
 
       <ShortageVendorOrdersBanner />
 

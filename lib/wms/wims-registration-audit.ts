@@ -1,0 +1,156 @@
+import { createHash } from "node:crypto";
+import { fetchSheetRows } from "./google-sheets";
+import { backupSheetWithinSpreadsheet, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
+import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
+import type { WimsRegistrationRow } from "./wims-registration";
+
+export type WimsAuditResultType = "approved_candidate" | "reviewing" | "rejected" | "already_linked" | "conflict" | "unmatched";
+
+export interface WimsAuditResultRow {
+  type: WimsAuditResultType;
+  wims: WimsRegistrationRow;
+  sheetRowNumber?: number;
+  productDbModelSku?: string;
+  productDbSkuId?: string;
+  message: string;
+}
+
+export interface WimsRegistrationAudit {
+  readOnly: true;
+  dryRunToken: string;
+  rows: WimsAuditResultRow[];
+  approvedCandidateCount: number;
+  reviewingCount: number;
+  rejectedCount: number;
+  alreadyLinkedCount: number;
+  conflictCount: number;
+  unmatchedCount: number;
+  pendingNotInWimsCount: number;
+  pendingNotInWims: { sheetRowNumber: number; modelSku: string; productName: string }[];
+}
+
+export interface WimsRegistrationApplyResult {
+  applied: boolean;
+  audit: WimsRegistrationAudit;
+  backupSheetName?: string;
+  writtenRowCount: number;
+  writtenCellCount: number;
+}
+
+const PENDING = new Set(["신상승인대기", "기존상품승인대기"]);
+
+function normalize(value: unknown): string {
+  return String(value ?? "").trim().toUpperCase().replace(/[\s_-]+/g, "");
+}
+
+function headerIndex(headers: string[], candidates: string[]): number {
+  const normalized = headers.map(normalize);
+  return normalized.findIndex(header => candidates.some(candidate => header === normalize(candidate)));
+}
+
+export async function buildWimsRegistrationAudit(wimsRows: WimsRegistrationRow[]): Promise<WimsRegistrationAudit> {
+  const sheetRows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" });
+  const headers = (sheetRows[0] || []).map(value => String(value ?? "").trim());
+  const idx = {
+    status: headerIndex(headers, ["현재상태", "상태"]),
+    modelSku: headerIndex(headers, ["모델SKU"]),
+    skuId: headerIndex(headers, ["SKU ID", "SKU"]),
+    barcode: headerIndex(headers, ["쿠팡 바코드", "Seller SKU Barcode", "쿠팡바코드", "바코드"]),
+    productName: headerIndex(headers, ["상품명"]),
+  };
+  const missing = Object.entries(idx).filter(([, value]) => value < 0).map(([key]) => key);
+  if (missing.length > 0) throw new Error(`제품DB 필수 열을 찾지 못했습니다: ${missing.join(", ")}`);
+
+  const products = sheetRows.slice(1).map((row, index) => ({
+    row,
+    sheetRowNumber: index + 2,
+    status: String(row[idx.status] ?? "").trim(),
+    modelSku: String(row[idx.modelSku] ?? "").trim(),
+    skuId: String(row[idx.skuId] ?? "").trim(),
+    barcode: String(row[idx.barcode] ?? "").trim(),
+    productName: String(row[idx.productName] ?? "").trim(),
+  }));
+  const byModelSku = new Map<string, typeof products>();
+  const bySkuId = new Map<string, typeof products>();
+  for (const product of products) {
+    if (normalize(product.modelSku)) byModelSku.set(normalize(product.modelSku), [...(byModelSku.get(normalize(product.modelSku)) || []), product]);
+    if (normalize(product.skuId)) bySkuId.set(normalize(product.skuId), [...(bySkuId.get(normalize(product.skuId)) || []), product]);
+  }
+
+  const matchedSheetRows = new Set<number>();
+  const rows: WimsAuditResultRow[] = [];
+  for (const wims of wimsRows) {
+    const skuMatches = wims.skuId ? bySkuId.get(normalize(wims.skuId)) || [] : [];
+    const modelMatches = wims.modelSku ? byModelSku.get(normalize(wims.modelSku)) || [] : [];
+    const matches = skuMatches.length > 0 ? skuMatches : modelMatches;
+    if (matches.length !== 1) {
+      rows.push({ type: matches.length > 1 ? "conflict" : "unmatched", wims, message: matches.length > 1 ? `제품DB 후보가 ${matches.length}행이라 자동 연결할 수 없습니다.` : "제품DB에서 동일 SKU ID 또는 모델SKU 행을 찾지 못했습니다." });
+      continue;
+    }
+    const product = matches[0];
+    matchedSheetRows.add(product.sheetRowNumber);
+    const base = { wims, sheetRowNumber: product.sheetRowNumber, productDbModelSku: product.modelSku, productDbSkuId: product.skuId };
+    if (wims.status === "rejected") {
+      rows.push({ ...base, type: "rejected", message: "WIMS 반려 건입니다. SKU·바코드를 자동 반영하지 않습니다." });
+    } else if (wims.status === "reviewing") {
+      rows.push({ ...base, type: "reviewing", message: "WIMS에서 실제 검수중인 등록 건입니다." });
+    } else if (wims.status !== "approved" || !wims.skuId || !wims.barcode) {
+      rows.push({ ...base, type: "unmatched", message: "검수완료 여부 또는 SKU·R바코드를 확인해야 합니다." });
+    } else if (product.skuId && normalize(product.skuId) !== normalize(wims.skuId)) {
+      rows.push({ ...base, type: "conflict", message: `제품DB SKU ${product.skuId}와 WIMS SKU ${wims.skuId}가 다릅니다.` });
+    } else if (product.barcode && normalize(product.barcode) !== normalize(wims.barcode)) {
+      rows.push({ ...base, type: "conflict", message: `불변 바코드가 다릅니다: 제품DB ${product.barcode} / WIMS ${wims.barcode}` });
+    } else if (product.skuId && product.barcode) {
+      rows.push({ ...base, type: "already_linked", message: "제품DB에 같은 SKU·바코드가 이미 연결되어 있습니다." });
+    } else {
+      rows.push({ ...base, type: "approved_candidate", message: `기존 제품DB ${product.sheetRowNumber}행에 SKU·바코드를 채울 수 있습니다.` });
+    }
+  }
+
+  const pendingNotInWims = products.filter(product => PENDING.has(product.status) && !matchedSheetRows.has(product.sheetRowNumber)).map(product => ({ sheetRowNumber: product.sheetRowNumber, modelSku: product.modelSku, productName: product.productName }));
+  const auditWithoutToken: Omit<WimsRegistrationAudit, "dryRunToken"> = {
+    readOnly: true,
+    rows,
+    approvedCandidateCount: rows.filter(row => row.type === "approved_candidate").length,
+    reviewingCount: wimsRows.filter(row => row.status === "reviewing").length,
+    rejectedCount: wimsRows.filter(row => row.status === "rejected").length,
+    alreadyLinkedCount: rows.filter(row => row.type === "already_linked").length,
+    conflictCount: rows.filter(row => row.type === "conflict").length,
+    unmatchedCount: rows.filter(row => row.type === "unmatched").length,
+    pendingNotInWimsCount: pendingNotInWims.length,
+    pendingNotInWims,
+  };
+  return { ...auditWithoutToken, dryRunToken: createHash("sha256").update(JSON.stringify(auditWithoutToken)).digest("hex") };
+}
+
+export async function applyWimsRegistrationAudit(wimsRows: WimsRegistrationRow[], expectedDryRunToken: string): Promise<WimsRegistrationApplyResult> {
+  const audit = await buildWimsRegistrationAudit(wimsRows);
+  if (!expectedDryRunToken || audit.dryRunToken !== expectedDryRunToken) throw new Error("WIMS 또는 제품DB 내용이 미리보기 이후 변경되었습니다. 다시 대조해주세요.");
+  const candidates = audit.rows.filter(row => row.type === "approved_candidate" && row.sheetRowNumber);
+  if (candidates.length === 0) return { applied: false, audit, writtenRowCount: 0, writtenCellCount: 0 };
+
+  const backup = await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME);
+  const rechecked = await buildWimsRegistrationAudit(wimsRows);
+  if (rechecked.dryRunToken !== audit.dryRunToken) throw new Error("제품DB가 백업 중 변경되었습니다. 다시 대조해주세요.");
+
+  const sheetRows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" });
+  const headers = (sheetRows[0] || []).map(value => String(value ?? "").trim());
+  const idx = {
+    status: headerIndex(headers, ["현재상태", "상태"]),
+    skuId: headerIndex(headers, ["SKU ID", "SKU"]),
+    barcode: headerIndex(headers, ["쿠팡 바코드", "Seller SKU Barcode", "쿠팡바코드", "바코드"]),
+    productName: headerIndex(headers, ["상품명"]),
+  };
+  const cellUpdates: SheetCellUpdate[] = [];
+  for (const candidate of rechecked.rows.filter(row => row.type === "approved_candidate" && row.sheetRowNumber)) {
+    const row = candidate.sheetRowNumber!;
+    cellUpdates.push(
+      { row, col: idx.status + 1, value: "완료" },
+      { row, col: idx.skuId + 1, value: candidate.wims.skuId },
+      { row, col: idx.barcode + 1, value: candidate.wims.barcode },
+      { row, col: idx.productName + 1, value: candidate.wims.productName }
+    );
+  }
+  await updateSheetCells(PRODUCT_DB_SHEET_NAME, cellUpdates);
+  return { applied: true, audit: rechecked, backupSheetName: backup.sheetName, writtenRowCount: candidates.length, writtenCellCount: cellUpdates.length };
+}
