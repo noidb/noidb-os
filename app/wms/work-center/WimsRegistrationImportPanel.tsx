@@ -7,6 +7,8 @@ import { wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
 
 const statusText = { reviewing: "검수중", approved: "검수완료", rejected: "반려", unknown: "확인 필요" } as const;
 const STORAGE_KEY = "noidb_wims_registration_snapshot_v1";
+const EXTENSION_EVENT_TYPE = "NOIDB_WIMS_EXTENSION_TRANSFER";
+const EXTENSION_ACK_TYPE = "NOIDB_WIMS_EXTENSION_ACK";
 
 interface SavedSnapshot {
   capturedAt: string;
@@ -34,6 +36,31 @@ export default function WimsRegistrationImportPanel() {
     } catch {
       localStorage.removeItem(STORAGE_KEY);
     }
+  }, []);
+
+  useEffect(() => {
+    function receiveExtensionTransfer(event: MessageEvent) {
+      if (event.source !== window || event.origin !== window.location.origin || event.data?.type !== EXTENSION_EVENT_TYPE) return;
+      const incomingText = event.data?.payload?.text;
+      if (typeof incomingText !== "string" || !incomingText.trim()) return;
+      window.postMessage({ type: EXTENSION_ACK_TYPE }, window.location.origin);
+      try {
+        const nextSnapshot = parseWimsClipboard(incomingText);
+        const nextCapturedAt = typeof event.data.payload.capturedAt === "string" ? event.data.payload.capturedAt : new Date().toISOString();
+        setText(incomingText);
+        setSnapshot(nextSnapshot);
+        setCapturedAt(nextCapturedAt);
+        setAudit(null);
+        setError("");
+        setMessage(`확장 기능에서 ${nextSnapshot.rows.length}건을 받았습니다. 제품DB와 자동 대조합니다.`);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ capturedAt: nextCapturedAt, snapshot: nextSnapshot } satisfies SavedSnapshot));
+        void auditRows(nextSnapshot.rows);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "확장 기능에서 받은 WIMS 표를 읽지 못했습니다.");
+      }
+    }
+    window.addEventListener("message", receiveExtensionTransfer);
+    return () => window.removeEventListener("message", receiveExtensionTransfer);
   }, []);
 
   function inspect() {
@@ -79,12 +106,11 @@ export default function WimsRegistrationImportPanel() {
     }
   }
 
-  async function compareProductDb() {
-    if (!snapshot || auditing) return;
+  async function auditRows(rows: WimsRegistrationSnapshot["rows"]) {
     setAuditing(true);
     setError("");
     try {
-      const response = await fetch("/api/wms/wims-registration/audit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows: snapshot.rows }) });
+      const response = await fetch("/api/wms/wims-registration/audit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "제품DB 대조에 실패했습니다.");
       setAudit(data as WimsRegistrationAudit);
@@ -95,12 +121,23 @@ export default function WimsRegistrationImportPanel() {
     }
   }
 
+  async function compareProductDb() {
+    if (!snapshot || auditing) return;
+    await auditRows(snapshot.rows);
+  }
+
   return (
     <section id="wims-registration" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", background: "#fff" }}>
       <strong style={{ display: "block", fontSize: "14px" }}>상품 등록 상태 확인 · WIMS</strong>
       <p style={{ color: wmsColors.muted, fontSize: "11px", margin: "4px 0 10px" }}>
-        Supplier Hub의 상품 등록 상태 확인 표에서 머리글과 상품 행을 복사해 붙여넣으세요. 이 단계는 읽기 전용이며 제품DB를 수정하지 않습니다.
+        브라우저 확장 기능의 `NOID-B로 WIMS 전송` 버튼을 누르면 자동으로 들어옵니다. 직접 붙여넣기는 비상용이며, 읽기 전용 대조만 자동 실행됩니다.
       </p>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "7px", marginBottom: "10px" }}>
+        <a href="/downloads/noidb-supplier-sync.zip" download style={{ ...wmsGhostButton, minHeight: "34px", padding: "0 11px", display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
+          최초 1회 확장 기능 받기
+        </a>
+        <span style={{ color: wmsColors.muted, fontSize: "10px" }}>압축 해제 → Chrome 확장 프로그램 → 개발자 모드 → 압축해제된 확장 프로그램 로드</span>
+      </div>
       <textarea
         value={text}
         onChange={event => setText(event.target.value)}
