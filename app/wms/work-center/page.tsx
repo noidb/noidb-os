@@ -7,12 +7,10 @@ import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import ActiveWaveList from "@/app/wms/picking/waves/ActiveWaveList";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import { UNASSIGNED_VENDOR_NAME } from "@/lib/wms/vendor-order/types";
-import { RefreshIcon, TruckIcon } from "../icons";
+import { InboxIcon, TruckIcon } from "../icons";
 import WorkCenterMenuButton from "./WorkCenterMenuButton";
 import NewPurchaseOrdersUpdateButton from "./NewPurchaseOrdersUpdateButton";
 import UpcomingInboundSummary from "./UpcomingInboundSummary";
-import SupplyStatusAuditPanel from "./SupplyStatusAuditPanel";
-import WimsRegistrationImportPanel from "./WimsRegistrationImportPanel";
 
 /**
  * 작업센터 첫 화면의 "부족분 거래처별 발주서" 진입 배너 (2026-08-19 신규).
@@ -94,22 +92,23 @@ export default function WmsWorkCenterPage() {
         <div>
           <p className="eyebrow">NOID-B OPERATIONS</p>
           <h1>작업센터</h1>
-          <p className="sub">상품등록부터 입고·피킹까지 PC와 모바일에서 같은 순서로 진행합니다.</p>
+          <p className="sub">신규 발주서 확인부터 입고·피킹·쉽먼트까지 발주서 기준으로 진행합니다.</p>
         </div>
       </div>
 
       <nav className="wms-workflow-nav" aria-label="작업 흐름 바로가기">
-        <a href="/"><span>1</span><strong>상품 준비</strong><small>AI 상품등록</small></a>
-        <a href="#wims-registration"><span>2</span><strong>등록 확인</strong><small>WIMS 검수</small></a>
-        <a href="#supply-status-audit"><span>3</span><strong>상품 운영</strong><small>공급상태</small></a>
-        <a href="#inbound-picking"><span>4</span><strong>창고 작업</strong><small>입고·피킹</small></a>
+        <a href="#purchase-orders"><span>1</span><strong>신규 발주</strong><small>발주서 업데이트</small></a>
+        <a href="/wms/vendor-orders"><span>2</span><strong>거래처 발주</strong><small>부족분 주문</small></a>
+        <a href="/wms/vendor-orders/receiving"><span>3</span><strong>입고·피킹</strong><small>발주서 작업</small></a>
+        <a href="/wms/shipment"><span>4</span><strong>쉽먼트</strong><small>구성·출력</small></a>
       </nav>
 
       {/* 상단 메뉴 3개 — 전부 WorkCenterMenuButton 하나만 재사용해 크기·아이콘 위치·글자
        *  위치를 완전히 통일한다(2026-08-20 신규). 모바일은 1열 세로, 760px 이상은 3열
        *  (app/globals.css .wms-work-center-menu). 나머지 두 버튼은 각자 상태(로딩중/완료 등)와
        *  결과 표시를 스스로 관리하는 자체완결 컴포넌트라 여기서는 배치만 한다. */}
-      <div className="wms-work-center-menu" style={{ marginBottom: "18px" }}>
+      <div id="purchase-orders" className="wms-work-center-menu" style={{ marginBottom: "18px" }}>
+        <NewPurchaseOrdersUpdateButton />
         <WorkCenterMenuButton
           href="/wms/vendor-orders"
           icon={<TruckIcon size={26} color={wmsColors.slateDark} />}
@@ -119,23 +118,13 @@ export default function WmsWorkCenterPage() {
           textColor={wmsColors.slateDark}
         />
         <WorkCenterMenuButton
-          href="#supply-status-audit"
-          icon={<RefreshIcon size={26} color={wmsColors.greenDark} />}
-          title="상품공급상태 진단·업데이트"
+          href="/wms/vendor-orders/receiving"
+          icon={<InboxIcon size={26} color={wmsColors.greenDark} />}
+          title="발주서 입고관리"
           tint={wmsColors.greenSoft}
           borderTint={wmsColors.green}
           textColor={wmsColors.greenDark}
         />
-        <NewPurchaseOrdersUpdateButton />
-      </div>
-
-      <div className="wms-section-heading">
-        <div><span>PRODUCT AUTOMATION</span><h2>상품등록 자동화</h2></div>
-        <p>WIMS 확인 → 제품DB 연결 → 운영정보 갱신</p>
-      </div>
-      <div className="wms-automation-grid">
-        <WimsRegistrationImportPanel />
-        <SupplyStatusAuditPanel />
       </div>
 
       <div id="inbound-picking" className="wms-section-heading">

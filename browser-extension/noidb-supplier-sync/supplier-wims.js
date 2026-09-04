@@ -64,7 +64,7 @@
         [STORAGE_KEY]: { text, capturedAt: new Date().toISOString(), sourceUrl: location.href, visibleRowCount }
       });
       showMessage(`현재 화면 ${visibleRowCount}개 행을 전송합니다.`);
-      window.open("https://noidb-os.vercel.app/wms/work-center?source=wims-extension#wims-registration", "_blank");
+      window.open("https://noidb-os.vercel.app/?source=wims-extension#product-registration-status", "_blank");
     } catch (error) {
       showMessage(error instanceof Error ? error.message : "WIMS 전송에 실패했습니다.", true);
     } finally {

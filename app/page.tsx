@@ -25,6 +25,8 @@ import { compressImageDataUrl } from "@/lib/image/compress";
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
 import { coverSquareCanvas, defaultFitAdjust, fitToWhiteCanvas, type FitAdjust } from "@/lib/thumbnail/fit";
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
+import WimsRegistrationImportPanel from "@/app/product-registration/WimsRegistrationImportPanel";
+import SupplyStatusAuditPanel from "@/app/product-registration/SupplyStatusAuditPanel";
 
 type Product = {
   supplier: string;
@@ -2498,26 +2500,20 @@ export default function Home() {
         </div>
         {dbStatus && <p className="note">{dbStatus}</p>}
         <details className="advancedPanel coupangDataPanel">
-          <summary>서플라이허브 데이터 업데이트</summary>
+          <summary>기타 쿠팡 데이터 수동 업데이트</summary>
           <div className="coupangImportGrid">
-            <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("skuMaster", e)}>
-              <strong>① 상품공급상태관리 다운로드</strong>
-              <span>파일명: 상품공급상태관리 SKU 다운로드</span>
-              <span>제품DB 행 추가 없음 · 기존 SKU는 상품명/바코드/발주가능상태만 갱신</span>
-              <input type="file" accept=".xlsx" disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("skuMaster", e.target.files); e.target.value = ""; }} />
-            </label>
             <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("inboundHistory", e)}>
-              <strong>② 입고상세내역 다운로드</strong>
+              <strong>입고상세내역 다운로드</strong>
               <span>파일명: Coupang_Stocked_Data_List</span>
               <input type="file" accept=".xlsx" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("inboundHistory", e.target.files); e.target.value = ""; }} />
             </label>
             <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("poList", e)}>
-              <strong>③ 발주SKU 리스트 다운로드</strong>
+              <strong>발주SKU 리스트 다운로드</strong>
               <span>파일명: PO_SKU_LIST</span>
               <input type="file" accept=".csv,.xlsx" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("poList", e.target.files); e.target.value = ""; }} />
             </label>
             <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("coupangExtract", e)}>
-              <strong>④ 쿠팡 추출DB 업데이트</strong>
+              <strong>쿠팡 추출DB 업데이트</strong>
               <span>쿠팡쇼핑몰 추출DB.xlsx 한 파일만 선택</span>
               <span>제품DB 행 추가 없음 · 기존 행의 상품링크/쿠팡 노출가/재고현황만 갱신</span>
               <input type="file" accept=".xlsx" disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("coupangExtract", e.target.files); e.target.value = ""; }} />
@@ -2525,6 +2521,17 @@ export default function Home() {
           </div>
           {coupangImportMessage && <p className={coupangImportMessage.startsWith("오류") ? "error" : "detailMessage"}>{coupangImportMessage}</p>}
         </details>
+      </section>
+
+      <section id="product-registration-status" className="card full">
+        <div className="wms-section-heading" style={{ marginTop: 0 }}>
+          <div><span>PRODUCT REGISTRATION</span><h2>8. 등록 진행상황 · 상품 운영정보</h2></div>
+          <p>WIMS 승인 확인 → SKU 연결 → 상품공급상태 갱신</p>
+        </div>
+        <div className="wms-automation-grid">
+          <WimsRegistrationImportPanel />
+          <SupplyStatusAuditPanel />
+        </div>
       </section>
 
       {lightbox && (

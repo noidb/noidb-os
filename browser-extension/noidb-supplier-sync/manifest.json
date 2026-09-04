@@ -12,8 +12,8 @@
     },
     {
       "matches": [
-        "https://noidb-os.vercel.app/wms/work-center*",
-        "http://localhost:3000/wms/work-center*"
+        "https://noidb-os.vercel.app/*",
+        "http://localhost:3000/*"
       ],
       "js": ["noidb-bridge.js"],
       "run_at": "document_idle"
