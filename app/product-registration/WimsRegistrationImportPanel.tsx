@@ -23,6 +23,7 @@ export default function WimsRegistrationImportPanel() {
   const [audit, setAudit] = useState<WimsRegistrationAudit | null>(null);
   const [auditing, setAuditing] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [decidingRow, setDecidingRow] = useState<number | null>(null);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -127,8 +128,30 @@ export default function WimsRegistrationImportPanel() {
     await auditRows(snapshot.rows);
   }
 
+  async function setRejectionDecision(sheetRowNumber: number, decision: "등록불가" | "재등록시도") {
+    if (!snapshot || !audit || decidingRow !== null) return;
+    setDecidingRow(sheetRowNumber);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch("/api/wms/wims-registration/rejection-decision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows: snapshot.rows, dryRunToken: audit.dryRunToken, sheetRowNumber, decision }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "반려 상태 변경에 실패했습니다.");
+      setMessage(`${decision} 처리 완료${data.backupSheetName ? ` · 백업 ${data.backupSheetName}` : ""}`);
+      await auditRows(snapshot.rows);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "반려 상태 변경에 실패했습니다.");
+    } finally {
+      setDecidingRow(null);
+    }
+  }
+
   const actionRows = useMemo(() => audit?.rows.filter(row =>
-    row.wims.status === "rejected" || row.type === "conflict" || row.type === "unmatched" || row.type === "approved_candidate"
+    (row.wims.status === "rejected" && !["등록불가", "재등록시도"].includes(row.productDbStatus || "")) || row.type === "conflict" || (row.type === "unmatched" && row.wims.status !== "rejected") || row.type === "approved_candidate"
   ) || [], [audit]);
 
   function actionLabel(row: WimsRegistrationAudit["rows"][number]) {
@@ -193,6 +216,12 @@ export default function WimsRegistrationImportPanel() {
                         <div style={{ marginTop: "2px" }}>{row.wims.productName}</div>
                         <div style={{ color: wmsColors.muted, marginTop: "2px" }}>{action.guide}</div>
                         <div style={{ color: wmsColors.muted }}>{[row.wims.skuId && `SKU ${row.wims.skuId}`, row.wims.barcode, row.wims.estimateId && `견적서 ${row.wims.estimateId}`].filter(Boolean).join(" · ") || "SKU·바코드 없음"}</div>
+                        {row.wims.status === "rejected" && row.sheetRowNumber && (
+                          <div className="wimsRejectionDecisionButtons">
+                            <button type="button" disabled={decidingRow !== null} onClick={() => void setRejectionDecision(row.sheetRowNumber!, "등록불가")}>등록불가</button>
+                            <button type="button" disabled={decidingRow !== null} onClick={() => void setRejectionDecision(row.sheetRowNumber!, "재등록시도")}>재등록시도</button>
+                          </div>
+                        )}
                       </div>
                     );
                   })}

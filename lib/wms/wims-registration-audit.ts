@@ -12,6 +12,7 @@ export interface WimsAuditResultRow {
   sheetRowNumber?: number;
   productDbModelSku?: string;
   productDbSkuId?: string;
+  productDbStatus?: string;
   message: string;
 }
 
@@ -38,9 +39,18 @@ export interface WimsRegistrationApplyResult {
 }
 
 const PENDING = new Set(["신상승인대기", "기존상품승인대기"]);
+const REJECTION_DECISIONS = new Set(["등록불가", "재등록시도"]);
 
 function normalize(value: unknown): string {
   return String(value ?? "").trim().toUpperCase().replace(/[\s_-]+/g, "");
+}
+
+function normalizeProductName(value: string, trailingModelSku = ""): string {
+  let text = value.trim();
+  if (trailingModelSku && text.toUpperCase().endsWith(trailingModelSku.toUpperCase())) {
+    text = text.slice(0, text.length - trailingModelSku.length).trim();
+  }
+  return normalize(text.replace(/\d+\s*(?:컬러|색상?)/g, "").replace(/[,.]/g, ""));
 }
 
 function headerIndex(headers: string[], candidates: string[]): number {
@@ -72,9 +82,11 @@ export async function buildWimsRegistrationAudit(wimsRows: WimsRegistrationRow[]
   }));
   const byModelSku = new Map<string, typeof products>();
   const bySkuId = new Map<string, typeof products>();
+  const byProductName = new Map<string, typeof products>();
   for (const product of products) {
     if (normalize(product.modelSku)) byModelSku.set(normalize(product.modelSku), [...(byModelSku.get(normalize(product.modelSku)) || []), product]);
     if (normalize(product.skuId)) bySkuId.set(normalize(product.skuId), [...(bySkuId.get(normalize(product.skuId)) || []), product]);
+    if (normalizeProductName(product.productName)) byProductName.set(normalizeProductName(product.productName), [...(byProductName.get(normalizeProductName(product.productName)) || []), product]);
   }
 
   const matchedSheetRows = new Set<number>();
@@ -82,14 +94,15 @@ export async function buildWimsRegistrationAudit(wimsRows: WimsRegistrationRow[]
   for (const wims of wimsRows) {
     const skuMatches = wims.skuId ? bySkuId.get(normalize(wims.skuId)) || [] : [];
     const modelMatches = wims.modelSku ? byModelSku.get(normalize(wims.modelSku)) || [] : [];
-    const matches = skuMatches.length > 0 ? skuMatches : modelMatches;
+    const rejectedNameMatches = wims.status === "rejected" ? byProductName.get(normalizeProductName(wims.productName, wims.modelSku)) || [] : [];
+    const matches = skuMatches.length > 0 ? skuMatches : modelMatches.length > 0 ? modelMatches : rejectedNameMatches;
     if (matches.length !== 1) {
       rows.push({ type: matches.length > 1 ? "conflict" : "unmatched", wims, message: matches.length > 1 ? `제품DB 후보가 ${matches.length}행이라 자동 연결할 수 없습니다.` : "제품DB에서 동일 SKU ID 또는 모델SKU 행을 찾지 못했습니다." });
       continue;
     }
     const product = matches[0];
     matchedSheetRows.add(product.sheetRowNumber);
-    const base = { wims, sheetRowNumber: product.sheetRowNumber, productDbModelSku: product.modelSku, productDbSkuId: product.skuId };
+    const base = { wims, sheetRowNumber: product.sheetRowNumber, productDbModelSku: product.modelSku, productDbSkuId: product.skuId, productDbStatus: product.status };
     if (wims.status === "rejected") {
       rows.push({ ...base, type: "rejected", message: "WIMS 반려 건입니다. SKU·바코드를 자동 반영하지 않습니다." });
     } else if (wims.status === "reviewing") {
@@ -121,6 +134,34 @@ export async function buildWimsRegistrationAudit(wimsRows: WimsRegistrationRow[]
     pendingNotInWims,
   };
   return { ...auditWithoutToken, dryRunToken: createHash("sha256").update(JSON.stringify(auditWithoutToken)).digest("hex") };
+}
+
+export async function applyWimsRejectionDecision(
+  wimsRows: WimsRegistrationRow[],
+  expectedDryRunToken: string,
+  sheetRowNumber: number,
+  decision: string
+) {
+  if (!REJECTION_DECISIONS.has(decision)) throw new Error("반려 처리 상태는 등록불가 또는 재등록시도만 가능합니다.");
+  const audit = await buildWimsRegistrationAudit(wimsRows);
+  if (!expectedDryRunToken || audit.dryRunToken !== expectedDryRunToken) throw new Error("WIMS 또는 제품DB 내용이 변경되었습니다. 다시 대조해주세요.");
+  const target = audit.rows.find(row => row.wims.status === "rejected" && row.sheetRowNumber === sheetRowNumber);
+  if (!target) throw new Error("정확히 연결된 반려 제품DB 행을 찾지 못했습니다.");
+
+  const sheetRows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" });
+  const headers = (sheetRows[0] || []).map(value => String(value ?? "").trim());
+  const statusIndex = headerIndex(headers, ["현재상태", "상태"]);
+  if (statusIndex < 0) throw new Error("제품DB 현재상태 열을 찾지 못했습니다.");
+  const currentStatus = String(sheetRows[sheetRowNumber - 1]?.[statusIndex] ?? "").trim();
+  const allowed = new Set(["신상승인대기", "기존상품승인대기", "등록파일생성", "등록불가", "재등록시도"]);
+  if (!allowed.has(currentStatus)) throw new Error(`현재상태가 ${currentStatus || "빈값"}이라 반려 상태로 변경하지 않았습니다.`);
+  if (currentStatus === decision) return { applied: false, decision, sheetRowNumber, backupSheetName: "" };
+
+  const backup = await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME);
+  const rechecked = await buildWimsRegistrationAudit(wimsRows);
+  if (rechecked.dryRunToken !== audit.dryRunToken) throw new Error("제품DB가 백업 중 변경되었습니다. 다시 대조해주세요.");
+  await updateSheetCells(PRODUCT_DB_SHEET_NAME, [{ row: sheetRowNumber, col: statusIndex + 1, value: decision }]);
+  return { applied: true, decision, sheetRowNumber, backupSheetName: backup.sheetName };
 }
 
 export async function applyWimsRegistrationAudit(wimsRows: WimsRegistrationRow[], expectedDryRunToken: string): Promise<WimsRegistrationApplyResult> {
