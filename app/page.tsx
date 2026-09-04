@@ -18,7 +18,7 @@ import {
   colorCode,
   ringSizeNumber,
 } from "@/lib/product-db/files";
-import { assertProductDbFilesWritable, ensureProductFolderTree, writeCategoryFile, writeProductDbFiles, writeRootFolderFile } from "@/lib/product-db/fs";
+import { assertProductDbFilesWritable, ensureProductFolderTree, rootFolderFileExists, writeCategoryFile, writeProductDbFiles, writeRootFolderFile } from "@/lib/product-db/fs";
 import { dataUrlToBlob } from "@/lib/product-db/files";
 import { buildProductDbZip } from "@/lib/product-db/zip";
 import { compressImageDataUrl } from "@/lib/image/compress";
@@ -1765,7 +1765,12 @@ export default function Home() {
         importerName: labelImporterName,
       });
       if (dbHandle) {
-        const savedPath = await writeRootFolderFile(dbHandle, "라벨", fileName, labelBlob);
+        const existing = await rootFolderFileExists(dbHandle, "라벨", fileName);
+        if (existing && !window.confirm(`${fileName}이 이미 있습니다.\n\n기존 라벨을 새 내용으로 교체할까요?`)) {
+          setExportMessage("기존 라벨을 유지했습니다.");
+          return;
+        }
+        const savedPath = await writeRootFolderFile(dbHandle, "라벨", fileName, labelBlob, { overwriteExisting: existing });
         setExportMessage(`라벨 저장 완료 → ${savedPath}`);
       } else {
         downloadBlobFile(labelBlob, fileName);
@@ -2448,7 +2453,7 @@ export default function Home() {
             {exportLoading === "images" ? "이미지 묶는 중..." : "썸네일 + 추가이미지만 다운로드"}
           </button>
           <button className="secondaryButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadLabel()}>
-            {exportLoading === "label" ? "라벨 생성 중..." : "라벨만 다운로드"}
+            {exportLoading === "label" ? "라벨 생성 중..." : dbHandle ? "라벨만 저장" : "라벨만 다운로드"}
           </button>
         </div>
         {exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}

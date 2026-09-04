@@ -69,6 +69,32 @@ function stripTrailingOptionFromName(name: string, option: string): string {
 }
 
 /**
+ * 제품DB 옵션이 색상까지만 저장된 경우에도 상품명 원문 뒤에 이어지는 호수/사이즈를 함께
+ * 보여준다. 알려진 옵션이 상품명에 실제로 존재하고 그 뒤에 명확한 규격 토큰이 있을 때만
+ * 확장하므로 없는 옵션을 추측해 만들지 않는다.
+ */
+function enrichKnownOptionFromName(name: string, knownOption: string): string {
+  const normalizedKnown = knownOption.trim();
+  if (!normalizedKnown) return "";
+
+  const matchPattern = escapeRegExp(normalizedKnown).replace(/\s+/g, "\\s+");
+  const matches = [...name.matchAll(new RegExp(matchPattern, "gi"))];
+  const lastMatch = matches.at(-1);
+  if (!lastMatch || lastMatch.index === undefined) return normalizedKnown;
+
+  const literalTail = name.slice(lastMatch.index).trim();
+  const remainder = literalTail.slice(lastMatch[0].length).trim();
+  const hasExplicitSize = /(?:^|[\s,/+\-])(?:\d{1,3}(?:\.\d+)?\s*(?:호|mm|cm)|(?:XS|S|M|L|XL|XXL|FREE))(?:$|[\s,/+\-])/i.test(remainder);
+  return hasExplicitSize ? literalTail : normalizedKnown;
+}
+
+/** 옵션 컬럼이 비어 있어도 상품명 끝의 색상 + 호수 조합이 명확하면 원문 그대로 분리한다. */
+function extractTrailingSizeOption(name: string): string {
+  const match = /(?:^|[\s,/\-])((?:실버|골드|로즈골드|블랙|화이트|핑크골드)\s+\d{1,3}(?:\.\d+)?\s*호(?:\s*\+\s*[^,]+)?)\s*$/i.exec(name);
+  return match?.[1]?.trim() || "";
+}
+
+/**
  * 상품명 정리 + 옵션 추출을 한 번에 돌려준다. 확정된 옵션명(제품DB 실제 값이든, 상품명 끝에서
  * 추출한 값이든)이 상품명 끝부분과 겹치면 그 중복 부분을 상품명에서 제거해 "상품명 / 옵션"이
  * 두 줄에 중복 표시되지 않게 한다 — 화면(거래처 발주서 초안 카드, 수동 상품검색 결과)과 카카오톡
@@ -92,7 +118,7 @@ export function resolveDisplayNameAndOption(
   const commaIndex = cleanedName.indexOf(",");
   if (commaIndex >= 0) {
     const name = cleanedName.slice(0, commaIndex).trim();
-    const optionParts = [knownOption, cleanedName.slice(commaIndex + 1)]
+    const optionParts = [cleanedName.slice(commaIndex + 1), knownOption]
       .flatMap(value => value.split(","))
       .map(value => value.trim())
       .filter(Boolean);
@@ -107,10 +133,11 @@ export function resolveDisplayNameAndOption(
   }
 
   if (knownOption) {
-    return { name: stripTrailingOptionFromName(cleanedName, knownOption), option: knownOption };
+    const completeOption = enrichKnownOptionFromName(cleanedName, knownOption);
+    return { name: stripTrailingOptionFromName(cleanedName, completeOption), option: completeOption };
   }
 
-  const extracted = extractTrailingOptionFromName(cleanedName);
+  const extracted = extractTrailingOptionFromName(cleanedName) || extractTrailingSizeOption(cleanedName);
   if (!extracted) return { name: cleanedName, option: "" };
   const strippedName = stripTrailingOptionFromName(cleanedName, extracted);
   return { name: strippedName || cleanedName, option: extracted };
