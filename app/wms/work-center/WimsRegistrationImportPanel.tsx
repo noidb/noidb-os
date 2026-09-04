@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { parseWimsClipboard, type WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 import type { WimsRegistrationAudit } from "@/lib/wms/wims-registration-audit";
 import { wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
@@ -33,6 +33,7 @@ export default function WimsRegistrationImportPanel() {
       if (!saved?.capturedAt || !Array.isArray(saved.snapshot?.rows)) return;
       setSnapshot(saved.snapshot);
       setCapturedAt(saved.capturedAt);
+      void auditRows(saved.snapshot.rows);
     } catch {
       localStorage.removeItem(STORAGE_KEY);
     }
@@ -126,6 +127,17 @@ export default function WimsRegistrationImportPanel() {
     await auditRows(snapshot.rows);
   }
 
+  const actionRows = useMemo(() => audit?.rows.filter(row =>
+    row.wims.status === "rejected" || row.type === "conflict" || row.type === "unmatched" || row.type === "approved_candidate"
+  ) || [], [audit]);
+
+  function actionLabel(row: WimsRegistrationAudit["rows"][number]) {
+    if (row.wims.status === "rejected") return { title: "반려 · 재등록 판단", color: "#c0392b", guide: "Supplier Hub에서 반려사유를 확인한 뒤 수정 재등록 또는 종료를 선택하세요." };
+    if (row.type === "conflict") return { title: "충돌 · 자동반영 금지", color: "#c0392b", guide: "SKU 또는 불변 바코드가 다릅니다. 기존 제품DB 행을 직접 확인하세요." };
+    if (row.type === "unmatched") return { title: "미연결 · 모델SKU 확인", color: "#a06118", guide: "상품명 끝의 모델SKU와 제품DB 모델SKU가 같은지 확인하세요." };
+    return { title: "승인 · 안전 연결 가능", color: wmsColors.greenDark, guide: "위의 안전 연결 버튼으로 SKU와 바코드를 기존 행에 채울 수 있습니다." };
+  }
+
   return (
     <section id="wims-registration" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", background: "#fff" }}>
       <strong style={{ display: "block", fontSize: "14px" }}>상품 등록 상태 확인 · WIMS</strong>
@@ -166,17 +178,46 @@ export default function WimsRegistrationImportPanel() {
           <button type="button" onClick={compareProductDb} disabled={auditing} style={{ ...wmsGhostButton, minHeight: "34px", marginTop: "9px", padding: "0 11px" }}>{auditing ? "제품DB 대조 중..." : "제품DB와 읽기 전용 대조"}</button>
           {audit && <p style={{ fontSize: "11px", margin: "8px 0 0", color: wmsColors.ink }}>연결 가능 {audit.approvedCandidateCount}건 · 검수중 {audit.reviewingCount}건 · 반려 {audit.rejectedCount}건 · 이미 연결 {audit.alreadyLinkedCount}건 · 충돌 {audit.conflictCount}건 · 미연결 {audit.unmatchedCount}건 · 붙여넣은 범위에서 확인 안 된 승인대기 {audit.pendingNotInWimsCount}건</p>}
           {audit && audit.approvedCandidateCount > 0 && <button type="button" onClick={applyApprovedCandidates} disabled={applying} style={{ ...wmsGhostButton, minHeight: "34px", marginTop: "8px", padding: "0 11px", color: wmsColors.greenDark }}>{applying ? "백업 후 연결 중..." : `검수완료 ${audit.approvedCandidateCount}건 안전 연결`}</button>}
-          <div style={{ display: "grid", gap: "6px", marginTop: "9px", maxHeight: "260px", overflowY: "auto" }}>
-            {snapshot.rows.map((row, index) => (
-              <div key={`${row.estimateId}-${row.modelSku}-${index}`} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "8px", padding: "8px 10px", fontSize: "11px" }}>
-                <strong style={{ color: row.status === "rejected" ? "#c0392b" : row.status === "approved" ? wmsColors.greenDark : wmsColors.ink }}>
-                  {row.modelSku || "모델SKU 확인 필요"} · {statusText[row.status]}
-                </strong>
-                <div>{row.productName}</div>
-                <div style={{ color: wmsColors.muted }}>{[row.skuId && `SKU ${row.skuId}`, row.barcode, row.estimateId && `견적서 ${row.estimateId}`].filter(Boolean).join(" · ") || "SKU·바코드 없음"}</div>
-              </div>
-            ))}
-          </div>
+          {audit && (
+            <div style={{ marginTop: "13px" }}>
+              <strong style={{ display: "block", fontSize: "13px" }}>지금 조치할 상품 {actionRows.length + audit.pendingNotInWimsCount}건</strong>
+              {actionRows.length === 0 && audit.pendingNotInWimsCount === 0 ? (
+                <p style={{ margin: "7px 0 0", padding: "10px", borderRadius: "9px", background: wmsColors.greenSoft, color: wmsColors.greenDark, fontSize: "11px", fontWeight: 700 }}>현재 WIMS에서 조치할 상품이 없습니다.</p>
+              ) : (
+                <div style={{ display: "grid", gap: "7px", marginTop: "8px", maxHeight: "320px", overflowY: "auto" }}>
+                  {actionRows.map((row, index) => {
+                    const action = actionLabel(row);
+                    return (
+                      <div key={`${row.wims.estimateId}-${row.wims.modelSku}-${index}`} style={{ border: `1px solid ${action.color}55`, borderLeft: `4px solid ${action.color}`, borderRadius: "9px", padding: "9px 10px", fontSize: "11px" }}>
+                        <strong style={{ color: action.color }}>{row.wims.modelSku || "모델SKU 확인 필요"} · {action.title}</strong>
+                        <div style={{ marginTop: "2px" }}>{row.wims.productName}</div>
+                        <div style={{ color: wmsColors.muted, marginTop: "2px" }}>{action.guide}</div>
+                        <div style={{ color: wmsColors.muted }}>{[row.wims.skuId && `SKU ${row.wims.skuId}`, row.wims.barcode, row.wims.estimateId && `견적서 ${row.wims.estimateId}`].filter(Boolean).join(" · ") || "SKU·바코드 없음"}</div>
+                      </div>
+                    );
+                  })}
+                  {audit.pendingNotInWims.map(item => (
+                    <div key={`pending-${item.sheetRowNumber}`} style={{ border: "1px solid #a0611855", borderLeft: "4px solid #a06118", borderRadius: "9px", padding: "9px 10px", fontSize: "11px" }}>
+                      <strong style={{ color: "#a06118" }}>{item.modelSku || "모델SKU 확인 필요"} · WIMS 범위에서 미확인</strong>
+                      <div style={{ marginTop: "2px" }}>{item.productName}</div>
+                      <div style={{ color: wmsColors.muted }}>다른 등록일 또는 다음 WIMS 페이지에 있는지 확인하세요. 제품DB {item.sheetRowNumber}행</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <details style={{ marginTop: "10px" }}>
+            <summary style={{ cursor: "pointer", color: wmsColors.muted, fontSize: "11px", fontWeight: 700 }}>정상 상품을 포함한 WIMS 전체 {snapshot.rows.length}건 보기</summary>
+            <div style={{ display: "grid", gap: "6px", marginTop: "9px", maxHeight: "260px", overflowY: "auto" }}>
+              {snapshot.rows.map((row, index) => (
+                <div key={`${row.estimateId}-${row.modelSku}-${index}`} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "8px", padding: "8px 10px", fontSize: "11px" }}>
+                  <strong style={{ color: row.status === "rejected" ? "#c0392b" : row.status === "approved" ? wmsColors.greenDark : wmsColors.ink }}>{row.modelSku || "모델SKU 확인 필요"} · {statusText[row.status]}</strong>
+                  <div>{row.productName}</div>
+                </div>
+              ))}
+            </div>
+          </details>
         </div>
       )}
     </section>
