@@ -82,7 +82,8 @@ const UNISEX_RING_SIZES = "9호,11호,14호,17호,20호,22호,25호";
 const MAX_PHOTOS = 10;
 const ACCEPTED = ["image/jpeg", "image/jpg", "image/png"];
 const DEFAULT_DETAIL_HEADER = "/노이드비-상단이미지.jpg";
-const DRAFT_STORAGE_KEY = "laura-product-draft";
+const DRAFT_STORAGE_KEY = "noidb-product-draft";
+const LAURA_DRAFT_STORAGE_KEY = "laura-product-draft";
 const LEGACY_DRAFT_STORAGE_KEY = ["noi", "db-product-draft"].join("");
 const DEFAULT_LABEL_YEAR_MONTH = (() => {
   const now = new Date();
@@ -323,12 +324,13 @@ export default function Home() {
     })();
 
     try {
-      const legacyRaw = localStorage.getItem(LEGACY_DRAFT_STORAGE_KEY);
+      const legacyKey = localStorage.getItem(LAURA_DRAFT_STORAGE_KEY) ? LAURA_DRAFT_STORAGE_KEY : LEGACY_DRAFT_STORAGE_KEY;
+      const legacyRaw = localStorage.getItem(legacyKey);
       const raw = localStorage.getItem(DRAFT_STORAGE_KEY) || legacyRaw;
       if (!raw) return;
       if (legacyRaw) {
         localStorage.setItem(DRAFT_STORAGE_KEY, raw);
-        localStorage.removeItem(LEGACY_DRAFT_STORAGE_KEY);
+        localStorage.removeItem(legacyKey);
       }
       const draft = JSON.parse(raw);
       if (draft.product) setProduct((prev: Product) => ({
@@ -920,6 +922,7 @@ export default function Home() {
     setBatchStatus("");
     setDbSavedFiles([]);
     localStorage.removeItem(DRAFT_STORAGE_KEY);
+    localStorage.removeItem(LAURA_DRAFT_STORAGE_KEY);
     localStorage.removeItem(LEGACY_DRAFT_STORAGE_KEY);
     setMessage("전체 입력값을 기본값으로 초기화했습니다.");
   };
@@ -1404,6 +1407,7 @@ export default function Home() {
         }),
       });
       localStorage.removeItem(DRAFT_STORAGE_KEY);
+      localStorage.removeItem(LAURA_DRAFT_STORAGE_KEY);
       localStorage.removeItem(LEGACY_DRAFT_STORAGE_KEY);
       setDraftStatus(`${model}으로 임시저장되었습니다.`);
       setMessage(`${model}으로 임시저장되었습니다.`);

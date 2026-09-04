@@ -1,0 +1,30 @@
+{
+  "downloadDir": "G:\\내 드라이브\\쿠팡데이터\\발주서리스트다운",
+  "inputDirs": {
+    "skuMaster": "G:\\내 드라이브\\쿠팡데이터\\상품공급상태관리 다운로드",
+    "inboundHistory": "G:\\내 드라이브\\쿠팡데이터\\입고상세내역 다운로드",
+    "poList": "G:\\내 드라이브\\쿠팡데이터\\발주서리스트다운"
+  },
+  "importUrl": "https://noidb-os.vercel.app/api/coupang-data",
+  "scanIntervalSeconds": 30,
+  "lookbackHours": 168,
+  "modePatterns": {
+    "skuMaster": ["^상품공급상태관리.*\\.xlsx$", "^noidb.*_sku_download_.*\\.xlsx$"],
+    "inboundHistory": ["^Coupang_Stocked_Data_List.*\\.xlsx$"],
+    "poList": ["^발주서(?:리스트)?.*\\.xlsx$"]
+  },
+  "archivePatterns": [
+    "^발주서리스트.*\\.zip$"
+  ],
+  "hanjinOutputDir": "G:\\내 드라이브\\쿠팡데이터\\한진택배업로드",
+  "centerPostcodes": {
+    "양산1": "50615",
+    "창원4": "51599",
+    "인천36": "22853",
+    "인천30": "22793",
+    "인천4": "22849",
+    "안산3": "15657",
+    "대구2": "39868",
+    "대구3": "43008"
+  }
+}

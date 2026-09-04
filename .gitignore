@@ -42,3 +42,6 @@ env/
 *-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].json
 .vercel
 .env*
+automation/coupang-po/.state/
+automation/coupang-po/config.json
+automation/coupang-po/*.log
