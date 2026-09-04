@@ -114,6 +114,7 @@ void (async () => {
     };
     await syncProductDbToGoogleSheet(registration);
     assert.equal(clientSheetBodies.at(-1)?.syncMode, "skipDuplicate", "클라이언트 신규등록은 중복 모델 건너뜀을 명시해야 합니다.");
+    assert.match(String(clientSheetBodies.at(-1)?.operationId || ""), /^[A-Za-z0-9_-]{12,120}$/, "클라이언트 신규등록은 재시도용 작업번호를 보내야 합니다.");
 
     process.env.GOOGLE_SHEETS_WEB_APP_URL = "https://example.invalid/noidb-sheet-test";
     process.env.QUICK_DRAFT_SYNC_CODE = "test-action-code-1234";
@@ -134,10 +135,11 @@ void (async () => {
     const routeResponse = await syncGoogleSheetRoute(new NextRequest("https://noidb-os.vercel.app/api/google-sheet", {
       method: "POST",
       headers: { ...sameOriginHeaders, cookie: `${NOIDB_ACTION_SESSION_COOKIE}=${session}` },
-      body: JSON.stringify({ ...registration, syncMode: "upsert" }),
+      body: JSON.stringify({ ...registration, syncMode: "upsert", operationId: "test-operation-0001" }),
     }));
     assert.equal(routeResponse.status, 200);
     assert.equal(webhookBodies.at(-1)?.syncMode, "skipDuplicate", "직접 API 요청도 신규등록을 upsert로 바꿀 수 없어야 합니다.");
+    assert.equal(webhookBodies.at(-1)?.operationId, "test-operation-0001", "동일 작업 재시도용 번호를 Apps Script까지 전달해야 합니다.");
     console.log("테스트·교육용 무변경 규칙 검증 완료");
     console.log("신규 상품등록 create-only 강제 검증 완료");
     console.log("기존 파일 보존·신규 저장 실패 롤백 검증 완료");

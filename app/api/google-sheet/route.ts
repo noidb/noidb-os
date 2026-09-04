@@ -115,6 +115,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ configured: called.configured, ...called.result });
     }
     const payload = raw as ExportPayload;
+    const operationId = String(raw.operationId || "").trim();
+    if (!/^[A-Za-z0-9_-]{12,120}$/.test(operationId)) {
+      return NextResponse.json({ configured: true, synced: false, error: "등록 작업번호가 올바르지 않습니다." }, { status: 400 });
+    }
     const sale = parseNumber(payload.product.price);
     const cost = costWithVat(parseNumber(payload.product.cost));
     const supply = supplyPrice(sale);
@@ -152,6 +156,7 @@ export async function POST(req: NextRequest) {
         payload: quotePayload,
       },
       replacementSku: payload.product.replacementSku || "",
+      operationId,
       // 신규 상품등록은 화면의 사전 중복검사와 무관하게 서버에서도 create-only로 고정한다.
       // 기존 모델 수정은 linkReplacementExisting 등 별도 명시 작업에서만 허용한다.
       syncMode: "skipDuplicate",

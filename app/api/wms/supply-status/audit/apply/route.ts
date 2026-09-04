@@ -3,6 +3,7 @@ import {
   applySupplyStatusAudit,
   ProductDbHeaderMissingError,
   SupplyStatusPreviewChangedError,
+  type SupplyStatusTableCapture,
 } from "@/lib/wms/supply-status-update";
 import { hasNoidbActionSession, isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
 
@@ -19,7 +20,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ applied: false, error: "명시적 승인 문자열과 최신 진단 토큰이 필요합니다." }, { status: 423 });
   }
   try {
-    const result = await applySupplyStatusAudit(body.dryRunToken);
+    const result = await applySupplyStatusAudit(body.dryRunToken, body.capture as SupplyStatusTableCapture | undefined);
     if (!("applied" in result)) return NextResponse.json({ applied: false, error: "상품공급상태 파일을 찾지 못했습니다." }, { status: 404 });
     return NextResponse.json(result);
   } catch (error) {

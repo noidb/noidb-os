@@ -316,6 +316,7 @@ export default function Home() {
   const [dbFolderName, setDbFolderName] = useState("");
   const [dbStatus, setDbStatus] = useState("");
   const [dbSavedFiles, setDbSavedFiles] = useState<string[]>([]);
+  const [registrationUploadReady, setRegistrationUploadReady] = useState<{ model: string; files: string[] } | null>(null);
   const existingDetailInputRef = useRef<HTMLInputElement>(null);
   const uploadPoolInputRef = useRef<HTMLInputElement>(null);
 
@@ -1572,6 +1573,7 @@ export default function Home() {
               tags: info.tags || "",
               sourcingUrl: info.sourcingUrl || "",
               syncMode: "skipDuplicate",
+              operationId: globalThis.crypto?.randomUUID?.() || `migration-${Date.now()}-${found}`,
             }),
           });
           const result = await res.json().catch(() => ({}));
@@ -1602,8 +1604,12 @@ export default function Home() {
   };
 
   const batchSave = async () => {
+    const isActual = batchMode === "actual";
     // 실제 등록 버튼을 누른 뒤 성공·실패·검증 차단 여부와 무관하게 다음 실행은 연습 모드다.
-    if (batchMode === "actual") setBatchMode("practice");
+    if (isActual) {
+      setBatchMode("practice");
+      setRegistrationUploadReady(null);
+    }
     if (pendingReplacementCleanup) {
       setBatchStatus("SKU 이관 결과 확인이 끝나지 않았습니다. 기존행 삭제 또는 연결 취소를 먼저 선택해주세요.");
       return;
@@ -1611,17 +1617,17 @@ export default function Home() {
     const required: string[] = [];
     if (!model) required.push("모델명");
     if (!product.category) required.push("카테고리");
-    if (batchMode === "actual" && !dbHandle && dbSupported) required.push("상품DB 폴더 연결");
+    if (isActual && !dbHandle && dbSupported) required.push("상품DB 폴더 연결");
     if (required.length) {
       setBatchStatus(`필수 항목 부족: ${required.join(", ")}`);
       return;
     }
 
-    if (batchMode === "actual" && modelDuplicate) {
+    if (isActual && modelDuplicate) {
       setBatchStatus("기존 모델의 일괄 저장은 안전을 위해 차단했습니다. 필요한 파일만 개별 다운로드하세요.");
       return;
     }
-    if (batchMode === "actual" && modelCheckMessage !== "사용 가능한 모델명") {
+    if (isActual && modelCheckMessage !== "사용 가능한 모델명") {
       setBatchStatus("실제 등록은 Google DB에서 사용 가능한 모델명 확인이 끝난 뒤에만 저장할 수 있습니다.");
       return;
     }
@@ -1646,7 +1652,7 @@ export default function Home() {
     setBatchBusy(true);
     setBatchStatus("등록파일을 생성·저장하고 있습니다...");
     try {
-      if (batchMode === "actual" && !await ensureNoidbActionSession()) {
+      if (isActual && !await ensureNoidbActionSession()) {
         setBatchStatus("실제 등록을 취소했습니다. 상품 폴더와 Google 제품DB는 변경하지 않았습니다.");
         return;
       }
@@ -1658,7 +1664,7 @@ export default function Home() {
       }
 
       const { files, skipped, readyFiles } = await collectInput(preview, false);
-      if (batchMode === "practice") {
+      if (!isActual) {
         const blob = await buildProductDbZip(product.category, model, files);
         downloadBlobFile(blob, `연습용_상품DB_${model}.zip`);
         setDbSavedFiles(readyFiles);
@@ -1680,9 +1686,12 @@ export default function Home() {
         const blob = await buildProductDbZip(product.category, model, files);
         downloadBlobFile(blob, `상품DB_${model}.zip`);
         setDbSavedFiles(readyFiles);
-        setBatchStatus(`상품 생성 완료 · ZIP 다운로드 (${files.length}개 파일)`);
+        const sync = await syncProductDbToGoogleSheet((await buildCollectInput(preview)));
+        if (!sync.ok) throw new Error(`${sync.message} · ZIP은 다운로드됐지만 Google 제품DB는 변경되지 않았습니다. 같은 모델로 다시 실행할 수 있습니다.`);
+        setBatchStatus(`상품 생성 완료 · ZIP 다운로드 (${files.length}개 파일) · ${sync.message}`);
       }
-      if (batchMode === "actual") {
+      if (isActual) {
+        setRegistrationUploadReady({ model, files: files.map(file => file.path) });
         await saveDraft();
         await loadQuoteQueue();
       }
@@ -2473,6 +2482,19 @@ export default function Home() {
         {batchStatus && <p className={batchStatus.startsWith("오류") ? "error" : "detailMessage"}>{batchStatus}</p>}
         {dbSavedFiles.length > 0 && (
           <div className="dbFileList"><h3>저장된 파일</h3><ul>{dbSavedFiles.slice(0, 40).map(f => <li key={f}>{f}</li>)}</ul></div>
+        )}
+        {registrationUploadReady?.model === model && (
+          <div className="registrationNextStep" role="status">
+            <div>
+              <strong>실제 등록파일 준비 완료</strong>
+              <span>{model} · {registrationUploadReady.files.length.toLocaleString()}개 파일 · Google 제품DB 반영 완료</span>
+              <span>다음은 Supplier Hub에서 등록파일과 견적서를 올린 뒤 최종 제출하는 단계입니다.</span>
+            </div>
+            <div className="registrationNextActions">
+              {dbSupported && <button type="button" className="secondaryButton" onClick={() => void openModelFolder()}>저장 폴더 열기</button>}
+              <a href="https://supplier.coupang.com/qvt/registration" target="_blank" rel="noreferrer">Supplier Hub 대량상품등록 열기</a>
+            </div>
+          </div>
         )}
         <div className="quoteQueuePanel">
           <div className="quoteQueueHeader">

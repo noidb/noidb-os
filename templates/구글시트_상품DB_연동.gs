@@ -151,37 +151,56 @@ function doPost(e) {
     }
 
     const model = Array.isArray(data.productInputRow) ? String(data.productInputRow[4] || '').trim() : '';
-    const duplicate = model && modelExists_(db, model);
-    if (duplicate && data.syncMode === 'skipDuplicate') {
-      return json_({ ok: true, duplicate: true, skipped: true });
+    const operationId = String(data.operationId || '').trim();
+    if (!/^[A-Za-z0-9_-]{12,120}$/.test(operationId)) {
+      return json_({ ok: false, error: '등록 작업번호가 올바르지 않습니다.' });
     }
+    const operationKey = 'product-registration:' + operationId;
+    const operationCache = CacheService.getScriptCache();
+    const registrationLock = LockService.getScriptLock();
+    registrationLock.waitLock(30000);
+    try {
+      const cached = operationCache.get(operationKey);
+      if (cached) return json_(JSON.parse(cached));
 
-    if (String(data.replacementSku || '').trim()) {
-      return json_({ ok: false, error: '재등록 상품은 먼저 [기존 등록행에 연결]을 눌러 이관 내용을 확인해주세요. 일반 저장만으로는 기존행을 교체하지 않습니다.' });
+      const duplicate = model && modelExists_(db, model);
+      if (duplicate && data.syncMode === 'skipDuplicate') {
+        const duplicateResult = { ok: true, duplicate: true, skipped: true };
+        operationCache.put(operationKey, JSON.stringify(duplicateResult), 21600);
+        return json_(duplicateResult);
+      }
+
+      if (String(data.replacementSku || '').trim()) {
+        return json_({ ok: false, error: '재등록 상품은 먼저 [기존 등록행에 연결]을 눌러 이관 내용을 확인해주세요. 일반 저장만으로는 기존행을 교체하지 않습니다.' });
+      }
+
+      const imageFormulas = saveProductImages_(data.productImages || []);
+      let rows = Array.isArray(data.productDbRows) ? data.productDbRows.map(row => {
+        const next = row.slice(0, PRODUCT_DB_HEADERS.length);
+        const imageColumn = dbColumn_('이미지');
+        const filename = String(next[imageColumn] || '');
+        if (imageFormulas[filename]) next[imageColumn] = imageFormulas[filename];
+        return next;
+      }) : [];
+
+      const replacementSku = String(data.replacementSku || '').trim();
+      if (replacementSku) rows = prepareReplacementRows_(ss, db, replacementSku, model, rows);
+      else rows.forEach(row => {
+        if (!String(row[dbColumn_('SKU ID')] || '').trim()) row[dbColumn_('현재상태')] = '신상승인대기';
+      });
+
+      const replacementSummary = rows && rows.replacementSummary ? rows.replacementSummary : null;
+      backupProductDbSheet_(ss, db, '상품저장');
+      upsertProduct_(db, data.productInputRow, rows);
+      if (data.quoteRecord) saveQuoteQueue_(ss, data.quoteRecord);
+      const result = { ok: true, duplicate: false, updated: Boolean(duplicate), quoteQueued: Boolean(data.quoteRecord),
+        cleanupAvailable: Boolean(replacementSummary && replacementSummary.activeOldRows),
+        oldRows: replacementSummary ? Number(replacementSummary.totalOld || 0) : 0 };
+      operationCache.put(operationKey, JSON.stringify(result), 21600);
+      return json_(result);
+    } finally {
+      registrationLock.releaseLock();
     }
-
-    const imageFormulas = saveProductImages_(data.productImages || []);
-    let rows = Array.isArray(data.productDbRows) ? data.productDbRows.map(row => {
-      const next = row.slice(0, PRODUCT_DB_HEADERS.length);
-      const imageColumn = dbColumn_('이미지');
-      const filename = String(next[imageColumn] || '');
-      if (imageFormulas[filename]) next[imageColumn] = imageFormulas[filename];
-      return next;
-    }) : [];
-
-    const replacementSku = String(data.replacementSku || '').trim();
-    if (replacementSku) rows = prepareReplacementRows_(ss, db, replacementSku, model, rows);
-    else rows.forEach(row => {
-      if (!String(row[dbColumn_('SKU ID')] || '').trim()) row[dbColumn_('현재상태')] = '신상승인대기';
-    });
-
-  const replacementSummary = rows && rows.replacementSummary ? rows.replacementSummary : null;
-  backupProductDbSheet_(ss, db, '상품저장');
-  upsertProduct_(db, data.productInputRow, rows);
-    if (data.quoteRecord) saveQuoteQueue_(ss, data.quoteRecord);
-    return json_({ ok: true, duplicate: false, updated: Boolean(duplicate), quoteQueued: Boolean(data.quoteRecord),
-      cleanupAvailable: Boolean(replacementSummary && replacementSummary.activeOldRows),
-      oldRows: replacementSummary ? Number(replacementSummary.totalOld || 0) : 0 });
   } catch (error) {
     return json_({ ok: false, error: String(error) });
   }

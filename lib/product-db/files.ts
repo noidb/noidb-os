@@ -220,11 +220,24 @@ export async function syncProductDbToGoogleSheet(input: CollectInput): Promise<G
         dataUrl?.startsWith("data:image/") ? await normalizeCoupangImage(dataUrl, 240) : dataUrl,
       ])
     ));
-    const syncRes = await fetch("/api/google-sheet", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...buildGoogleSheetPayload(input, sheetOptionImages), syncMode: "skipDuplicate" }),
-    });
+    const operationId = globalThis.crypto?.randomUUID?.() || `registration-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const requestBody = JSON.stringify({ ...buildGoogleSheetPayload(input, sheetOptionImages), syncMode: "skipDuplicate", operationId });
+    let syncRes: Response | null = null;
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        syncRes = await fetch("/api/google-sheet", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: requestBody,
+        });
+        if (syncRes.status < 500 || attempt === 1) break;
+      } catch (error) {
+        lastError = error;
+        if (attempt === 1) throw error;
+      }
+    }
+    if (!syncRes) throw lastError instanceof Error ? lastError : new Error("Google 시트 연결 실패");
     const sync = await syncRes.json().catch(() => ({}));
     if (!syncRes.ok || sync?.error) return { ok: false, message: `Google 시트 (${sync?.error || "누적 실패"})` };
     if (!sync?.configured) return { ok: false, message: "Google 시트 연동 미설정" };

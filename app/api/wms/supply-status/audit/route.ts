@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { buildSupplyStatusAudit, ProductDbHeaderMissingError } from "@/lib/wms/supply-status-update";
+import { NextRequest, NextResponse } from "next/server";
+import { buildSupplyStatusAudit, ProductDbHeaderMissingError, type SupplyStatusTableCapture } from "@/lib/wms/supply-status-update";
 
 export const runtime = "nodejs";
 
@@ -22,5 +22,18 @@ export async function GET() {
       { error: error instanceof Error ? error.message : "상품공급상태 안전 진단 중 오류가 발생했습니다." },
       { status: 500 }
     );
+  }
+}
+
+/** 브라우저 확장 기능이 검증해 보낸 Supplier Hub 전체 표를 읽기 전용으로 진단한다. */
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json() as { capture?: SupplyStatusTableCapture };
+    const audit = await buildSupplyStatusAudit(body.capture);
+    if (!audit.fileFound) return NextResponse.json({ error: "Supplier Hub 상품공급상태 표가 없습니다." }, { status: 404 });
+    return NextResponse.json(audit);
+  } catch (error) {
+    if (error instanceof ProductDbHeaderMissingError) return NextResponse.json({ error: error.message }, { status: 400 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Supplier Hub 상품공급상태 진단 중 오류가 발생했습니다." }, { status: 400 });
   }
 }

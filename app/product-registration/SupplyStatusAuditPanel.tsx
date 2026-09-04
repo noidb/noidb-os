@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import type { SupplyStatusAudit, SupplyStatusAuditIssue } from "@/lib/wms/supply-status-update";
+import { useEffect, useRef, useState } from "react";
+import type { SupplyStatusAudit, SupplyStatusAuditIssue, SupplyStatusTableCapture } from "@/lib/wms/supply-status-update";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 import { wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
 
@@ -10,6 +10,8 @@ const issueLabel: Record<SupplyStatusAuditIssue["type"], string> = {
   barcode_conflict: "바코드 충돌",
   unmatched: "미매칭",
 };
+const EXTENSION_EVENT_TYPE = "NOIDB_SUPPLY_STATUS_EXTENSION_TRANSFER";
+const EXTENSION_ACK_TYPE = "NOIDB_SUPPLY_STATUS_EXTENSION_ACK";
 
 export default function SupplyStatusAuditPanel() {
   const [loading, setLoading] = useState(false);
@@ -18,23 +20,65 @@ export default function SupplyStatusAuditPanel() {
   const [message, setMessage] = useState("");
   const [audit, setAudit] = useState<SupplyStatusAudit | null>(null);
   const [showIssues, setShowIssues] = useState(false);
+  const [capture, setCapture] = useState<SupplyStatusTableCapture | null>(null);
+  const receivingRef = useRef(false);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("source") === "supply-status-extension" && params.get("transferId")) {
+      setMessage("Supplier Hub 상품공급상태 전체 결과를 받고 있습니다. 이 화면을 그대로 두세요.");
+      return;
+    }
     void runAudit();
   }, []);
 
-  async function runAudit(preserveMessage = false) {
-    if (loading) return;
+  useEffect(() => {
+    async function receiveExtensionTransfer(event: MessageEvent) {
+      if (event.source !== window || event.origin !== window.location.origin || event.data?.type !== EXTENSION_EVENT_TYPE || receivingRef.current) return;
+      const nextCapture = event.data?.payload as SupplyStatusTableCapture | undefined;
+      if (!nextCapture || !Array.isArray(nextCapture.headers) || !Array.isArray(nextCapture.rows)) {
+        setError("확장 프로그램에서 받은 상품공급상태 데이터 형식이 올바르지 않습니다.");
+        window.postMessage({ type: EXTENSION_ACK_TYPE, accepted: false }, window.location.origin);
+        return;
+      }
+      receivingRef.current = true;
+      setCapture(nextCapture);
+      setMessage("Supplier Hub 전체 표를 받았습니다. 제품DB와 안전 대조 중입니다.");
+      const accepted = await runAudit(true, nextCapture);
+      if (accepted) {
+        const completedUrl = new URL(window.location.href);
+        completedUrl.searchParams.delete("source");
+        completedUrl.searchParams.delete("transferId");
+        window.history.replaceState(window.history.state, "", `${completedUrl.pathname}${completedUrl.search}${completedUrl.hash}`);
+        setMessage(`Supplier Hub 실시간 ${nextCapture.totalRowCount.toLocaleString()}건을 빠짐없이 받아 제품DB와 대조했습니다.`);
+      }
+      window.postMessage({ type: EXTENSION_ACK_TYPE, accepted }, window.location.origin);
+      receivingRef.current = false;
+    }
+    window.addEventListener("message", receiveExtensionTransfer);
+    return () => window.removeEventListener("message", receiveExtensionTransfer);
+  }, []);
+
+  async function runAudit(preserveMessage = false, captureOverride: SupplyStatusTableCapture | null = capture): Promise<boolean> {
+    if (loading) return false;
     setLoading(true);
     setError("");
     if (!preserveMessage) setMessage("");
     try {
-      const response = await fetch(`/api/wms/supply-status/audit?t=${Date.now()}`, { cache: "no-store" });
+      const response = captureOverride
+        ? await fetch("/api/wms/supply-status/audit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ capture: captureOverride }),
+        })
+        : await fetch(`/api/wms/supply-status/audit?t=${Date.now()}`, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "안전 진단에 실패했습니다.");
       setAudit(data as SupplyStatusAudit);
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "안전 진단에 실패했습니다.");
+      return false;
     } finally {
       setLoading(false);
     }
@@ -57,7 +101,7 @@ export default function SupplyStatusAuditPanel() {
       const response = await fetch("/api/wms/supply-status/audit/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmation: "안전한 상품공급상태 변경 반영", dryRunToken: audit.dryRunToken }),
+        body: JSON.stringify({ confirmation: "안전한 상품공급상태 변경 반영", dryRunToken: audit.dryRunToken, ...(capture ? { capture } : {}) }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "안전 항목 반영에 실패했습니다.");
@@ -66,7 +110,7 @@ export default function SupplyStatusAuditPanel() {
           ? `반영 완료 · 신규 승인 ${Number(data.newApprovalCount || 0).toLocaleString()}건 · 기존 SKU ${Number(data.existingSkuUpdateCount || 0).toLocaleString()}건 · 백업 ${data.backupSheetName || "완료"}`
           : "반영할 안전 항목이 없습니다."
       );
-      await runAudit(true);
+      await runAudit(true, capture);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "안전 항목 반영에 실패했습니다.");
     } finally {
@@ -79,10 +123,10 @@ export default function SupplyStatusAuditPanel() {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
         <div>
           <strong style={{ display: "block", fontSize: "14px" }}>상품공급상태 안전 진단</strong>
-          <span style={{ color: wmsColors.muted, fontSize: "11px" }}>화면을 열면 Google Drive 최신 파일 자동 진단 · 반영은 최종 확인 후 실행 · 제품DB 신규행 0건</span>
+          <span style={{ color: wmsColors.muted, fontSize: "11px" }}>Supplier Hub의 `상품공급상태 전체를 NOID-B로 전송`을 누르면 다운로드 없이 자동 진단 · 제품DB 신규행 0건</span>
         </div>
         <button type="button" onClick={() => void runAudit()} disabled={loading} style={{ ...wmsGhostButton, minHeight: "36px", padding: "0 14px" }}>
-          {loading ? "자동 진단 중..." : "최신 파일 다시 진단"}
+          {loading ? "자동 진단 중..." : capture ? "받은 실시간 표 다시 진단" : "Drive 최신 파일 진단"}
         </button>
       </div>
 
@@ -92,7 +136,7 @@ export default function SupplyStatusAuditPanel() {
       {audit && (
         <div style={{ marginTop: "12px" }}>
           <p style={{ color: wmsColors.muted, fontSize: "11px", margin: "0 0 10px", wordBreak: "break-all" }}>
-            {audit.fileName} · {new Date(audit.fileMtime).toLocaleString("ko-KR")}
+            {capture ? "Supplier Hub 실시간 전체 수집" : audit.fileName} · {new Date(audit.fileMtime).toLocaleString("ko-KR")}
           </p>
           <div className="wms-supply-audit-grid">
             <AuditValue label="다운로드 전체" value={audit.downloadedCount} />

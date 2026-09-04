@@ -97,6 +97,11 @@
 .dbFileList ul{margin:0;padding-left:18px}
 .dbFileList li{line-height:1.55;word-break:break-all}
 .dbFileList.skipped{border-color:#fde68a;background:#fffbeb}
+.registrationNextStep{margin-top:14px;padding:14px;border:1px solid #b9cbbf;border-radius:14px;background:#eef5f0;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.registrationNextStep>div:first-child{display:grid;gap:4px}.registrationNextStep strong{font-size:15px}.registrationNextStep span{font-size:12px;color:#56645d}
+.registrationNextActions{display:flex;gap:8px;flex-wrap:wrap}.registrationNextActions button,.registrationNextActions a{min-height:40px;padding:0 14px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;text-decoration:none}
+.registrationNextActions a{background:#252525;color:#fff}
+@media(max-width:760px){.registrationNextStep{align-items:stretch}.registrationNextActions{display:grid;grid-template-columns:1fr}.registrationNextActions button,.registrationNextActions a{width:100%;min-height:44px}}
 .coupangDataPanel{margin-top:18px}
 .coupangImportGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px}
 .coupangImportItem{display:flex;flex-direction:column;gap:7px;padding:14px;border:1px solid #dbeafe;border-radius:12px;background:#eff6ff;cursor:pointer}
