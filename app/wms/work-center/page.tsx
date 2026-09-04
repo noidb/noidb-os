@@ -91,8 +91,19 @@ export default function WmsWorkCenterPage() {
        *  가두지 않고 페이지 기본 배경 위에 직접 표시(2026-08-20 실기기 추가 확인 1번). main도
        *  더 이상 자체 흰색 배경을 칠하지 않아 "각진 흰색 외곽 패널" 인상이 사라진다. */}
       <div className="hero wms-work-center-hero">
-        <h1>작업센터</h1>
+        <div>
+          <p className="eyebrow">NOID-B OPERATIONS</p>
+          <h1>작업센터</h1>
+          <p className="sub">상품등록부터 입고·피킹까지 PC와 모바일에서 같은 순서로 진행합니다.</p>
+        </div>
       </div>
+
+      <nav className="wms-workflow-nav" aria-label="작업 흐름 바로가기">
+        <a href="/"><span>1</span><strong>상품 준비</strong><small>AI 상품등록</small></a>
+        <a href="#wims-registration"><span>2</span><strong>등록 확인</strong><small>WIMS 검수</small></a>
+        <a href="#supply-status-audit"><span>3</span><strong>상품 운영</strong><small>공급상태</small></a>
+        <a href="#inbound-picking"><span>4</span><strong>창고 작업</strong><small>입고·피킹</small></a>
+      </nav>
 
       {/* 상단 메뉴 3개 — 전부 WorkCenterMenuButton 하나만 재사용해 크기·아이콘 위치·글자
        *  위치를 완전히 통일한다(2026-08-20 신규). 모바일은 1열 세로, 760px 이상은 3열
@@ -118,8 +129,19 @@ export default function WmsWorkCenterPage() {
         <NewPurchaseOrdersUpdateButton />
       </div>
 
-      <WimsRegistrationImportPanel />
-      <SupplyStatusAuditPanel />
+      <div className="wms-section-heading">
+        <div><span>PRODUCT AUTOMATION</span><h2>상품등록 자동화</h2></div>
+        <p>WIMS 확인 → 제품DB 연결 → 운영정보 갱신</p>
+      </div>
+      <div className="wms-automation-grid">
+        <WimsRegistrationImportPanel />
+        <SupplyStatusAuditPanel />
+      </div>
+
+      <div id="inbound-picking" className="wms-section-heading">
+        <div><span>WAREHOUSE OPERATIONS</span><h2>입고·피킹 작업</h2></div>
+        <p>신규발주 확인 → 부족분 발주 → 통합 피킹</p>
+      </div>
 
       <ShortageVendorOrdersBanner />
 

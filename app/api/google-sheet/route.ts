@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildSkuRows, formatCoupangOptionName, costWithVat, dimensionText, parseNumber, supplierLabel, supplyPrice } from "@/lib/excel/common";
 import type { ExportPayload } from "@/lib/excel/types";
+import { markRegistrationFilesCreated } from "@/lib/wms/registration-file-stage";
 
 export const runtime = "nodejs";
 
@@ -149,11 +150,16 @@ export async function POST(req: NextRequest) {
       replacementSku: payload.product.replacementSku || "",
       syncMode: raw.syncMode || "upsert",
     });
+    let registrationStage: { updatedRows: number; backupSheetName?: string } | null = null;
+    if (called.configured && called.result?.ok !== false && !called.result?.duplicate && !called.result?.updated) {
+      registrationStage = await markRegistrationFilesCreated(payload.model, skus.map(sku => sku.sku));
+    }
     return NextResponse.json({
       configured: called.configured,
       synced: called.configured && called.result?.ok !== false && !called.result?.duplicate,
       duplicate: Boolean(called.result?.duplicate),
       result: called.result,
+      registrationStage,
     });
   } catch (error) {
     return NextResponse.json(

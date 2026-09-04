@@ -96,7 +96,7 @@ export default function WimsRegistrationImportPanel() {
   }
 
   return (
-    <section style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", marginBottom: "18px", background: "#fff" }}>
+    <section id="wims-registration" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", background: "#fff" }}>
       <strong style={{ display: "block", fontSize: "14px" }}>상품 등록 상태 확인 · WIMS</strong>
       <p style={{ color: wmsColors.muted, fontSize: "11px", margin: "4px 0 10px" }}>
         Supplier Hub의 상품 등록 상태 확인 표에서 머리글과 상품 행을 복사해 붙여넣으세요. 이 단계는 읽기 전용이며 제품DB를 수정하지 않습니다.

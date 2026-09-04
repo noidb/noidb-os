@@ -13,11 +13,12 @@ import {
   buildAdditionalImagesCsv,
   collectProductImageFiles,
   collectProductDbFiles,
+  syncProductDbToGoogleSheet,
   createLabelBlob,
   colorCode,
   ringSizeNumber,
 } from "@/lib/product-db/files";
-import { ensureProductFolderTree, writeCategoryFile, writeProductDbFiles, writeRootFolderFile } from "@/lib/product-db/fs";
+import { assertProductDbFilesWritable, ensureProductFolderTree, writeCategoryFile, writeProductDbFiles, writeRootFolderFile } from "@/lib/product-db/fs";
 import { dataUrlToBlob } from "@/lib/product-db/files";
 import { buildProductDbZip } from "@/lib/product-db/zip";
 import { compressImageDataUrl } from "@/lib/image/compress";
@@ -286,6 +287,7 @@ export default function Home() {
   const [labelImporterName, setLabelImporterName] = useState("프리스타일");
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchStatus, setBatchStatus] = useState("");
+  const [batchMode, setBatchMode] = useState<"practice" | "actual">("practice");
   const [coupangImportBusy, setCoupangImportBusy] = useState("");
   const [coupangImportMessage, setCoupangImportMessage] = useState("");
   const [quoteQueue, setQuoteQueue] = useState<QuoteQueueRecord[]>([]);
@@ -1468,7 +1470,7 @@ export default function Home() {
     }
   };
 
-  const collectInput = async (detailOverride?: string) => {
+  const buildCollectInput = async (detailOverride?: string) => {
     const thumbs: Record<string, string> = {};
     await Promise.all(options.map(async opt => {
       const source = optionThumbs[opt]?.dataUrl;
@@ -1488,7 +1490,7 @@ export default function Home() {
         filename: `${model}-${String(index + 5).padStart(2, "0")}.jpg`,
         dataUrl: await normalizeCoupangImage(item.slot!.dataUrl),
       }));
-    return collectProductDbFiles({
+    return {
       category: product.category,
       model,
       title,
@@ -1515,8 +1517,11 @@ export default function Home() {
         manufacturerName: labelManufacturerName,
         importerName: labelImporterName,
       },
-    });
+    };
   };
+
+  const collectInput = async (detailOverride?: string, syncGoogleSheet = true) =>
+    collectProductDbFiles(await buildCollectInput(detailOverride), { syncGoogleSheet });
 
   const migrateExistingDbToGoogle = async () => {
     if (!dbHandle) {
@@ -1602,14 +1607,18 @@ export default function Home() {
     const required: string[] = [];
     if (!model) required.push("모델명");
     if (!product.category) required.push("카테고리");
-    if (!dbHandle && dbSupported) required.push("상품DB 폴더 연결");
+    if (batchMode === "actual" && !dbHandle && dbSupported) required.push("상품DB 폴더 연결");
     if (required.length) {
       setBatchStatus(`필수 항목 부족: ${required.join(", ")}`);
       return;
     }
 
-    if (modelDuplicate && !window.confirm(`${model}은(는) 이미 등록된 모델명입니다. 기존 Google 상품DB 내용을 업데이트할까요?`)) {
-      setBatchStatus("기존 모델 업데이트를 취소했습니다.");
+    if (batchMode === "actual" && modelDuplicate) {
+      setBatchStatus("기존 모델의 일괄 저장은 안전을 위해 차단했습니다. 필요한 파일만 개별 다운로드하세요.");
+      return;
+    }
+    if (batchMode === "actual" && modelCheckMessage !== "사용 가능한 모델명") {
+      setBatchStatus("실제 등록은 Google DB에서 사용 가능한 모델명 확인이 끝난 뒤에만 저장할 수 있습니다.");
       return;
     }
 
@@ -1640,25 +1649,35 @@ export default function Home() {
         setDetailPreview(preview);
       }
 
-      const { files, skipped, readyFiles } = await collectInput(preview);
-      const googleStatus = skipped.find(item => item.startsWith("Google 시트"));
-      if (dbHandle) {
-        const saved = await writeProductDbFiles(dbHandle, product.category, model, files);
+      const { files, skipped, readyFiles } = await collectInput(preview, false);
+      if (batchMode === "practice") {
+        const blob = await buildProductDbZip(product.category, model, files);
+        downloadBlobFile(blob, `연습용_상품DB_${model}.zip`);
+        setDbSavedFiles(readyFiles);
+        setBatchStatus("테스트·교육용 ZIP 생성 완료 · 실제 상품 폴더와 Google 제품DB는 변경하지 않았습니다.");
+      } else if (dbHandle) {
+        // 파일 충돌 여부를 Google 시트 변경보다 먼저 확인하여 기존 상품과 시트가 모두 보존되게 한다.
+        await assertProductDbFilesWritable(dbHandle, product.category, model, files);
+        const sync = await syncProductDbToGoogleSheet((await buildCollectInput(preview)));
+        if (!sync.ok) throw new Error(`${sync.message} · 상품 폴더는 변경하지 않았습니다.`);
+        const saved = await writeProductDbFiles(dbHandle, product.category, model, files, { overwriteExisting: false });
         const fileSkips = skipped.filter(item => !item.startsWith("Google 시트"));
         setDbSavedFiles(saved);
         setBatchStatus(
           `상품 생성 완료 · ${saved.length}개 저장 → ${product.category}/${model}/` +
             (fileSkips.length ? ` · 미저장: ${fileSkips.join(", ")}` : "") +
-            (googleStatus ? ` · ${googleStatus}` : "")
+            ` · ${sync.message}`
         );
       } else {
         const blob = await buildProductDbZip(product.category, model, files);
         downloadBlobFile(blob, `상품DB_${model}.zip`);
         setDbSavedFiles(readyFiles);
-        setBatchStatus(`상품 생성 완료 · ZIP 다운로드 (${files.length}개 파일)` + (googleStatus ? ` · ${googleStatus}` : ""));
+        setBatchStatus(`상품 생성 완료 · ZIP 다운로드 (${files.length}개 파일)`);
       }
-      await saveDraft();
-      await loadQuoteQueue();
+      if (batchMode === "actual") {
+        await saveDraft();
+        await loadQuoteQueue();
+      }
     } catch (e) {
       setBatchStatus(`오류: ${e instanceof Error ? e.message : "저장 실패"}`);
     } finally {
@@ -2421,8 +2440,17 @@ export default function Home() {
           </button>
         </div>
         {exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
+        <div className="batchModePanel" role="group" aria-label="일괄 생성 용도">
+          <button type="button" className={batchMode === "practice" ? "selected" : ""} onClick={() => setBatchMode("practice")}>
+            <strong>테스트·교육용</strong><span>ZIP만 생성 · 폴더와 제품DB 변경 없음</span>
+          </button>
+          <button type="button" className={batchMode === "actual" ? "selected" : ""} onClick={() => setBatchMode("actual")}>
+            <strong>실제 등록용</strong><span>새 모델만 저장 · 기존 파일 덮어쓰기 차단</span>
+          </button>
+        </div>
+        {batchMode === "actual" && modelDuplicate && <p className="dangerAlert">기존 모델입니다. 일괄 저장은 차단되며 필요한 파일만 위의 개별 다운로드를 사용하세요.</p>}
         <button className="batchSaveButton" type="button" disabled={batchBusy} onClick={batchSave}>
-          {batchBusy ? "저장 중..." : "등록파일 일괄 생성 및 저장"}
+          {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP 생성" : "실제 등록파일 일괄 생성 및 저장"}
         </button>
         {!dbSupported && <p className="saveExplain">모바일에서는 상품DB ZIP이 다운로드됩니다. 다운로드 완료 후 공유 또는 파일 앱에서 Google Drive에 저장하세요.</p>}
         {batchStatus && <p className={batchStatus.startsWith("오류") ? "error" : "detailMessage"}>{batchStatus}</p>}

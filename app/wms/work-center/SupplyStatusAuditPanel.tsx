@@ -69,7 +69,7 @@ export default function SupplyStatusAuditPanel() {
   }
 
   return (
-    <section id="supply-status-audit" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", marginBottom: "18px", background: wmsColors.surfaceBeige }}>
+    <section id="supply-status-audit" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", background: wmsColors.surfaceBeige }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
         <div>
           <strong style={{ display: "block", fontSize: "14px" }}>상품공급상태 안전 진단</strong>

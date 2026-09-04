@@ -10,6 +10,8 @@
     "verify:shipment-split": "npx --yes tsx scripts/verify-shipment-split.ts",
     "verify:supply-status-safe": "npx --yes tsx scripts/verify-supply-status-safe-updates.ts",
     "verify:wims-registration": "npx --yes tsx scripts/verify-wims-registration.ts",
+    "verify:registration-file-stage": "npx --yes tsx scripts/verify-registration-file-stage.ts",
+    "verify:safe-product-file-write": "npx --yes tsx scripts/verify-safe-product-file-write.ts",
     "coupang:collect": "node automation/coupang-po/collector.mjs --once",
     "coupang:watch": "node automation/coupang-po/collector.mjs --watch",
     "coupang:auto": "node automation/coupang-po/collector.mjs --once",

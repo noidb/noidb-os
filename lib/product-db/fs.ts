@@ -11,11 +11,16 @@ export async function writeProductDbFiles(
   root: FileSystemDirectoryHandle,
   category: string,
   model: string,
-  files: ProductDbFile[]
+  files: ProductDbFile[],
+  options: { overwriteExisting?: boolean } = {}
 ) {
   const categoryDir = await getOrCreateDir(root, category);
   const modelDir = await getOrCreateDir(categoryDir, model);
   const saved: string[] = [];
+
+  if (options.overwriteExisting === false) {
+    await assertProductDbFilesWritable(root, category, model, files);
+  }
 
   for (const file of files) {
     const targetDir = file.folder
@@ -53,6 +58,27 @@ export async function writeCategoryFile(
   await writable.write(blob);
   await writable.close();
   return `${category}/${filename}`;
+}
+
+export async function assertProductDbFilesWritable(
+  root: FileSystemDirectoryHandle,
+  category: string,
+  model: string,
+  files: ProductDbFile[]
+) {
+  const categoryDir = await getOrCreateDir(root, category);
+  const modelDir = await getOrCreateDir(categoryDir, model);
+  const existing: string[] = [];
+  for (const file of files) {
+    const targetDir = file.folder ? await getOrCreateDir(modelDir, file.folder) : modelDir;
+    try {
+      await targetDir.getFileHandle(file.filename);
+      existing.push(`${file.folder ? `${file.folder}/` : ""}${file.filename}`);
+    } catch (error) {
+      if (!(error instanceof DOMException) || error.name !== "NotFoundError") throw error;
+    }
+  }
+  if (existing.length > 0) throw new Error(`기존 파일 ${existing.length}개가 있어 일괄 저장을 중단했습니다: ${existing.slice(0, 5).join(", ")}${existing.length > 5 ? " 외" : ""}`);
 }
 
 /** Save one independently generated file into 상품이미지DB/<folder>/. */

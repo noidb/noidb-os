@@ -88,6 +88,11 @@ export type ProductLabelInput = {
   importerName?: string;
 };
 
+export type GoogleSheetSyncResult = {
+  ok: boolean;
+  message: string;
+};
+
 export function buildProductLabelLines(input: ProductLabelInput, now = new Date()): string[] {
   const model = input.model.trim();
   if (!model) throw new Error("라벨 모델명을 입력해주세요.");
@@ -186,6 +191,52 @@ export type CollectInput = {
   label?: Omit<ProductLabelInput, "model">;
 };
 
+function buildGoogleSheetPayload(input: CollectInput, optionImages: Record<string, string>) {
+  const extras = [input.extra01, input.extra02, input.extra03, input.extra04];
+  const customImages = (input.customImages || []).filter(item => item.dataUrl?.startsWith("data:image/") && item.filename);
+  const additionalImageNames = [
+    ...buildAdditionalImagesCsv(input.model, extras).split(",").filter(Boolean),
+    ...customImages.map(item => item.filename),
+  ];
+  const additionalImagesCsv = additionalImageNames.join(",");
+  return {
+    product: input.product,
+    model: input.model,
+    title: input.title,
+    tags: input.tags,
+    additionalImages: additionalImageNames,
+    additionalImagesCsv,
+    sourcingUrl: input.sourcingUrl || "",
+    optionImages,
+  };
+}
+
+export async function syncProductDbToGoogleSheet(input: CollectInput): Promise<GoogleSheetSyncResult> {
+  if (!input.title) return { ok: false, message: "Google 시트 (상품명 없음)" };
+  try {
+    const sheetOptionImages = Object.fromEntries(await Promise.all(
+      Object.entries(input.optionThumbs || {}).map(async ([option, dataUrl]) => [
+        option,
+        dataUrl?.startsWith("data:image/") ? await normalizeCoupangImage(dataUrl, 240) : dataUrl,
+      ])
+    ));
+    const syncRes = await fetch("/api/google-sheet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildGoogleSheetPayload(input, sheetOptionImages)),
+    });
+    const sync = await syncRes.json().catch(() => ({}));
+    if (!syncRes.ok || sync?.error) return { ok: false, message: `Google 시트 (${sync?.error || "누적 실패"})` };
+    if (!sync?.configured) return { ok: false, message: "Google 시트 연동 미설정" };
+    if (sync?.duplicate) return { ok: false, message: "Google 시트 (중복 모델명이라 건너뜀)" };
+    if (!sync?.synced) return { ok: false, message: "Google 시트 (저장 결과를 확인하지 못함)" };
+    const staged = Number(sync?.registrationStage?.updatedRows || 0);
+    return { ok: true, message: staged > 0 ? `Google 시트 상품DB 누적 완료 · 등록파일생성 ${staged}행` : "Google 시트 상품DB 누적 완료" };
+  } catch (error) {
+    return { ok: false, message: `Google 시트 (${error instanceof Error ? error.message : "누적 실패"})` };
+  }
+}
+
 export function buildAdditionalImagesCsv(model: string, extras: (string | undefined)[]) {
   const names: string[] = [];
   extras.forEach((url, i) => {
@@ -197,7 +248,8 @@ export function buildAdditionalImagesCsv(model: string, extras: (string | undefi
 }
 
 export async function collectProductDbFiles(
-  input: CollectInput
+  input: CollectInput,
+  collectOptions: { syncGoogleSheet?: boolean } = {}
 ): Promise<CollectResult> {
   const files: ProductDbFile[] = [];
   const skipped: string[] = [];
@@ -304,18 +356,7 @@ export async function collectProductDbFiles(
     ...customImages.map(item => item.filename),
   ];
   const additionalImagesCsv = additionalImageNames.join(",");
-  const payload = {
-    product: input.product,
-    model: input.model,
-    title: input.title,
-    tags: input.tags,
-    additionalImages: additionalImagesCsv
-      ? additionalImagesCsv.split(",")
-      : [],
-    additionalImagesCsv,
-    sourcingUrl: input.sourcingUrl || "",
-    optionImages: input.optionThumbs || {},
-  };
+  const payload = buildGoogleSheetPayload(input, input.optionThumbs || {});
 
   const quoteCategories = ["반지", "귀걸이", "피어싱", "목걸이", "팔찌", "발찌"];
   if (quoteCategories.includes(category) && input.title) {
@@ -343,35 +384,10 @@ export async function collectProductDbFiles(
     missingFiles.push("견적서");
   }
 
-  if (input.title) {
-    try {
-      // 제품DB 셀에는 80px 미리보기만 표시하므로 대용량 1000px 원본 대신 가벼운 시트 전용 썸네일을 전송합니다.
-      const sheetOptionImages = Object.fromEntries(await Promise.all(
-        Object.entries(input.optionThumbs || {}).map(async ([option, dataUrl]) => [
-          option,
-          dataUrl?.startsWith("data:image/") ? await normalizeCoupangImage(dataUrl, 240) : dataUrl,
-        ])
-      ));
-      const syncRes = await fetch("/api/google-sheet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, optionImages: sheetOptionImages }),
-      });
-      const sync = await syncRes.json().catch(() => ({}));
-      if (!syncRes.ok || sync?.error) {
-        skipped.push(`Google 시트 (${sync?.error || "누적 실패"})`);
-      } else if (!sync?.configured) {
-        skipped.push("Google 시트 연동 미설정");
-      } else if (sync?.duplicate) {
-        skipped.push("Google 시트 (중복 모델명이라 건너뜀)");
-      } else if (!sync?.synced) {
-        skipped.push("Google 시트 (저장 결과를 확인하지 못함)");
-      } else {
-        readyFiles.push("Google 시트 상품DB 누적 완료");
-      }
-    } catch (error) {
-      skipped.push(`Google 시트 (${error instanceof Error ? error.message : "누적 실패"})`);
-    }
+  if (input.title && collectOptions.syncGoogleSheet !== false) {
+    const sync = await syncProductDbToGoogleSheet(input);
+    if (sync.ok) readyFiles.push(sync.message);
+    else skipped.push(sync.message);
   }
   for (const item of customImages) {
     pushFlat(files, item.filename, dataUrlToBlob(item.dataUrl));
