@@ -11,7 +11,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://supplier.coupang.com/plan/ticket/supplySkuList*"],
+      "matches": ["https://supplier.coupang.com/*"],
       "js": ["supply-status-core.js", "supplier-supply-status.js"],
       "run_at": "document_idle"
     },

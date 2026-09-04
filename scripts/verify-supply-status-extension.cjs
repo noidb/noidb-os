@@ -44,7 +44,11 @@ assert.equal(repeatedSku.complete, false);
 assert.match(repeatedSku.errors.join(" "), /반복/);
 
 const bridgeSource = fs.readFileSync(path.resolve(__dirname, "../browser-extension/noidb-supplier-sync/noidb-bridge.js"), "utf8");
+const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../browser-extension/noidb-supplier-sync/manifest.json"), "utf8"));
+const supplyScript = fs.readFileSync(path.resolve(__dirname, "../browser-extension/noidb-supplier-sync/supplier-supply-status.js"), "utf8");
 assert.match(bridgeSource, /noidbPendingSupplyStatusTransfer/);
 assert.match(bridgeSource, /Array\.isArray\(candidate\?\.rows\)/, "상품공급상태 행 배열을 NOID-B 페이지로 전달해야 합니다.");
+assert.equal(manifest.content_scripts.some(script => script.matches?.includes("https://supplier.coupang.com/*") && script.js?.includes("supplier-supply-status.js")), true, "주소가 달라져도 상품공급상태 표를 감지해야 합니다.");
+assert.match(supplyScript, /findSupplyTable\(\);[\s\S]*document\.body\.appendChild\(button\)/, "필수 열이 있는 표를 찾은 뒤에만 버튼을 표시해야 합니다.");
 
 console.log("상품공급상태 확장 전체 페이지 수집 규칙 검증 완료");

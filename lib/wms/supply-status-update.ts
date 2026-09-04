@@ -281,9 +281,9 @@ export function parseSupplyStatusCapture(capture: SupplyStatusTableCapture): Par
   if (!capture.capturedAt || Number.isNaN(Date.parse(capture.capturedAt))) throw new Error("Supplier Hub 수집 시간이 올바르지 않습니다.");
   try {
     const sourceUrl = new URL(capture.sourceUrl);
-    if (sourceUrl.origin !== "https://supplier.coupang.com" || sourceUrl.pathname !== "/plan/ticket/supplySkuList") throw new Error();
+    if (sourceUrl.origin !== "https://supplier.coupang.com") throw new Error();
   } catch {
-    throw new Error("Supplier Hub 상품공급상태 관리 출처 주소가 올바르지 않습니다.");
+    throw new Error("Supplier Hub 출처 주소가 올바르지 않습니다.");
   }
 
   const headers = ["", ...capture.headers.map(value => String(value ?? "").trim())];

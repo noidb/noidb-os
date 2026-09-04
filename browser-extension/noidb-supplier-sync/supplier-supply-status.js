@@ -245,5 +245,30 @@
       window.setTimeout(() => { button.textContent = original; }, 5500);
     }
   });
-  document.body.appendChild(button);
+  let mountScheduled = false;
+  const observer = new MutationObserver(() => {
+    if (mountScheduled) return;
+    mountScheduled = true;
+    window.setTimeout(() => {
+      mountScheduled = false;
+      mountButtonIfReady();
+    }, 250);
+  });
+
+  function mountButtonIfReady() {
+    if (document.getElementById(BUTTON_ID)) {
+      observer.disconnect();
+      return;
+    }
+    try {
+      findSupplyTable();
+    } catch {
+      return;
+    }
+    document.body.appendChild(button);
+    observer.disconnect();
+  }
+
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  mountButtonIfReady();
 })();
