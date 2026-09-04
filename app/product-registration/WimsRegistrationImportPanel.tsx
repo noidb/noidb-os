@@ -223,7 +223,7 @@ export default function WimsRegistrationImportPanel() {
       </p>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "7px", marginBottom: "10px" }}>
         <a href="/downloads/noidb-supplier-sync.zip" download style={{ ...wmsGhostButton, minHeight: "34px", padding: "0 11px", display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
-          확장 기능 받기·업데이트
+          확장 기능 v1.2 업데이트
         </a>
         <span style={{ color: wmsColors.muted, fontSize: "10px" }}>압축 해제 → Chrome 확장 프로그램 → 개발자 모드 → 압축해제된 확장 프로그램 로드</span>
       </div>
