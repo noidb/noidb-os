@@ -3,23 +3,50 @@
 import { useEffect, useMemo, useState } from "react";
 import { parseWimsClipboard, type WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 import type { WimsRegistrationAudit } from "@/lib/wms/wims-registration-audit";
+import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 import { wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
 
 const statusText = { reviewing: "검수중", approved: "검수완료", rejected: "반려", unknown: "확인 필요" } as const;
 const STORAGE_KEY = "noidb_wims_registration_snapshot_v1";
-const ACTION_CODE_STORAGE_KEY = "noidb-quick-detail-sync-code";
 const EXTENSION_EVENT_TYPE = "NOIDB_WIMS_EXTENSION_TRANSFER";
 const EXTENSION_ACK_TYPE = "NOIDB_WIMS_EXTENSION_ACK";
+const MAX_WIMS_TRANSFER_ROWS = 1000;
 
 interface SavedSnapshot {
   capturedAt: string;
   snapshot: WimsRegistrationSnapshot;
+  capture: ExtensionCaptureSummary | null;
+}
+
+interface ExtensionCaptureSummary {
+  mode: "all-pages";
+  totalRowCount: number;
+  pageCount: number;
+  pageSize: number;
+}
+
+function readExtensionCaptureSummary(payload: Record<string, unknown>, parsedRowCount: number): ExtensionCaptureSummary | null {
+  if (payload.captureMode !== "all-pages") return null;
+  const totalRowCount = Number(payload.totalRowCount);
+  const collectedRowCount = Number(payload.collectedRowCount);
+  const pageCount = Number(payload.pageCount);
+  const pageSize = Number(payload.pageSize);
+  const complete = payload.coverageComplete === true;
+  const validCounts = [totalRowCount, collectedRowCount, pageCount, pageSize].every(value => Number.isSafeInteger(value) && value > 0);
+  if (totalRowCount > MAX_WIMS_TRANSFER_ROWS) {
+    throw new Error(`WIMS 검색 결과가 ${MAX_WIMS_TRANSFER_ROWS}건을 넘습니다. 등록일 범위를 줄여 다시 수집해주세요.`);
+  }
+  if (!complete || !validCounts || totalRowCount !== collectedRowCount || collectedRowCount !== parsedRowCount) {
+    throw new Error("WIMS 전체 수집 건수가 맞지 않아 전송을 중단했습니다. Supplier Hub에서 다시 수집해주세요.");
+  }
+  return { mode: "all-pages", totalRowCount, pageCount, pageSize };
 }
 
 export default function WimsRegistrationImportPanel() {
   const [text, setText] = useState("");
   const [snapshot, setSnapshot] = useState<WimsRegistrationSnapshot | null>(null);
   const [capturedAt, setCapturedAt] = useState("");
+  const [capture, setCapture] = useState<ExtensionCaptureSummary | null>(null);
   const [error, setError] = useState("");
   const [audit, setAudit] = useState<WimsRegistrationAudit | null>(null);
   const [auditing, setAuditing] = useState(false);
@@ -29,12 +56,18 @@ export default function WimsRegistrationImportPanel() {
 
   useEffect(() => {
     try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("source") === "wims-extension" && params.get("transferId")) {
+        setMessage("Supplier Hub에서 WIMS 전체 결과를 수집하고 있습니다. 완료될 때까지 이 화면을 그대로 두세요.");
+        return;
+      }
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const saved = JSON.parse(raw) as SavedSnapshot;
       if (!saved?.capturedAt || !Array.isArray(saved.snapshot?.rows)) return;
       setSnapshot(saved.snapshot);
       setCapturedAt(saved.capturedAt);
+      setCapture(saved.capture || null);
       void auditRows(saved.snapshot.rows);
     } catch {
       localStorage.removeItem(STORAGE_KEY);
@@ -46,20 +79,36 @@ export default function WimsRegistrationImportPanel() {
       if (event.source !== window || event.origin !== window.location.origin || event.data?.type !== EXTENSION_EVENT_TYPE) return;
       const incomingText = event.data?.payload?.text;
       if (typeof incomingText !== "string" || !incomingText.trim()) return;
-      window.postMessage({ type: EXTENSION_ACK_TYPE }, window.location.origin);
       try {
         const nextSnapshot = parseWimsClipboard(incomingText);
+        const nextCapture = readExtensionCaptureSummary(event.data.payload as Record<string, unknown>, nextSnapshot.rows.length);
         const nextCapturedAt = typeof event.data.payload.capturedAt === "string" ? event.data.payload.capturedAt : new Date().toISOString();
         setText(incomingText);
         setSnapshot(nextSnapshot);
         setCapturedAt(nextCapturedAt);
+        setCapture(nextCapture);
         setAudit(null);
         setError("");
-        setMessage(`확장 기능에서 ${nextSnapshot.rows.length}건을 받았습니다. 제품DB와 자동 대조합니다.`);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ capturedAt: nextCapturedAt, snapshot: nextSnapshot } satisfies SavedSnapshot));
+        setMessage(nextCapture
+          ? `WIMS 전체 ${nextCapture.totalRowCount}건 · ${nextCapture.pageCount}페이지를 빠짐없이 받았습니다. 제품DB와 자동 대조합니다.`
+          : `확장 기능에서 현재 화면 ${nextSnapshot.rows.length}건을 받았습니다. 제품DB와 자동 대조합니다.`);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ capturedAt: nextCapturedAt, snapshot: nextSnapshot, capture: nextCapture } satisfies SavedSnapshot));
+        const completedUrl = new URL(window.location.href);
+        completedUrl.searchParams.delete("source");
+        completedUrl.searchParams.delete("transferId");
+        window.history.replaceState(window.history.state, "", `${completedUrl.pathname}${completedUrl.search}${completedUrl.hash}`);
+        window.postMessage({ type: EXTENSION_ACK_TYPE, accepted: true }, window.location.origin);
         void auditRows(nextSnapshot.rows);
       } catch (caught) {
+        setText(incomingText);
+        setSnapshot(null);
+        setCapturedAt("");
+        setCapture(null);
+        setAudit(null);
+        setMessage("");
+        localStorage.removeItem(STORAGE_KEY);
         setError(caught instanceof Error ? caught.message : "확장 기능에서 받은 WIMS 표를 읽지 못했습니다.");
+        window.postMessage({ type: EXTENSION_ACK_TYPE, accepted: false }, window.location.origin);
       }
     }
     window.addEventListener("message", receiveExtensionTransfer);
@@ -72,7 +121,8 @@ export default function WimsRegistrationImportPanel() {
       const nextCapturedAt = new Date().toISOString();
       setSnapshot(nextSnapshot);
       setCapturedAt(nextCapturedAt);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ capturedAt: nextCapturedAt, snapshot: nextSnapshot } satisfies SavedSnapshot));
+      setCapture(null);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ capturedAt: nextCapturedAt, snapshot: nextSnapshot, capture: null } satisfies SavedSnapshot));
       setError("");
     } catch (caught) {
       setSnapshot(null);
@@ -84,35 +134,11 @@ export default function WimsRegistrationImportPanel() {
     setText("");
     setSnapshot(null);
     setCapturedAt("");
+    setCapture(null);
     setError("");
-      setAudit(null);
-      setMessage("");
+    setAudit(null);
+    setMessage("");
     localStorage.removeItem(STORAGE_KEY);
-  }
-
-  async function ensureActionSession(): Promise<boolean> {
-    const statusResponse = await fetch("/api/auth/noidb-action-session", { cache: "no-store" });
-    const status = await statusResponse.json().catch(() => ({}));
-    if (statusResponse.ok && status.authenticated) return true;
-    if (statusResponse.ok && !status.configured) throw new Error("서버 관리자 연동번호가 아직 설정되지 않았습니다.");
-
-    let code = window.localStorage.getItem(ACTION_CODE_STORAGE_KEY)?.trim() || "";
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      if (!code) {
-        code = window.prompt("제품DB 상태 변경 보호를 위해 기존 상세페이지 연동번호를 입력해주세요. 이 PC에서는 한 번만 확인합니다.")?.trim() || "";
-      }
-      if (!code) return false;
-      const response = await fetch("/api/auth/noidb-action-session", { method: "POST", headers: { "x-noidb-action-code": code } });
-      const data = await response.json().catch(() => ({}));
-      if (response.ok && data.authenticated) {
-        window.localStorage.setItem(ACTION_CODE_STORAGE_KEY, code);
-        return true;
-      }
-      window.localStorage.removeItem(ACTION_CODE_STORAGE_KEY);
-      code = "";
-      if (attempt === 1) throw new Error(data.error || "관리자 잠금을 해제하지 못했습니다.");
-    }
-    return false;
   }
 
   async function applyApprovedCandidates() {
@@ -122,7 +148,7 @@ export default function WimsRegistrationImportPanel() {
     setError("");
     setMessage("");
     try {
-      if (!await ensureActionSession()) return;
+      if (!await ensureNoidbActionSession()) return;
       const response = await fetch("/api/wms/wims-registration/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows: snapshot.rows, dryRunToken: audit.dryRunToken, confirmation: "WIMS 검수완료 상품 연결" }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "검수완료 상품 연결에 실패했습니다.");
@@ -161,7 +187,7 @@ export default function WimsRegistrationImportPanel() {
     setError("");
     setMessage("");
     try {
-      if (!await ensureActionSession()) return;
+      if (!await ensureNoidbActionSession()) return;
       const response = await fetch("/api/wms/wims-registration/rejection-decision", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -193,11 +219,11 @@ export default function WimsRegistrationImportPanel() {
     <section id="wims-registration" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", background: "#fff" }}>
       <strong style={{ display: "block", fontSize: "14px" }}>상품 등록 상태 확인 · WIMS</strong>
       <p style={{ color: wmsColors.muted, fontSize: "11px", margin: "4px 0 10px" }}>
-        브라우저 확장 기능의 `NOID-B로 WIMS 전송` 버튼을 누르면 자동으로 들어옵니다. 직접 붙여넣기는 비상용이며, 읽기 전용 대조만 자동 실행됩니다.
+        브라우저 확장 기능의 `WIMS 전체를 NOID-B로 전송`을 한 번 누르면 검색 결과의 모든 페이지를 검증해 가져옵니다. 직접 붙여넣기는 비상용입니다.
       </p>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "7px", marginBottom: "10px" }}>
         <a href="/downloads/noidb-supplier-sync.zip" download style={{ ...wmsGhostButton, minHeight: "34px", padding: "0 11px", display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
-          최초 1회 확장 기능 받기
+          확장 기능 받기·업데이트
         </a>
         <span style={{ color: wmsColors.muted, fontSize: "10px" }}>압축 해제 → Chrome 확장 프로그램 → 개발자 모드 → 압축해제된 확장 프로그램 로드</span>
       </div>
@@ -216,7 +242,11 @@ export default function WimsRegistrationImportPanel() {
       {snapshot && (
         <div style={{ marginTop: "12px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "8px" }}>
-            <span style={{ color: wmsColors.muted, fontSize: "10px" }}>{capturedAt ? `마지막 확인 ${new Date(capturedAt).toLocaleString("ko-KR")}` : "현재 붙여넣은 결과"}</span>
+            <span style={{ color: capture ? wmsColors.greenDark : wmsColors.muted, fontSize: "10px", fontWeight: capture ? 800 : 400 }}>
+              {capture
+                ? `전체 ${capture.totalRowCount}건 · ${capture.pageCount}페이지 완전수집 · ${new Date(capturedAt).toLocaleString("ko-KR")}`
+                : capturedAt ? `현재 페이지만 확인 · ${new Date(capturedAt).toLocaleString("ko-KR")}` : "현재 붙여넣은 결과"}
+            </span>
             <button type="button" onClick={clearSnapshot} style={{ ...wmsGhostButton, minHeight: "30px", padding: "0 9px", fontSize: "10px" }}>저장 결과 지우기</button>
           </div>
           <div className="wms-supply-audit-grid">
@@ -257,7 +287,7 @@ export default function WimsRegistrationImportPanel() {
                     <div key={`pending-${item.sheetRowNumber}`} style={{ border: "1px solid #a0611855", borderLeft: "4px solid #a06118", borderRadius: "9px", padding: "9px 10px", fontSize: "11px" }}>
                       <strong style={{ color: "#a06118" }}>{item.modelSku || "모델SKU 확인 필요"} · WIMS 범위에서 미확인</strong>
                       <div style={{ marginTop: "2px" }}>{item.productName}</div>
-                      <div style={{ color: wmsColors.muted }}>다른 등록일 또는 다음 WIMS 페이지에 있는지 확인하세요. 제품DB {item.sheetRowNumber}행</div>
+                      <div style={{ color: wmsColors.muted }}>{capture ? "현재 검색 조건 밖에 있거나 아직 WIMS에 등록되지 않았는지 확인하세요." : "다른 등록일 또는 다음 WIMS 페이지에 있는지 확인하세요."} 제품DB {item.sheetRowNumber}행</div>
                     </div>
                   ))}
                 </div>

@@ -223,7 +223,7 @@ export async function syncProductDbToGoogleSheet(input: CollectInput): Promise<G
     const syncRes = await fetch("/api/google-sheet", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildGoogleSheetPayload(input, sheetOptionImages)),
+      body: JSON.stringify({ ...buildGoogleSheetPayload(input, sheetOptionImages), syncMode: "skipDuplicate" }),
     });
     const sync = await syncRes.json().catch(() => ({}));
     if (!syncRes.ok || sync?.error) return { ok: false, message: `Google 시트 (${sync?.error || "누적 실패"})` };

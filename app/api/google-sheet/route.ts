@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { buildSkuRows, formatCoupangOptionName, costWithVat, dimensionText, parseNumber, supplierLabel, supplyPrice } from "@/lib/excel/common";
 import type { ExportPayload } from "@/lib/excel/types";
 import { markRegistrationFilesCreated } from "@/lib/wms/registration-file-stage";
+import { hasNoidbActionSession, isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
 
 export const runtime = "nodejs";
 
@@ -74,6 +75,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  if (!isSameOriginActionRequest(req) || !hasNoidbActionSession(req)) {
+    return NextResponse.json({ configured: true, synced: false, error: "관리자 잠금 해제가 필요합니다." }, { status: 401 });
+  }
   try {
     const webhookUrl = process.env.GOOGLE_SHEETS_WEB_APP_URL;
     if (!webhookUrl) return NextResponse.json({ configured: false, synced: false });
@@ -148,7 +152,9 @@ export async function POST(req: NextRequest) {
         payload: quotePayload,
       },
       replacementSku: payload.product.replacementSku || "",
-      syncMode: raw.syncMode || "upsert",
+      // 신규 상품등록은 화면의 사전 중복검사와 무관하게 서버에서도 create-only로 고정한다.
+      // 기존 모델 수정은 linkReplacementExisting 등 별도 명시 작업에서만 허용한다.
+      syncMode: "skipDuplicate",
     });
     let registrationStage: { updatedRows: number; backupSheetName?: string } | null = null;
     if (called.configured && called.result?.ok !== false && !called.result?.duplicate && !called.result?.updated) {

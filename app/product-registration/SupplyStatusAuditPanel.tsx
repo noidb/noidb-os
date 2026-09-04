@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { SupplyStatusAudit, SupplyStatusAuditIssue } from "@/lib/wms/supply-status-update";
+import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 import { wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
 
 const issueLabel: Record<SupplyStatusAuditIssue["type"], string> = {
@@ -52,6 +53,7 @@ export default function SupplyStatusAuditPanel() {
     setError("");
     setMessage("");
     try {
+      if (!await ensureNoidbActionSession()) return;
       const response = await fetch("/api/wms/supply-status/audit/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { NextRequest } from "next/server";
 import {
   buildSafeSupplyStatusCellUpdates,
   type ProductDbHeaderIndex,
   type SupplyStatusProposedUpdate,
 } from "../lib/wms/supply-status-update";
+import { POST as applySupplyStatus } from "../app/api/wms/supply-status/apply/route";
+import { POST as applySupplyStatusAudit } from "../app/api/wms/supply-status/audit/apply/route";
 
 const headers: ProductDbHeaderIndex = {
   status: 0,
@@ -42,3 +45,22 @@ assert.deepEqual(approvedCells.map(cell => cell.col), [1, 3, 6, 4, 7]);
 assert.equal(approvedCells.every(cell => cell.row === 20), true, "신규행을 만들지 않고 기존 승인대기 행만 수정해야 합니다.");
 
 console.log("상품공급상태 안전 갱신 규칙 검증 완료");
+
+async function verifyWriteRoutesFailClosed() {
+  const headers = {
+    host: "noidb-os.vercel.app",
+    origin: "https://noidb-os.vercel.app",
+    "sec-fetch-site": "same-origin",
+    "content-type": "application/json",
+  };
+  const applyResponse = await applySupplyStatus(new NextRequest("https://noidb-os.vercel.app/api/wms/supply-status/apply", { method: "POST", headers, body: "{}" }));
+  const auditApplyResponse = await applySupplyStatusAudit(new NextRequest("https://noidb-os.vercel.app/api/wms/supply-status/audit/apply", { method: "POST", headers, body: "{}" }));
+  assert.equal(applyResponse.status, 401);
+  assert.equal(auditApplyResponse.status, 401);
+  console.log("상품공급상태 쓰기 API 무인증 차단 검증 완료");
+}
+
+verifyWriteRoutesFailClosed().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

@@ -27,6 +27,7 @@ import { coverSquareCanvas, defaultFitAdjust, fitToWhiteCanvas, type FitAdjust }
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 import WimsRegistrationImportPanel from "@/app/product-registration/WimsRegistrationImportPanel";
 import SupplyStatusAuditPanel from "@/app/product-registration/SupplyStatusAuditPanel";
+import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 
 type Product = {
   supplier: string;
@@ -226,6 +227,15 @@ function readFile(file: File) {
   });
 }
 
+async function postGoogleSheet(body: unknown): Promise<Response> {
+  if (!await ensureNoidbActionSession()) throw new Error("관리자 잠금 해제를 취소했습니다.");
+  return fetch("/api/google-sheet", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 function loadImage(src: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
     const img = new Image();
@@ -395,6 +405,11 @@ export default function Home() {
     return product.modelName?.trim() || buildAutoModel(product);
   }, [product.category, product.gender, product.modelNo, product.modelName]);
 
+  // 실제 등록은 한 상품에만 쓰는 1회성 선택이다. 다른 상품으로 바뀌면 연습 모드로 자동 복귀한다.
+  useEffect(() => {
+    setBatchMode("practice");
+  }, [model, product.category]);
+
   useEffect(() => {
     if (!model) {
       setModelDuplicate(false);
@@ -522,16 +537,12 @@ export default function Home() {
     if (!window.confirm(`${model}에 구 SKU ${legacySku}의 옵션별 창고번호와 재고 이력을 이관할까요?\n\n이 단계에서는 기존행을 삭제하지 않습니다.`)) return;
     const requestLink = async (forceLegacyOptions: boolean) => {
       const linkPayload = exportPayload();
-      const response = await fetch("/api/google-sheet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "linkReplacementExisting",
-          model,
-          replacementSku: legacySku,
-          forceLegacyOptions,
-          payload: { ...linkPayload, optionImages: {} },
-        }),
+      const response = await postGoogleSheet({
+        action: "linkReplacementExisting",
+        model,
+        replacementSku: legacySku,
+        forceLegacyOptions,
+        payload: { ...linkPayload, optionImages: {} },
       });
       const responseText = await response.text();
       let data: any = {};
@@ -590,11 +601,7 @@ export default function Home() {
     }
     setModelCheckMessage("확인된 기존행만 삭제하고 있습니다...");
     try {
-      const response = await fetch("/api/google-sheet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "deleteReplacementLegacyRows", model: pending.model, replacementSku: pending.legacySku, confirmed: true }),
-      });
+      const response = await postGoogleSheet({ action: "deleteReplacementLegacyRows", model: pending.model, replacementSku: pending.legacySku, confirmed: true });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "기존행 삭제 실패");
       setPendingReplacementCleanup(null);
@@ -611,11 +618,7 @@ export default function Home() {
     if (!window.confirm(`${pending.model}의 이번 SKU 연결을 취소하고 기존행을 복원할까요?`)) return;
     setModelCheckMessage("기존행을 복원하고 있습니다...");
     try {
-      const response = await fetch("/api/google-sheet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "undoReplacementLink", model: pending.model, replacementSku: pending.legacySku }),
-      });
+      const response = await postGoogleSheet({ action: "undoReplacementLink", model: pending.model, replacementSku: pending.legacySku });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "연결 취소 실패");
       setPendingReplacementCleanup(null);
@@ -924,6 +927,7 @@ export default function Home() {
     setSourcingSaveStatus("");
     setExportMessage("");
     setBatchStatus("");
+    setBatchMode("practice");
     setDbSavedFiles([]);
     localStorage.removeItem(DRAFT_STORAGE_KEY);
     localStorage.removeItem(LAURA_DRAFT_STORAGE_KEY);
@@ -1082,11 +1086,7 @@ export default function Home() {
     if (!window.confirm(`${group.gender} ${group.category} 대기목록 ${group.records.length}모델을 비울까요? 견적서를 다운로드하고 쿠팡 업로드까지 확인한 뒤 비우세요.`)) return;
     setQuoteQueueBusy(group.key);
     try {
-      const response = await fetch("/api/google-sheet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "quoteQueueClear", gender: group.gender, category: group.category }),
-      });
+      const response = await postGoogleSheet({ action: "quoteQueueClear", gender: group.gender, category: group.category });
       const data = await response.json();
       if (!response.ok || data.error) throw new Error(data.error || "견적서 대기목록 비우기 실패");
       setExportMessage(`${group.gender} ${group.category} 대기목록 ${Number(data.cleared || 0).toLocaleString()}모델을 비웠습니다.`);
@@ -1102,11 +1102,7 @@ export default function Home() {
     if (!window.confirm(`${modelName}을(를) 묶음 견적서 대기목록에서 삭제할까요?\n상품DB의 제품 정보는 삭제되지 않습니다.`)) return;
     setQuoteQueueBusy(`삭제:${modelName}`);
     try {
-      const response = await fetch("/api/google-sheet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "quoteQueueDeleteModel", model: modelName }),
-      });
+      const response = await postGoogleSheet({ action: "quoteQueueDeleteModel", model: modelName });
       const data = await response.json();
       if (!response.ok || data.error) throw new Error(data.error || "모델 삭제 실패");
       setExportMessage(`${modelName}을(를) 묶음 견적서 대기목록에서 삭제했습니다.`);
@@ -1398,26 +1394,26 @@ export default function Home() {
           uploadPool, title, tags,
         },
       });
-      await fetch("/api/google-sheet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "cloudDraftSave",
-          record: {
-            model,
-            savedAt: Date.now(),
-            data: { product, analysis, sourcingUrls, sourcingUrlInputs, title, tags, cloudOnly: true },
-          },
-        }),
+      const cloudResponse = await postGoogleSheet({
+        action: "cloudDraftSave",
+        record: {
+          model,
+          savedAt: Date.now(),
+          data: { product, analysis, sourcingUrls, sourcingUrlInputs, title, tags, cloudOnly: true },
+        },
       });
+      if (!cloudResponse.ok) {
+        const cloudError = await cloudResponse.json().catch(() => ({}));
+        throw new Error(cloudError.error || "클라우드 임시저장 실패");
+      }
       localStorage.removeItem(DRAFT_STORAGE_KEY);
       localStorage.removeItem(LAURA_DRAFT_STORAGE_KEY);
       localStorage.removeItem(LEGACY_DRAFT_STORAGE_KEY);
       setDraftStatus(`${model}으로 임시저장되었습니다.`);
       setMessage(`${model}으로 임시저장되었습니다.`);
       await refreshDrafts();
-    } catch {
-      setDraftStatus("임시저장 공간이 부족합니다. 오래된 임시저장을 삭제해주세요.");
+    } catch (error) {
+      setDraftStatus(`임시저장 실패: ${error instanceof Error ? error.message : "저장 공간을 확인해주세요."}`);
     }
   };
 
@@ -1539,6 +1535,10 @@ export default function Home() {
     let found = 0;
     let lastError = "";
     try {
+      if (!await ensureNoidbActionSession()) {
+        setBatchStatus("기존 DB 이전을 취소했습니다. 제품DB는 변경하지 않았습니다.");
+        return;
+      }
       async function* findInfoFiles(dir: FileSystemDirectoryHandle): AsyncGenerator<FileSystemFileHandle> {
         for await (const [name, handle] of (dir as any).entries()) {
           if (handle.kind === "directory") {
@@ -1602,6 +1602,8 @@ export default function Home() {
   };
 
   const batchSave = async () => {
+    // 실제 등록 버튼을 누른 뒤 성공·실패·검증 차단 여부와 무관하게 다음 실행은 연습 모드다.
+    if (batchMode === "actual") setBatchMode("practice");
     if (pendingReplacementCleanup) {
       setBatchStatus("SKU 이관 결과 확인이 끝나지 않았습니다. 기존행 삭제 또는 연결 취소를 먼저 선택해주세요.");
       return;
@@ -1644,6 +1646,10 @@ export default function Home() {
     setBatchBusy(true);
     setBatchStatus("등록파일을 생성·저장하고 있습니다...");
     try {
+      if (batchMode === "actual" && !await ensureNoidbActionSession()) {
+        setBatchStatus("실제 등록을 취소했습니다. 상품 폴더와 Google 제품DB는 변경하지 않았습니다.");
+        return;
+      }
       let preview = detailPreview;
       if (!preview && detailImages.length) {
         const built = await composeDetailPage();
@@ -1858,13 +1864,17 @@ export default function Home() {
                 <div><strong>{record.model}</strong><span>{new Date(record.savedAt).toLocaleString("ko-KR")}</span></div>
                 <button type="button" className="green" onClick={() => loadDraft(record)}>불러오기</button>
                 <button type="button" className="removeButton" onClick={() => void (async () => {
-                  await deleteProductDraft(record.model);
-                  await fetch("/api/google-sheet", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ action: "cloudDraftDelete", model: record.model }),
-                  });
-                  await refreshDrafts();
+                  try {
+                    const response = await postGoogleSheet({ action: "cloudDraftDelete", model: record.model });
+                    if (!response.ok) {
+                      const data = await response.json().catch(() => ({}));
+                      throw new Error(data.error || "클라우드 임시저장 삭제 실패");
+                    }
+                    await deleteProductDraft(record.model);
+                    await refreshDrafts();
+                  } catch (error) {
+                    setDraftStatus(`임시저장 삭제 실패: ${error instanceof Error ? error.message : "다시 시도해주세요."}`);
+                  }
                 })()}>삭제</button>
               </div>
             ))}
@@ -2447,7 +2457,7 @@ export default function Home() {
             <strong>테스트·교육용</strong><span>ZIP만 생성 · 폴더와 제품DB 변경 없음</span>
           </button>
           <button type="button" className={batchMode === "actual" ? "selected" : ""} onClick={() => setBatchMode("actual")}>
-            <strong>실제 등록용</strong><span>새 모델만 저장 · 기존 파일 덮어쓰기 차단</span>
+            <strong>실제 등록용</strong><span>1회만 실행 · 새 모델만 저장 · 기존 파일 덮어쓰기 차단</span>
           </button>
         </div>
         {batchMode === "actual" && modelDuplicate && <p className="dangerAlert">기존 모델입니다. 일괄 저장은 차단되며 필요한 파일만 위의 개별 다운로드를 사용하세요.</p>}

@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
   "name": "NOID-B 서플라이허브 연결",
-  "version": "1.0.0",
-  "description": "쿠팡 Supplier Hub WIMS 표를 NOID-B 작업센터로 복사·붙여넣기 없이 전달합니다.",
+  "version": "1.1.0",
+  "description": "쿠팡 Supplier Hub WIMS 전체 검색 결과를 검증해 NOID-B AI 상품등록으로 전달합니다.",
   "permissions": ["storage"],
   "content_scripts": [
     {
       "matches": ["https://supplier.coupang.com/qvt/wims*"],
-      "js": ["supplier-wims.js"],
+      "js": ["wims-core.js", "supplier-wims.js"],
       "run_at": "document_idle"
     },
     {
