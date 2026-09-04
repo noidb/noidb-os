@@ -7,6 +7,7 @@ import { wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
 
 const statusText = { reviewing: "검수중", approved: "검수완료", rejected: "반려", unknown: "확인 필요" } as const;
 const STORAGE_KEY = "noidb_wims_registration_snapshot_v1";
+const ACTION_CODE_STORAGE_KEY = "noidb-quick-detail-sync-code";
 const EXTENSION_EVENT_TYPE = "NOIDB_WIMS_EXTENSION_TRANSFER";
 const EXTENSION_ACK_TYPE = "NOIDB_WIMS_EXTENSION_ACK";
 
@@ -89,6 +90,31 @@ export default function WimsRegistrationImportPanel() {
     localStorage.removeItem(STORAGE_KEY);
   }
 
+  async function ensureActionSession(): Promise<boolean> {
+    const statusResponse = await fetch("/api/auth/noidb-action-session", { cache: "no-store" });
+    const status = await statusResponse.json().catch(() => ({}));
+    if (statusResponse.ok && status.authenticated) return true;
+    if (statusResponse.ok && !status.configured) throw new Error("서버 관리자 연동번호가 아직 설정되지 않았습니다.");
+
+    let code = window.localStorage.getItem(ACTION_CODE_STORAGE_KEY)?.trim() || "";
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (!code) {
+        code = window.prompt("제품DB 상태 변경 보호를 위해 기존 상세페이지 연동번호를 입력해주세요. 이 PC에서는 한 번만 확인합니다.")?.trim() || "";
+      }
+      if (!code) return false;
+      const response = await fetch("/api/auth/noidb-action-session", { method: "POST", headers: { "x-noidb-action-code": code } });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.authenticated) {
+        window.localStorage.setItem(ACTION_CODE_STORAGE_KEY, code);
+        return true;
+      }
+      window.localStorage.removeItem(ACTION_CODE_STORAGE_KEY);
+      code = "";
+      if (attempt === 1) throw new Error(data.error || "관리자 잠금을 해제하지 못했습니다.");
+    }
+    return false;
+  }
+
   async function applyApprovedCandidates() {
     if (!snapshot || !audit || applying || audit.approvedCandidateCount === 0) return;
     if (!window.confirm(`검수완료·정확일치 ${audit.approvedCandidateCount}건을 기존 제품DB 행에 연결합니다.\n\n전체 시트를 먼저 백업하고 상품명·SKU ID·R바코드·현재상태만 반영합니다. 신규행은 만들지 않습니다.`)) return;
@@ -96,6 +122,7 @@ export default function WimsRegistrationImportPanel() {
     setError("");
     setMessage("");
     try {
+      if (!await ensureActionSession()) return;
       const response = await fetch("/api/wms/wims-registration/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows: snapshot.rows, dryRunToken: audit.dryRunToken, confirmation: "WIMS 검수완료 상품 연결" }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "검수완료 상품 연결에 실패했습니다.");
@@ -134,6 +161,7 @@ export default function WimsRegistrationImportPanel() {
     setError("");
     setMessage("");
     try {
+      if (!await ensureActionSession()) return;
       const response = await fetch("/api/wms/wims-registration/rejection-decision", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

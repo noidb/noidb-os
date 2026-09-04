@@ -13,6 +13,8 @@ export interface WimsAuditResultRow {
   productDbModelSku?: string;
   productDbSkuId?: string;
   productDbStatus?: string;
+  productDbProductName?: string;
+  productDbBarcode?: string;
   message: string;
 }
 
@@ -102,7 +104,7 @@ export async function buildWimsRegistrationAudit(wimsRows: WimsRegistrationRow[]
     }
     const product = matches[0];
     matchedSheetRows.add(product.sheetRowNumber);
-    const base = { wims, sheetRowNumber: product.sheetRowNumber, productDbModelSku: product.modelSku, productDbSkuId: product.skuId, productDbStatus: product.status };
+    const base = { wims, sheetRowNumber: product.sheetRowNumber, productDbModelSku: product.modelSku, productDbSkuId: product.skuId, productDbStatus: product.status, productDbProductName: product.productName, productDbBarcode: product.barcode };
     if (wims.status === "rejected") {
       rows.push({ ...base, type: "rejected", message: "WIMS 반려 건입니다. SKU·바코드를 자동 반영하지 않습니다." });
     } else if (wims.status === "reviewing") {
@@ -160,7 +162,30 @@ export async function applyWimsRejectionDecision(
   const backup = await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME);
   const rechecked = await buildWimsRegistrationAudit(wimsRows);
   if (rechecked.dryRunToken !== audit.dryRunToken) throw new Error("제품DB가 백업 중 변경되었습니다. 다시 대조해주세요.");
-  await updateSheetCells(PRODUCT_DB_SHEET_NAME, [{ row: sheetRowNumber, col: statusIndex + 1, value: decision }]);
+
+  // 백업 사이에 열 순서가 바뀌었을 가능성까지 차단하기 위해 최종 쓰기 직전에
+  // 머리글과 대상 행 식별자를 다시 읽는다. 이전 statusIndex를 재사용하지 않는다.
+  const finalRows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" });
+  const finalHeaders = (finalRows[0] || []).map(value => String(value ?? "").trim());
+  const finalStatusIndex = headerIndex(finalHeaders, ["현재상태", "상태"]);
+  const finalModelSkuIndex = headerIndex(finalHeaders, ["모델SKU"]);
+  const finalSkuIdIndex = headerIndex(finalHeaders, ["SKU ID", "SKU"]);
+  const finalProductNameIndex = headerIndex(finalHeaders, ["상품명"]);
+  const finalBarcodeIndex = headerIndex(finalHeaders, ["쿠팡 바코드", "Seller SKU Barcode", "쿠팡바코드", "바코드"]);
+  if ([finalStatusIndex, finalModelSkuIndex, finalSkuIdIndex, finalProductNameIndex, finalBarcodeIndex].some(index => index < 0)) throw new Error("최종 확인에서 제품DB 식별 열을 찾지 못했습니다.");
+  const finalRow = finalRows[sheetRowNumber - 1] || [];
+  const finalModelSku = String(finalRow[finalModelSkuIndex] ?? "").trim();
+  const finalSkuId = String(finalRow[finalSkuIdIndex] ?? "").trim();
+  const finalProductName = String(finalRow[finalProductNameIndex] ?? "").trim();
+  const finalBarcode = String(finalRow[finalBarcodeIndex] ?? "").trim();
+  const finalStatus = String(finalRow[finalStatusIndex] ?? "").trim();
+  const identityUnchanged = normalize(finalModelSku) === normalize(target.productDbModelSku)
+    && normalize(finalSkuId) === normalize(target.productDbSkuId)
+    && normalizeProductName(finalProductName) === normalizeProductName(target.productDbProductName || "")
+    && normalize(finalBarcode) === normalize(target.productDbBarcode);
+  if (!identityUnchanged) throw new Error("최종 확인에서 대상 제품DB 행의 식별정보가 바뀌어 상태를 수정하지 않았습니다.");
+  if (finalStatus !== currentStatus) throw new Error(`현재상태가 ${currentStatus || "빈값"}에서 ${finalStatus || "빈값"}(으)로 바뀌어 덮어쓰지 않았습니다.`);
+  await updateSheetCells(PRODUCT_DB_SHEET_NAME, [{ row: sheetRowNumber, col: finalStatusIndex + 1, value: decision }]);
   return { applied: true, decision, sheetRowNumber, backupSheetName: backup.sheetName };
 }
 

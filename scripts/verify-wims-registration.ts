@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import { NextRequest } from "next/server";
+import { createNoidbActionSession, isSameOriginActionRequest, verifyNoidbActionCode, verifyNoidbActionSession } from "../lib/wms/noidb-action-auth";
 import { parseWimsClipboard } from "../lib/wms/wims-registration";
+import { POST as applyRegistration } from "../app/api/wms/wims-registration/apply/route";
+import { POST as applyRejectionDecision } from "../app/api/wms/wims-registration/rejection-decision/route";
 
 const sample = [
   "상품명\t상품 등록일\t카테고리\t바코드\t원본 견적서\t견적서 ID\tSKU ID\t상태\t등록 진행 단계",
@@ -60,3 +64,32 @@ assert.equal(vertical.rows[1].modelSku, "wp24041505-16");
 assert.equal(vertical.rows[1].skuId, "79392730");
 assert.equal(vertical.rows[1].barcode, "R259891680004");
 assert.equal(parseWimsClipboard(verticalSample.replace(" wp24041505-16", "")).rows[1].modelSku, "");
+
+const previousActionCode = process.env.QUICK_DRAFT_SYNC_CODE;
+process.env.QUICK_DRAFT_SYNC_CODE = "test-action-code-1234";
+assert.equal(verifyNoidbActionCode("test-action-code-1234"), true);
+assert.equal(verifyNoidbActionCode("wrong-action-code"), false);
+const now = Date.now();
+const session = createNoidbActionSession(now);
+assert.equal(verifyNoidbActionSession(session, now + 1_000), true);
+assert.equal(verifyNoidbActionSession(`${session}tampered`, now + 1_000), false);
+assert.equal(verifyNoidbActionSession(session, now + 31 * 24 * 60 * 60 * 1_000), false);
+assert.equal(isSameOriginActionRequest(new NextRequest("https://noidb-os.vercel.app/api/test", { method: "POST", headers: { host: "noidb-os.vercel.app", origin: "https://noidb-os.vercel.app", "sec-fetch-site": "same-origin" } })), true);
+assert.equal(isSameOriginActionRequest(new NextRequest("https://noidb-os.vercel.app/api/test", { method: "POST", headers: { host: "noidb-os.vercel.app", origin: "https://attacker.example", "sec-fetch-site": "cross-site" } })), false);
+if (previousActionCode === undefined) delete process.env.QUICK_DRAFT_SYNC_CODE;
+else process.env.QUICK_DRAFT_SYNC_CODE = previousActionCode;
+
+async function verifyWriteRoutesFailClosed() {
+  const headers = { host: "noidb-os.vercel.app", origin: "https://noidb-os.vercel.app", "sec-fetch-site": "same-origin", "content-type": "application/json" };
+  const applyResponse = await applyRegistration(new NextRequest("https://noidb-os.vercel.app/api/wms/wims-registration/apply", { method: "POST", headers, body: "{}" }));
+  const rejectionResponse = await applyRejectionDecision(new NextRequest("https://noidb-os.vercel.app/api/wms/wims-registration/rejection-decision", { method: "POST", headers, body: "{}" }));
+  assert.equal(applyResponse.status, 401);
+  assert.equal(rejectionResponse.status, 401);
+  console.log("WIMS 쓰기 API 무인증 차단 검증 완료");
+}
+
+verifyWriteRoutesFailClosed().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});
+console.log("WIMS 관리자 상태 변경 인증 검증 완료");
