@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { SupplyStatusAudit, SupplyStatusAuditIssue } from "@/lib/wms/supply-status-update";
 import { wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
 
@@ -17,6 +17,10 @@ export default function SupplyStatusAuditPanel() {
   const [message, setMessage] = useState("");
   const [audit, setAudit] = useState<SupplyStatusAudit | null>(null);
   const [showIssues, setShowIssues] = useState(false);
+
+  useEffect(() => {
+    void runAudit();
+  }, []);
 
   async function runAudit(preserveMessage = false) {
     if (loading) return;
@@ -73,10 +77,10 @@ export default function SupplyStatusAuditPanel() {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
         <div>
           <strong style={{ display: "block", fontSize: "14px" }}>상품공급상태 안전 진단</strong>
-          <span style={{ color: wmsColors.muted, fontSize: "11px" }}>진단은 읽기 전용 · 반영은 최종 확인 후 실행 · 제품DB 신규행 0건</span>
+          <span style={{ color: wmsColors.muted, fontSize: "11px" }}>화면을 열면 Google Drive 최신 파일 자동 진단 · 반영은 최종 확인 후 실행 · 제품DB 신규행 0건</span>
         </div>
         <button type="button" onClick={() => void runAudit()} disabled={loading} style={{ ...wmsGhostButton, minHeight: "36px", padding: "0 14px" }}>
-          {loading ? "진단 중..." : "최신 파일 진단"}
+          {loading ? "자동 진단 중..." : "최신 파일 다시 진단"}
         </button>
       </div>
 
@@ -104,20 +108,24 @@ export default function SupplyStatusAuditPanel() {
             <AuditValue label="신규행 생성 예정" value={audit.proposedNewRowCount} good />
           </div>
 
-          <button
-            type="button"
-            onClick={applySafeUpdates}
-            disabled={applying || audit.safeUpdateCount === 0}
-            style={{ ...wmsGhostButton, minHeight: "36px", marginTop: "10px", padding: "0 12px", opacity: applying || audit.safeUpdateCount === 0 ? 0.55 : 1 }}
-          >
-            {applying ? "안전 항목 반영 중..." : `안전 항목 ${audit.safeUpdateCount.toLocaleString()}건 반영`}
-          </button>
+          <div className="productRegistrationActionButtons">
+            <button
+              type="button"
+              onClick={applySafeUpdates}
+              disabled={applying || audit.safeUpdateCount === 0}
+              style={{ ...wmsGhostButton, opacity: applying || audit.safeUpdateCount === 0 ? 0.55 : 1 }}
+            >
+              {applying ? "안전 항목 반영 중..." : `안전 항목 ${audit.safeUpdateCount.toLocaleString()}건 반영`}
+            </button>
+            {audit.issues.length > 0 && (
+              <button type="button" onClick={() => setShowIssues(value => !value)} style={wmsGhostButton}>
+                {showIssues ? "확인 필요 숨기기" : `확인 필요 ${audit.issues.length}건 보기`}
+              </button>
+            )}
+          </div>
 
           {audit.issues.length > 0 && (
             <>
-              <button type="button" onClick={() => setShowIssues(value => !value)} style={{ ...wmsGhostButton, minHeight: "32px", marginTop: "10px", padding: "0 10px", fontSize: "11px" }}>
-                {showIssues ? "확인 필요 숨기기" : `확인 필요 ${audit.issues.length}건 보기`}
-              </button>
               {showIssues && (
                 <div style={{ display: "grid", gap: "6px", marginTop: "8px", maxHeight: "280px", overflowY: "auto" }}>
                   {audit.issues.map((issue, index) => (

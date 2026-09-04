@@ -132,7 +132,7 @@ export default function WimsRegistrationImportPanel() {
   ) || [], [audit]);
 
   function actionLabel(row: WimsRegistrationAudit["rows"][number]) {
-    if (row.wims.status === "rejected") return { title: "반려 · 재등록 판단", color: "#c0392b", guide: "Supplier Hub에서 반려사유를 확인한 뒤 수정 재등록 또는 종료를 선택하세요." };
+    if (row.wims.status === "rejected") return { title: "반려 · 사유 확인 필요", color: "#c0392b", guide: "Supplier Hub WIMS에서 반려사유를 확인한 뒤 실제 수정 방법을 결정하세요." };
     if (row.type === "conflict") return { title: "충돌 · 자동반영 금지", color: "#c0392b", guide: "SKU 또는 불변 바코드가 다릅니다. 기존 제품DB 행을 직접 확인하세요." };
     if (row.type === "unmatched") return { title: "미연결 · 모델SKU 확인", color: "#a06118", guide: "상품명 끝의 모델SKU와 제품DB 모델SKU가 같은지 확인하세요." };
     return { title: "승인 · 안전 연결 가능", color: wmsColors.greenDark, guide: "위의 안전 연결 버튼으로 SKU와 바코드를 기존 행에 채울 수 있습니다." };
@@ -193,6 +193,11 @@ export default function WimsRegistrationImportPanel() {
                         <div style={{ marginTop: "2px" }}>{row.wims.productName}</div>
                         <div style={{ color: wmsColors.muted, marginTop: "2px" }}>{action.guide}</div>
                         <div style={{ color: wmsColors.muted }}>{[row.wims.skuId && `SKU ${row.wims.skuId}`, row.wims.barcode, row.wims.estimateId && `견적서 ${row.wims.estimateId}`].filter(Boolean).join(" · ") || "SKU·바코드 없음"}</div>
+                        {row.wims.status === "rejected" && (
+                          <a href="https://supplier.coupang.com/qvt/wims" target="_blank" rel="noreferrer" style={{ ...wmsGhostButton, display: "inline-flex", alignItems: "center", justifyContent: "center", minHeight: "34px", marginTop: "7px", padding: "0 10px", textDecoration: "none", color: action.color }}>
+                            Supplier Hub에서 반려사유 확인
+                          </a>
+                        )}
                       </div>
                     );
                   })}
