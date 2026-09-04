@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import ExcelJS from "exceljs";
+import { resolveBarcodeModelIdentifier } from "../lib/wms/barcode-model-identifier";
 import { buildShipmentCreationUploadFile, type ParsedTrackingRow } from "../lib/wms/hanjin-upload";
 import { findTrackingNumbersReusedAcrossShippingGroups } from "../lib/wms/hanjin-shipment-auto";
 import { buildFulfillmentCenterLabelWorkbook, buildGenerationBarcodeWorkbook } from "../lib/wms/shipment-output-files";
@@ -10,6 +11,9 @@ import type { PurchaseOrderSourceRecord } from "../lib/wms/purchase-order-source
 import type { ShipmentOutputGroup } from "../lib/wms/shipment-output-context";
 
 async function main() {
+assert.equal(resolveBarcodeModelIdentifier({ modelSku: "wr000123-SI20", modelName: "한글 상품명" }), "wr000123-SI20");
+assert.equal(resolveBarcodeModelIdentifier({ modelSku: "", modelName: "we00011" }), "we00011");
+assert.equal(resolveBarcodeModelIdentifier({ modelSku: "", modelName: "노이드비 써지컬스틸" }), "");
 const records: PurchaseOrderSourceRecord[] = [
   { purchaseOrderNumber: "140000001", sourceContainerFile: "fixture", sourceEntryFile: "a.xlsx", sourceSheet: "상품목록", sourceRow: 2, fulfillmentCenterName: "서울", expectedArrivalDate: "2026-09-04", recipientName: "서울", phone: "01000000000", postalCode: "00000", address: "서울", skuId: "1001", barcode: "R1001", productName: "테스트 목걸이, 골드", optionName: "골드", orderedQuantity: 2 },
   { purchaseOrderNumber: "140000002", sourceContainerFile: "fixture", sourceEntryFile: "b.xlsx", sourceSheet: "상품목록", sourceRow: 2, fulfillmentCenterName: "호법", expectedArrivalDate: "2026-09-04", recipientName: "호법", phone: "01000000000", postalCode: "00000", address: "호법", skuId: "1002", barcode: "R1002", productName: "테스트 반지, 실버", optionName: "실버", orderedQuantity: 1 },

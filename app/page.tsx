@@ -11,12 +11,13 @@ import {
 } from "@/lib/product-db/idb";
 import {
   buildAdditionalImagesCsv,
+  collectProductImageFiles,
   collectProductDbFiles,
   createLabelBlob,
   colorCode,
   ringSizeNumber,
 } from "@/lib/product-db/files";
-import { ensureProductFolderTree, writeCategoryFile, writeProductDbFiles } from "@/lib/product-db/fs";
+import { ensureProductFolderTree, writeCategoryFile, writeProductDbFiles, writeRootFolderFile } from "@/lib/product-db/fs";
 import { dataUrlToBlob } from "@/lib/product-db/files";
 import { buildProductDbZip } from "@/lib/product-db/zip";
 import { compressImageDataUrl } from "@/lib/image/compress";
@@ -83,6 +84,10 @@ const ACCEPTED = ["image/jpeg", "image/jpg", "image/png"];
 const DEFAULT_DETAIL_HEADER = "/노이드비-상단이미지.jpg";
 const DRAFT_STORAGE_KEY = "laura-product-draft";
 const LEGACY_DRAFT_STORAGE_KEY = ["noi", "db-product-draft"].join("");
+const DEFAULT_LABEL_YEAR_MONTH = (() => {
+  const now = new Date();
+  return `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, "0")}`;
+})();
 const DEFAULT_SUPPLIERS = [
   "프리스타일", "JK인터내셔널", "닝구네", "단종", "모건쥬얼리", "블루", "비에이블리",
   "샬롬", "세븐", "스콜피온", "실버데이", "아트피어싱", "자체제작", "제작", "쥬얼리김",
@@ -275,6 +280,9 @@ export default function Home() {
 
   const [exportLoading, setExportLoading] = useState("");
   const [exportMessage, setExportMessage] = useState("");
+  const [labelManufactureYearMonth, setLabelManufactureYearMonth] = useState(DEFAULT_LABEL_YEAR_MONTH);
+  const [labelManufacturerName, setLabelManufacturerName] = useState("프리스타일 협력사");
+  const [labelImporterName, setLabelImporterName] = useState("프리스타일");
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchStatus, setBatchStatus] = useState("");
   const [coupangImportBusy, setCoupangImportBusy] = useState("");
@@ -1290,30 +1298,22 @@ export default function Home() {
     }
   };
 
-  const saveDetailPageOnly = async () => {
-    if (!model || !product.category) {
-      setDetailMessage("오류: 모델명과 카테고리를 먼저 확인해주세요.");
+  const downloadDetailPageOnly = async () => {
+    if (!model) {
+      setExportMessage("모델명을 먼저 확인해주세요.");
       return;
     }
+    setExportLoading("detail");
     try {
-      setDetailMessage("상세페이지만 저장하고 있습니다...");
+      setExportMessage("상세이미지만 만들고 있습니다...");
       const dataUrl = detailPreview || (await composeDetailPage()).dataUrl;
       setDetailPreview(dataUrl);
-      if (dbHandle) {
-        const saved = await writeProductDbFiles(dbHandle, product.category, model, [{
-          folder: "",
-          filename: `${model}.jpg`,
-          blob: dataUrlToBlob(dataUrl),
-          path: `${model}.jpg`,
-        }]);
-        setDbSavedFiles(prev => [...new Set([...prev, ...saved])]);
-        setDetailMessage(`상세페이지 저장 완료 → ${product.category}/${model}/${model}.jpg`);
-      } else {
-        downloadDataUrl(dataUrl, `${model}.jpg`);
-        setDetailMessage("상세페이지 다운로드 완료");
-      }
+      downloadDataUrl(dataUrl, `${model}.jpg`);
+      setExportMessage("상세이미지 다운로드 완료");
     } catch (e) {
-      setDetailMessage(`오류: ${e instanceof Error ? e.message : "상세페이지 저장 실패"}`);
+      setExportMessage(`오류: ${e instanceof Error ? e.message : "상세이미지 다운로드 실패"}`);
+    } finally {
+      setExportLoading("");
     }
   };
 
@@ -1506,6 +1506,11 @@ export default function Home() {
       customImages: await Promise.all(customImages),
       detailPreview: detailOverride ?? detailPreview,
       sourcingUrl,
+      label: {
+        manufactureYearMonth: labelManufactureYearMonth,
+        manufacturerName: labelManufacturerName,
+        importerName: labelImporterName,
+      },
     });
   };
 
@@ -1715,8 +1720,73 @@ export default function Home() {
   };
 
   const downloadLabel = async () => {
-    if (!model) return;
-    downloadBlobFile(await createLabelBlob(model), `라벨_${model}.jpg`);
+    if (!model) {
+      setExportMessage("모델명을 먼저 확인해주세요.");
+      return;
+    }
+    setExportLoading("label");
+    try {
+      const fileName = `라벨_${model}.jpg`;
+      const labelBlob = await createLabelBlob({
+        model,
+        manufactureYearMonth: labelManufactureYearMonth,
+        manufacturerName: labelManufacturerName,
+        importerName: labelImporterName,
+      });
+      if (dbHandle) {
+        const savedPath = await writeRootFolderFile(dbHandle, "라벨", fileName, labelBlob);
+        setExportMessage(`라벨 저장 완료 → ${savedPath}`);
+      } else {
+        downloadBlobFile(labelBlob, fileName);
+        setExportMessage("라벨 다운로드 완료");
+      }
+    } catch (e) {
+      setExportMessage(`오류: ${e instanceof Error ? e.message : "라벨 다운로드 실패"}`);
+    } finally {
+      setExportLoading("");
+    }
+  };
+
+  const downloadProductImagesOnly = async () => {
+    if (!model || !product.category) {
+      setExportMessage("모델명과 카테고리를 먼저 확인해주세요.");
+      return;
+    }
+    setExportLoading("images");
+    try {
+      const normalizedThumbs = Object.fromEntries(await Promise.all(
+        options.flatMap(option => {
+          const dataUrl = optionThumbs[option]?.dataUrl;
+          return dataUrl ? [[option, normalizeCoupangImage(dataUrl)]] : [];
+        }).map(async ([option, pending]) => [option, await pending])
+      ));
+      const normalizedExtras = await Promise.all(
+        [allOptions?.dataUrl, detailCut?.dataUrl, wear01?.dataUrl, wear02?.dataUrl]
+          .map(async dataUrl => dataUrl ? normalizeCoupangImage(dataUrl) : undefined)
+      );
+      const normalizedCustom = await Promise.all(
+        customSlots.filter(item => item.slot?.dataUrl).slice(0, 5).map(async (item, index) => ({
+          filename: `${model}-${String(index + 5).padStart(2, "0")}.jpg`,
+          dataUrl: await normalizeCoupangImage(item.slot!.dataUrl),
+        }))
+      );
+      const files = collectProductImageFiles({
+        category: product.category,
+        model,
+        sizesCsv: product.sizes,
+        optionThumbs: normalizedThumbs,
+        additionalImages: normalizedExtras,
+        customImages: normalizedCustom,
+      });
+      if (!files.length) throw new Error("다운로드할 썸네일 또는 추가이미지가 없습니다.");
+      const zip = await buildProductDbZip(product.category, model, files);
+      downloadBlobFile(zip, `썸네일_추가이미지_${model}.zip`);
+      setExportMessage(`썸네일 + 추가이미지 다운로드 완료 · ${files.length}개 파일`);
+    } catch (e) {
+      setExportMessage(`오류: ${e instanceof Error ? e.message : "이미지 다운로드 실패"}`);
+    } finally {
+      setExportLoading("");
+    }
   };
 
   const downloadSkuManual = (option: string) => {
@@ -2301,9 +2371,6 @@ export default function Home() {
           <button type="button" className="purpleButton" onClick={() => void buildDetailPage()}>
             780px 상세페이지 만들기
           </button>
-          <button type="button" className="secondaryButton" onClick={() => void saveDetailPageOnly()}>
-            상세페이지만 다운로드
-          </button>
         </div>
         {detailMessage && <p className="detailMessage">{detailMessage}</p>}
         {detailPreview && (
@@ -2324,6 +2391,32 @@ export default function Home() {
         </div>
         {draftStatus && <p className="detailMessage">{draftStatus}</p>}
         {dbFolderName && <p className="detailMessage">연결: {dbFolderName}</p>}
+        <div className="labelQuickPanel">
+          <strong>라벨 정보</strong>
+          <p>현재 상품 정보를 기본값으로 사용합니다. 바꿔야 하는 항목만 수정하세요.</p>
+          <div className="labelQuickFields">
+            <Field label="모델명"><input value={model} onChange={e => updateModel(e.target.value)} /></Field>
+            <Field label="제조연월"><input value={labelManufactureYearMonth} onChange={e => setLabelManufactureYearMonth(e.target.value)} placeholder="2026.09" /></Field>
+            <Field label="제조자명"><input value={labelManufacturerName} onChange={e => setLabelManufacturerName(e.target.value)} /></Field>
+            <Field label="수입자명"><input value={labelImporterName} onChange={e => setLabelImporterName(e.target.value)} /></Field>
+          </div>
+          <span>{dbHandle ? "라벨만 실행하면 연결된 상품이미지DB/라벨 폴더에 JPG로 저장됩니다." : "저장 폴더가 연결되지 않은 환경에서는 JPG로 다운로드됩니다."}</span>
+        </div>
+        <div className="individualDownloadGrid">
+          <button className="secondaryButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadQuote()}>
+            {exportLoading === "quote" ? "견적서 생성 중..." : "견적서만 다운로드"}
+          </button>
+          <button className="secondaryButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadDetailPageOnly()}>
+            {exportLoading === "detail" ? "상세이미지 생성 중..." : "상세이미지만 다운로드"}
+          </button>
+          <button className="secondaryButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadProductImagesOnly()}>
+            {exportLoading === "images" ? "이미지 묶는 중..." : "썸네일 + 추가이미지만 다운로드"}
+          </button>
+          <button className="secondaryButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadLabel()}>
+            {exportLoading === "label" ? "라벨 생성 중..." : "라벨만 다운로드"}
+          </button>
+        </div>
+        {exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
         <button className="batchSaveButton" type="button" disabled={batchBusy} onClick={batchSave}>
           {batchBusy ? "저장 중..." : "등록파일 일괄 생성 및 저장"}
         </button>

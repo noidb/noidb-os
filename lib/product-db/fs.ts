@@ -54,3 +54,18 @@ export async function writeCategoryFile(
   await writable.close();
   return `${category}/${filename}`;
 }
+
+/** Save one independently generated file into 상품이미지DB/<folder>/. */
+export async function writeRootFolderFile(
+  root: FileSystemDirectoryHandle,
+  folder: string,
+  filename: string,
+  blob: Blob,
+) {
+  const targetDir = await getOrCreateDir(root, folder);
+  const handle = await targetDir.getFileHandle(filename, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(blob);
+  await writable.close();
+  return `${folder}/${filename}`;
+}

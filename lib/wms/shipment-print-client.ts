@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import { PDFDocument, rgb } from "pdf-lib";
 import bwipjs from "bwip-js";
+import { resolveBarcodeModelIdentifier } from "./barcode-model-identifier";
 import type { ProductCatalogItem } from "./product-catalog";
 import type { PickingWaveItem } from "./picking-wave/types";
 import { resolveDisplayNameAndOption } from "./display-name";
@@ -61,6 +62,10 @@ function filenameShipmentNumber(name: string): string | null {
 
 function unique(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
+}
+
+export function formatShipmentQuantitySummary(skuCount: number, totalQuantity: number): string {
+  return `SKU ${skuCount}종 / 총 ${totalQuantity}개`;
 }
 
 async function pdfTextPages(file: File): Promise<{ width: number; height: number; items: PdfTextItem[] }[]> {
@@ -281,8 +286,8 @@ export function matchShipmentPrintGroups(
       }
       // SKU/바코드/상품명/옵션/수량은 발주서 기반 source를 유일한 기준으로 사용한다.
       // 제조국과 모델명만 SKU ID로 조회한 제품DB(구글시트) 값을 보강한다.
-      const resolvedModelName = catalog[0].modelName || catalog[0].productName;
-      if (!catalog[0].countryOfOrigin || !resolvedModelName) errors.push(`${shipmentNumber} SKU ${item.skuId}: 제품DB 제조국 또는 모델명 누락`);
+      const resolvedModelName = resolveBarcodeModelIdentifier(catalog[0]);
+      if (!catalog[0].countryOfOrigin || !resolvedModelName) errors.push(`${shipmentNumber} SKU ${item.skuId}: 제품DB 제조국 또는 영문·숫자 모델SKU/모델명 누락`);
       const display = resolveDisplayNameAndOption(
         source.productName,
         source.optionLabel
@@ -303,7 +308,9 @@ export function matchShipmentPrintGroups(
       shipmentNumber,
       label,
       manifest,
-      barcodeRows: matchedRows.sort((a, b) => a.sourceRowNumber - b.sourceRowNumber),
+      // manifest.items를 순회하며 쌓은 순서를 그대로 유지한다. 발주서 원본 행번호로
+      // 다시 정렬하면 동봉내역서에 표시된 상품 순서와 바코드 출력 순서가 달라진다.
+      barcodeRows: matchedRows,
       purchaseOrderNumbers,
       fulfillmentCenter: manifest.fulfillmentCenter,
       expectedDate: manifest.expectedDate,
@@ -348,7 +355,7 @@ export async function buildFourUpLabelPdf(groups: ShipmentPrintGroup[]): Promise
 /**
  * 기존 BarTender 양식이 참조하는 7개 열 이름을 바꾸지 않고 출력용 XLSX를 만든다.
  * 각 쉽먼트 첫 행은 상품 바코드를 비워 구분표로 출력하고, 다음 행부터 최종 납품수량만큼
- * 상품행을 반복한다. 발주서 원본 순서는 matchShipmentPrintGroups에서 이미 보존된다.
+ * 상품행을 반복한다. 동봉내역서의 상품 순서는 matchShipmentPrintGroups에서 이미 보존된다.
  */
 export async function buildBarTenderWorkbook(groups: ShipmentPrintGroup[]): Promise<Uint8Array> {
   const ExcelJS = (await import("exceljs")).default;
@@ -368,7 +375,7 @@ export async function buildBarTenderWorkbook(groups: ShipmentPrintGroup[]): Prom
       group.fulfillmentCenter,
       `입고예정일 ${group.expectedDate}\n쉽먼트번호 ${group.shipmentNumber}`,
       `발주번호 ${group.purchaseOrderNumbers.join(", ")}`,
-      `SKU ${skuCount}종 / 총 ${totalQuantity}개${group.boxNumber ? ` / 박스 ${group.boxNumber}` : ""}`,
+      formatShipmentQuantitySummary(skuCount, totalQuantity),
       "쉽먼트구분",
     ]);
     for (const row of group.barcodeRows) {
@@ -440,7 +447,7 @@ function separatorCanvas(group: ShipmentPrintGroup): HTMLCanvasElement {
   ctx.fillText(`발주 ${group.purchaseOrderNumbers.join(", ")}`, element.width / 2, 195);
   const total = group.barcodeRows.reduce((sum, row) => sum + row.quantity, 0);
   ctx.font = '800 24px "Noto Sans KR", "Malgun Gothic", sans-serif';
-  ctx.fillText(`SKU ${group.barcodeRows.length}종 / 총 ${total}개${group.boxNumber ? ` / 박스 ${group.boxNumber}` : ""}`, element.width / 2, 242);
+  ctx.fillText(formatShipmentQuantitySummary(group.barcodeRows.length, total), element.width / 2, 242);
   ctx.font = '600 14px "Noto Sans KR", "Malgun Gothic", sans-serif';
   ctx.fillText("이 구분표 다음 라벨부터 동일 쉽먼트", element.width / 2, 272);
   return element;

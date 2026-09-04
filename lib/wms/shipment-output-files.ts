@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { resolveBarcodeModelIdentifier } from "./barcode-model-identifier";
 import { resolveDisplayNameAndOption } from "./display-name";
 import { summarizeFulfillmentCenterLabels } from "./fulfillment-center-label-summary";
 import { normalizeSkuId } from "./sku-normalize";
@@ -70,9 +71,9 @@ export async function buildGenerationBarcodeWorkbook(
         continue;
       }
       const catalog = matches[0];
-      const modelName = catalog.modelName || catalog.productName;
+      const modelName = resolveBarcodeModelIdentifier(catalog);
       if (!modelName || !catalog.countryOfOrigin) {
-        errors.push(`SKU ${skuId}: 제품DB 모델명 또는 제조국명 누락`);
+        errors.push(`SKU ${skuId}: 영문·숫자 모델SKU/모델명 또는 제조국명 누락`);
         continue;
       }
       const display = resolveDisplayNameAndOption(record.productName, record.optionName);

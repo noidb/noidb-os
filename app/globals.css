@@ -127,6 +127,15 @@
 .exportActions button{border:0;border-radius:10px;padding:13px 17px;font-weight:800;cursor:pointer}
 .exportActions button:disabled{opacity:.65;cursor:wait}
 @media(max-width:760px){.exportActions{flex-direction:column}.exportActions button{width:100%}}
+.individualDownloadGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}
+.individualDownloadGrid button{width:100%;min-height:54px;border:1px solid #cfc0b0;border-radius:12px;padding:14px 16px;font-size:15px;font-weight:800;cursor:pointer}
+.individualDownloadGrid button:disabled{opacity:.65;cursor:wait}
+@media(max-width:760px){.individualDownloadGrid{grid-template-columns:1fr}.individualDownloadGrid button{min-height:56px;font-size:16px}}
+.labelQuickPanel{margin-top:14px;padding:14px;border:1px solid #ded4c8;border-radius:12px;background:#faf8f4}
+.labelQuickPanel>strong{font-size:15px}.labelQuickPanel>p,.labelQuickPanel>span{display:block;margin:5px 0 0;color:#6f655b;font-size:12px;line-height:1.5}
+.labelQuickFields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}
+.labelQuickFields .field{margin:0}.labelQuickFields input{width:100%;box-sizing:border-box}
+@media(max-width:760px){.labelQuickFields{grid-template-columns:1fr}}
 
 .originalButton{background:#0f766e;color:#fff}
 .aiOptionalButton{background:#eef3f5;color:#1f3a4d}

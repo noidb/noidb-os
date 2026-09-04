@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "verify:shipment-split": "npx --yes tsx scripts/verify-shipment-split.ts"
   },
   "dependencies": {
     "@vercel/blob": "^2.8.0",

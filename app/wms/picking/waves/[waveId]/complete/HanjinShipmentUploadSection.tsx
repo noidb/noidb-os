@@ -9,6 +9,7 @@ interface Props {
   baskets: BasketAssignment[];
   /** 2단계에서 업로드한 "송장번호 입력 완료" 원본의 base64 — 반드시 있어야 실행된다. */
   trackingFileBase64: string | null;
+  onGenerated?: (fileName: string) => Promise<void> | void;
 }
 
 /**
@@ -18,7 +19,7 @@ interface Props {
  * 송장번호가 실제로 채워진 행만 골라 새로 만든다 — 매칭 실패 행은 절대 포함하지 않는다.
  * 2단계 업로드 파일이 없으면(trackingFileBase64===null) 버튼 자체가 비활성화된다.
  */
-export default function HanjinShipmentUploadSection({ waveId, baskets, trackingFileBase64 }: Props) {
+export default function HanjinShipmentUploadSection({ waveId, baskets, trackingFileBase64, onGenerated }: Props) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
@@ -68,6 +69,7 @@ export default function HanjinShipmentUploadSection({ waveId, baskets, trackingF
         `송장번호가 확인된 ${includedCount}개 행으로 생성했습니다` +
           (Number(excludedCount) > 0 ? ` (업로드파일에서 뺀 행 ${excludedCount}개 — ${excludedRowsRaw})` : "")
       );
+      await onGenerated?.(fileName);
     } catch (err) {
       setError(err instanceof Error ? err.message : "쉽먼트 생성 업로드파일 생성 중 오류가 발생했습니다.");
     } finally {

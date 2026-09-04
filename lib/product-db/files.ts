@@ -49,7 +49,65 @@ export function buildSkuThumbFilenames(
   return [`${model}-${code}.jpg`];
 }
 
-export async function createLabelBlob(model: string): Promise<Blob> {
+export type ImageOnlyInput = {
+  category: string;
+  model: string;
+  sizesCsv: string;
+  optionThumbs: Record<string, string>;
+  additionalImages: (string | undefined)[];
+  customImages?: { filename: string; dataUrl: string }[];
+};
+
+/** Builds only Coupang thumbnails and additional images. No quote, label, sheet, or DB side effects. */
+export function collectProductImageFiles(input: ImageOnlyInput): ProductDbFile[] {
+  if (!input.model) return [];
+  const files: ProductDbFile[] = [];
+  for (const [option, dataUrl] of Object.entries(input.optionThumbs || {})) {
+    if (!dataUrl?.startsWith("data:image/")) continue;
+    const blob = dataUrlToBlob(dataUrl);
+    for (const filename of buildSkuThumbFilenames(input.model, input.category, option, input.sizesCsv)) {
+      pushFlat(files, filename, blob);
+    }
+  }
+  input.additionalImages.forEach((dataUrl, index) => {
+    if (!dataUrl?.startsWith("data:image/")) return;
+    const filename = `${input.model}-${String(index + 1).padStart(2, "0")}.jpg`;
+    pushFlat(files, filename, dataUrlToBlob(dataUrl));
+  });
+  for (const item of input.customImages || []) {
+    if (!item.filename || !item.dataUrl?.startsWith("data:image/")) continue;
+    pushFlat(files, item.filename, dataUrlToBlob(item.dataUrl));
+  }
+  return files;
+}
+
+export type ProductLabelInput = {
+  model: string;
+  manufactureYearMonth?: string;
+  manufacturerName?: string;
+  importerName?: string;
+};
+
+export function buildProductLabelLines(input: ProductLabelInput, now = new Date()): string[] {
+  const model = input.model.trim();
+  if (!model) throw new Error("라벨 모델명을 입력해주세요.");
+  const ym = input.manufactureYearMonth?.trim() || `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const manufacturerName = input.manufacturerName?.trim() || "프리스타일 협력사";
+  const importerName = input.importerName?.trim() || "프리스타일";
+  return [
+    `1. 모델명 : ${model}`,
+    `2. 제조연월 : ${ym}`,
+    `3. 제조자명 : ${manufacturerName}`,
+    `4. 수입자명 : ${importerName}`,
+    "5. 주소 및 전화번호 : 경기도 고양시 탄현동 1559-1 / 010-5769-5602",
+    "6. 제조국명 : 중국",
+    "7. 사용연령 : 14세 이상",
+    "8. 주의사항 : 분실, 파손주의",
+  ];
+}
+
+export async function createLabelBlob(input: string | ProductLabelInput): Promise<Blob> {
+  const values = typeof input === "string" ? { model: input } : input;
   const canvas = document.createElement("canvas");
   canvas.width = 900;
   canvas.height = 1200;
@@ -67,18 +125,7 @@ export async function createLabelBlob(model: string): Promise<Blob> {
   ctx.font = "bold 32px Arial, sans-serif";
   ctx.fillText("전기용품 및 생활용품 안전관리법에 의한표시", 450, 105);
 
-  const now = new Date();
-  const ym = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const lines = [
-    `1. 모델명 : ${model}`,
-    `2. 제조연월 : ${ym}`,
-    "3. 제조자명 : 프리스타일 협력사",
-    "4. 수입자명 : 프리스타일",
-    "5. 주소 및 전화번호 : 경기도 고양시 탄현동 1559-1 / 010-5769-5602",
-    "6. 제조국명 : 중국",
-    "7. 사용연령 : 14세 이상",
-    "8. 주의사항 : 분실, 파손주의",
-  ];
+  const lines = buildProductLabelLines(values);
 
   ctx.textAlign = "left";
   ctx.font = "26px Arial, sans-serif";
@@ -136,6 +183,7 @@ export type CollectInput = {
   customImages?: { filename: string; dataUrl: string }[];
   detailPreview: string;
   sourcingUrl?: string;
+  label?: Omit<ProductLabelInput, "model">;
 };
 
 export function buildAdditionalImagesCsv(model: string, extras: (string | undefined)[]) {
@@ -243,7 +291,7 @@ export async function collectProductDbFiles(
   }
 
   try {
-    const labelBlob = await createLabelBlob(model);
+    const labelBlob = await createLabelBlob({ model, ...input.label });
     pushFlat(files, `라벨_${model}.jpg`, labelBlob);
     readyFiles.push(`라벨_${model}.jpg`);
   } catch {
