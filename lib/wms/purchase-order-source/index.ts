@@ -1,4 +1,6 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { cachedParsedFile } from "../parsed-file-cache";
 import path from "node:path";
 import JSZip from "jszip";
 import { downloadDriveFile, isDriveReaderConfigured, listDriveFilesFromEnv, shouldRequireDriveReader } from "../google-drive-reader";
@@ -23,18 +25,36 @@ async function expand(container: string, buffer: Buffer): Promise<PurchaseOrderB
   return inputs;
 }
 
-async function loadInputs(): Promise<{ containers: number; inputs: PurchaseOrderBinaryInput[] }> {
+interface ParsedContainer { documents: PurchaseOrderSourceDocument[]; errors: PurchaseOrderIndex["parseErrors"]; entries: number }
+async function parseInputs(inputs: PurchaseOrderBinaryInput[]): Promise<ParsedContainer> {
+  const documents: PurchaseOrderSourceDocument[] = [], errors: PurchaseOrderIndex["parseErrors"] = [];
+  for (const input of inputs) {
+    try { documents.push(await parsePurchaseOrderSource(input)); }
+    catch (error) { errors.push({ sourceContainerFile: input.sourceContainerFile, sourceEntryFile: input.sourceEntryFile, message: error instanceof Error ? error.message : "파싱 실패" }); }
+  }
+  return { documents, errors, entries: inputs.length };
+}
+async function loadInputs(fresh: boolean): Promise<{ containers: number; parsed: ParsedContainer[] }> {
+  const parsed: ParsedContainer[] = [];
+  async function load(name: string, descriptor: unknown, download: () => Promise<Buffer>) {
+    return cachedParsedFile("purchase-order-parser-1", descriptor, async () => {
+      const buffer = await download();
+      const value = await parseInputs(await expand(name, buffer));
+      return { value, contentHash: createHash("sha256").update(buffer).digest("hex"), purchaseOrders: value.documents.map(item => item.purchaseOrderNumber) };
+    }, (value): value is ParsedContainer => Boolean(value && typeof value === "object" && Array.isArray((value as ParsedContainer).documents) && Array.isArray((value as ParsedContainer).errors)), fresh);
+  }
   if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
     const files = (await listDriveFilesFromEnv("GOOGLE_DRIVE_COUPANG_PURCHASE_ORDER_FOLDER_ID"))
       .filter(file => /\.(zip|xlsx)$/i.test(file.name));
-    const inputs: PurchaseOrderBinaryInput[] = [];
-    for (const file of files) inputs.push(...await expand(file.name, await downloadDriveFile(file.id)));
-    return { containers: files.length, inputs };
+    for (const file of files) parsed.push(await load(file.name, [file.id, file.name, file.modifiedTime, file.size], () => downloadDriveFile(file.id)));
+    return { containers: files.length, parsed };
   }
   const names = (await readdir(LOCAL_SOURCE_DIR)).filter(name => /\.(zip|xlsx)$/i.test(name));
-  const inputs: PurchaseOrderBinaryInput[] = [];
-  for (const name of names) inputs.push(...await expand(name, await readFile(path.join(LOCAL_SOURCE_DIR, name))));
-  return { containers: names.length, inputs };
+  for (const name of names) {
+    const filePath = path.join(LOCAL_SOURCE_DIR, name), info = await stat(filePath);
+    parsed.push(await load(name, [filePath, info.mtimeMs, info.size], () => readFile(filePath)));
+  }
+  return { containers: names.length, parsed };
 }
 
 function signature(document: PurchaseOrderSourceDocument): string {
@@ -53,17 +73,15 @@ function duplicate(po: string, documents: PurchaseOrderSourceDocument[]): Purcha
   return { purchaseOrderNumber: po, sources: documents.map(item => `${item.sourceContainerFile} :: ${item.sourceEntryFile}`) };
 }
 
-export async function buildPurchaseOrderIndex(inputs?: PurchaseOrderBinaryInput[], sourceContainerCount?: number): Promise<PurchaseOrderIndex> {
-  const loaded = inputs ? { containers: sourceContainerCount ?? new Set(inputs.map(item => item.sourceContainerFile)).size, inputs } : await loadInputs();
+export async function buildPurchaseOrderIndex(inputs?: PurchaseOrderBinaryInput[], sourceContainerCount?: number, fresh = true): Promise<PurchaseOrderIndex> {
+  const loaded = inputs ? { containers: sourceContainerCount ?? new Set(inputs.map(item => item.sourceContainerFile)).size, parsed: [await parseInputs(inputs)] } : await loadInputs(fresh);
   const documentsByPo = new Map<string, PurchaseOrderSourceDocument[]>();
   const parseErrors: PurchaseOrderIndex["parseErrors"] = [];
-  for (const input of loaded.inputs) {
-    try {
-      const document = await parsePurchaseOrderSource(input);
+  for (const container of loaded.parsed) {
+    parseErrors.push(...container.errors);
+    for (const document of container.documents) {
       const key = normalizeSkuId(document.purchaseOrderNumber);
       documentsByPo.set(key, [...(documentsByPo.get(key) || []), document]);
-    } catch (error) {
-      parseErrors.push({ sourceContainerFile: input.sourceContainerFile, sourceEntryFile: input.sourceEntryFile, message: error instanceof Error ? error.message : "파싱 실패" });
     }
   }
 
@@ -82,7 +100,7 @@ export async function buildPurchaseOrderIndex(inputs?: PurchaseOrderBinaryInput[
       conflicts.push(info);
     }
   }
-  return { byPurchaseOrderNumber, duplicateFiles, identicalDuplicates, conflicts, parseErrors, sourceContainerCount: loaded.containers, sourceEntryCount: loaded.inputs.length };
+  return { byPurchaseOrderNumber, duplicateFiles, identicalDuplicates, conflicts, parseErrors, sourceContainerCount: loaded.containers, sourceEntryCount: loaded.parsed.reduce((sum, item) => sum + item.entries, 0) };
 }
 
 /** 검색·미리보기에서 같은 Drive 원본을 버튼마다 다시 내려받지 않도록 하는 짧은 서버 캐시.
@@ -90,7 +108,7 @@ export async function buildPurchaseOrderIndex(inputs?: PurchaseOrderBinaryInput[
 export async function getCachedPurchaseOrderIndex(ttlMs = DEFAULT_INDEX_CACHE_TTL_MS): Promise<PurchaseOrderIndex> {
   if (cachedIndex && cachedIndex.expiresAt > Date.now()) return cachedIndex.value;
   if (!indexPromise) {
-    indexPromise = buildPurchaseOrderIndex().then(value => {
+    indexPromise = buildPurchaseOrderIndex(undefined, undefined, false).then(value => {
       cachedIndex = { expiresAt: Date.now() + Math.max(1_000, ttlMs), value };
       return value;
     }).finally(() => {

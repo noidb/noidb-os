@@ -6,8 +6,14 @@ const calls = { reads: 0, downloads: 0, transactions: 0 };
 let authenticated = false, sameOrigin = true;
 const token = 'a'.repeat(64);
 const context = { incoming: [{}], cellPreview: { blockers: [] } };
+const cache = new Map();
 class ConfigError extends Error {}
 const dependencies = {
+  '@/lib/wms/parsed-file-cache': { cachedParsedFile: async (version, descriptor, parse, valid, fresh) => {
+    const key = JSON.stringify([version, descriptor]);
+    if (fresh || !cache.has(key)) cache.set(key, (await parse()).value);
+    return cache.get(key);
+  } },
   'next/server': { NextResponse: { json: (body, init = {}) => ({ body, status: init.status || 200 }) } },
   '@/lib/wms/google-drive-oauth-reader': {
     resolveDriveFolderPath: async () => { calls.reads++; return 'folder'; },
@@ -18,7 +24,7 @@ const dependencies = {
   '@/lib/wms/google-service-account': { WmsGoogleNotConfiguredError: ConfigError },
   '@/lib/wms/noidb-action-auth': { hasNoidbActionSession: () => authenticated, isSameOriginActionRequest: () => sameOrigin },
   '@/lib/wms/inbound-import-context': {
-    readInboundWorkbook: async () => ({}), loadInboundImportContext: async () => context,
+    readInboundWorkbook: async () => ({fingerprint:'a'.repeat(64),items:[]}), loadInboundImportContext: async () => context,
     inboundPreviewSummary: () => ({ previewToken: token, candidateEvents: 1 }),
   },
   '@/lib/wms/inbound-import-transaction': {

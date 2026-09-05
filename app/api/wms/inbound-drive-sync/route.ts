@@ -7,26 +7,23 @@ import { readInboundWorkbook, loadInboundImportContext, inboundPreviewSummary } 
 import { applyInboundTransaction, InboundCommitUncertainError } from "@/lib/wms/inbound-import-transaction";
 import { createInboundTransactionStore } from "@/lib/wms/inbound-import-store";
 import type { InboundImportDataset } from "@/lib/wms/inbound-import-safety";
+import { cachedParsedFile } from "@/lib/wms/parsed-file-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 180;
 const FOLDER_PATH = ["쿠팡데이터", "입고상세내역 다운로드"];
-// Performance cache only, never an import ledger. Files are read fresh before apply.
-const parsedCache = new Map<string, InboundImportDataset>();
+const validDataset = (value: unknown): value is InboundImportDataset => Boolean(value && typeof value === "object" && typeof (value as InboundImportDataset).fingerprint === "string" && Array.isArray((value as InboundImportDataset).items));
 
 async function loadContext(fresh: boolean) {
   const folder = await resolveDriveFolderPath(FOLDER_PATH);
   const files = (await listOAuthDriveFolderFiles(folder)).filter(file => /\.xlsx$/i.test(file.name)).sort((a, b) => a.id.localeCompare(b.id));
   const datasets: InboundImportDataset[] = [];
   for (const file of files) {
-    const key = JSON.stringify([file.id, file.name, file.modifiedTime, file.size]);
-    let dataset = fresh ? undefined : parsedCache.get(key);
-    if (!dataset) {
-      dataset = await readInboundWorkbook(await downloadOAuthDriveFile(file.id), file.name);
-      if (parsedCache.size >= 50) parsedCache.delete(parsedCache.keys().next().value!);
-      parsedCache.set(key, dataset);
-    }
+    const dataset = await cachedParsedFile("inbound-event-v2-parser-1", [file.id, file.name, file.modifiedTime, file.size], async () => {
+      const value = await readInboundWorkbook(await downloadOAuthDriveFile(file.id), file.name);
+      return { value, contentHash: value.fingerprint, purchaseOrders: [...new Set(value.items.map(item => item.po))], actualDates: [...new Set(value.items.map(item => item.actualDate))] };
+    }, validDataset, fresh);
     datasets.push(dataset);
   }
   const descriptors = files.map(({ id, name, modifiedTime, size }) => ({ id, name, modifiedTime, size }));

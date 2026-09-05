@@ -42,6 +42,8 @@ export default function WmsInboundPage() {
   const [syncPreview, setSyncPreview] = useState<DriveSyncPreview | null>(null);
   const [driveReconnectRequired, setDriveReconnectRequired] = useState(false);
   const [showApplyConfirm, setShowApplyConfirm] = useState(false);
+  const [generated, setGenerated] = useState<{ actualDate: string; couponName: string; couponUrl: string; missingName: string; missingUrl: string } | null>(null);
+  useEffect(() => () => { if (generated) { URL.revokeObjectURL(generated.couponUrl); URL.revokeObjectURL(generated.missingUrl); } }, [generated]);
 
   async function reload() {
     setLoading(true); setMessage("");
@@ -105,7 +107,7 @@ export default function WmsInboundPage() {
 
   async function generate() {
     if (!selected) return;
-    setBusy(true); setMessage("");
+    setBusy(true); setMessage(""); setGenerated(null);
     try {
       const response = await fetch("/api/wms/inbound-results", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -126,7 +128,15 @@ export default function WmsInboundPage() {
       const driveWarning = decodeHeader("X-NOIDB-Drive-Save-Warning");
       const couponFileName = decodeHeader("X-NOIDB-Coupon-File-Name");
       const missingFileName = decodeHeader("X-NOIDB-Missing-File-Name");
-      downloadBlobPreservingPage(await response.blob(), fileName);
+      const output = await response.blob();
+      const JSZip = (await import("jszip")).default;
+      const bundle = await JSZip.loadAsync(await output.arrayBuffer());
+      const couponEntry = bundle.file(couponFileName), missingEntry = bundle.file(missingFileName);
+      if (!couponEntry || !missingEntry) throw new Error("두 출력파일이 모두 들어 있는지 확인하지 못했습니다. 다시 생성해 주세요.");
+      const [couponData, missingData] = await Promise.all([couponEntry.async("arraybuffer"), missingEntry.async("arraybuffer")]);
+      const mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+      setGenerated({ actualDate: selected.actualDate, couponName: couponFileName, couponUrl: URL.createObjectURL(new Blob([couponData], { type: mime })), missingName: missingFileName, missingUrl: URL.createObjectURL(new Blob([missingData], { type: mime })) });
+      downloadBlobPreservingPage(output, fileName);
       const generatedFiles = [couponFileName, missingFileName].filter(Boolean).join(" / ");
       const driveResult = driveSaved
         ? " · Drive 저장 완료"
@@ -139,7 +149,9 @@ export default function WmsInboundPage() {
   return (
     <main style={{ maxWidth: WMS_MOBILE_WIDTH, minHeight: "100vh", margin: "0 auto", padding: "12px 12px calc(24px + env(safe-area-inset-bottom))", background: wmsColors.background, color: wmsColors.ink, fontFamily: "sans-serif", boxSizing: "border-box" }}>
       <a href="/wms/work-center" style={{ color: wmsColors.slateDark, fontSize: "13px" }}>← 작업센터</a>
-      <h1 style={{ margin: "12px 0 4px", fontSize: "22px" }}>입고결과·쿠폰</h1>
+      <a href="/wms/output-history?category=coupon" style={{ color: wmsColors.slateDark, fontSize: "13px", float: "right" }}>생성파일 이력</a>
+      <h1 style={{ margin: "12px 0 4px", fontSize: "22px", clear: "both" }}>입고결과·쿠폰</h1>
+      {generated && <section aria-label="생성한 파일 다운로드" style={{ padding: 12, border: `1px solid ${wmsColors.border}`, borderRadius: 12, marginBottom: 12 }}><strong>{generated.actualDate} 생성한 파일</strong><div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}><a href={generated.couponUrl} download={generated.couponName} style={wmsGhostButton}>쿠폰파일 다운로드</a><a href={generated.missingUrl} download={generated.missingName} style={wmsGhostButton}>미입고파일 다운로드</a></div><p style={{ fontSize: 12 }}>할인율을 바꾸거나 다시 만들려면 아래 파일 생성 버튼을 누르세요.</p></section>}
       <p style={{ margin: "0 0 12px", fontSize: "12px", color: wmsColors.muted }}>실제 입고일과 발주번호+SKU 누적입고를 기준으로 자동 계산합니다.</p>
       <section style={{ padding: "12px", marginBottom: "12px", border: `1px solid ${wmsColors.border}`, borderRadius: "12px", background: wmsColors.surfaceBeige }}>
         <strong style={{ display: "block", fontSize: "14px" }}>입고파일 자동 확인</strong>

@@ -100,7 +100,7 @@ export default function OutboundWorkCenter() {
     </div>
     <details className={styles.section}><summary>예정 작업 · 입고예정 물량</summary><UpcomingInboundSummary /></details>
     <details className={styles.section}><summary>완료·보관 {overview ? `(${filed.length})` : ""}</summary><p className={styles.muted}>직접 완료하거나 보관한 작업만 표시합니다. 언제든 재출력하거나 작업 중으로 복원할 수 있습니다.</p><div className={styles.workGrid}>{filed.map(renderWork)}</div></details>
-    <footer className={styles.footer}><a href="/wms/settings/folder-connections">파일폴더 연결 상태</a><a href="/wms/work-center?view=classic">기존 화면 보기</a></footer>
+    <footer className={styles.footer}><a href="/wms/output-history">생성파일 이력</a><a href="/wms/settings/folder-connections">파일폴더 연결 상태</a><a href="/wms/work-center?view=classic">기존 화면 보기</a></footer>
     {change && <div className={styles.overlay}><section role="dialog" aria-modal="true" aria-labelledby="work-state-title" className={styles.dialog}>
       <h2 id="work-state-title">{statusLabel(change.status)} 확인</h2><p>{change.work.title}</p><p>발주 {change.work.purchaseOrderCount}건 · SKU {change.work.skuCount}개</p><p>변경: {change.work.state?.status === "archived" ? "보관" : change.work.state?.status === "completed" ? "완료" : "작업 중"} → {statusLabel(change.status)}</p><p>목록의 표시 상태만 바뀝니다. 피킹수량·운송장·Shipment·재고·원본파일은 그대로 보존합니다.</p>
       {change.status === "archived" && <p className={styles.warning}>미처리 작업도 보관 목록으로 이동합니다. 작업 데이터는 삭제하지 않습니다.</p>}
