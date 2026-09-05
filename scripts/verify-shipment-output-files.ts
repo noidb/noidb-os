@@ -25,6 +25,7 @@ const barcodeBuffer = await buildGenerationBarcodeWorkbook(groups, catalog);
 const barcodeBook = new ExcelJS.Workbook();
 await barcodeBook.xlsx.load(barcodeBuffer as unknown as ExcelJS.Buffer);
 const barcodeSheet = barcodeBook.getWorksheet("템플릿1")!;
+assert.equal(barcodeSheet.getTables().length, 1, "Shipment 바코드 파일에도 BarTender용 Excel 테이블이 있어야 합니다.");
 assert.deepEqual((barcodeSheet.getRow(1).values as unknown[]).slice(1), ["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"]);
 assert.equal(barcodeSheet.rowCount, 6);
 assert.equal([...barcodeSheet.getColumn(3).values].includes("제품DB값은사용하지않음"), false);

@@ -362,7 +362,6 @@ export async function buildBarTenderWorkbook(groups: ShipmentPrintGroup[]): Prom
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("템플릿1");
   const headers = ["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"];
-  sheet.addRow(headers);
   const outputRows: (string | number)[][] = [];
 
   for (const group of groups) {
@@ -397,7 +396,15 @@ export async function buildBarTenderWorkbook(groups: ShipmentPrintGroup[]): Prom
   }
   // 라벨 프린터는 먼저 출력한 라벨이 묶음의 아래쪽에 쌓인다. 전체 레코드를 역순으로
   // 전송해야 최종 묶음을 위에서 볼 때 구분표 → 해당 상품 순서가 된다.
-  for (const row of outputRows.reverse()) sheet.addRow(row);
+  sheet.addTable({
+    name: "BarTenderData",
+    ref: "A1",
+    headerRow: true,
+    totalsRow: false,
+    style: { theme: "TableStyleLight1", showRowStripes: false },
+    columns: headers.map(name => ({ name })),
+    rows: outputRows.reverse(),
+  });
   sheet.getRow(1).font = { bold: true };
   sheet.columns = [12, 8, 18, 48, 36, 18, 24, 14].map(width => ({ width }));
   const buffer = await workbook.xlsx.writeBuffer();

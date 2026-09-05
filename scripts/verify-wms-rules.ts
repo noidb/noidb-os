@@ -46,6 +46,7 @@ async function main() {
   await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
   const sheet = workbook.getWorksheet("템플릿1");
   assert(sheet);
+  assert.equal(sheet.getTables().length, 1, "BarTender가 인식할 수 있는 Excel 테이블이 정확히 1개 있어야 합니다.");
   assert.deepEqual((sheet.getRow(1).values as ExcelJS.CellValue[]).slice(1), ["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"]);
   assert.equal(sheet.getRow(2).getCell(8).value, "상품", "역순 출력의 첫 데이터 행은 상품이어야 합니다.");
   assert.equal(sheet.getRow(2).getCell(4).value, split.name);
@@ -64,6 +65,7 @@ async function main() {
   await singleWorkbook.xlsx.load(singleBytes as unknown as ArrayBuffer);
   const singleSheet = singleWorkbook.getWorksheet("템플릿1");
   assert(singleSheet);
+  assert.equal(singleSheet.getTables().length, 1, "1장 재출력 파일에도 Excel 테이블이 있어야 합니다.");
   assert.equal(singleSheet.rowCount, 2, "바코드 1장 재출력은 헤더 외 상품행이 정확히 1개여야 합니다.");
   assert.equal(singleSheet.getRow(2).getCell(5).value, "실버, 25호");
   assert.equal(singleSheet.getRow(2).getCell(2).value, 1, "1장 재출력 번호는 숫자 1이어야 합니다.");
@@ -85,6 +87,7 @@ async function main() {
   await batchWorkbook.xlsx.load(batchBytes as unknown as ArrayBuffer);
   const batchSheet = batchWorkbook.getWorksheet("템플릿1");
   assert(batchSheet);
+  assert.equal(batchSheet.getTables().length, 1, "다건 재출력 파일에도 Excel 테이블이 있어야 합니다.");
   assert.equal(batchSheet.rowCount, 4, "2종 3장 선택 재출력은 헤더 외 상품행이 정확히 3개여야 합니다.");
   assert.deepEqual([2, 3, 4].map(row => batchSheet.getRow(row).getCell(1).value), ["50138269", "50138269", "50138268"], "선택 재출력 파일은 실제 적재 순서를 위해 전체 역순이어야 합니다.");
   assert.deepEqual([2, 3, 4].map(row => batchSheet.getRow(row).getCell(2).value), [3, 2, 1], "다건 재출력 번호는 선택 순서의 숫자 순번을 전체 역순으로 저장해야 합니다.");

@@ -7,6 +7,24 @@ import type { ProductCatalogItem } from "./product-catalog";
 import type { PurchaseOrderSourceRecord } from "./purchase-order-source/types";
 import type { ShipmentOutputGroup } from "./shipment-output-context";
 
+const BARTENDER_HEADERS = ["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"] as const;
+
+function addBarTenderDataSheet(workbook: ExcelJS.Workbook, rows: (string | number)[][]): ExcelJS.Worksheet {
+  const sheet = workbook.addWorksheet("템플릿1");
+  sheet.addTable({
+    name: "BarTenderData",
+    ref: "A1",
+    headerRow: true,
+    totalsRow: false,
+    style: { theme: "TableStyleLight1", showRowStripes: false },
+    columns: BARTENDER_HEADERS.map(name => ({ name })),
+    rows,
+  });
+  sheet.getRow(1).font = { bold: true };
+  sheet.columns = [12, 14, 18, 48, 36, 18, 24, 14].map(width => ({ width }));
+  return sheet;
+}
+
 export async function buildFulfillmentCenterLabelWorkbook(records: readonly PurchaseOrderSourceRecord[]): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("물류센터라벨");
@@ -96,11 +114,7 @@ export async function buildGenerationBarcodeWorkbook(
   if (errors.length > 0) throw new Error(`바코드 파일 생성을 차단했습니다. ${errors.join(" | ")}`);
 
   const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet("템플릿1");
-  sheet.addRow(["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"]);
-  for (const row of outputRows.reverse()) sheet.addRow(row);
-  sheet.getRow(1).font = { bold: true };
-  sheet.columns = [12, 14, 18, 48, 36, 18, 24, 14].map(width => ({ width }));
+  addBarTenderDataSheet(workbook, outputRows.reverse());
   return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
 }
 
@@ -117,13 +131,11 @@ export async function buildSingleBarcodeWorkbook(
   if (!modelName || !catalog.countryOfOrigin) throw new Error(`SKU ${skuId}: 영문·숫자 모델SKU/모델명 또는 제조국명이 없습니다.`);
   const display = resolveDisplayNameAndOption(record.productName, record.optionName);
   const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet("템플릿1");
-  sheet.addRow(["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"]);
+  const rows: (string | number)[][] = [];
   for (let index = 0; index < quantity; index += 1) {
-    sheet.addRow([skuId, index + 1, record.barcode, display.name, display.option, catalog.countryOfOrigin, modelName, "상품"]);
+    rows.push([skuId, index + 1, record.barcode, display.name, display.option, catalog.countryOfOrigin, modelName, "상품"]);
   }
-  sheet.getRow(1).font = { bold: true };
-  sheet.columns = [12, 14, 18, 48, 36, 18, 24, 14].map(width => ({ width }));
+  addBarTenderDataSheet(workbook, rows);
   return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
 }
 
@@ -151,10 +163,6 @@ export async function buildBatchBarcodeWorkbook(items: readonly BatchBarcodeWork
     }
   }
   const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet("템플릿1");
-  sheet.addRow(["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"]);
-  for (const row of outputRows.reverse()) sheet.addRow(row);
-  sheet.getRow(1).font = { bold: true };
-  sheet.columns = [12, 14, 18, 48, 36, 18, 24, 14].map(width => ({ width }));
+  addBarTenderDataSheet(workbook, outputRows.reverse());
   return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
 }
