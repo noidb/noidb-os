@@ -9,6 +9,7 @@ import HanjinAutoShipmentSection from "./HanjinAutoShipmentSection";
 import type { HanjinGenerationResult } from "./HanjinUploadSection";
 import ShipmentOutputSetSection from "./ShipmentOutputSetSection";
 import ShipmentWorkflowStepCard from "./ShipmentWorkflowStepCard";
+import { chooseOutputGenerationId } from "@/lib/wms/output-generation-progress";
 
 interface Props {
   waveId: string;
@@ -45,8 +46,7 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
         if (current) return current;
         const saved = sessionStorage.getItem(activeGenerationStorageKey);
         const shared = wave?.selectedOutputGenerationId;
-        if (stored.some(item => item.generationId === shared)) return shared || null;
-        return stored.some(item => item.generationId === saved) ? saved : stored.at(-1)?.generationId || null;
+        return chooseOutputGenerationId(stored, shared, saved);
       });
       setStep1Done(stored.length > 0);
     }).catch(() => undefined);
@@ -100,8 +100,10 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
     const outputGenerations = (wave.outputGenerations || []).map(generation => generation.generationId === generationId
       ? { ...generation, outputSetFileName: fileName, outputSetGeneratedAt: now, updatedAt: now }
       : generation);
-    await repository.saveWave({ ...wave, outputGenerations, selectedOutputGenerationId: generationId, updatedAt: now });
+    const selectedOutputGenerationId = chooseOutputGenerationId(outputGenerations) || generationId;
+    await repository.saveWave({ ...wave, outputGenerations, selectedOutputGenerationId, updatedAt: now });
     setGenerations(outputGenerations);
+    setActiveGenerationId(selectedOutputGenerationId);
   }
 
   async function removeUnusedGeneration(generationId: string) {
