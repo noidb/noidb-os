@@ -6,6 +6,7 @@ import { resolveDisplayNameAndOption } from "./display-name";
 export const STATUS_REQUEST_SHEET = "_WMS단종해제이력";
 export const RECEIVING_DELAY_SHEET = "_WMS입고지연이력";
 export const RECEIVING_COST_SHEET = "_WMS입고원가이력";
+export const STATUS_FILE_GENERATION_SHEET = "_WMS단종파일생성이력";
 
 export const STATUS_REQUEST_HEADERS = [
   "요청ID", "SKU ID", "모델SKU", "상품명", "옵션", "현재상태", "요청구분", "요청일",
@@ -17,6 +18,9 @@ export const RECEIVING_DELAY_HEADERS = [
 export const RECEIVING_COST_HEADERS = [
   "기록ID", "발주번호", "발주라인ID", "SKU ID", "입력단가(부가세별도)", "부가세", "원가(부가세포함)",
   "입고수량", "입력일시", "입력자", "이전원가",
+] as const;
+export const STATUS_FILE_GENERATION_HEADERS = [
+  "생성ID", "구분", "SKU IDs", "요청 IDs", "생성일시", "XLSX 파일명", "PDF 파일명", "생성자",
 ] as const;
 
 const EMPTY_STATUS_TOKEN = "(빈값)";
@@ -122,66 +126,21 @@ export async function listStatusRequests(): Promise<StatusRequestRecord[]> {
   });
 }
 
-export async function createStatusRequest(input: {
-  skuId: string; requestType: "단종" | "단종해제"; operator: string; purchaseOrderNumber?: string;
-}): Promise<StatusRequestRecord> {
-  const skuId = requiredText(input.skuId, "SKU ID");
-  const operator = requiredText(input.operator, "처리자");
-  if (input.requestType !== "단종" && input.requestType !== "단종해제") throw new Error("지원하지 않는 요청구분입니다.");
-  const [requests, product] = await Promise.all([listStatusRequests(), readProductSnapshot(skuId)]);
-  if (requests.some(request => normalizeSkuId(request.skuId) === normalizeSkuId(skuId) && request.supplyHubStatus === "처리대기")) {
-    throw new Error(`SKU ${skuId}에 이미 처리대기 요청이 있습니다.`);
-  }
-  const headerIndex = (header: string) => {
-    const index = product.headers.indexOf(header);
-    if (index < 0) throw new Error(`제품DB에 '${header}' 헤더가 없습니다.`);
-    return index;
-  };
-  const currentStatus = String(product.values[headerIndex("현재상태")] ?? "").trim();
-  let nextStatus = "단종";
-  let previousStatus = currentStatus;
-  if (input.requestType === "단종") {
-    if (currentStatus === "단종") throw new Error(`SKU ${skuId}는 이미 단종 상태입니다.`);
-  } else {
-    if (currentStatus !== "단종") throw new Error(`SKU ${skuId}의 현재상태가 단종이 아니어서 자동 해제하지 않았습니다.`);
-    const prior = [...requests].reverse().find(request => normalizeSkuId(request.skuId) === normalizeSkuId(skuId) && request.requestType === "단종");
-    if (!prior) throw new Error(`SKU ${skuId}의 단종 전 상태 이력을 찾지 못해 자동 복원을 중단했습니다.`);
-    nextStatus = prior.previousStatus;
-    previousStatus = currentStatus;
-  }
-
-  const now = new Date().toISOString();
-  const productName = String(product.values[headerIndex("상품명")] ?? "").trim();
-  const display = resolveDisplayNameAndOption(productName, String(product.values[product.headers.indexOf("색상")] ?? "").trim());
-  const record: StatusRequestRecord = {
-    id: makeId("status"), skuId: normalizeSkuId(skuId),
-    modelSku: String(product.values[headerIndex("모델SKU")] ?? "").trim(),
-    productName: display.name,
-    optionLabel: display.option,
-    currentStatus: nextStatus, requestType: input.requestType, requestedAt: now, supplyHubStatus: "처리대기",
-    completedAt: "", requester: operator, processor: "", previousStatus,
-    productLink: String(product.values[product.headers.indexOf("제품링크")] ?? "").trim(),
-    purchaseOrderNumber: String(input.purchaseOrderNumber || "").trim(), sheetRow: 0,
-  };
-
-  await writeProductField(skuId, "현재상태", currentStatus, nextStatus);
-  try {
-    await appendSheetRow(STATUS_REQUEST_SHEET, [
-      record.id, record.skuId, record.modelSku, record.productName, record.optionLabel, record.currentStatus,
-      record.requestType, record.requestedAt, record.supplyHubStatus, "", record.requester, "",
-      previousStatus || EMPTY_STATUS_TOKEN, record.productLink, record.purchaseOrderNumber,
-    ]);
-  } catch (error) {
-    await writeProductField(skuId, "현재상태", nextStatus, currentStatus).catch(() => undefined);
-    throw error;
-  }
-  return record;
+export interface StatusFileGenerationRecord {
+  id: string;
+  kind: "단종" | "단종해제";
+  skuIds: string[];
+  requestIds: string[];
+  generatedAt: string;
+  xlsxFileName: string;
+  pdfFileName: string;
+  operator: string;
 }
 
-/** 피킹 목록에서 단종 후보만 Supply Hub 처리대기 목록에 넣는다.
- * 제품DB 현재상태는 건드리지 않으며, 실제 단종 처리는 기존 단종/해제 화면에서 별도로 수행한다. */
-export async function queueDiscontinueCandidate(input: {
-  skuId: string; operator: string; purchaseOrderNumber?: string;
+/** 단종/해제 후보만 외부 처리대기 목록에 넣는다.
+ * 제품DB 현재상태는 건드리지 않으며, 파일 생성과 실제 외부 완료를 별도로 관리한다. */
+export async function queueStatusCandidate(input: {
+  skuId: string; operator: string; purchaseOrderNumber?: string; requestType: "단종" | "단종해제";
 }): Promise<StatusRequestRecord> {
   const skuId = requiredText(input.skuId, "SKU ID");
   const operator = requiredText(input.operator, "처리자");
@@ -195,14 +154,15 @@ export async function queueDiscontinueCandidate(input: {
     return index;
   };
   const currentStatus = String(product.values[headerIndex("현재상태")] ?? "").trim();
-  if (currentStatus === "단종") throw new Error(`SKU ${skuId}는 이미 단종 상태입니다.`);
+  if (input.requestType === "단종" && currentStatus === "단종") throw new Error(`SKU ${skuId}는 이미 단종 상태입니다.`);
+  if (input.requestType === "단종해제" && currentStatus !== "단종") throw new Error(`SKU ${skuId}는 현재 단종 상태가 아니어서 해제대기에 넣지 않았습니다.`);
   const productName = String(product.values[headerIndex("상품명")] ?? "").trim();
   const display = resolveDisplayNameAndOption(productName, String(product.values[product.headers.indexOf("색상")] ?? "").trim());
   const record: StatusRequestRecord = {
     id: makeId("status"), skuId: normalizeSkuId(skuId),
     modelSku: String(product.values[headerIndex("모델SKU")] ?? "").trim(),
     productName: display.name, optionLabel: display.option,
-    currentStatus: "단종", requestType: "단종", requestedAt: new Date().toISOString(), supplyHubStatus: "처리대기",
+    currentStatus, requestType: input.requestType, requestedAt: new Date().toISOString(), supplyHubStatus: "처리대기",
     completedAt: "", requester: operator, processor: "", previousStatus: currentStatus,
     productLink: String(product.values[product.headers.indexOf("제품링크")] ?? "").trim(),
     purchaseOrderNumber: String(input.purchaseOrderNumber || "").trim(), sheetRow: 0,
@@ -213,6 +173,12 @@ export async function queueDiscontinueCandidate(input: {
     currentStatus || EMPTY_STATUS_TOKEN, record.productLink, record.purchaseOrderNumber,
   ]);
   return record;
+}
+
+export async function queueDiscontinueCandidate(input: {
+  skuId: string; operator: string; purchaseOrderNumber?: string;
+}): Promise<StatusRequestRecord> {
+  return queueStatusCandidate({ ...input, requestType: "단종" });
 }
 
 export async function completeStatusRequests(ids: string[], operatorValue: string): Promise<number> {
@@ -233,6 +199,48 @@ export async function completeStatusRequests(ids: string[], operatorValue: strin
   if (!updates.length) return 0;
   await updateSheetCells(STATUS_REQUEST_SHEET, updates);
   return updates.length / 3;
+}
+
+export async function listStatusFileGenerations(): Promise<StatusFileGenerationRecord[]> {
+  await ensureHiddenSheet(STATUS_FILE_GENERATION_SHEET, [...STATUS_FILE_GENERATION_HEADERS]);
+  const rows = await fetchSheetRows(STATUS_FILE_GENERATION_SHEET);
+  return rows.slice(1).filter(row => row.some(Boolean)).map(row => {
+    const item = rowObject(STATUS_FILE_GENERATION_HEADERS, row);
+    return {
+      id: item["생성ID"], kind: item["구분"] as "단종" | "단종해제",
+      skuIds: item["SKU IDs"].split(",").map(value => value.trim()).filter(Boolean),
+      requestIds: item["요청 IDs"].split(",").map(value => value.trim()).filter(Boolean),
+      generatedAt: item["생성일시"], xlsxFileName: item["XLSX 파일명"], pdfFileName: item["PDF 파일명"], operator: item["생성자"],
+    };
+  });
+}
+
+export async function recordStatusFileGeneration(input: {
+  kind: "단종" | "단종해제"; skuIds: string[]; requestIds: string[];
+  xlsxFileName: string; pdfFileName?: string; operator?: string;
+}): Promise<StatusFileGenerationRecord> {
+  if (input.kind !== "단종" && input.kind !== "단종해제") throw new Error("지원하지 않는 생성 구분입니다.");
+  const skuIds = Array.from(new Set((input.skuIds || []).map(normalizeSkuId).filter(Boolean)));
+  const requestIds = Array.from(new Set((input.requestIds || []).map(value => String(value || "").trim()).filter(Boolean)));
+  if (!skuIds.length || !requestIds.length) throw new Error("파일 생성 이력의 SKU 또는 요청 정보가 비어 있습니다.");
+  const pending = await listStatusRequests();
+  const pendingById = new Map(pending.filter(item => item.supplyHubStatus === "처리대기").map(item => [item.id, item]));
+  const matched = requestIds.map(id => pendingById.get(id)).filter((item): item is StatusRequestRecord => Boolean(item));
+  const matchedSkuIds = Array.from(new Set(matched.map(item => normalizeSkuId(item.skuId))));
+  if (matched.length !== requestIds.length || matchedSkuIds.length !== skuIds.length || matchedSkuIds.some(id => !skuIds.includes(id))) {
+    throw new Error("현재 처리대기 목록과 생성 파일의 SKU가 달라 이력 저장을 중단했습니다.");
+  }
+  await ensureHiddenSheet(STATUS_FILE_GENERATION_SHEET, [...STATUS_FILE_GENERATION_HEADERS]);
+  const record: StatusFileGenerationRecord = {
+    id: makeId("status-file"), kind: input.kind, skuIds, requestIds, generatedAt: new Date().toISOString(),
+    xlsxFileName: requiredText(input.xlsxFileName, "XLSX 파일명"), pdfFileName: String(input.pdfFileName || "").trim(),
+    operator: String(input.operator || "자동").trim() || "자동",
+  };
+  await appendSheetRow(STATUS_FILE_GENERATION_SHEET, [
+    record.id, record.kind, record.skuIds.join(","), record.requestIds.join(","), record.generatedAt,
+    record.xlsxFileName, record.pdfFileName, record.operator,
+  ]);
+  return record;
 }
 
 export async function recordReceivingDelay(input: {

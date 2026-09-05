@@ -275,15 +275,15 @@ export default function VendorOrderReceivingPage() {
       } else {
         for (const line of targets) {
           await postPermanentAction({
-            action: "status",
+            action: "queue-status",
             skuId: line.skuId,
             requestType: kind,
             purchaseOrderNumber: openRow.draft.id,
           });
         }
         setSaveMessage(kind === "단종"
-          ? "제품DB를 단종으로 변경하고 Supply Hub 처리대기 이력을 저장했습니다."
-          : "보존된 단종 전 상태로 복원하고 Supply Hub 처리대기 이력을 저장했습니다.");
+          ? "선택상품을 단종 대기에 추가했습니다. 제품DB는 변경하지 않았습니다."
+          : "선택상품을 단종해제 대기에 추가했습니다. 제품DB는 변경하지 않았습니다.");
       }
       await reload();
     } catch (error) { setSaveError(error instanceof Error ? error.message : `${kind} 처리에 실패했습니다.`); }
@@ -499,8 +499,8 @@ export default function VendorOrderReceivingPage() {
                   {delayActive ? "입고지연 해제" : "거래처 입고지연"}
                 </button>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginTop: "6px" }}>
-                  <button onClick={() => updateSelectedCatalog("단종", [line])} disabled={saving} style={{ ...wmsGhostButton, minHeight: "34px", background: "#f4dfd9", color: "#934633", fontSize: "12px" }}>단종처리</button>
-                  <button onClick={() => updateSelectedCatalog("단종해제", [line])} disabled={saving} style={{ ...wmsGhostButton, minHeight: "34px", color: wmsColors.greenDark, fontSize: "12px" }}>단종해제</button>
+                  <button onClick={() => updateSelectedCatalog("단종", [line])} disabled={saving} style={{ ...wmsGhostButton, minHeight: "34px", background: "#f4dfd9", color: "#934633", fontSize: "12px" }}>단종대기</button>
+                  <button onClick={() => updateSelectedCatalog("단종해제", [line])} disabled={saving} style={{ ...wmsGhostButton, minHeight: "34px", color: wmsColors.greenDark, fontSize: "12px" }}>해제대기</button>
                 </div>
                 <button onClick={() => deleteSelectedLines([line.id])} disabled={saving} style={{ width: "100%", minHeight: "34px", marginTop: "6px", border: 0, borderRadius: "9px", background: "#f4dfd9", color: "#934633", fontWeight: 800 }}>삭제</button>
               </div>
@@ -518,8 +518,8 @@ export default function VendorOrderReceivingPage() {
           선택 미입고분 발주서 생성하기 ({selectedLineIds.size}종)
         </button>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "8px" }}>
-          <button onClick={() => updateSelectedCatalog("단종")} disabled={saving || selectedLineIds.size === 0} style={{ ...wmsGhostButton, minHeight: "40px", background: "#f4dfd9", color: "#934633", opacity: selectedLineIds.size ? 1 : 0.45 }}>선택상품 단종</button>
-          <button onClick={() => updateSelectedCatalog("단종해제")} disabled={saving || selectedLineIds.size === 0} style={{ ...wmsGhostButton, minHeight: "40px", color: wmsColors.greenDark, opacity: selectedLineIds.size ? 1 : 0.45 }}>선택상품 단종해제</button>
+          <button onClick={() => updateSelectedCatalog("단종")} disabled={saving || selectedLineIds.size === 0} style={{ ...wmsGhostButton, minHeight: "40px", background: "#f4dfd9", color: "#934633", opacity: selectedLineIds.size ? 1 : 0.45 }}>선택 단종대기</button>
+          <button onClick={() => updateSelectedCatalog("단종해제")} disabled={saving || selectedLineIds.size === 0} style={{ ...wmsGhostButton, minHeight: "40px", color: wmsColors.greenDark, opacity: selectedLineIds.size ? 1 : 0.45 }}>선택 해제대기</button>
           <button onClick={() => setReceivingDelay(openRow.draftLines.filter(line => selectedLineIds.has(line.id)), true)} disabled={saving || selectedLineIds.size === 0} style={{ ...wmsGhostButton, minHeight: "40px", color: wmsColors.warn, opacity: selectedLineIds.size ? 1 : 0.45 }}>선택 입고지연</button>
           <button onClick={() => setReceivingDelay(openRow.draftLines.filter(line => selectedLineIds.has(line.id)), false)} disabled={saving || selectedLineIds.size === 0} style={{ ...wmsGhostButton, minHeight: "40px", color: wmsColors.greenDark, opacity: selectedLineIds.size ? 1 : 0.45 }}>선택 지연해제</button>
           <button onClick={() => updateSelectedCatalog("품절")} disabled={saving || selectedLineIds.size === 0} style={{ ...wmsGhostButton, minHeight: "40px", gridColumn: "1 / -1", opacity: selectedLineIds.size ? 1 : 0.45 }}>선택상품 현재고 0</button>
