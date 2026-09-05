@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
@@ -41,10 +42,14 @@ async function run() {
   const sheet = workbook.worksheets[0];
   if (!sheet || sheet.columnCount !== 3 || sheet.rowCount !== 2 || sheet.getCell("A2").text !== "SKU-1" || sheet.getCell("C2").hyperlink !== "https://example.com/products/sku-1") throw new Error("미입고 파일 A/B/C열 및 제품링크 검증 실패");
 
-  const original = await readFile("G:\\내 드라이브\\쿠팡데이터\\마케팅\\쿠폰관리\\쿠팡_프로모션쿠폰_30퍼센트_20260823.xlsx");
+  const originalPath = "G:\\내 드라이브\\쿠팡데이터\\마케팅\\쿠폰관리\\쿠팡_프로모션쿠폰_30퍼센트_20260823.xlsx";
   const bundled = await readFile(path.join(process.cwd(), "lib", "wms", "data", "coupon-templates", "쿠팡_프로모션쿠폰_양식.xlsx"));
   const hash = (buffer: Buffer) => createHash("sha256").update(buffer).digest("hex");
-  if (hash(original) !== hash(bundled)) throw new Error("쿠폰 양식 복사본이 G: 원본과 다름");
+  // CI has no G: drive. Keep the exact original hash gate there, and additionally
+  // compare the live local original whenever the user's drive is available.
+  assert.equal(hash(bundled), "a5795fd80471c567d504bc0b0fda2264cc3de3af216fcd35197aed86f4dc283e");
+  const comparedLocalOriginal = existsSync(originalPath);
+  if (comparedLocalOriginal && hash(await readFile(originalPath)) !== hash(bundled)) throw new Error("쿠폰 양식 복사본이 G: 원본과 다름");
   const templateZip = await JSZip.loadAsync(bundled);
   const generatedEntries = Object.keys(couponZip.files).sort();
   const templateEntries = Object.keys(templateZip.files).sort();
@@ -74,7 +79,7 @@ async function run() {
   if (!/action === "apply"/.test(syncRoute) || !/status: 409/.test(syncRoute) || !/form\.set\("dryRun", "true"\)/.test(syncRoute)) throw new Error("입고 Drive sync apply 차단 또는 읽기 전용 preview 없음");
   if (/backupSheetWithinSpreadsheet|\bput\(|writeIndex/.test(syncRoute)) throw new Error("입고 Drive sync 잠금 상태에서 백업 또는 Drive index 쓰기 경로가 남음");
 
-  console.log(JSON.stringify({ actualDate: result.actualDate, purchaseOrders: 1, couponSku: 2, partialSku: 1, missingSku: 1, couponRows: 5, missingColumns: 3, missingProductLinkColumnPreserved: true, missingSkuNotDroppedWhenLinkBlank: true, bundledTemplateMatchesDrive: true, couponTemplatePackagePreserved: true, productionDryRun: true, previewEventLock: true, inboundApplyLocked: true }, null, 2));
+  console.log(JSON.stringify({ actualDate: result.actualDate, purchaseOrders: 1, couponSku: 2, partialSku: 1, missingSku: 1, couponRows: 5, missingColumns: 3, missingProductLinkColumnPreserved: true, missingSkuNotDroppedWhenLinkBlank: true, bundledTemplateMatchesVerifiedHash: true, comparedLocalOriginal, couponTemplatePackagePreserved: true, productionDryRun: true, previewEventLock: true, inboundApplyLocked: true }, null, 2));
 }
 
 run().catch(error => { console.error(error); process.exitCode = 1; });

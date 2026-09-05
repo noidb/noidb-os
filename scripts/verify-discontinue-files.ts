@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import JSZip from "jszip";
@@ -35,10 +36,14 @@ async function sheetXml(buffer: Buffer, file: string): Promise<string> {
 }
 
 async function run() {
-  const discontinueSource = await readFile(path.join(ROOT, DISCONTINUE_TEMPLATE_NAME));
-  const releaseSource = await readFile(path.join(ROOT, RELEASE_TEMPLATE_NAME));
   const bundledDiscontinue = await readFile(path.join(BUNDLED, DISCONTINUE_TEMPLATE_NAME));
   const bundledRelease = await readFile(path.join(BUNDLED, RELEASE_TEMPLATE_NAME));
+  if (sha256(bundledDiscontinue) !== "5a37e90a8a31714ccce364b79ad496160e098dd6b87710b092a2bd71344b31ba") throw new Error("검증된 단종 원본 양식 hash 불일치");
+  if (sha256(bundledRelease) !== "a52fc0cf5fab2df97057ea31a9e4f1bb647b8506cd393a7ec18d47f40857b3df") throw new Error("검증된 단종해제 원본 양식 hash 불일치");
+  const discontinuePath = path.join(ROOT, DISCONTINUE_TEMPLATE_NAME);
+  const releasePath = path.join(ROOT, RELEASE_TEMPLATE_NAME);
+  const discontinueSource = existsSync(discontinuePath) ? await readFile(discontinuePath) : bundledDiscontinue;
+  const releaseSource = existsSync(releasePath) ? await readFile(releasePath) : bundledRelease;
   if (sha256(discontinueSource) !== sha256(bundledDiscontinue)) throw new Error("앱 내 단종 양식 복사본이 G: 원본과 다름");
   if (sha256(releaseSource) !== sha256(bundledRelease)) throw new Error("앱 내 단종해제 양식 복사본이 G: 원본과 다름");
   const selected = [
@@ -73,7 +78,8 @@ async function run() {
     releaseSkuCount: release.itemCount,
     releaseRows: rowCount(releaseSheet),
     releaseOldDataRowsRemaining: 0,
-    bundledTemplatesMatchDriveOriginals: true,
+    bundledTemplatesMatchVerifiedHashes: true,
+    comparedLocalOriginals: existsSync(discontinuePath) && existsSync(releasePath),
   }, null, 2));
 }
 
