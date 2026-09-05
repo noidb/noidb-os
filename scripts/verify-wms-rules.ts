@@ -50,6 +50,7 @@ async function main() {
   assert.equal(sheet.getRow(2).getCell(8).value, "상품", "역순 출력의 첫 데이터 행은 상품이어야 합니다.");
   assert.equal(sheet.getRow(2).getCell(4).value, split.name);
   assert.equal(sheet.getRow(2).getCell(5).value, split.option);
+  assert.equal(sheet.getRow(2).getCell(2).value, 2, "역순 파일의 번호는 창고분류가 아니라 숫자 순번이어야 합니다.");
   assert.equal(sheet.getRow(sheet.rowCount).getCell(8).value, "쉽먼트구분", "역순 출력의 마지막 행은 쉽먼트 구분행이어야 합니다.");
 
   const singleBytes = await buildSingleBarcodeWorkbook({
@@ -65,6 +66,7 @@ async function main() {
   assert(singleSheet);
   assert.equal(singleSheet.rowCount, 2, "바코드 1장 재출력은 헤더 외 상품행이 정확히 1개여야 합니다.");
   assert.equal(singleSheet.getRow(2).getCell(5).value, "실버, 25호");
+  assert.equal(singleSheet.getRow(2).getCell(2).value, 1, "1장 재출력 번호는 숫자 1이어야 합니다.");
   assert.equal(singleSheet.getRow(2).getCell(8).value, "상품");
 
   const batchBytes = await buildBatchBarcodeWorkbook([
@@ -85,6 +87,7 @@ async function main() {
   assert(batchSheet);
   assert.equal(batchSheet.rowCount, 4, "2종 3장 선택 재출력은 헤더 외 상품행이 정확히 3개여야 합니다.");
   assert.deepEqual([2, 3, 4].map(row => batchSheet.getRow(row).getCell(1).value), ["50138269", "50138269", "50138268"], "선택 재출력 파일은 실제 적재 순서를 위해 전체 역순이어야 합니다.");
+  assert.deepEqual([2, 3, 4].map(row => batchSheet.getRow(row).getCell(2).value), [3, 2, 1], "다건 재출력 번호는 선택 순서의 숫자 순번을 전체 역순으로 저장해야 합니다.");
 
   console.log("WMS 고정 규칙 검증 통과: 브랜드 제거, 첫 쉼표 옵션 분리, 호수 보존, BarTender XLSX, 구분행, 전체 역순, 바코드 1장·다건 재출력");
 }

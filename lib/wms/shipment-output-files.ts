@@ -49,6 +49,7 @@ export async function buildGenerationBarcodeWorkbook(
   const errors: string[] = [];
   const outputRows: (string | number)[][] = [];
   for (const group of groups) {
+    let sequenceNumber = 1;
     const purchaseOrderNumbers = [...new Set(group.records.map(record => record.purchaseOrderNumber))].sort();
     const skuCount = new Set(group.records.map(record => normalizeSkuId(record.skuId))).size;
     const totalQuantity = group.records.reduce((sum, record) => sum + record.orderedQuantity, 0);
@@ -80,7 +81,7 @@ export async function buildGenerationBarcodeWorkbook(
       for (let count = 0; count < record.orderedQuantity; count += 1) {
         outputRows.push([
           skuId,
-          catalog.warehouseNumber,
+          sequenceNumber,
           record.barcode,
           display.name,
           display.option,
@@ -88,6 +89,7 @@ export async function buildGenerationBarcodeWorkbook(
           modelName,
           "상품",
         ]);
+        sequenceNumber += 1;
       }
     }
   }
@@ -118,7 +120,7 @@ export async function buildSingleBarcodeWorkbook(
   const sheet = workbook.addWorksheet("템플릿1");
   sheet.addRow(["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"]);
   for (let index = 0; index < quantity; index += 1) {
-    sheet.addRow([skuId, catalog.warehouseNumber, record.barcode, display.name, display.option, catalog.countryOfOrigin, modelName, "상품"]);
+    sheet.addRow([skuId, index + 1, record.barcode, display.name, display.option, catalog.countryOfOrigin, modelName, "상품"]);
   }
   sheet.getRow(1).font = { bold: true };
   sheet.columns = [12, 14, 18, 48, 36, 18, 24, 14].map(width => ({ width }));
@@ -135,6 +137,7 @@ export interface BatchBarcodeWorkbookItem {
 export async function buildBatchBarcodeWorkbook(items: readonly BatchBarcodeWorkbookItem[]): Promise<Buffer> {
   if (items.length < 1 || items.length > 200) throw new Error("한 파일에는 바코드를 1~200종까지 담을 수 있습니다.");
   const outputRows: (string | number)[][] = [];
+  let sequenceNumber = 1;
   for (const { record, catalog, quantity } of items) {
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1000) throw new Error("바코드 출력수량은 SKU별 1~1000 사이 정수여야 합니다.");
     const skuId = normalizeSkuId(record.skuId);
@@ -143,7 +146,8 @@ export async function buildBatchBarcodeWorkbook(items: readonly BatchBarcodeWork
     if (!modelName || !catalog.countryOfOrigin) throw new Error(`SKU ${skuId}: 영문·숫자 모델SKU/모델명 또는 제조국명이 없습니다.`);
     const display = resolveDisplayNameAndOption(record.productName, record.optionName);
     for (let index = 0; index < quantity; index += 1) {
-      outputRows.push([skuId, catalog.warehouseNumber, record.barcode, display.name, display.option, catalog.countryOfOrigin, modelName, "상품"]);
+      outputRows.push([skuId, sequenceNumber, record.barcode, display.name, display.option, catalog.countryOfOrigin, modelName, "상품"]);
+      sequenceNumber += 1;
     }
   }
   const workbook = new ExcelJS.Workbook();

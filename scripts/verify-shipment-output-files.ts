@@ -28,6 +28,7 @@ const barcodeSheet = barcodeBook.getWorksheet("템플릿1")!;
 assert.deepEqual((barcodeSheet.getRow(1).values as unknown[]).slice(1), ["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"]);
 assert.equal(barcodeSheet.rowCount, 6);
 assert.equal([...barcodeSheet.getColumn(3).values].includes("제품DB값은사용하지않음"), false);
+assert.deepEqual([2, 4, 5].map(row => barcodeSheet.getRow(row).getCell(2).value), [1, 2, 1], "쉽먼트별 번호는 창고분류가 아니라 1부터 시작하는 숫자 순번이어야 합니다.");
 
 const labelBuffer = await buildFulfillmentCenterLabelWorkbook(records);
 const labelBook = new ExcelJS.Workbook();

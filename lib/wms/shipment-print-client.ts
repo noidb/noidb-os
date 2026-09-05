@@ -366,6 +366,7 @@ export async function buildBarTenderWorkbook(groups: ShipmentPrintGroup[]): Prom
   const outputRows: (string | number)[][] = [];
 
   for (const group of groups) {
+    let sequenceNumber = 1;
     const skuCount = group.barcodeRows.length;
     const totalQuantity = group.barcodeRows.reduce((sum, row) => sum + row.quantity, 0);
     outputRows.push([
@@ -382,7 +383,7 @@ export async function buildBarTenderWorkbook(groups: ShipmentPrintGroup[]): Prom
       for (let count = 0; count < row.quantity; count += 1) {
         outputRows.push([
           row.skuId,
-          row.warehouseNumber,
+          sequenceNumber,
           row.barcode,
           row.productName,
           row.optionLabel,
@@ -390,6 +391,7 @@ export async function buildBarTenderWorkbook(groups: ShipmentPrintGroup[]): Prom
           row.modelName,
           "상품",
         ]);
+        sequenceNumber += 1;
       }
     }
   }
