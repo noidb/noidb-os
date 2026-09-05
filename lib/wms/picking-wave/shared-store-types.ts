@@ -2,6 +2,8 @@ import type { BasketAssignment, PickingWave, PickingWaveItem } from "./types";
 import type { PoConfirmationRecord } from "../po-confirm-state";
 import type { VendorOrderDraft, VendorOrderDraftLine } from "../vendor-order/types";
 import type { ModelLocation, Shelf, SkuLocation, WarehouseBox, WarehouseMigrationMapping, WarehouseZone } from "../types";
+import type { Shipment, ShipmentSplitPreview, ShipmentStatus } from "../shipment/types";
+import type { ShipmentOutputGeneration } from "./types";
 
 export interface PickingWaveStoreSnapshot {
   schemaVersion: 1;
@@ -19,6 +21,7 @@ export interface PickingWaveStoreSnapshot {
   warehouseModelLocations: ModelLocation[];
   warehouseSkuExceptions: SkuLocation[];
   warehouseMigrationMappings: WarehouseMigrationMapping[];
+  shipments: Shipment[];
   deletedWaveIds: Record<string, string>;
   deletedItemIds: Record<string, string>;
   deletedBasketKeys: Record<string, string>;
@@ -26,7 +29,9 @@ export interface PickingWaveStoreSnapshot {
   deletedVendorDraftIds: Record<string, string>;
   deletedVendorLineIds: Record<string, string>;
   deletedWarehouseSkuIds: Record<string, string>;
+  deletedShipmentIds: Record<string, string>;
   completedCreateOperations: Record<string, { waveId: string; completedAt: string }>;
+  completedShipmentCreateOperations: Record<string, { shipmentIds: string[]; completedAt: string }>;
 }
 
 export type PickingWaveStoreMutation =
@@ -51,7 +56,13 @@ export type PickingWaveStoreMutation =
   | { action: "saveWarehouseModelLocation"; location: ModelLocation }
   | { action: "saveWarehouseSkuException"; exception: SkuLocation }
   | { action: "deleteWarehouseSkuException"; skuId: string; deletedAt: string }
-  | { action: "saveWarehouseMigrationMapping"; mapping: WarehouseMigrationMapping };
+  | { action: "saveWarehouseMigrationMapping"; mapping: WarehouseMigrationMapping }
+  | { action: "migrateShipments"; shipments: Shipment[] }
+  | { action: "createShipments"; operationId: string; previews: ShipmentSplitPreview[]; now: string }
+  | { action: "renameShipment"; shipmentId: string; name: string; now: string }
+  | { action: "updateShipmentStatus"; shipmentId: string; status: ShipmentStatus; now: string }
+  | { action: "updateShipmentGeneration"; shipmentId: string; generation: ShipmentOutputGeneration; now: string }
+  | { action: "deleteShipment"; shipmentId: string; deletedAt: string };
 
 export function emptyPickingWaveStoreSnapshot(): PickingWaveStoreSnapshot {
   return {
@@ -70,6 +81,7 @@ export function emptyPickingWaveStoreSnapshot(): PickingWaveStoreSnapshot {
     warehouseModelLocations: [],
     warehouseSkuExceptions: [],
     warehouseMigrationMappings: [],
+    shipments: [],
     deletedWaveIds: {},
     deletedItemIds: {},
     deletedBasketKeys: {},
@@ -77,7 +89,9 @@ export function emptyPickingWaveStoreSnapshot(): PickingWaveStoreSnapshot {
     deletedVendorDraftIds: {},
     deletedVendorLineIds: {},
     deletedWarehouseSkuIds: {},
+    deletedShipmentIds: {},
     completedCreateOperations: {},
+    completedShipmentCreateOperations: {},
   };
 }
 
@@ -127,5 +141,13 @@ export function isPickingWaveStoreMutation(value: unknown): value is PickingWave
   if (value.action === "saveWarehouseSkuException") return hasText(value.exception, "skuId");
   if (value.action === "deleteWarehouseSkuException") return hasText(value, "skuId") && hasText(value, "deletedAt");
   if (value.action === "saveWarehouseMigrationMapping") return hasText(value.mapping, "id");
+  if (value.action === "migrateShipments") return Array.isArray(value.shipments) && value.shipments.length <= 10_000
+    && value.shipments.every(shipment => hasText(shipment, "id") && hasText(shipment, "updatedAt") && Array.isArray((shipment as Record<string, unknown>).purchaseOrders));
+  if (value.action === "createShipments") return hasText(value, "operationId") && hasText(value, "now")
+    && Array.isArray(value.previews) && value.previews.length <= 10_000;
+  if (value.action === "renameShipment") return hasText(value, "shipmentId") && hasText(value, "name") && hasText(value, "now");
+  if (value.action === "updateShipmentStatus") return hasText(value, "shipmentId") && hasText(value, "status") && hasText(value, "now");
+  if (value.action === "updateShipmentGeneration") return hasText(value, "shipmentId") && isObject(value.generation) && hasText(value, "now");
+  if (value.action === "deleteShipment") return hasText(value, "shipmentId") && hasText(value, "deletedAt");
   return false;
 }

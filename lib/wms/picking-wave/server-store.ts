@@ -3,6 +3,8 @@ import path from "node:path";
 import { BlobPreconditionFailedError, get, put } from "@vercel/blob";
 import { basketKey, emptyPickingWaveStoreSnapshot, type PickingWaveStoreMutation, type PickingWaveStoreSnapshot } from "./shared-store-types";
 import { mergePoConfirmationRecords, removeTransientPoConfirmationRecordsForWave } from "../po-confirm-state";
+import { createShipmentsInState, deleteShipmentFromState, renameShipmentInState, updateShipmentGenerationInState, updateShipmentStatusInState } from "../shipment/state";
+import type { Shipment } from "../shipment/types";
 
 const BLOB_PATH = "noidb-wms/picking-waves/v1/store.json";
 const MAX_RETRIES = 6;
@@ -68,6 +70,7 @@ function normalizeSnapshot(value: unknown): PickingWaveStoreSnapshot {
     warehouseModelLocations: Array.isArray(raw.warehouseModelLocations) ? raw.warehouseModelLocations : [],
     warehouseSkuExceptions: Array.isArray(raw.warehouseSkuExceptions) ? raw.warehouseSkuExceptions : [],
     warehouseMigrationMappings: Array.isArray(raw.warehouseMigrationMappings) ? raw.warehouseMigrationMappings : [],
+    shipments: Array.isArray(raw.shipments) ? raw.shipments : [],
     deletedWaveIds: raw.deletedWaveIds && typeof raw.deletedWaveIds === "object" ? raw.deletedWaveIds : {},
     deletedItemIds: raw.deletedItemIds && typeof raw.deletedItemIds === "object" ? raw.deletedItemIds : {},
     deletedBasketKeys: raw.deletedBasketKeys && typeof raw.deletedBasketKeys === "object" ? raw.deletedBasketKeys : {},
@@ -75,8 +78,27 @@ function normalizeSnapshot(value: unknown): PickingWaveStoreSnapshot {
     deletedVendorDraftIds: raw.deletedVendorDraftIds && typeof raw.deletedVendorDraftIds === "object" ? raw.deletedVendorDraftIds : {},
     deletedVendorLineIds: raw.deletedVendorLineIds && typeof raw.deletedVendorLineIds === "object" ? raw.deletedVendorLineIds : {},
     deletedWarehouseSkuIds: raw.deletedWarehouseSkuIds && typeof raw.deletedWarehouseSkuIds === "object" ? raw.deletedWarehouseSkuIds : {},
+    deletedShipmentIds: raw.deletedShipmentIds && typeof raw.deletedShipmentIds === "object" ? raw.deletedShipmentIds : {},
     completedCreateOperations: raw.completedCreateOperations && typeof raw.completedCreateOperations === "object" ? raw.completedCreateOperations : {},
+    completedShipmentCreateOperations: raw.completedShipmentCreateOperations && typeof raw.completedShipmentCreateOperations === "object" ? raw.completedShipmentCreateOperations : {},
   };
+}
+
+function mergeShipmentMigration(existing: Shipment[], incoming: readonly Shipment[], deleted: Record<string, string>): Shipment[] {
+  const merged = new Map(existing.map(shipment => [shipment.id, shipment]));
+  const assigned = new Map(existing.flatMap(shipment => shipment.purchaseOrders.map(order => [order.purchaseOrderNumber, shipment.id] as const)));
+  for (const shipment of [...incoming].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
+    if (!shipment.id || deleted[shipment.id]) continue;
+    const current = merged.get(shipment.id);
+    if (current) {
+      if (recordTime(shipment).localeCompare(recordTime(current)) > 0) merged.set(shipment.id, shipment);
+      continue;
+    }
+    if (shipment.purchaseOrders.some(order => assigned.has(order.purchaseOrderNumber))) continue;
+    merged.set(shipment.id, shipment);
+    for (const order of shipment.purchaseOrders) assigned.set(order.purchaseOrderNumber, shipment.id);
+  }
+  return [...merged.values()];
 }
 
 function useBlobStore(): boolean {
@@ -169,7 +191,7 @@ async function writeLocalSnapshot(snapshot: PickingWaveStoreSnapshot): Promise<v
   await fs.rename(temporaryPath, LOCAL_STORE_PATH);
 }
 
-function applyMutation(current: PickingWaveStoreSnapshot, mutation: PickingWaveStoreMutation): PickingWaveStoreSnapshot {
+export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot, mutation: PickingWaveStoreMutation): PickingWaveStoreSnapshot {
   const next = normalizeSnapshot(structuredClone(current));
   if (mutation.action === "migrate") {
     next.waves = mergeByKey(next.waves, mutation.snapshot.waves || [], value => value.id, next.deletedWaveIds, false);
@@ -273,6 +295,22 @@ function applyMutation(current: PickingWaveStoreSnapshot, mutation: PickingWaveS
     next.warehouseSkuExceptions = next.warehouseSkuExceptions.filter(value => value.skuId !== mutation.skuId);
   } else if (mutation.action === "saveWarehouseMigrationMapping") {
     next.warehouseMigrationMappings = mergeByKey(next.warehouseMigrationMappings, [mutation.mapping], value => value.id, {}, true);
+  } else if (mutation.action === "migrateShipments") {
+    next.shipments = mergeShipmentMigration(next.shipments, mutation.shipments, next.deletedShipmentIds);
+  } else if (mutation.action === "createShipments") {
+    if (next.completedShipmentCreateOperations[mutation.operationId]) return current;
+    const result = createShipmentsInState(next.shipments, mutation.previews, mutation.now);
+    next.shipments = result.all;
+    next.completedShipmentCreateOperations[mutation.operationId] = { shipmentIds: result.created.map(shipment => shipment.id), completedAt: mutation.now };
+  } else if (mutation.action === "renameShipment") {
+    next.shipments = renameShipmentInState(next.shipments, mutation.shipmentId, mutation.name, mutation.now).all;
+  } else if (mutation.action === "updateShipmentStatus") {
+    next.shipments = updateShipmentStatusInState(next.shipments, mutation.shipmentId, mutation.status, mutation.now).all;
+  } else if (mutation.action === "updateShipmentGeneration") {
+    next.shipments = updateShipmentGenerationInState(next.shipments, mutation.shipmentId, mutation.generation, mutation.now).all;
+  } else if (mutation.action === "deleteShipment") {
+    next.shipments = deleteShipmentFromState(next.shipments, mutation.shipmentId);
+    next.deletedShipmentIds[mutation.shipmentId] = mutation.deletedAt;
   }
   next.revision = current.revision + 1;
   next.updatedAt = new Date().toISOString();
@@ -287,7 +325,7 @@ export async function mutatePickingWaveStore(mutation: PickingWaveStoreMutation)
   if (!useBlobStore()) {
     const task = localMutationQueue.then(async () => {
       const { snapshot } = await readLocalSnapshot();
-      const next = applyMutation(snapshot, mutation);
+      const next = applyPickingWaveStoreMutation(snapshot, mutation);
       await writeLocalSnapshot(next);
       return next;
     });
@@ -299,7 +337,7 @@ export async function mutatePickingWaveStore(mutation: PickingWaveStoreMutation)
       try {
         const { snapshot, etag } = await readBlobSnapshot();
         if (mutation.action === "createWaveBatch" && snapshot.completedCreateOperations[mutation.operationId]) return snapshot;
-        const next = applyMutation(snapshot, mutation);
+        const next = applyPickingWaveStoreMutation(snapshot, mutation);
         await writeBlobSnapshot(next, etag);
         return next;
       } catch (error) {

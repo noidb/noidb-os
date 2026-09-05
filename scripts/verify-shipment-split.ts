@@ -5,6 +5,8 @@ import type { ShipmentPurchaseOrder } from "../lib/wms/shipment/types";
 import type { BasketAssignment, PickingWave, PickingWaveItem } from "../lib/wms/picking-wave/types";
 import { splitShipmentOutputDocuments } from "../lib/wms/shipment-output-split";
 import type { PurchaseOrderSourceDocument } from "../lib/wms/purchase-order-source/types";
+import { emptyPickingWaveStoreSnapshot } from "../lib/wms/picking-wave/shared-store-types";
+import { applyPickingWaveStoreMutation } from "../lib/wms/picking-wave/server-store";
 
 function orders(quantities: number[]): ShipmentPurchaseOrder[] {
   return quantities.map((totalQuantity, index) => ({
@@ -69,6 +71,25 @@ assert.doesNotThrow(() => createShipmentsInState(afterDelete, previewShipmentSpl
 const progressed = first.all.map(shipment => shipment.id === first.created[0].id ? { ...shipment, status: "tracking_verified" as const } : shipment);
 assert.throws(() => deleteShipmentFromState(progressed, first.created[0].id), /삭제할 수 없습니다/);
 
+const sharedCreated = applyPickingWaveStoreMutation(emptyPickingWaveStoreSnapshot(), {
+  action: "createShipments", operationId: "shipment-operation-1", previews, now: "2026-09-02T01:00:00.000Z",
+});
+assert.equal(sharedCreated.shipments.length, 2, "공용 저장소에 Shipment 묶음이 저장되어야 합니다.");
+assert.deepEqual(sharedCreated.completedShipmentCreateOperations["shipment-operation-1"].shipmentIds, ["SHP-20260902-001", "SHP-20260902-002"]);
+const replayed = applyPickingWaveStoreMutation(sharedCreated, {
+  action: "createShipments", operationId: "shipment-operation-1", previews, now: "2026-09-02T01:00:00.000Z",
+});
+assert.equal(replayed.revision, sharedCreated.revision, "같은 생성 요청 재시도는 중복 Shipment를 만들면 안 됩니다.");
+assert.throws(() => applyPickingWaveStoreMutation(sharedCreated, {
+  action: "createShipments", operationId: "shipment-operation-2", previews, now: "2026-09-02T02:00:00.000Z",
+}), /이미/, "공용 저장소에서도 같은 발주서를 두 Shipment에 넣으면 안 됩니다.");
+const sharedProgressed = applyPickingWaveStoreMutation(sharedCreated, {
+  action: "updateShipmentStatus", shipmentId: "SHP-20260902-001", status: "tracking_verified", now: "2026-09-02T03:00:00.000Z",
+});
+assert.throws(() => applyPickingWaveStoreMutation(sharedProgressed, {
+  action: "deleteShipment", shipmentId: "SHP-20260902-001", deletedAt: "2026-09-02T04:00:00.000Z",
+}), /삭제할 수 없습니다/, "운송장 이후 Shipment는 공용 저장소에서도 삭제를 막아야 합니다.");
+
 const completedWave: PickingWave = { id: "WAVE-C", status: "completed", sourcePurchaseOrderNumbers: ["123456789"], completedGroupIds: [], productDbConfigured: true, createdAt: "2026-09-01", updatedAt: "2026-09-02", completedAt: "2026-09-02", shippingGroups: [{ key: "인천36-20260910", expectedDate: "2026-09-10", fulfillmentCenter: "인천36", purchaseOrderNumbers: ["123456789"] }] };
 const inProgressWave: PickingWave = { ...completedWave, id: "WAVE-P", status: "in_progress", sourcePurchaseOrderNumbers: ["987654321"], completedAt: undefined };
 const item = { id: "WAVE-C-SKU", waveId: "WAVE-C", productCode: "SKU", productName: "상품", barcode: "BAR", totalQuantity: 3, sources: [{ purchaseOrderNumber: "123456789", basketNumber: "1", requestedQuantity: 3 }], locationStatus: "unlocated", modelSortKey: "", locationSortKey: "", status: "full", pickedQuantity: 3, shortageQuantity: 0, allocations: [{ purchaseOrderNumber: "123456789", basketNumber: "1", requestedQuantity: 3, fulfilledQuantity: 3, shortageQuantity: 0 }], createdAt: "2026-09-01", updatedAt: "2026-09-02" } satisfies PickingWaveItem;
@@ -79,4 +100,4 @@ assert.deepEqual(candidates.map(candidate => candidate.purchaseOrderNumber), ["1
 assert.equal(candidates[0].totalQuantity, 3);
 assert.equal(JSON.stringify({ completedWave, inProgressWave, item, basket }), pickingSnapshot, "Shipment 후보 계산이 피킹 데이터를 변경하면 안 됩니다.");
 
-console.log("Shipment 분할 검증 통과: 총수량 200 제한, 발주서 원자성, 초과발주 수동확인, 완료 웨이브만 대상, 피킹 불변, 중복 차단, ID 유지, 삭제 복귀");
+console.log("Shipment 분할 검증 통과: 총수량 200 제한, 발주서 원자성, 초과발주 수동확인, 완료 웨이브만 대상, 피킹 불변, 공용저장·재시도·중복 차단, ID 유지, 삭제 보호");
