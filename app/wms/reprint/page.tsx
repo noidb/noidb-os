@@ -47,6 +47,7 @@ export default function WmsReprintCenterPage() {
   const [selected, setSelected] = useState<SelectedBarcode[]>(loadSavedSelection);
   const [searching, setSearching] = useState(false);
   const [readingPhoto, setReadingPhoto] = useState(false);
+  const [draggingPhoto, setDraggingPhoto] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -92,10 +93,12 @@ export default function WmsReprintCenterPage() {
     await findAndAdd(query);
   }
 
-  async function readPhoto(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
+  async function readPhotos(files: File[]) {
+    const imageFiles = files.filter(file => file.type.startsWith("image/"));
+    if (!imageFiles.length) {
+      setError("사진 파일을 끌어다 놓아 주세요.");
+      return;
+    }
     setReadingPhoto(true);
     setError(null);
     try {
@@ -104,10 +107,15 @@ export default function WmsReprintCenterPage() {
       const supported = await Detector.getSupportedFormats?.();
       const preferred = ["code_128", "ean_13", "ean_8", "data_matrix", "qr_code"].filter(format => !supported || supported.includes(format));
       const detector = new Detector(preferred.length ? { formats: preferred } : undefined);
-      const bitmap = await createImageBitmap(file);
-      const detected = await detector.detect(bitmap);
-      bitmap.close();
-      const barcodes = [...new Set(detected.map(item => item.rawValue.trim()).filter(Boolean))];
+      const detectedGroups = await Promise.all(imageFiles.map(async file => {
+        const bitmap = await createImageBitmap(file);
+        try {
+          return await detector.detect(bitmap);
+        } finally {
+          bitmap.close();
+        }
+      }));
+      const barcodes = [...new Set(detectedGroups.flat().map(item => item.rawValue.trim()).filter(Boolean))];
       if (!barcodes.length) throw new Error("사진에서 바코드를 읽지 못했습니다. 더 가까이 찍거나 아래 입력칸에 바코드 뒷자리들을 줄바꿈해 입력해 주세요.");
       const joined = barcodes.join("\n");
       setQuery(joined);
@@ -117,6 +125,12 @@ export default function WmsReprintCenterPage() {
     } finally {
       setReadingPhoto(false);
     }
+  }
+
+  async function readPhoto(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = "";
+    await readPhotos(files);
   }
 
   async function generateSelected() {
@@ -158,10 +172,18 @@ export default function WmsReprintCenterPage() {
 
     <section style={{ ...wmsOuterCard, padding: "14px", display: "grid", gap: "10px" }}>
       <strong style={{ fontSize: "15px" }}>1. 바코드 모으기</strong>
-      <label htmlFor="barcode-photo" style={{ ...wmsSecondaryButton, minHeight: "46px", display: "flex", alignItems: "center", justifyContent: "center", cursor: readingPhoto ? "wait" : "pointer", boxSizing: "border-box" }}>
-        {readingPhoto ? "사진에서 읽는 중..." : "📷 사진에서 바코드 한꺼번에 찾기"}
+      <label
+        htmlFor="barcode-photo"
+        onDragEnter={event => { event.preventDefault(); setDraggingPhoto(true); }}
+        onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDraggingPhoto(true); }}
+        onDragLeave={event => { event.preventDefault(); if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingPhoto(false); }}
+        onDrop={event => { event.preventDefault(); setDraggingPhoto(false); void readPhotos(Array.from(event.dataTransfer.files)); }}
+        style={{ ...wmsSecondaryButton, minHeight: "82px", display: "flex", flexDirection: "column", gap: "5px", alignItems: "center", justifyContent: "center", cursor: readingPhoto ? "wait" : "pointer", boxSizing: "border-box", borderStyle: "dashed", borderWidth: "2px", background: draggingPhoto ? wmsColors.greenSoft : wmsColors.surface }}
+      >
+        <strong>{readingPhoto ? "사진에서 읽는 중..." : draggingPhoto ? "여기에 놓으세요" : "📷 사진을 여기로 드래그앤드롭"}</strong>
+        {!readingPhoto && !draggingPhoto ? <span style={{ fontSize: "11px", fontWeight: 600, color: wmsColors.muted }}>또는 눌러서 사진 선택 · 여러 장 가능</span> : null}
       </label>
-      <input id="barcode-photo" type="file" accept="image/*" capture="environment" onChange={event => void readPhoto(event)} disabled={readingPhoto || searching} style={{ position: "absolute", width: "1px", height: "1px", overflow: "hidden", clip: "rect(0 0 0 0)" }} />
+      <input id="barcode-photo" type="file" accept="image/*" capture="environment" multiple onChange={event => void readPhoto(event)} disabled={readingPhoto || searching} style={{ position: "absolute", width: "1px", height: "1px", overflow: "hidden", clip: "rect(0 0 0 0)" }} />
       <form onSubmit={search} style={{ display: "grid", gap: "8px" }}>
         <label htmlFor="barcode-query" style={{ fontSize: "12px", fontWeight: 800 }}>또는 바코드 전체·뒷자리 여러 개 입력</label>
         <textarea ref={queryRef} id="barcode-query" value={query} onChange={event => setQuery(event.target.value)} placeholder={"예: 90009\n40002\n55002\n\n한 개씩 입력해도 기존 목록에 계속 쌓입니다."} rows={5} style={{ width: "100%", minHeight: "116px", resize: "vertical", boxSizing: "border-box", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "10px", padding: "10px 12px", fontSize: "16px" }} />
