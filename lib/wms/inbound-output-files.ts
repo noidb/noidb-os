@@ -37,12 +37,23 @@ export async function buildCouponWorkbook(items: InboundResultItem[], discountRa
 export async function buildMissingWorkbook(items: InboundResultItem[]): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("미입고 SKU");
-  sheet.columns = [{ header: "SKU ID", key: "skuId", width: 18 }, { header: "상품명", key: "productName", width: 70 }];
+  sheet.columns = [
+    { header: "SKU ID", key: "skuId", width: 18 },
+    { header: "상품명", key: "productName", width: 70 },
+    { header: "제품링크", key: "productLink", width: 45 },
+  ];
   sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
   sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4F6258" } };
   sheet.views = [{ state: "frozen", ySplit: 1 }];
-  for (const item of items) sheet.addRow({ skuId: item.skuId, productName: item.productName });
+  for (const item of items) {
+    const row = sheet.addRow({ skuId: item.skuId, productName: item.productName, productLink: item.productLink });
+    if (item.productLink) {
+      row.getCell(3).value = { text: item.productLink, hyperlink: item.productLink };
+      row.getCell(3).font = { color: { argb: "FF2F6D4F" }, underline: true };
+    }
+  }
   sheet.getColumn(1).numFmt = "@";
   sheet.getColumn(2).alignment = { wrapText: true, vertical: "middle" };
+  sheet.getColumn(3).alignment = { wrapText: true, vertical: "middle" };
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }

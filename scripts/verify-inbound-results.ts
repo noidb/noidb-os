@@ -18,7 +18,11 @@ const purchaseRows = [
 ];
 
 async function run() {
-  const results = buildInboundDateResults(inboundRows, purchaseRows, []);
+  const results = buildInboundDateResults(inboundRows, purchaseRows, [{
+    skuId: "SKU-1", productName: "제품DB 상품명", barcode: "R1", modelSku: "MODEL-1", modelName: "MODEL", imageUrl: "",
+    category: "", gender: "", optionLabel: "", warehouseNumber: "", boxNumber: "", currentStock: "", currentStatus: "",
+    costVatIncluded: "", vendorName: "", countryOfOrigin: "", productLink: "https://example.com/products/sku-1",
+  }]);
   if (results.length !== 1) throw new Error("실제 입고일 그룹 수 불일치");
   const result = results[0];
   if (result.actualDate !== "2026-09-05" || result.purchaseOrderCount !== 1) throw new Error("실제 입고일/발주 집계 실패");
@@ -34,7 +38,7 @@ async function run() {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(missing as unknown as ExcelJS.Buffer);
   const sheet = workbook.worksheets[0];
-  if (!sheet || sheet.columnCount !== 2 || sheet.rowCount !== 2 || sheet.getCell("A2").text !== "SKU-1") throw new Error("미입고 파일 A/B열 검증 실패");
+  if (!sheet || sheet.columnCount !== 3 || sheet.rowCount !== 2 || sheet.getCell("A2").text !== "SKU-1" || sheet.getCell("C2").hyperlink !== "https://example.com/products/sku-1") throw new Error("미입고 파일 A/B/C열 및 제품링크 검증 실패");
 
   const original = await readFile("G:\\내 드라이브\\쿠팡데이터\\마케팅\\쿠폰관리\\쿠팡_프로모션쿠폰_30퍼센트_20260823.xlsx");
   const bundled = await readFile(path.join(process.cwd(), "lib", "wms", "data", "coupon-templates", "쿠팡_프로모션쿠폰_양식.xlsx"));
@@ -45,7 +49,7 @@ async function run() {
   if (!/mode === "inboundHistory"/.test(importRoute) || !/sku, actualDate/.test(importRoute)) throw new Error("입고 실제일 그룹 또는 운영 dry-run 보호 없음");
   if (!/expectedFileIds/.test(syncRoute) || !/backupSheetWithinSpreadsheet\("제품DB"\)/.test(syncRoute)) throw new Error("입고 자동반영 미리보기 고정 또는 제품DB 백업 없음");
 
-  console.log(JSON.stringify({ actualDate: result.actualDate, purchaseOrders: 1, couponSku: 2, partialSku: 1, missingSku: 1, couponRows: 5, missingColumns: 2, bundledTemplateMatchesDrive: true, productionDryRun: true, previewFingerprintLock: true, productDbBackupBeforeApply: true }, null, 2));
+  console.log(JSON.stringify({ actualDate: result.actualDate, purchaseOrders: 1, couponSku: 2, partialSku: 1, missingSku: 1, couponRows: 5, missingColumns: 3, missingProductLink: true, bundledTemplateMatchesDrive: true, productionDryRun: true, previewFingerprintLock: true, productDbBackupBeforeApply: true }, null, 2));
 }
 
 run().catch(error => { console.error(error); process.exitCode = 1; });

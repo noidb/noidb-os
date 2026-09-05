@@ -23,6 +23,7 @@ interface PurchaseEntry {
 export interface InboundResultItem {
   skuId: string;
   productName: string;
+  productLink: string;
 }
 
 export interface InboundNameConflict {
@@ -137,7 +138,7 @@ export function buildInboundDateResults(
     const toItems = (skuIds: string[]) => skuIds.map(skuId => {
       const result = nameForSku(skuId, scopedPurchases, scopedInbounds, catalog);
       if (result.conflict) conflicts.set(skuId, result.conflict);
-      return { skuId, productName: result.name };
+      return { skuId, productName: result.name, productLink: catalog.get(skuId)?.productLink || "" };
     }).sort((a, b) => a.skuId.localeCompare(b.skuId, "ko-KR", { numeric: true }));
     const couponItems = toItems(couponSkuIds);
     const missingItems = toItems(missingSkuIds);

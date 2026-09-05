@@ -14,6 +14,12 @@ interface DriveSyncPreview {
   result?: { parsed?: number; totalInbound?: number; files?: number; skipped?: boolean };
 }
 
+interface ApiFailure {
+  success?: false;
+  code?: string;
+  error?: string;
+}
+
 export default function WmsInboundPage() {
   const [results, setResults] = useState<InboundDateResult[]>([]);
   const [selectedDate, setSelectedDate] = useState("");
@@ -22,6 +28,7 @@ export default function WmsInboundPage() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [syncPreview, setSyncPreview] = useState<DriveSyncPreview | null>(null);
+  const [driveReconnectRequired, setDriveReconnectRequired] = useState(false);
 
   async function reload() {
     setLoading(true); setMessage("");
@@ -46,8 +53,15 @@ export default function WmsInboundPage() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, expectedFileIds: action === "apply" ? (syncPreview?.newFiles || []).map(file => file.id) : [] }),
       });
-      const data = await response.json();
-      if (!response.ok || !data.success) throw new Error(data.error || "입고파일 자동 확인에 실패했습니다.");
+      const data = await response.json() as DriveSyncPreview & ApiFailure;
+      if (!response.ok || !data.success) {
+        if (data.code === "DRIVE_RECONNECT_REQUIRED") {
+          setDriveReconnectRequired(true);
+          setSyncPreview(null);
+        }
+        throw new Error(data.error || "입고파일 자동 확인에 실패했습니다.");
+      }
+      setDriveReconnectRequired(false);
       setSyncPreview(data);
       if (data.applied) {
         const completedMessage = data.result?.skipped ? "이미 반영된 파일이라 중복 적용하지 않았습니다." : `입고파일 ${data.newFiles.length}개 반영 완료 · 실제 입고 ${Number(data.result?.totalInbound || 0).toLocaleString()}개`;
@@ -86,6 +100,11 @@ export default function WmsInboundPage() {
         <strong style={{ display: "block", fontSize: "14px" }}>입고파일 자동 확인</strong>
         <p style={{ margin: "4px 0 9px", fontSize: "11px", color: wmsColors.muted }}>Google Drive의 입고상세내역 다운로드 폴더에서 새 XLSX만 찾습니다.</p>
         <button type="button" onClick={() => syncDrive("preview")} disabled={busy} style={{ ...wmsGhostButton, width: "100%", minHeight: "42px", opacity: busy ? .5 : 1 }}>{busy ? "확인 중..." : "새 입고파일 확인"}</button>
+        {driveReconnectRequired ? <div style={{ marginTop: "8px", padding: "10px", border: `1px solid ${wmsColors.warn}`, borderRadius: "10px", background: wmsColors.warnSoft }}>
+          <strong style={{ display: "block", marginBottom: "6px", fontSize: "12px", color: wmsColors.warnText }}>Google Drive 연결이 만료되었습니다.</strong>
+          <a href="/api/auth/google-drive/start" target="_blank" rel="noopener noreferrer" style={{ ...wmsPrimaryButton, display: "flex", alignItems: "center", justifyContent: "center", width: "100%", minHeight: "44px", boxSizing: "border-box", textDecoration: "none" }}>Google Drive 다시 연결</a>
+          <p style={{ margin: "6px 0 0", fontSize: "10px", color: wmsColors.muted }}>연결을 마치고 이 화면으로 돌아와 새 입고파일 확인을 다시 누르세요.</p>
+        </div> : null}
         {syncPreview?.newFiles.length ? <div style={{ marginTop: "8px", fontSize: "11px", lineHeight: 1.5 }}>
           <strong>새 파일 {syncPreview.newFiles.length}개</strong>
           {syncPreview.newFiles.map(file => <div key={file.id}>{file.name}</div>)}

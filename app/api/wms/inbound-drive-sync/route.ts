@@ -2,6 +2,7 @@ import { get, put } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 import { downloadOAuthDriveFile, listOAuthDriveFolderFiles, resolveDriveFolderPath, type OAuthDriveFileInfo } from "@/lib/wms/google-drive-oauth-reader";
 import { backupSheetWithinSpreadsheet } from "@/lib/wms/google-sheets";
+import { DriveOAuthNotConnectedError, DriveOAuthTokenInvalidError } from "@/lib/wms/google-drive-oauth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -74,6 +75,12 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json({ success: true, canApply: action === "preview", applied: action === "apply", backupCreated: action === "apply", newFiles: newFiles.map(descriptor), modifiedFiles: [], result });
   } catch (error) {
+    if (error instanceof DriveOAuthNotConnectedError || error instanceof DriveOAuthTokenInvalidError) {
+      return NextResponse.json(
+        { success: false, code: "DRIVE_RECONNECT_REQUIRED", error: "Google Drive를 다시 연결해 주세요." },
+        { status: 401 },
+      );
+    }
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "입고파일 자동 확인에 실패했습니다." }, { status: 400 });
   }
 }
