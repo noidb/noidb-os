@@ -393,9 +393,9 @@ export async function buildBarTenderWorkbook(groups: ShipmentPrintGroup[]): Prom
       }
     }
   }
-  // 라벨 프린터는 먼저 출력한 라벨이 묶음의 아래쪽에 쌓인다. 전체 레코드를 역순으로
-  // 전송해야 최종 묶음을 위에서 볼 때 구분표 → 해당 상품 순서가 된다.
-  for (const row of outputRows.reverse()) sheet.addRow(row);
+  // 파일과 BarTender에 전달되는 행 순서를 동봉내역서와 동일하게 유지한다.
+  // 쉽먼트 구분행 다음에 동봉내역서의 상품이 첫 행부터 차례로 이어진다.
+  for (const row of outputRows) sheet.addRow(row);
   sheet.getRow(1).font = { bold: true };
   sheet.columns = [12, 8, 18, 48, 36, 18, 24, 14].map(width => ({ width }));
   const buffer = await workbook.xlsx.writeBuffer();

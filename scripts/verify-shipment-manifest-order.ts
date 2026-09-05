@@ -93,14 +93,14 @@ async function main() {
     outputType: String(sheet.getRow(index + 2).getCell(8).value ?? ""),
   }));
 
-  assert.equal(savedRows.at(-1)?.outputType, "쉽먼트구분");
+  assert.equal(savedRows[0]?.outputType, "쉽먼트구분");
   assert.deepEqual(
     savedRows.filter(row => row.outputType === "상품").map(row => row.skuId),
-    [...manifestOrder].reverse(),
-    "저장 레코드는 프린터 적재 후 동봉내역서 순서가 되도록 전체 역순이어야 합니다.",
+    manifestOrder,
+    "저장 레코드는 동봉내역서 상품 순서와 정확히 같아야 합니다.",
   );
 
-  console.log(JSON.stringify({ manifestOrder, savedWorkbookOrder: savedRows.map(row => row.skuId || row.outputType), physicalStackOrder: ["쉽먼트구분", ...manifestOrder] }, null, 2));
+  console.log(JSON.stringify({ manifestOrder, savedWorkbookOrder: savedRows.map(row => row.skuId || row.outputType) }, null, 2));
 }
 
 main().catch(error => {
