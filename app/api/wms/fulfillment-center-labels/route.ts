@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { buildShipmentOutputContext, ShipmentOutputValidationError } from "@/lib/wms/shipment-output-context";
 import { summarizeFulfillmentCenterLabels } from "@/lib/wms/fulfillment-center-label-summary";
 import { buildFulfillmentCenterLabelWorkbook } from "@/lib/wms/shipment-output-files";
+import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,10 +42,13 @@ export async function POST(req: NextRequest) {
     const buffer = await buildFulfillmentCenterLabelWorkbook(context.records);
     const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date()).replace(/-/g, "");
     const asciiName = `fulfillment-center-labels_${date}.xlsx`;
-    const koreanName = encodeURIComponent(`물류센터_라벨_${date}.xlsx`);
+    const koreanFileName = `물류센터_라벨_${date}.xlsx`;
+    const koreanName = encodeURIComponent(koreanFileName);
+    const driveHeaders = await generatedDriveSaveHeaders(buffer, koreanFileName, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ["쿠팡데이터", "쉽먼트업로드완성", "쉽먼트출력세트"]);
 
     return new NextResponse(buffer as unknown as ArrayBuffer, {
       headers: {
+        ...driveHeaders,
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${koreanName}`,
         "Cache-Control": "no-store",

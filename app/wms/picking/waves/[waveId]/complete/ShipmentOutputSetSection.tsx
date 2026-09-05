@@ -143,10 +143,14 @@ export default function ShipmentOutputSetSection({ waveId, items, generation, ge
         const disposition = response.headers.get("Content-Disposition") || "";
         const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/)?.[1];
         const fileName = encoded ? decodeURIComponent(encoded) : kind === "barcode" ? "바코드출력_최종.xlsx" : "물류센터_라벨.xlsx";
+        const driveSaved = response.headers.get("X-NOIDB-Drive-Saved") === "true";
+        const driveWarning = decodeURIComponent(response.headers.get("X-NOIDB-Drive-Save-Warning") || "");
         downloadBlobPreservingPage(await response.blob(), fileName, downloadTarget);
+        if (driveSaved) setMessage(`${kind === "barcode" ? "바코드" : "물류센터 라벨"} 파일 생성 및 Drive 자동저장을 완료했습니다.`);
+        else if (driveWarning) setMessage(driveWarning);
       }
       const label = kind === "all" ? "Shipment 출력세트" : kind === "barcode" ? "바코드" : "물류센터 라벨";
-      setMessage(`묶음 발주 ${activeGeneration.purchaseOrderNumbers.length}건 기준 ${label} 파일을 생성했습니다. 언제든 다시 생성할 수 있습니다.`);
+      if (kind === "all") setMessage(`묶음 발주 ${activeGeneration.purchaseOrderNumbers.length}건 기준 ${label} 파일을 생성했습니다. 언제든 다시 생성할 수 있습니다.`);
     } catch (cause) {
       closeReservedDownloadTarget(downloadTarget);
       setError(cause instanceof Error ? cause.message : "Shipment 출력세트 생성 중 오류가 발생했습니다.");

@@ -23,7 +23,7 @@ function nextAvailableName(requested: string, existing: Set<string>): string {
 
 /** 원본을 덮어쓰지 않고 지정한 사용자 Drive 폴더에 비공개 파일을 저장한다. */
 export async function uploadGeneratedFileToDrive(
-  buffer: Buffer | Uint8Array,
+  buffer: Buffer | Uint8Array | ArrayBuffer,
   requestedFileName: string,
   mimeType: string,
   folderPath: string[],
@@ -36,7 +36,11 @@ export async function uploadGeneratedFileToDrive(
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: fileName, parents: [folderId] })}\r\n` +
     `--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`,
   );
-  const body = Buffer.concat([metadata, Buffer.from(buffer), Buffer.from(`\r\n--${boundary}--`)]);
+  let payload: Buffer;
+  if (Buffer.isBuffer(buffer)) payload = buffer;
+  else if (buffer instanceof ArrayBuffer) payload = Buffer.from(buffer);
+  else payload = Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const body = Buffer.concat([metadata, payload, Buffer.from(`\r\n--${boundary}--`)]);
   const token = await getValidDriveAccessToken();
   const response = await fetch(`${DRIVE_UPLOAD_BASE}?uploadType=multipart&fields=id,name`, {
     method: "POST",
@@ -51,7 +55,7 @@ export async function uploadGeneratedFileToDrive(
 }
 
 export async function generatedDriveSaveHeaders(
-  buffer: Buffer | Uint8Array,
+  buffer: Buffer | Uint8Array | ArrayBuffer,
   fileName: string,
   mimeType: string,
   folderPath: string[],

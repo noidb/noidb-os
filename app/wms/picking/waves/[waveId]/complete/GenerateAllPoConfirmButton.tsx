@@ -353,6 +353,8 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
 
       const fallback = `PO_FOR_CONFIRM_선택발주_${selectedPoNumbers.length}건.xlsx`;
       const fileName = responseFileName(response, fallback);
+      const driveSaved = response.headers.get("X-NOIDB-Drive-Saved") === "true";
+      const driveWarning = decodeURIComponent(response.headers.get("X-NOIDB-Drive-Save-Warning") || "");
       downloadBlobPreservingPage(await response.blob(), fileName, downloadTarget);
 
       const now = new Date().toISOString();
@@ -363,7 +365,7 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
           )
         )
       );
-      setSuccessMessage(`${selectedPoNumbers.length}개 발주의 통합 파일 1개가 생성되었습니다. 쿠팡 업로드 전까지 발주확정 완료로 처리되지 않습니다.`);
+      setSuccessMessage(`${selectedPoNumbers.length}개 발주의 통합 파일 1개가 생성되었습니다.${driveSaved ? " Drive 자동저장도 완료했습니다." : driveWarning ? ` ${driveWarning}` : ""} 쿠팡 업로드 전까지 발주확정 완료로 처리되지 않습니다.`);
     } catch (error) {
       closeReservedDownloadTarget(downloadTarget);
       const message = error instanceof Error ? error.message : "발주확정 통합 파일 생성 중 오류가 발생했습니다.";

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
 import {
   buildSelectedPoConfirmWorkbook,
   type ConfirmedQuantitiesByPoInput,
@@ -52,8 +53,10 @@ export async function POST(request: NextRequest) {
 
     const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
     const fileName = `PO_FOR_CONFIRM_선택발주_${result.selectedPoNumbers.length}건_${timestamp}.xlsx`;
+    const driveHeaders = await generatedDriveSaveHeaders(result.buffer, fileName, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ["쿠팡데이터", "발주서업로드완성"]);
     return new NextResponse(result.buffer, {
       headers: {
+        ...driveHeaders,
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
         "Cache-Control": "no-store",
