@@ -18,7 +18,7 @@ import type { PickingWave } from "@/lib/wms/picking-wave/types";
  * 조회/가져오기 API(/api/wms/supplier-hub-orders, /api/wms/import-latest-purchase-orders)는
  * 전혀 바꾸지 않았다 — 현재 프로젝트 폴더의 엑셀 파일을 읽는 기존 방식 그대로다.
  */
-export default function NewPurchaseOrdersUpdateButton() {
+export default function NewPurchaseOrdersUpdateButton({ onImported, unavailableWorkIds = [] }: { onImported?: () => void; unavailableWorkIds?: string[] } = {}) {
   const waveRepository = usePickingWaveRepository();
   const autoCheckedRef = useRef(false);
   const [open, setOpen] = useState(false);
@@ -38,7 +38,7 @@ export default function NewPurchaseOrdersUpdateButton() {
       const response = await fetch("/api/wms/supplier-hub-orders", { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) {
-        setError(data.error || "발주서를 불러오지 못했습니다.");
+        setError("발주서를 불러오지 못했습니다. 파일폴더 연결 상태를 확인해 주세요.");
         return;
       }
       setOrders(data.orders as SupplierHubPurchaseOrder[]);
@@ -56,16 +56,16 @@ export default function NewPurchaseOrdersUpdateButton() {
       const response = await fetch("/api/wms/import-latest-purchase-orders", { method: "POST" });
       const data = await response.json();
       if (!response.ok) {
-        setImportError(data.error || "최신 발주서를 불러오지 못했습니다.");
+        setImportError("새 발주서를 확인하지 못했습니다. 파일폴더 연결 상태를 확인해 주세요.");
         return;
       }
       setImportResult(data as ImportLatestResult);
       const waves = await waveRepository.listWaves();
-      // 완료·발주확정 상태도 같은 출고작업의 후속 서류/재출력이 남아 있을 수 있으므로
-      // 보관 기능이 생기기 전까지는 저장된 모든 웨이브를 출고작업 후보로 유지한다.
-      const activeWaves = waves;
+      // 기존 추가 편집기가 지원하는 작업만 제안한다. 이미 연결된 PO 판별은
+      // 완료·보관 작업까지 포함하여 중복 출고작업 생성을 유도하지 않는다.
+      const activeWaves = waves.filter(wave => wave.status === "in_progress");
       setInProgressWaves(activeWaves);
-      setInProgressPoNumbers(new Set(activeWaves.flatMap(wave => wave.sourcePurchaseOrderNumbers)));
+      setInProgressPoNumbers(new Set(waves.flatMap(wave => wave.sourcePurchaseOrderNumbers)));
       if (activeWaves[0]) {
         const defaults: Record<string, string> = {};
         for (const poNumber of [...(data.addedPurchaseOrderNumbers || []), ...(data.updatedPurchaseOrderNumbers || [])]) defaults[poNumber] = activeWaves[0].id;
@@ -74,6 +74,7 @@ export default function NewPurchaseOrdersUpdateButton() {
       setShowAllOrders(false);
       await loadOrders();
       setOpen((data.addedPurchaseOrderNumbers?.length || 0) + (data.updatedPurchaseOrderNumbers?.length || 0) > 0);
+      onImported?.();
     } catch {
       setImportError("최신 발주서를 불러오지 못했습니다.");
     } finally {
@@ -90,6 +91,7 @@ export default function NewPurchaseOrdersUpdateButton() {
   }, []);
 
   const newlyAddedSet = new Set(importResult?.addedPurchaseOrderNumbers ?? []);
+  const availableWaves = inProgressWaves.filter(wave => !unavailableWorkIds.includes(wave.id));
   const recentlyChangedSet = new Set([
     ...(importResult?.addedPurchaseOrderNumbers ?? []),
     ...(importResult?.updatedPurchaseOrderNumbers ?? []),
@@ -97,7 +99,7 @@ export default function NewPurchaseOrdersUpdateButton() {
   const visibleOrders = orders
     ? (showAllOrders
         ? orders
-        : orders.filter(order => recentlyChangedSet.has(order.purchaseOrderNumber) && !inProgressPoNumbers.has(order.purchaseOrderNumber)))
+        : orders.filter(order => recentlyChangedSet.has(order.purchaseOrderNumber) || !inProgressPoNumbers.has(order.purchaseOrderNumber)))
     : null;
   const completedChangeByPo = new Map(
     (importResult?.updatedScheduleChanges ?? []).map(change => [change.purchaseOrderNumber, change])
@@ -131,6 +133,7 @@ export default function NewPurchaseOrdersUpdateButton() {
       )}
 
       {open && (
+        <div style={{ gridColumn: "1 / -1" }}>
         <div style={{ marginTop: "10px", border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", background: "#ffffff" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
             <h2 style={{ margin: 0, fontSize: "14px" }}>{showAllOrders ? "전체 발주서 목록" : "신규·변경 발주서 목록"}</h2>
@@ -210,8 +213,8 @@ export default function NewPurchaseOrdersUpdateButton() {
               {visibleOrders.map(order => {
                 const totalQuantity = order.items.reduce((sum, item) => sum + item.orderedQuantity, 0);
                 const completedChange = completedChangeByPo.get(order.purchaseOrderNumber);
-                const canChooseWork = recentlyChangedSet.has(order.purchaseOrderNumber) && !inProgressPoNumbers.has(order.purchaseOrderNumber);
-                const targetWave = targetWaveByPo[order.purchaseOrderNumber] || inProgressWaves[0]?.id;
+                const canChooseWork = !inProgressPoNumbers.has(order.purchaseOrderNumber);
+                const targetWave = availableWaves.find(wave => wave.id === targetWaveByPo[order.purchaseOrderNumber])?.id || availableWaves[0]?.id;
                 return (
                   <div key={order.purchaseOrderNumber} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "12px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "4px", marginBottom: "8px" }}>
@@ -294,6 +297,8 @@ export default function NewPurchaseOrdersUpdateButton() {
                       <HighlightTile label="입고예정일" value={order.expectedDate} />
                     </div>
 
+                    <details>
+                    <summary style={{ cursor: "pointer", fontSize: "12px", padding: "8px 0" }}>상품 목록 보기 ({order.items.length})</summary>
                     <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                       {order.items.map(item => (
                         <div
@@ -305,25 +310,26 @@ export default function NewPurchaseOrdersUpdateButton() {
                         </div>
                       ))}
                     </div>
+                    </details>
 
                     {canChooseWork && (
                       <div style={{ marginTop: "10px", paddingTop: "10px", borderTop: `1px dashed ${wmsColors.border}` }}>
                         <div style={{ fontSize: "11px", fontWeight: 800, marginBottom: "6px" }}>이 발주서 작업방법 선택</div>
-                        {inProgressWaves.length > 0 && (
+                        {availableWaves.length > 0 && (
                           <select
-                            value={targetWaveByPo[order.purchaseOrderNumber] || inProgressWaves[0].id}
+                            value={targetWave}
                             onChange={event => setTargetWaveByPo(prev => ({ ...prev, [order.purchaseOrderNumber]: event.target.value }))}
                             style={{ width: "100%", minHeight: "38px", borderRadius: "8px", border: `1px solid ${wmsColors.borderStrong}`, background: "#fff", marginBottom: "6px", padding: "0 8px" }}
                           >
-                            {inProgressWaves.map(wave => <option key={wave.id} value={wave.id}>{wave.displayName || wave.id}</option>)}
+                            {availableWaves.map((wave, index) => <option key={wave.id} value={wave.id}>{wave.displayName && !wave.displayName.startsWith("WAVE-") ? wave.displayName : `출고작업 ${index + 1}`}</option>)}
                           </select>
                         )}
                         <div style={{ display: "flex", gap: "6px" }}>
                           <a
-                            href={inProgressWaves.length > 0 && targetWave ? `/wms/picking/waves?addPo=${encodeURIComponent(order.purchaseOrderNumber)}&targetWave=${encodeURIComponent(targetWave)}` : undefined}
-                            aria-disabled={inProgressWaves.length === 0}
-                            tabIndex={inProgressWaves.length === 0 ? -1 : undefined}
-                            style={{ ...wmsPrimaryButton, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", textDecoration: "none", flex: 1, minHeight: "38px", fontSize: "11px", opacity: inProgressWaves.length === 0 ? 0.5 : 1, cursor: inProgressWaves.length === 0 ? "default" : "pointer" }}
+                            href={targetWave ? `/wms/picking/waves?addPo=${encodeURIComponent(order.purchaseOrderNumber)}&targetWave=${encodeURIComponent(targetWave)}` : undefined}
+                            aria-disabled={!targetWave}
+                            tabIndex={!targetWave ? -1 : undefined}
+                            style={{ ...wmsPrimaryButton, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", textDecoration: "none", flex: 1, minHeight: "38px", fontSize: "11px", opacity: !targetWave ? 0.5 : 1, cursor: !targetWave ? "default" : "pointer" }}
                           >
                             기존 출고작업에 추가
                           </a>
@@ -334,7 +340,7 @@ export default function NewPurchaseOrdersUpdateButton() {
                             새 출고작업
                           </a>
                         </div>
-                        {inProgressWaves.length === 0 && <div style={{ fontSize: "10px", color: wmsColors.muted, marginTop: "4px" }}>저장된 출고작업이 없어 새 출고작업으로 시작합니다.</div>}
+                        {availableWaves.length === 0 && <div style={{ fontSize: "10px", color: wmsColors.muted, marginTop: "4px" }}>새 발주서를 추가할 수 있는 작업이 없습니다. 기존 작업의 남은 발주는 위의 계속하기에서 처리해 주세요.</div>}
                       </div>
                     )}
                   </div>
@@ -352,7 +358,9 @@ export default function NewPurchaseOrdersUpdateButton() {
             </button>
           )}
         </div>
+        </div>
       )}
+      {importResult && !open && <button type="button" onClick={() => setOpen(true)} style={{ ...wmsGhostButton, width: "100%", marginTop: "8px" }}>신규·미연결 발주서 검토하기</button>}
     </div>
   );
 }

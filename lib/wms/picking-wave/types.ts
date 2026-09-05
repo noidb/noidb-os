@@ -22,6 +22,13 @@
 export type PickingWaveStatus = "in_progress" | "completed" | "result_confirmed" | "order_confirmed";
 export type PickingWaveItemStatus = "pending" | "full" | "partial" | "notfound";
 
+/** Explicit work-center filing only; never inferred from PickingWave.status or a date. */
+export interface OutboundWorkState {
+  status: "active" | "completed" | "archived";
+  updatedAt: string;
+  history: { status: "active" | "completed" | "archived"; changedAt: string }[];
+}
+
 /** 아이템 합산 전, 발주서별 원본 요청 수량 */
 export interface PickingWaveSourceRef {
   purchaseOrderNumber: string;

@@ -76,7 +76,10 @@ function purchaseEntries(rows: string[][]): PurchaseEntry[] {
     po: text(row, ["발주번호"]),
     skuId: normalizeSkuId(text(row, ["SKU ID"])),
     productName: text(row, ["상품명"]),
-    confirmedQuantity: numberValue(row["확정수량"]) || numberValue(row["발주수량"]),
+    // 확정 0은 실제로 확정하지 않은 수량이다. 빈 셀에 한해서만 원래 발주수량을 사용한다.
+    confirmedQuantity: String(row["확정수량"] ?? "").trim() === ""
+      ? numberValue(row["발주수량"])
+      : numberValue(row["확정수량"]),
     status: text(row, ["발주현황"]),
   })).filter(item => item.po && item.skuId && item.confirmedQuantity > 0 && !/취소|반려|무효/.test(item.status));
 }

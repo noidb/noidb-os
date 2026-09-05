@@ -1,4 +1,4 @@
-import { appendSheetRow, ensureHiddenSheet, fetchSheetRows, updateSheetCells } from "./google-sheets";
+import { appendSheetRow, ensureHiddenSheet, fetchExistingSheetRows, fetchSheetRows, updateSheetCells } from "./google-sheets";
 import { normalizeSkuId, PRODUCT_DB_SHEET_NAME } from "./product-catalog";
 import { calculateReceivingCost } from "./receiving-cost";
 import { resolveDisplayNameAndOption } from "./display-name";
@@ -111,9 +111,10 @@ async function writeProductField(
 }
 
 export async function listStatusRequests(): Promise<StatusRequestRecord[]> {
-  await ensureHiddenSheet(STATUS_REQUEST_SHEET, [...STATUS_REQUEST_HEADERS]);
-  const rows = await fetchSheetRows(STATUS_REQUEST_SHEET);
-  return rows.slice(1).filter(row => row.some(Boolean)).map((row, index) => {
+  const rows = await fetchExistingSheetRows(STATUS_REQUEST_SHEET, { expectedHeaders: STATUS_REQUEST_HEADERS });
+  // 빈 이력행이 있어도 실제 시트 행번호를 유지해야 처리완료가 다른 SKU 셀에 기록되지 않는다.
+  return rows.slice(1).map((row, index) => ({ row, sheetRow: index + 2 }))
+    .filter(({ row }) => row.some(Boolean)).map(({ row, sheetRow }) => {
     const item = rowObject(STATUS_REQUEST_HEADERS, row);
     return {
       id: item["요청ID"], skuId: item["SKU ID"], modelSku: item["모델SKU"], productName: item["상품명"],
@@ -121,7 +122,7 @@ export async function listStatusRequests(): Promise<StatusRequestRecord[]> {
       requestedAt: item["요청일"], supplyHubStatus: item["Supply Hub 처리상태"] as "처리대기" | "처리완료",
       completedAt: item["처리완료일"], requester: item["요청자"], processor: item["처리자"],
       previousStatus: item["이전상태"] === EMPTY_STATUS_TOKEN ? "" : item["이전상태"], productLink: item["제품링크"],
-      purchaseOrderNumber: item["발주번호"], sheetRow: index + 2,
+      purchaseOrderNumber: item["발주번호"], sheetRow,
     };
   });
 }
@@ -167,6 +168,7 @@ export async function queueStatusCandidate(input: {
     productLink: String(product.values[product.headers.indexOf("제품링크")] ?? "").trim(),
     purchaseOrderNumber: String(input.purchaseOrderNumber || "").trim(), sheetRow: 0,
   };
+  await ensureHiddenSheet(STATUS_REQUEST_SHEET, [...STATUS_REQUEST_HEADERS]);
   await appendSheetRow(STATUS_REQUEST_SHEET, [
     record.id, record.skuId, record.modelSku, record.productName, record.optionLabel, record.currentStatus,
     record.requestType, record.requestedAt, record.supplyHubStatus, "", record.requester, "",
@@ -202,8 +204,7 @@ export async function completeStatusRequests(ids: string[], operatorValue: strin
 }
 
 export async function listStatusFileGenerations(): Promise<StatusFileGenerationRecord[]> {
-  await ensureHiddenSheet(STATUS_FILE_GENERATION_SHEET, [...STATUS_FILE_GENERATION_HEADERS]);
-  const rows = await fetchSheetRows(STATUS_FILE_GENERATION_SHEET);
+  const rows = await fetchExistingSheetRows(STATUS_FILE_GENERATION_SHEET, { expectedHeaders: STATUS_FILE_GENERATION_HEADERS });
   return rows.slice(1).filter(row => row.some(Boolean)).map(row => {
     const item = rowObject(STATUS_FILE_GENERATION_HEADERS, row);
     return {
@@ -264,8 +265,7 @@ export async function recordReceivingDelay(input: {
 }
 
 export async function listReceivingDelaySummaries(): Promise<ReceivingDelaySummary[]> {
-  await ensureHiddenSheet(RECEIVING_DELAY_SHEET, [...RECEIVING_DELAY_HEADERS]);
-  const rows = await fetchSheetRows(RECEIVING_DELAY_SHEET);
+  const rows = await fetchExistingSheetRows(RECEIVING_DELAY_SHEET, { expectedHeaders: RECEIVING_DELAY_HEADERS });
   const summaries = new Map<string, ReceivingDelaySummary>();
   for (const row of rows.slice(1)) {
     const skuId = normalizeSkuId(row[1]);

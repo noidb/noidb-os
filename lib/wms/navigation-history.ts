@@ -168,7 +168,15 @@ export function installWmsNavigationHistory() {
   window.addEventListener("popstate", onPopState);
   window.addEventListener("hashchange", onHashChange);
   document.addEventListener("click", onLinkClick);
-  if (stored) restorePosition(stored);
+  // complete 해시 딥링크의 첫 진입/StrictMode 재설치에서 방금 만든 scrollY=0 항목을 6초 동안
+  // 복원하면, 대상 화면의 scrollIntoView를 ResizeObserver가 다시 맨 위로 덮는다. 이 최초 0 복원만
+  // complete 화면에 맡긴다. 실제 뒤로가기 위치와 popstate/pageshow 복원 경로는 그대로 유지한다.
+  const completeHashOwnsInitialPosition = Boolean(
+    stored?.scrollY === 0
+    && location.hash
+    && /^\/wms\/picking\/waves\/[^/]+\/complete\/?$/.test(location.pathname)
+  );
+  if (stored && !completeHashOwnsInitialPosition) restorePosition(stored);
 
   return () => {
     const pendingRestore = restoring;

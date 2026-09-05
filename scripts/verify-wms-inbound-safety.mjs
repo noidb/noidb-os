@@ -20,7 +20,7 @@ const context = {
 vm.createContext(context);
 vm.runInContext(`${source}\n;globalThis.__purchaseTrackingTotals = purchaseTrackingTotals_;`, context, { filename: sourcePath });
 
-function poRow({ po, sku = "SKU-1", qty, received = 0, expectedDate = "2026-08-20", status = "발주확정", key = `${po}-${sku}` }) {
+function poRow({ po, sku = "SKU-1", qty, confirmed = qty, received = 0, expectedDate = "2026-08-20", status = "발주확정", key = `${po}-${sku}` }) {
   const row = Array(16).fill("");
   row[0] = key;
   row[1] = po;
@@ -29,7 +29,7 @@ function poRow({ po, sku = "SKU-1", qty, received = 0, expectedDate = "2026-08-2
   row[7] = expectedDate;
   row[8] = "2026-08-01";
   row[9] = qty;
-  row[10] = qty;
+  row[10] = confirmed;
   row[11] = received;
   return row;
 }
@@ -67,6 +67,9 @@ assert.equal(
 );
 assert.equal(missing([poRow({ po: "A", qty: 12, received: 20 })]), 0, "미입고 음수 방지");
 assert.equal(missing([poRow({ po: "A", qty: 12, received: 0, status: "발주취소" })]), undefined, "취소 발주 제외");
+assert.equal(missing([poRow({ po: "A", qty: 12, confirmed: 0 })]), undefined, "확정수량 숫자 0을 발주수량으로 치환 금지");
+assert.equal(missing([poRow({ po: "A", qty: 12, confirmed: "0" })]), undefined, "확정수량 문자열 0도 치환 금지");
+assert.equal(missing([poRow({ po: "A", qty: 12, confirmed: "" })]), 12, "확정수량 빈값만 발주수량 대체");
 
 assert.match(parserSource, /row\["발주번호"\].*row\["번호"\]/s, "번호 헤더를 발주번호 후보로 인식");
 assert.match(source, /existingByFingerprint\[fingerprint\]/, "동일 파일 fingerprint 조회");
@@ -74,5 +77,5 @@ assert.match(source, /skippedDatasets\+\+; return;/, "동일 fingerprint 재업�
 
 console.log(JSON.stringify({
   ok: true,
-  scenarios: ["정상 완전입고", "지연 완전입고", "부분입고", "추가입고", "동일 SKU 복수 발주", "음수 방지", "취소 제외", "동일 파일 재업로드 방지"],
+  scenarios: ["정상 완전입고", "지연 완전입고", "부분입고", "추가입고", "동일 SKU 복수 발주", "음수 방지", "취소 제외", "확정 0 보존", "빈 확정수량 대체", "동일 파일 재업로드 방지"],
 }));

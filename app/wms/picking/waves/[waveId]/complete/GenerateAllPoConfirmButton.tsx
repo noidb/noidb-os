@@ -354,6 +354,7 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
       const fallback = `PO_FOR_CONFIRM_선택발주_${selectedPoNumbers.length}건.xlsx`;
       const fileName = responseFileName(response, fallback);
       const driveSaved = response.headers.get("X-NOIDB-Drive-Saved") === "true";
+      const driveFileName = decodeURIComponent(response.headers.get("X-NOIDB-Drive-File-Name") || "");
       const driveWarning = decodeURIComponent(response.headers.get("X-NOIDB-Drive-Save-Warning") || "");
       downloadBlobPreservingPage(await response.blob(), fileName, downloadTarget);
 
@@ -361,7 +362,7 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
       setRecords(
         upsertPoConfirmationRecords(
           selectedPoNumbers.map(poNumber =>
-            buildRecord(poNumber, "document_generated", now, { generatedFileName: fileName })
+            buildRecord(poNumber, "document_generated", now, { generatedFileName: driveSaved && driveFileName ? driveFileName : fileName })
           )
         )
       );

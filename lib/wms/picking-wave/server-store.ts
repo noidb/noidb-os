@@ -5,6 +5,7 @@ import { basketKey, emptyPickingWaveStoreSnapshot, type PickingWaveStoreMutation
 import { mergePoConfirmationRecords, removeTransientPoConfirmationRecordsForWave } from "../po-confirm-state";
 import { createShipmentsInState, deleteShipmentFromState, renameShipmentInState, updateShipmentGenerationInState, updateShipmentStatusInState } from "../shipment/state";
 import type { Shipment } from "../shipment/types";
+import { summarizeOutboundWork, kstWorkDate } from "../work-center";
 
 const BLOB_PATH = "noidb-wms/picking-waves/v1/store.json";
 const MAX_RETRIES = 6;
@@ -81,6 +82,7 @@ function normalizeSnapshot(value: unknown): PickingWaveStoreSnapshot {
     deletedShipmentIds: raw.deletedShipmentIds && typeof raw.deletedShipmentIds === "object" ? raw.deletedShipmentIds : {},
     completedCreateOperations: raw.completedCreateOperations && typeof raw.completedCreateOperations === "object" ? raw.completedCreateOperations : {},
     completedShipmentCreateOperations: raw.completedShipmentCreateOperations && typeof raw.completedShipmentCreateOperations === "object" ? raw.completedShipmentCreateOperations : {},
+    ...(raw.outboundWorkStates ? { outboundWorkStates: raw.outboundWorkStates } : {}),
   };
 }
 
@@ -193,7 +195,16 @@ async function writeLocalSnapshot(snapshot: PickingWaveStoreSnapshot): Promise<v
 
 export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot, mutation: PickingWaveStoreMutation): PickingWaveStoreSnapshot {
   const next = normalizeSnapshot(structuredClone(current));
-  if (mutation.action === "migrate") {
+  if (mutation.action === "setOutboundWorkState") {
+    const wave = next.waves.find(item => item.id === mutation.waveId);
+    if (!wave) throw new Error("저장된 출고작업을 찾을 수 없습니다.");
+    const prior = next.outboundWorkStates?.[wave.id];
+    if ((prior?.updatedAt || null) !== mutation.expectedUpdatedAt) throw new Error("다른 기기에서 작업 상태가 변경되었습니다. 새로 확인한 뒤 다시 선택해 주세요.");
+    if (mutation.status === "completed" && !summarizeOutboundWork(wave, next.items.filter(item => item.waveId === wave.id), prior, kstWorkDate()).canComplete) {
+      throw new Error("미처리 피킹 또는 Shipment·출력세트가 남아 있습니다. 작업을 계속하거나 보관을 선택해 주세요.");
+    }
+    next.outboundWorkStates = { ...next.outboundWorkStates, [wave.id]: { status: mutation.status, updatedAt: mutation.now, history: [...(prior?.history || []), { status: mutation.status, changedAt: mutation.now }] } };
+  } else if (mutation.action === "migrate") {
     next.waves = mergeByKey(next.waves, mutation.snapshot.waves || [], value => value.id, next.deletedWaveIds, false);
     next.items = mergeByKey(next.items, mutation.snapshot.items || [], value => value.id, next.deletedItemIds, false)
       .filter(item => !next.deletedWaveIds[item.waveId]);

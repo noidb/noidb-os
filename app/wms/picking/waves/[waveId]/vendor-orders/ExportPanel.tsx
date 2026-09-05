@@ -12,6 +12,7 @@ interface Props {
   vendorName: string;
   lines: VendorOrderDraftLine[];
   status: VendorOrderDraftStatus;
+  busy?: boolean;
   onMarkSent: () => void | Promise<void>;
   onReviseAgain: () => void | Promise<void>;
 }
@@ -32,7 +33,7 @@ interface Props {
  * (renderVendorOrderImage)는 카카오톡 공유가 파일 공유를 지원하지 않는 기기에서 대신 자동
  * 다운로드하는 폴백으로 계속 쓴다 — 기능 자체는 사라지지 않는다.
  */
-export default function VendorOrderExportPanel({ wave, vendorName, lines, status, onMarkSent, onReviseAgain }: Props) {
+export default function VendorOrderExportPanel({ wave, vendorName, lines, status, busy = false, onMarkSent, onReviseAgain }: Props) {
   const [shareBusy, setShareBusy] = useState(false);
   const [shareFallbackMessage, setShareFallbackMessage] = useState<string | null>(null);
   const [showMessagePreview, setShowMessagePreview] = useState(false);
@@ -125,12 +126,14 @@ export default function VendorOrderExportPanel({ wave, vendorName, lines, status
         </button>
         <button
           onClick={() => onMarkSent()}
+          disabled={busy}
           style={{ ...wmsGreenDarkButton, minHeight: "48px", fontSize: "12px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25 }}
         >
-          전송완료/해제
+          {busy ? "저장 중..." : status === "sent" ? "전송완료 해제" : "전송완료"}
         </button>
         <button
           onClick={() => onReviseAgain()}
+          disabled={busy}
           style={{ ...wmsSecondaryButton, gridColumn: "1 / -1", minHeight: "42px", fontSize: "12px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25 }}
         >
           {status === "sent" ? "다시 수정" : "발주내용 수정"}

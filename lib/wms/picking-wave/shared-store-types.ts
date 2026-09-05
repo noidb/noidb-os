@@ -1,4 +1,4 @@
-import type { BasketAssignment, PickingWave, PickingWaveItem } from "./types";
+import type { BasketAssignment, PickingWave, PickingWaveItem, OutboundWorkState } from "./types";
 import type { PoConfirmationRecord } from "../po-confirm-state";
 import type { VendorOrderDraft, VendorOrderDraftLine } from "../vendor-order/types";
 import type { ModelLocation, Shelf, SkuLocation, WarehouseBox, WarehouseMigrationMapping, WarehouseZone } from "../types";
@@ -32,9 +32,12 @@ export interface PickingWaveStoreSnapshot {
   deletedShipmentIds: Record<string, string>;
   completedCreateOperations: Record<string, { waveId: string; completedAt: string }>;
   completedShipmentCreateOperations: Record<string, { shipmentIds: string[]; completedAt: string }>;
+  /** Optional for existing snapshots. No migration or Wave rewrite is required. */
+  outboundWorkStates?: Record<string, OutboundWorkState>;
 }
 
 export type PickingWaveStoreMutation =
+  | { action: "setOutboundWorkState"; waveId: string; status: OutboundWorkState["status"]; expectedUpdatedAt: string | null; now: string }
   | { action: "migrate"; snapshot: Partial<Pick<PickingWaveStoreSnapshot, "waves" | "items" | "baskets" | "poConfirmationRecords" | "vendorOrderDrafts" | "vendorOrderLines" | "warehouseZones" | "warehouseShelves" | "warehouseBoxes" | "warehouseModelLocations" | "warehouseSkuExceptions" | "warehouseMigrationMappings">> }
   | { action: "saveWave"; wave: PickingWave }
   | { action: "deleteWave"; waveId: string; deletedAt: string }
@@ -109,6 +112,8 @@ function hasText(value: unknown, key: string): boolean {
 
 export function isPickingWaveStoreMutation(value: unknown): value is PickingWaveStoreMutation {
   if (!isObject(value) || typeof value.action !== "string") return false;
+  if (value.action === "setOutboundWorkState") return hasText(value, "waveId") && ["active", "completed", "archived"].includes(String(value.status))
+    && (value.expectedUpdatedAt === null || typeof value.expectedUpdatedAt === "string") && typeof value.now === "string" && Number.isFinite(Date.parse(value.now));
   if (value.action === "migrate") {
     if (!isObject(value.snapshot)) return false;
     const arrays = Object.values(value.snapshot);

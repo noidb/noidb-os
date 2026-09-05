@@ -77,7 +77,7 @@ function workCenterDestination(wave: PickingWave): string {
 function nextAction(wave: PickingWave): string {
   const generations = wave.outputGenerations || [];
   if (generations.length > 0) {
-    const progress = summarizeOutputGenerations(generations);
+    const progress = summarizeOutputGenerations(generations, wave.sourcePurchaseOrderNumbers);
     if (progress.pendingPurchaseOrders > 0) return `남은 발주 ${progress.pendingPurchaseOrders}건 Shipment 계속하기`;
     return "Shipment 출력세트·재출력";
   }
@@ -90,7 +90,7 @@ function nextAction(wave: PickingWave): string {
 function businessStatus(wave: PickingWave): string {
   const generations = wave.outputGenerations || [];
   if (generations.length > 0) {
-    const progress = summarizeOutputGenerations(generations);
+    const progress = summarizeOutputGenerations(generations, wave.sourcePurchaseOrderNumbers);
     return `Shipment 발주 ${progress.completedPurchaseOrders}/${progress.purchaseOrderTotal}`;
   }
   if (wave.status === "order_confirmed") return "발주확정";
@@ -118,7 +118,7 @@ export function WaveSummaryCard({
 }) {
   const { wave, skuCount, totalQuantity, completedSkuCount, shippingByDate } = summary;
   const progress = skuCount > 0 ? Math.round((completedSkuCount / skuCount) * 100) : 0;
-  const generationProgress = summarizeOutputGenerations(wave.outputGenerations || []);
+  const generationProgress = summarizeOutputGenerations(wave.outputGenerations || [], wave.sourcePurchaseOrderNumbers);
 
   return (
     <article className="wms-active-wave-card">

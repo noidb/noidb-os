@@ -250,7 +250,8 @@ export function resolveLiveFields(item: LiveResolvableItem, liveCatalogByProduct
     gender: live ? live.gender : item.gender,
     name,
     optionLabel: option,
-    imageUrl: live?.imageUrl || item.imageUrl,
+    // A matched blank cell is an intentional unlink, not a reason to revive the old wave image.
+    imageUrl: live ? live.imageUrl : item.imageUrl,
     vendorName: live?.vendorName || item.vendorName,
     catalogWarehouseNumber: live?.warehouseNumber || item.catalogWarehouseNumber,
     catalogBoxNumber: live?.boxNumber || item.catalogBoxNumber,

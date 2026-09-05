@@ -48,6 +48,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
   const [removedLineIds, setRemovedLineIds] = useState<Set<string>>(new Set());
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [searchAddVendor, setSearchAddVendor] = useState<string | null>(null);
   const [manualVendorNames, setManualVendorNames] = useState<string[]>([]);
   const [isPreview, setIsPreview] = useState(false);
@@ -87,26 +88,26 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
           // 웨이브가 없으므로 재계산할 부족분 자체가 없다 — 저장된 수동 라인만 그대로 보여준다.
           setLines(existingLines);
           setIsPreview(false);
-        } else if (loadedWave && loadedWave.status !== "in_progress") {
-          // 방문할 때마다 최신 부족수량으로 자동 라인만 다시 계산한다 — 수동 추가 라인은 절대 안 건드림
-          // (2026-08-19 사용자 확정 — 웨이브를 수정한 뒤 다시 열면 부족분 목록이 항상 최신 상태여야 함).
-          const recalculated = recalculateAutoVendorOrderLines(params.waveId, waveItems, existingLines, now);
-          await Promise.all(recalculated.removedLineIds.map(id => vendorOrderRepository.deleteLine(id)));
-          await Promise.all(recalculated.lines.map(line => vendorOrderRepository.saveLine(line)));
-          setLines(recalculated.lines);
-          setIsPreview(false);
         } else if (loadedWave) {
-          // 아직 피킹 진행중인 웨이브 — 저장하지 않고 지금까지의 부족수량만 미리보기로 계산한다
-          // (2026-08-19 신규: "진행 중 웨이브 화면 → 부족분 거래처 발주서 확인" 진입 경로).
-          const preview = recalculateAutoVendorOrderLines(params.waveId, waveItems, existingLines, now);
-          setLines(preview.lines);
-          setIsPreview(true);
+          // Opening a page is read-only. Preserve already approved/sent rows and only propose
+          // changes for editable drafts; a user save is the persistence boundary.
+          const lockedDraftIds = new Set(existingDrafts.filter(draft => draft.status === "approved" || draft.status === "sent").map(draft => draft.id));
+          const lockedLines = existingLines.filter(line => lockedDraftIds.has(line.draftId));
+          const lockedSkuIds = new Set(lockedLines.map(line => line.skuId));
+          const recalculated = recalculateAutoVendorOrderLines(params.waveId, waveItems.filter(item => !lockedSkuIds.has(item.productCode)), existingLines.filter(line => !lockedDraftIds.has(line.draftId)), now);
+          setLines([...lockedLines, ...recalculated.lines]);
+          setRemovedLineIds(new Set(recalculated.removedLineIds));
+          setDirty(Boolean(recalculated.removedLineIds.length || recalculated.addedProductCodes.length || recalculated.updatedProductCodes.length));
+          // Shortages may be ordered while the rest of this same outbound work is still picked.
+          setIsPreview(false);
         } else {
           // 원래 웨이브가 보관/삭제된 과거 발주서는 저장된 거래처 발주 품목을 그대로 복구한다.
           // 재계산할 원본 웨이브가 없으므로 기존 라인을 수정하거나 삭제하지 않는다.
           setLines(existingLines);
           setIsPreview(false);
         }
+      } catch (error) {
+        setSaveError(error instanceof Error ? error.message : "거래처 발주서를 불러오지 못했습니다.");
       } finally {
         setLoading(false);
       }
@@ -288,13 +289,15 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
 
   /** 라인들을 저장(임시저장)한다 — draftId를 현재 vendorName 기준으로 다시 맞추고, 삭제된 라인을 반영한다. */
   async function persistAll(overrideStatus?: { vendorName: string; status: VendorOrderDraftStatus }) {
+    if (saving) return;
     setSaving(true);
+    setSaveError(null);
     const now = new Date().toISOString();
+    try {
 
     for (const id of removedLineIds) {
       await vendorOrderRepository.deleteLine(id);
     }
-    setRemovedLineIds(new Set());
 
     const vendorNames = new Set(lines.map(line => line.vendorName || UNASSIGNED_VENDOR_NAME));
     if (overrideStatus) vendorNames.add(overrideStatus.vendorName);
@@ -324,20 +327,24 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
             statusBeforeSent: isOverride && overrideStatus!.status === "sent" ? "draft" : undefined,
           };
       nextDraftsByVendor[vendorName] = draft;
-      await vendorOrderRepository.saveDraft(draft);
     }
-    setDraftsByVendor(nextDraftsByVendor);
 
     const linesToSave = lines.map(line => ({
       ...line,
       vendorName: line.vendorName || UNASSIGNED_VENDOR_NAME,
       draftId: `${params.waveId}::${line.vendorName || UNASSIGNED_VENDOR_NAME}`,
     }));
-    await Promise.all(linesToSave.map(line => vendorOrderRepository.saveLine(line)));
+    // A failed line save must not mark the draft as sent. Confirm the status last.
+    for (const line of linesToSave) await vendorOrderRepository.saveLine(line);
+    for (const vendorName of vendorNames) await vendorOrderRepository.saveDraft(nextDraftsByVendor[vendorName]);
+    setDraftsByVendor(nextDraftsByVendor);
     setLines(linesToSave);
 
+    setRemovedLineIds(new Set());
     setDirty(false);
-    setSaving(false);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "공용 저장에 실패했습니다. 입력한 내용은 유지되며 다시 저장할 수 있습니다.");
+    } finally { setSaving(false); }
   }
 
   async function handleApprove(vendorName: string) {
@@ -525,6 +532,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                     vendorName={group.vendorName}
                     lines={group.lines}
                     status={status}
+                    busy={saving}
                     onMarkSent={() => toggleSent(group.vendorName)}
                     onReviseAgain={() => persistAll({ vendorName: group.vendorName, status: "resend_needed" })}
                   />
@@ -536,6 +544,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
         </>
       )}
 
+      {saveError && <p role="alert" style={{ color: "#b42318", fontSize: "12px" }}>{saveError}</p>}
       {dirty && (
         <p style={{ fontSize: "11px", color: wmsColors.warn, marginBottom: "10px" }}>
           저장하지 않은 변경사항이 있습니다 — "임시저장"을 눌러야 반영됩니다.

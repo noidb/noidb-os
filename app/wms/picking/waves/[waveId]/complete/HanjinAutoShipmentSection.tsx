@@ -78,7 +78,12 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
       const response = await fetch("/api/wms/hanjin-upload/build-shipment-auto", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ purchaseOrderNumbers: generation.purchaseOrderNumbers, selectedReprintFileName }),
+        body: JSON.stringify({
+          waveId: generation.waveId,
+          generationId: generation.generationId,
+          purchaseOrderNumbers: generation.purchaseOrderNumbers,
+          selectedReprintFileName,
+        }),
       });
       if (!response.ok) {
         closeReservedDownloadTarget(downloadTarget);
@@ -94,10 +99,11 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
       const fileNameMatch = disposition.match(/filename\*=UTF-8''(.+)$/);
       const fileName = fileNameMatch ? decodeURIComponent(fileNameMatch[1]) : "쉽먼트생성_업로드파일.xlsx";
       const driveSaved = response.headers.get("X-NOIDB-Drive-Saved") === "true";
+      const driveFileName = decodeURIComponent(response.headers.get("X-NOIDB-Drive-File-Name") || "");
       const driveWarning = decodeURIComponent(response.headers.get("X-NOIDB-Drive-Save-Warning") || "");
       downloadBlobPreservingPage(await response.blob(), fileName, downloadTarget);
       setResultMessage(`${generationLabel || "현재 묶음"}의 발주 ${generation.purchaseOrderNumbers.length}건만 Shipment로 생성했습니다.${driveSaved ? " · Drive 자동저장 완료" : driveWarning ? ` · ${driveWarning}` : ""}`);
-      await onGenerated?.(generation.generationId, fileName);
+      await onGenerated?.(generation.generationId, driveSaved && driveFileName ? driveFileName : fileName);
     } catch (cause) {
       closeReservedDownloadTarget(downloadTarget);
       setError(cause instanceof Error ? cause.message : "쉽먼트파일 생성 중 오류가 발생했습니다.");

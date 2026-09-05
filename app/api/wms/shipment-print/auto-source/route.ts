@@ -49,6 +49,7 @@ export async function POST(request: NextRequest) {
     const expectedPurchaseOrders = new Set<string>((Array.isArray(body.expectedPurchaseOrderNumbers) ? body.expectedPurchaseOrderNumbers : []).map((value: unknown) => String(value).trim()).filter((value: string) => Boolean(value)));
     if (!waveId) return NextResponse.json({ error: "웨이브 ID가 없습니다." }, { status: 400 });
     if (!dateTokens.length) return NextResponse.json({ error: "출력 PDF 입고예정일이 올바르지 않습니다." }, { status: 400 });
+    if (!expectedWorkbookName) return NextResponse.json({ error: "현재 Shipment가 사용한 쉽먼트 XLSX 파일명이 없습니다." }, { status: 400 });
 
     let pdfFiles: SourceFile[];
     let workbookFiles: Awaited<ReturnType<typeof loadShipmentPrintWorkbookSources>>;
@@ -56,7 +57,7 @@ export async function POST(request: NextRequest) {
       const [labels, manifests, workbooks] = await Promise.all([
         driveFiles("shipment_Label_document"),
         driveFiles("shipment_ManiFest_document"),
-        loadShipmentPrintWorkbookSources(),
+        loadShipmentPrintWorkbookSources(expectedWorkbookName),
       ]);
       pdfFiles = [...labels, ...manifests];
       workbookFiles = workbooks;
@@ -64,7 +65,7 @@ export async function POST(request: NextRequest) {
       const root = process.env.WMS_SHIPMENT_PRINT_SOURCE_DIR || "G:\\내 드라이브\\쿠팡데이터\\쉽먼트업로드완성\\쉽먼트출력세트";
       const [datedPdfFiles, workbooks] = await Promise.all([
         Promise.all(dateTokens.map(dateToken => localFiles(path.join(root, dateToken)))),
-        loadShipmentPrintWorkbookSources(),
+        loadShipmentPrintWorkbookSources(expectedWorkbookName),
       ]);
       pdfFiles = datedPdfFiles.flat();
       workbookFiles = workbooks;
@@ -80,7 +81,7 @@ export async function POST(request: NextRequest) {
     }
     let selectedWorkbook: SourceFile;
     try {
-      selectedWorkbook = await selectShipmentPrintWorkbook(workbookFiles, [...expectedPurchaseOrders], { expectedWorkbookName });
+      selectedWorkbook = await selectShipmentPrintWorkbook(workbookFiles, [...expectedPurchaseOrders], { expectedWorkbookName, strictName: true });
     } catch (error) {
       if (error instanceof ShipmentPrintWorkbookSelectionError) {
         return NextResponse.json({ error: error.message }, { status: 400 });

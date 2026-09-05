@@ -106,6 +106,43 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   useEffect(() => {
     if (loading || restoredScrollRef.current) return;
     restoredScrollRef.current = true;
+    const hash = window.location.hash.slice(1);
+    if (hash) {
+      let targetId = hash;
+      try { targetId = decodeURIComponent(hash); } catch { /* 원문 hash로 탐색 */ }
+      let frame = 0;
+      let observer: ResizeObserver | undefined;
+      let stopped = false;
+      const alignTarget = () => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => {
+          if (!stopped) document.getElementById(targetId)?.scrollIntoView({ block: "start", behavior: "auto" });
+        });
+      };
+      const stop = () => {
+        if (stopped) return;
+        stopped = true;
+        cancelAnimationFrame(frame);
+        observer?.disconnect();
+        clearTimeout(timeout);
+        window.removeEventListener("wheel", stop);
+        window.removeEventListener("touchstart", stop);
+        window.removeEventListener("pointerdown", stop);
+        window.removeEventListener("keydown", stop);
+      };
+      const timeout = window.setTimeout(stop, 8_000);
+      if (typeof ResizeObserver !== "undefined") {
+        observer = new ResizeObserver(alignTarget);
+        observer.observe(document.documentElement);
+        observer.observe(document.body);
+      }
+      window.addEventListener("wheel", stop, { passive: true });
+      window.addEventListener("touchstart", stop, { passive: true });
+      window.addEventListener("pointerdown", stop, { passive: true });
+      window.addEventListener("keydown", stop);
+      requestAnimationFrame(alignTarget);
+      return stop;
+    }
     const savedPosition = Number(sessionStorage.getItem(pagePositionKey) || "0");
     if (savedPosition > 0) requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo({ top: savedPosition })));
   }, [loading, pagePositionKey]);
@@ -198,6 +235,7 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
         </div>
 
         <ShipmentWorkflowStepCard
+          id="po-confirm"
           step={1}
           title="발주확정 통합파일"
           subtitle="발주수량을 기본 확정수량으로 사용하며 상태와 관계없이 다시 생성할 수 있습니다."
@@ -335,6 +373,7 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
 
       <div style={{ marginTop: "20px" }}>
           <ShipmentWorkflowStepCard
+            id="po-confirm"
             step={1}
             title="발주확정 통합파일"
             subtitle="발주수량을 기본 확정수량으로 사용하고 예외만 수정합니다. 실제 피킹과 독립적으로 다시 생성할 수 있습니다."

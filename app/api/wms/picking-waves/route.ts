@@ -22,6 +22,10 @@ export async function POST(request: NextRequest) {
     if (!isPickingWaveStoreMutation(mutation)) {
       return NextResponse.json({ ok: false, error: "저장 요청 형식이 올바르지 않습니다." }, { status: 400, headers: noStoreHeaders });
     }
+    // Filing requires the dedicated work-center confirmation and same-origin checks.
+    if (mutation.action === "setOutboundWorkState") {
+      return NextResponse.json({ ok: false, error: "작업센터에서 변경 내용을 확인한 뒤 저장해 주세요." }, { status: 403, headers: noStoreHeaders });
+    }
     return NextResponse.json({ ok: true, snapshot: await mutatePickingWaveStore(mutation as PickingWaveStoreMutation) }, { headers: noStoreHeaders });
   } catch (error) {
     if (error instanceof PickingWaveStoreBusyError) {

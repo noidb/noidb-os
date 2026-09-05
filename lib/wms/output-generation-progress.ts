@@ -10,11 +10,11 @@ export interface OutputGenerationProgress {
   pendingPurchaseOrders: number;
 }
 
-export function summarizeOutputGenerations(generations: readonly ShipmentOutputGeneration[]): OutputGenerationProgress {
-  const allPurchaseOrders = new Set(generations.flatMap(generation => generation.purchaseOrderNumbers));
+export function summarizeOutputGenerations(generations: readonly ShipmentOutputGeneration[], sourcePurchaseOrderNumbers?: readonly string[]): OutputGenerationProgress {
+  const allPurchaseOrders = new Set(sourcePurchaseOrderNumbers ?? generations.flatMap(generation => generation.purchaseOrderNumbers));
   const completedPurchaseOrderSet = new Set(generations
     .filter(generation => generation.status === "shipment_generated")
-    .flatMap(generation => generation.purchaseOrderNumbers));
+    .flatMap(generation => generation.purchaseOrderNumbers).filter(po => allPurchaseOrders.has(po)));
   const completed = generations.filter(generation => generation.status === "shipment_generated").length;
   const unfinished = generations.filter(generation => generation.status !== "shipment_generated");
   const superseded = unfinished.filter(generation => generation.purchaseOrderNumbers.every(po => completedPurchaseOrderSet.has(po))).length;

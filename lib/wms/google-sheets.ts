@@ -93,6 +93,24 @@ async function fetchSpreadsheetTabs(): Promise<SheetTabProperties[]> {
   }));
 }
 
+/** 선택적 이력 탭을 읽기만 한다. 조회 화면에서는 탭 생성·헤더 쓰기를 하지 않는다. */
+export async function fetchExistingSheetRows(
+  sheetName: string,
+  options?: { expectedHeaders?: readonly string[]; valueRenderOption?: SheetValueRenderOption },
+): Promise<string[][]> {
+  const tabs = await fetchSpreadsheetTabs();
+  if (!tabs.some(tab => tab.title === sheetName)) return [];
+  const rows = await fetchSheetRows(sheetName, { valueRenderOption: options?.valueRenderOption });
+  const headers = options?.expectedHeaders;
+  if (headers) {
+    const actual = (rows[0] || []).slice(0, headers.length).map(value => String(value || "").trim());
+    if (actual.length < headers.length || headers.some((header, index) => actual[index] !== header)) {
+      throw new Error("이력 목록의 열 구성이 달라 조회를 중단했습니다. 관리자에게 확인해 주세요.");
+    }
+  }
+  return rows;
+}
+
 /** 이력 저장용 숨김 탭이 없을 때만 만들고, 기존 탭이면 헤더가 정확한지 검증한다. */
 export async function ensureHiddenSheet(sheetName: string, headers: string[]): Promise<SheetTabProperties> {
   const tabs = await fetchSpreadsheetTabs();

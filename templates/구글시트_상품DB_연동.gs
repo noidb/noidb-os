@@ -2135,7 +2135,8 @@ function purchaseTrackingTotals_(ss, inboundTotals) {
     if (!sku) return;
     const status = String(row[4] || '').trim();
     if (/취소|반려|무효/.test(status)) return;
-    const orderQty = number_(row[10]) || number_(row[9]);
+    // 확정수량 0을 원래 발주수량으로 되살리지 않는다. 미확정 빈 셀만 발주수량을 사용한다.
+    const orderQty = String(row[10] == null ? '' : row[10]).trim() === '' ? number_(row[9]) : number_(row[10]);
     if (orderQty <= 0) return;
     const item = grouped[sku] || { entries: [], recentOrderDate: '' };
     const orderDate = dateOnlyText_(row[8]);

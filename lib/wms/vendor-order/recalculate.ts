@@ -29,6 +29,7 @@ export function recalculateAutoVendorOrderLines(
 ): RecalculateResult {
   const shortageItems = sortWarehouseProducts(waveItems.filter(item => item.shortageQuantity > 0));
   const manualLines = existingLines.filter(line => line.isManuallyAdded);
+  const manualSkuIds = new Set(manualLines.map(line => line.skuId));
   const autoLinesByCode = new Map(existingLines.filter(line => !line.isManuallyAdded).map(line => [line.skuId, line]));
 
   const nextAutoLines: VendorOrderDraftLine[] = [];
@@ -36,11 +37,18 @@ export function recalculateAutoVendorOrderLines(
   const updatedProductCodes: string[] = [];
 
   for (const item of shortageItems) {
+    // A SKU explicitly transferred from picking already has a persisted line. Do not create
+    // another auto line beside it (or overwrite its memo/vendor/edited quantity by the same ID).
+    if (manualSkuIds.has(item.productCode)) continue;
     const orderQuantity = toVendorOrderQuantity(item.shortageQuantity);
     const existing = autoLinesByCode.get(item.productCode);
     if (existing) {
-      if (existing.shortageQuantity !== orderQuantity || existing.actualShortageQuantity !== item.shortageQuantity) updatedProductCodes.push(item.productCode);
-      nextAutoLines.push({ ...existing, actualShortageQuantity: item.shortageQuantity, shortageQuantity: orderQuantity, updatedAt: now });
+      const previousAutoQuantity = toVendorOrderQuantity(existing.actualShortageQuantity ?? item.shortageQuantity);
+      const userEditedQuantity = existing.shortageQuantity !== previousAutoQuantity;
+      const nextQuantity = userEditedQuantity ? existing.shortageQuantity : orderQuantity;
+      const changed = existing.shortageQuantity !== nextQuantity || existing.actualShortageQuantity !== item.shortageQuantity;
+      if (changed) updatedProductCodes.push(item.productCode);
+      nextAutoLines.push(changed ? { ...existing, actualShortageQuantity: item.shortageQuantity, shortageQuantity: nextQuantity, updatedAt: now } : existing);
       autoLinesByCode.delete(item.productCode);
     } else {
       const vendorName = item.vendorName || UNASSIGNED_VENDOR_NAME;
@@ -71,7 +79,9 @@ export function recalculateAutoVendorOrderLines(
   }
 
   // 남은 것들(shortageItems에 더 이상 없음) = 부족수량이 0이 된 자동 라인 → 삭제 대상
-  const removedLineIds = Array.from(autoLinesByCode.values()).map(line => line.id);
+  // Preserve ambiguous legacy duplicates for review rather than deleting operating data.
+  const legacyManualConflicts = Array.from(autoLinesByCode.values()).filter(line => manualSkuIds.has(line.skuId));
+  const removedLineIds = Array.from(autoLinesByCode.values()).filter(line => !manualSkuIds.has(line.skuId)).map(line => line.id);
 
-  return { lines: sortWarehouseProducts([...manualLines, ...nextAutoLines]), removedLineIds, addedProductCodes, updatedProductCodes };
+  return { lines: sortWarehouseProducts([...manualLines, ...nextAutoLines, ...legacyManualConflicts]), removedLineIds, addedProductCodes, updatedProductCodes };
 }
