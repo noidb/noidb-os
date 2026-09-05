@@ -503,7 +503,6 @@ export async function buildAutoShipmentFile(
   for (const group of groups) {
     const expectedMonthDay = formatMonthDay(group.expectedDate);
     const expectedDateDigits = group.expectedDate.replace(/[^\d]/g, "");
-    const groupTrackingNumbers = new Set<string>();
 
     for (const po of group.purchaseOrderNumbers) {
       const key = normalizeSkuId(po);
@@ -564,16 +563,12 @@ export async function buildAutoShipmentFile(
         continue;
       }
 
-      groupTrackingNumbers.add(trackingNumber);
       trackingNumbersUsed.add(trackingNumber);
       for (const row of confirmedRows) resolvedRows.push({ ...row, trackingNumber });
     }
 
-    if (groupTrackingNumbers.size > 1) {
-      blockingReasons.push(
-        `같은 운송장으로 합배송된 발주번호끼리 운송장번호가 다릅니다: ${group.fulfillmentCenter} ${group.purchaseOrderNumbers.join(", ")} → ${[...groupTrackingNumbers].join(", ")}`
-      );
-    }
+    // 같은 센터·날짜라도 한진 송장파일은 총수량 200개 기준으로 발주서 단위 분할될 수 있다.
+    // 각 발주번호가 정확히 한 운송장에만 연결되면 여러 운송장번호를 정상으로 인정한다.
   }
 
   if (blockingReasons.length > 0) {

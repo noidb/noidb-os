@@ -44,6 +44,8 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
       setActiveGenerationId(current => {
         if (current) return current;
         const saved = sessionStorage.getItem(activeGenerationStorageKey);
+        const shared = wave?.selectedOutputGenerationId;
+        if (stored.some(item => item.generationId === shared)) return shared || null;
         return stored.some(item => item.generationId === saved) ? saved : stored.at(-1)?.generationId || null;
       });
       setStep1Done(stored.length > 0);
@@ -69,10 +71,17 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
     const outputGenerations = existing
       ? (wave.outputGenerations || []).map(item => item.generationId === existing.generationId ? generation : item)
       : [...(wave.outputGenerations || []), generation];
-    await repository.saveWave({ ...wave, outputGenerations, updatedAt: now });
+    await repository.saveWave({ ...wave, outputGenerations, selectedOutputGenerationId: generation.generationId, updatedAt: now });
     setGenerations(outputGenerations);
     setActiveGenerationId(generation.generationId);
     setStep1Done(true);
+  }
+
+  async function selectGeneration(generationId: string) {
+    setActiveGenerationId(generationId);
+    const wave = await repository.getWave(waveId);
+    if (!wave || wave.selectedOutputGenerationId === generationId) return;
+    await repository.saveWave({ ...wave, selectedOutputGenerationId: generationId, updatedAt: new Date().toISOString() });
   }
 
   async function markShipmentGenerated(generationId: string, fileName: string) {
@@ -80,7 +89,7 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
     if (!wave) return;
     const now = new Date().toISOString();
     const outputGenerations = (wave.outputGenerations || []).map(generation => generation.generationId === generationId ? { ...generation, shipmentFileName: fileName, status: "shipment_generated" as const, updatedAt: now } : generation);
-    await repository.saveWave({ ...wave, outputGenerations, updatedAt: now });
+    await repository.saveWave({ ...wave, outputGenerations, selectedOutputGenerationId: generationId, updatedAt: now });
     setGenerations(outputGenerations);
   }
 
@@ -91,7 +100,7 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
     const outputGenerations = (wave.outputGenerations || []).map(generation => generation.generationId === generationId
       ? { ...generation, outputSetFileName: fileName, outputSetGeneratedAt: now, updatedAt: now }
       : generation);
-    await repository.saveWave({ ...wave, outputGenerations, updatedAt: now });
+    await repository.saveWave({ ...wave, outputGenerations, selectedOutputGenerationId: generationId, updatedAt: now });
     setGenerations(outputGenerations);
   }
 
@@ -100,7 +109,10 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
     const target = wave?.outputGenerations?.find(generation => generation.generationId === generationId);
     if (!wave || !target || target.status === "shipment_generated") return;
     const outputGenerations = (wave.outputGenerations || []).filter(generation => generation.generationId !== generationId);
-    await repository.saveWave({ ...wave, outputGenerations, updatedAt: new Date().toISOString() });
+    const selectedOutputGenerationId = wave.selectedOutputGenerationId === generationId
+      ? outputGenerations.at(-1)?.generationId
+      : wave.selectedOutputGenerationId;
+    await repository.saveWave({ ...wave, outputGenerations, selectedOutputGenerationId, updatedAt: new Date().toISOString() });
     setGenerations(outputGenerations);
     if (activeGenerationId === generationId) setActiveGenerationId(outputGenerations.at(-1)?.generationId || null);
   }
@@ -122,7 +134,7 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
           {recentGenerations.map(generation => {
             const originalIndex = generations.findIndex(item => item.generationId === generation.generationId);
             return <span key={generation.generationId} style={{ display: "inline-flex", border: `1px solid ${generation.generationId === activeGeneration?.generationId ? wmsColors.slate : wmsColors.border}`, borderRadius: "999px", background: generation.generationId === activeGeneration?.generationId ? "rgba(83,109,120,0.12)" : "#fff", whiteSpace: "nowrap", overflow: "hidden" }}>
-              <button type="button" onClick={() => setActiveGenerationId(generation.generationId)} style={{ border: 0, background: "transparent", padding: "7px 9px", fontSize: "11px" }}>묶음 {originalIndex + 1} · 발주 {generation.purchaseOrderNumbers.length}건</button>
+              <button type="button" onClick={() => void selectGeneration(generation.generationId)} style={{ border: 0, background: "transparent", padding: "7px 9px", fontSize: "11px" }}>묶음 {originalIndex + 1} · 발주 {generation.purchaseOrderNumbers.length}건</button>
               {generation.status !== "shipment_generated" && <button type="button" aria-label={`묶음 ${originalIndex + 1} 삭제`} onClick={() => void removeUnusedGeneration(generation.generationId)} style={{ border: 0, borderLeft: `1px solid ${wmsColors.border}`, background: "transparent", padding: "0 8px", color: wmsColors.muted }}>×</button>}
             </span>;
           })}

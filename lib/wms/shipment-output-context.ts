@@ -4,6 +4,7 @@ import type { CenterAddressResolution } from "./center-address/types";
 import { resolveDestinationSupplements } from "./purchase-order-source/destination";
 import { buildPurchaseOrderIndex } from "./purchase-order-source/index";
 import type { PurchaseOrderIndex, PurchaseOrderSourceDocument, PurchaseOrderSourceRecord } from "./purchase-order-source/types";
+import { DEFAULT_MAX_INVOICE_QUANTITY, splitShipmentOutputDocuments } from "./shipment-output-split";
 
 export interface ShipmentOutputGroup {
   key: string;
@@ -34,6 +35,7 @@ export interface ShipmentOutputPreview {
   missingSkuRows: string[];
   missingBarcodeRows: string[];
   quantityErrorRows: string[];
+  oversizedPurchaseOrderNumbers: string[];
   sourceRecordCount: number;
   totalOrderedQuantity: number;
   blockingReasons: string[];
@@ -74,7 +76,7 @@ export async function buildShipmentOutputContext(
   const missingBarcodeRows = records.filter(item => !item.barcode.trim()).map(item => `${item.purchaseOrderNumber}:${item.sourceRow}`);
   const quantityErrorRows = records.filter(item => !Number.isFinite(item.orderedQuantity) || item.orderedQuantity <= 0).map(item => `${item.purchaseOrderNumber}:${item.sourceRow}`);
 
-  const groupsByKey = new Map<string, ShipmentOutputGroup>();
+  const destinationGroups = new Map<string, { document: PurchaseOrderSourceDocument; postalCode: string; postalCodeSource: string }[]>();
   const missingPostalCodeCenters = new Set<string>();
   const destinationResolutions = await resolveDestinationSupplements(documents.map(document => ({ fulfillmentCenterName: document.fulfillmentCenterName, address: document.address })));
   for (const document of documents) {
@@ -83,15 +85,31 @@ export async function buildShipmentOutputContext(
     const recipientName = `로켓배송*${document.fulfillmentCenterName}`;
     const postalCode = resolution?.postalCode || "";
     const key = [document.fulfillmentCenterName.replace(/\s+/g, ""), document.expectedArrivalDate, normalizedAddress(document.address), normalizedPhone(document.phone), postalCode, recipientName].join("\0");
-    let group = groupsByKey.get(key);
-    if (!group) {
-      group = { key, fulfillmentCenterName: document.fulfillmentCenterName, expectedArrivalDate: document.expectedArrivalDate, recipientName, phone: document.phone, postalCode, postalCodeSource: resolution?.source || "", address: document.address, purchaseOrderNumbers: [], records: [] };
-      groupsByKey.set(key, group);
-    }
-    group.purchaseOrderNumbers.push(document.purchaseOrderNumber);
-    group.records.push(...document.records);
+    destinationGroups.set(key, [...(destinationGroups.get(key) || []), { document, postalCode, postalCodeSource: resolution?.source || "" }]);
   }
-  const groups = [...groupsByKey.values()];
+  const oversizedPurchaseOrderNumbers: string[] = [];
+  const groups: ShipmentOutputGroup[] = [];
+  for (const [destinationKey, entries] of destinationGroups) {
+    const entryByPo = new Map(entries.map(entry => [entry.document.purchaseOrderNumber, entry]));
+    const batches = splitShipmentOutputDocuments(entries.map(entry => entry.document));
+    batches.forEach((batch, batchIndex) => {
+      const first = batch.documents[0];
+      const firstEntry = entryByPo.get(first.purchaseOrderNumber)!;
+      if (batch.manualReviewRequired) oversizedPurchaseOrderNumbers.push(first.purchaseOrderNumber);
+      groups.push({
+        key: `${destinationKey}\0${batchIndex + 1}`,
+        fulfillmentCenterName: first.fulfillmentCenterName,
+        expectedArrivalDate: first.expectedArrivalDate,
+        recipientName: `로켓배송*${first.fulfillmentCenterName}`,
+        phone: first.phone,
+        postalCode: firstEntry.postalCode,
+        postalCodeSource: firstEntry.postalCodeSource,
+        address: first.address,
+        purchaseOrderNumbers: batch.documents.map(document => document.purchaseOrderNumber),
+        records: batch.documents.flatMap(document => document.records),
+      });
+    });
+  }
   const blockingReasons: string[] = [];
   if (missing.length) blockingReasons.push(`원본 미매칭 발주번호 ${missing.length}개`);
   if (conflicts.length) blockingReasons.push(`원본 충돌 발주번호 ${conflicts.length}개`);
@@ -101,6 +119,7 @@ export async function buildShipmentOutputContext(
   if (missingSkuRows.length) blockingReasons.push(`SKU 누락 ${missingSkuRows.length}행`);
   if (missingBarcodeRows.length) blockingReasons.push(`바코드 누락 ${missingBarcodeRows.length}행`);
   if (quantityErrorRows.length) blockingReasons.push(`수량 오류 ${quantityErrorRows.length}행`);
+  if (oversizedPurchaseOrderNumbers.length) blockingReasons.push(`단일 발주 ${DEFAULT_MAX_INVOICE_QUANTITY}개 초과 · 수동 분할 확인 ${oversizedPurchaseOrderNumbers.length}건`);
   if (matchedSet.size !== purchaseOrderNumbers.length) blockingReasons.push("요청 PO 집합과 원본 매칭 PO 집합이 일치하지 않습니다.");
 
   const preview: ShipmentOutputPreview = {
@@ -119,6 +138,7 @@ export async function buildShipmentOutputContext(
     missingSkuRows,
     missingBarcodeRows,
     quantityErrorRows,
+    oversizedPurchaseOrderNumbers,
     sourceRecordCount: records.length,
     totalOrderedQuantity: records.reduce((sum, item) => sum + (Number.isFinite(item.orderedQuantity) ? item.orderedQuantity : 0), 0),
     blockingReasons,

@@ -122,6 +122,8 @@ export interface PickingWave {
   orderConfirmedAt?: string;
   /** 송장 생성 당시의 선택 발주 집합. 기존 웨이브에는 없을 수 있으며 출력 재생성에만 사용한다. */
   outputGenerations?: ShipmentOutputGeneration[];
+  /** PC·모바일에서 같은 송장/Shipment 묶음을 계속 처리하기 위한 공용 선택값. */
+  selectedOutputGenerationId?: string;
 }
 
 export interface ShipmentOutputGeneration {

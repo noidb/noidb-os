@@ -3,6 +3,8 @@ import { buildShipmentCandidates, previewShipmentSplit } from "../lib/wms/shipme
 import { createShipmentsInState, deleteShipmentFromState, renameShipmentInState } from "../lib/wms/shipment/state";
 import type { ShipmentPurchaseOrder } from "../lib/wms/shipment/types";
 import type { BasketAssignment, PickingWave, PickingWaveItem } from "../lib/wms/picking-wave/types";
+import { splitShipmentOutputDocuments } from "../lib/wms/shipment-output-split";
+import type { PurchaseOrderSourceDocument } from "../lib/wms/purchase-order-source/types";
 
 function orders(quantities: number[]): ShipmentPurchaseOrder[] {
   return quantities.map((totalQuantity, index) => ({
@@ -27,6 +29,25 @@ assert.deepEqual(quantities([120, 90, 80]), [120, 170]);
 const oversized = previewShipmentSplit(orders([201]), 200);
 assert.deepEqual(oversized.map(item => item.totalQuantity), [201]);
 assert.equal(oversized[0].manualReviewRequired, true, "단일 발주가 최대수량을 넘으면 쪼개지 않고 수동 확인 대상으로 남겨야 합니다.");
+
+function sourceDocuments(values: number[]): PurchaseOrderSourceDocument[] {
+  return values.map((orderedQuantity, index) => {
+    const purchaseOrderNumber = String(200000000 + index);
+    return {
+      purchaseOrderNumber, sourceContainerFile: "fixture.zip", sourceEntryFile: `${purchaseOrderNumber}.xlsx`, sourceSheet: "상품목록", sourceRow: 2,
+      fulfillmentCenterName: "동탄1", expectedArrivalDate: "2026-09-10", recipientName: "담당자", phone: "01000000000", postalCode: "12345", address: "주소",
+      records: [{ purchaseOrderNumber, sourceContainerFile: "fixture.zip", sourceEntryFile: `${purchaseOrderNumber}.xlsx`, sourceSheet: "상품목록", sourceRow: 2,
+        fulfillmentCenterName: "동탄1", expectedArrivalDate: "2026-09-10", recipientName: "담당자", phone: "01000000000", postalCode: "12345", address: "주소",
+        skuId: `SKU-${index}`, barcode: `R-${index}`, productName: "상품", optionName: "옵션", orderedQuantity }],
+    };
+  });
+}
+const outputBatches = splitShipmentOutputDocuments(sourceDocuments([50, 50, 50, 50, 50]));
+assert.deepEqual(outputBatches.map(batch => batch.totalQuantity), [200, 50], "실제 송장 출력 경로도 200개 기준으로 분할해야 합니다.");
+assert.deepEqual(outputBatches.flatMap(batch => batch.documents.map(document => document.purchaseOrderNumber)), sourceDocuments([50, 50, 50, 50, 50]).map(document => document.purchaseOrderNumber), "발주서가 누락되거나 둘로 쪼개지면 안 됩니다.");
+const oversizedOutput = splitShipmentOutputDocuments(sourceDocuments([201]));
+assert.equal(oversizedOutput[0].documents.length, 1);
+assert.equal(oversizedOutput[0].manualReviewRequired, true);
 
 const previews = previewShipmentSplit(orders([100, 100, 1]), 200);
 const first = createShipmentsInState([], previews, "2026-09-02T01:00:00.000Z");
