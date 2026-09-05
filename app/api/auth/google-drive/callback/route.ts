@@ -8,7 +8,10 @@ import { consumeOAuthState, exchangeCodeForRefreshToken } from "@/lib/wms/google
  */
 export const runtime = "nodejs";
 
-function resultPage(title: string, message: string, ok: boolean): NextResponse {
+function resultPage(title: string, message: string, ok: boolean, retryHref?: string): NextResponse {
+  const retryLink = retryHref
+    ? `<a href="${retryHref}" class="action">Google Drive 다시 연결</a>`
+    : "";
   const html = `<!doctype html>
 <html lang="ko"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${title}</title>
@@ -17,9 +20,10 @@ function resultPage(title: string, message: string, ok: boolean): NextResponse {
   .card { background: #fff; border-radius: 16px; padding: 28px; max-width: 360px; text-align: center; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
   h1 { font-size: 17px; margin: 0 0 10px; color: ${ok ? "#2f6d4f" : "#b23b3b"}; }
   p { font-size: 13px; line-height: 1.6; color: #555; margin: 0; }
+  .action { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; margin-top: 18px; border-radius: 10px; background: #343a3d; color: #fff; padding: 0 16px; text-decoration: none; font-size: 13px; font-weight: 800; }
 </style></head>
-<body><div class="card"><h1>${ok ? "✅" : "❌"} ${title}</h1><p>${message}</p></div></body></html>`;
-  return new NextResponse(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+<body><div class="card"><h1>${ok ? "✅" : "❌"} ${title}</h1><p>${message}</p>${retryLink}</div></body></html>`;
+  return new NextResponse(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store, max-age=0" } });
 }
 
 export async function GET(request: NextRequest) {
@@ -32,7 +36,12 @@ export async function GET(request: NextRequest) {
   }
 
   if (!consumeOAuthState(state)) {
-    return resultPage("Google Drive 연결 실패", "인증 요청이 만료되었거나 올바르지 않습니다(state 검증 실패). 화면으로 돌아가 연결 버튼을 다시 눌러주세요.", false);
+    return resultPage(
+      "Google Drive 연결 시간이 지났습니다",
+      "기존 연결 요청이 만료되었습니다. 아래 버튼을 누르면 새 요청으로 바로 다시 시작합니다.",
+      false,
+      "/api/auth/google-drive/start?returnTo=/wms/settings/folder-connections"
+    );
   }
 
   if (!code) {

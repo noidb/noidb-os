@@ -42,5 +42,8 @@ export async function GET(request: NextRequest) {
 
   const state = createOAuthState();
   const authUrl = buildAuthUrl(state);
-  return NextResponse.redirect(authUrl);
+  const response = NextResponse.redirect(authUrl);
+  // 브라우저/CDN이 예전 state가 들어간 OAuth 리디렉션을 재사용하지 않게 한다.
+  response.headers.set("Cache-Control", "no-store, max-age=0");
+  return response;
 }

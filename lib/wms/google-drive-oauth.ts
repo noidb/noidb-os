@@ -68,10 +68,12 @@ function requireOAuthEnv(): OAuthEnv {
 // 인스턴스가 여러 개면 같은 문제가 재발할 수 있는 구조였음). 그래서 서버 메모리에 아무것도
 // 저장하지 않고, state 문자열 자체에 타임스탬프+난수를 넣고 클라이언트 시크릿으로 서명해
 // 검증 시점에 서명만 다시 계산해 비교하는 방식으로 바꿨다 — 어느 라우트/인스턴스에서
-// 검증하든 항상 같은 결과가 나온다. 대신 완전한 1회용(single-use) 보장은 아니고 TTL(10분)
+// 검증하든 항상 같은 결과가 나온다. 대신 완전한 1회용(single-use) 보장은 아니고 TTL(2시간)
 // 안에서는 같은 state를 재사용해도 검증을 통과한다 — 이 앱은 개인 로컬 WMS 도구라 위조하려면
 // 여전히 서버만 아는 client secret이 있어야 하므로 실질적 위험은 낮다고 판단했다.
-const STATE_TTL_MS = 10 * 60 * 1000;
+// Google의 미확인 앱 경고를 읽거나 다른 업무 탭을 확인한 뒤 돌아오는 실제 사용 흐름에서
+// 10분은 너무 짧았다. 서명 검증은 그대로 유지하면서 완료 가능한 시간만 넉넉히 잡는다.
+const STATE_TTL_MS = 2 * 60 * 60 * 1000;
 
 function stateSigningKey(): string {
   return requireOAuthEnv().clientSecret;
@@ -104,7 +106,10 @@ export function consumeOAuthState(state: string | null): boolean {
   }
   const issuedAt = Number(timestamp);
   if (!Number.isFinite(issuedAt)) return false;
-  return Date.now() - issuedAt <= STATE_TTL_MS;
+  const age = Date.now() - issuedAt;
+  // 서버 시계가 잠깐 어긋난 경우는 1분까지만 허용하고, 오래되었거나 미래에서 발급된
+  // state는 거부한다.
+  return age >= -60 * 1000 && age <= STATE_TTL_MS;
 }
 
 export function buildAuthUrl(state: string): string {
