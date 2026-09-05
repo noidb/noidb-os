@@ -40,6 +40,40 @@ export async function resolveDriveFolderPath(parts: string[]): Promise<string> {
   return parentId;
 }
 
+/**
+ * 여러 사용자용 폴더 상태를 한 번에 확인한다. 공통 상위 경로는 같은 Promise를 재사용해
+ * `쿠팡데이터`를 카드 수만큼 반복 조회하지 않는다. 폴더 ID는 호출자에게 반환하지 않는다.
+ */
+export async function probeOAuthDriveFolderPaths(paths: Record<string, string[]>): Promise<Record<string, boolean>> {
+  const prefixCache = new Map<string, Promise<string>>();
+
+  function resolveWithSharedPrefixes(parts: string[]): Promise<string> {
+    let parentPromise = Promise.resolve("root");
+    const prefix: string[] = [];
+    for (const part of parts) {
+      prefix.push(part);
+      const key = JSON.stringify(prefix);
+      let next = prefixCache.get(key);
+      if (!next) {
+        next = parentPromise.then(parentId => findFolder(parentId, part));
+        prefixCache.set(key, next);
+      }
+      parentPromise = next;
+    }
+    return parentPromise;
+  }
+
+  const entries = await Promise.all(Object.entries(paths).map(async ([key, parts]) => {
+    try {
+      await resolveWithSharedPrefixes(parts);
+      return [key, true] as const;
+    } catch {
+      return [key, false] as const;
+    }
+  }));
+  return Object.fromEntries(entries);
+}
+
 export async function listOAuthDriveFolderFiles(folderId: string): Promise<OAuthDriveFileInfo[]> {
   const q = `'${escapeQuery(folderId)}' in parents and trashed=false`;
   const files: OAuthDriveFileInfo[] = [];

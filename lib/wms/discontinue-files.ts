@@ -7,6 +7,7 @@ import {
   listDriveFilesFromEnv,
   searchDriveFilesByName,
 } from "./google-drive-reader";
+import { downloadOAuthDriveFile, listOAuthDriveFolderFiles, resolveDriveFolderPath } from "./google-drive-oauth-reader";
 
 export const DISCONTINUE_TEMPLATE_NAME = "[양식]판매중지_SKU_영구생산중단.xlsx";
 export const RELEASE_TEMPLATE_NAME = "이메일발송용_노이드비_단종해제 SKU리스트.xlsx";
@@ -70,6 +71,16 @@ function rowXml(xml: string, rowNumber: number): string {
 }
 
 async function templateBuffer(fileName: string): Promise<Buffer> {
+  try {
+    const folderId = await resolveDriveFolderPath(["쿠팡데이터", "단종 및 해제"]);
+    const matches = (await listOAuthDriveFolderFiles(folderId)).filter(file => file.name === fileName);
+    if (matches.length === 1) return downloadOAuthDriveFile(matches[0].id);
+    if (matches.length > 1) throw new Error("단종 및 해제 폴더에 같은 이름의 양식이 여러 개 있습니다. 폴더 연결을 확인해 주세요.");
+  } catch (error) {
+    // 사용자 Drive가 아직 연결되지 않은 환경에서는 기존 서비스 계정/검증된 번들 양식으로
+    // 이어간다. 중복 양식처럼 안전상 막아야 하는 오류는 그대로 전달한다.
+    if (error instanceof Error && error.message.includes("같은 이름의 양식이 여러 개")) throw error;
+  }
   if (isDriveReaderConfigured()) {
     let matches = [];
     try {
