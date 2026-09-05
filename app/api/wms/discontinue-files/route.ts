@@ -7,6 +7,7 @@ import {
   loadReleaseTemplate,
   type DiscontinueFileItem,
 } from "@/lib/wms/discontinue-files";
+import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,9 +27,16 @@ export async function POST(request: NextRequest) {
     const fileName = kind === "discontinue"
       ? `판매중지_SKU_영구생산중단_${date.compact}.xlsx`
       : `이메일발송용_노이드비_단종해제 SKU리스트_${date.compact}.xlsx`;
+    const driveHeaders = await generatedDriveSaveHeaders(
+      result.buffer,
+      fileName,
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ["쿠팡데이터", "단종 및 해제"],
+    );
     return new NextResponse(result.buffer, {
       status: 200,
       headers: {
+        ...driveHeaders,
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
         "X-NOIDB-File-Name": encodeURIComponent(fileName),

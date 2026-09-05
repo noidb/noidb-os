@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseTrackingRowsFromBuffer, buildShipmentCreationUploadFile } from "@/lib/wms/hanjin-upload";
 import { buildShipmentOutputContext, ShipmentOutputValidationError } from "@/lib/wms/shipment-output-context";
+import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
 
 /**
  * 3단계 전용 API — Supplier Hub 쉽먼트 생성 업로드파일을 만든다 (2026-08-19 6차 실사용 테스트
  * 신규). 1단계(한진택배 송장출력용 업로드파일, /api/wms/hanjin-upload/generate)와는 완전히
  * 다른 파일이다: 2단계에서 업로드한 "송장번호 입력 완료" 원본의 실제 행 데이터를 그대로 읽어,
  * 현재 웨이브의 (발주번호,물류센터)와 일치하고 송장번호가 실제로 채워진 행만 새 파일로 만든다.
- * 매칭 실패(송장번호 없음) 행은 절대 포함하지 않는다. 이 API는 아무것도 외부에 업로드하지 않고
- * 파일만 만들어 반환한다.
+ * 매칭 실패(송장번호 없음) 행은 절대 포함하지 않는다. 파일은 지정 Drive 폴더에도 저장하지만
+ * Supplier Hub에는 자동 제출하지 않는다.
  */
 export const runtime = "nodejs";
 
@@ -49,9 +50,16 @@ export async function POST(request: NextRequest) {
 
     const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
     const fileName = `쉽먼트생성_업로드파일_${waveId}_${timestamp}.xlsx`;
+    const driveHeaders = await generatedDriveSaveHeaders(
+      result.buffer,
+      fileName,
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ["쿠팡데이터", "쉽먼트업로드완성"],
+    );
 
     return new NextResponse(result.buffer, {
       headers: {
+        ...driveHeaders,
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
         "X-Included-Count": String(result.includedCount),

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { AutoShipmentBlockedError, buildAutoShipmentFile } from "@/lib/wms/hanjin-shipment-auto";
 import { buildShipmentOutputContext, ShipmentOutputValidationError } from "@/lib/wms/shipment-output-context";
+import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
 
 /**
  * "쉽먼트파일 생성" 버튼 하나로 끝내는 자동화 API(2026-08-24 9차). 사용자가 파일을 직접 고르지
@@ -35,9 +36,16 @@ export async function POST(request: NextRequest) {
 
     const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
     const fileName = `쉽먼트생성_업로드파일_${timestamp}.xlsx`;
+    const driveHeaders = await generatedDriveSaveHeaders(
+      result.buffer,
+      fileName,
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ["쿠팡데이터", "쉽먼트업로드완성"],
+    );
 
     return new NextResponse(result.buffer, {
       headers: {
+        ...driveHeaders,
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
         "X-Included-Count": String(result.includedCount),

@@ -155,9 +155,12 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
       const disposition = response.headers.get("Content-Disposition") || "";
       const fileNameMatch = disposition.match(/filename\*=UTF-8''(.+)$/);
       const fileName = fileNameMatch ? decodeURIComponent(fileNameMatch[1]) : "한진택배_업로드.xlsx";
+      const driveSaved = response.headers.get("X-NOIDB-Drive-Saved") === "true";
+      const driveWarning = decodeURIComponent(response.headers.get("X-NOIDB-Drive-Save-Warning") || "");
       downloadBlobPreservingPage(await response.blob(), fileName, downloadTarget);
       await onGenerated?.({ purchaseOrderNumbers: selectedPoNumbers, preview, fileName });
-      setResultMessage(exact ? `동일한 발주 ${selectedPoNumbers.length}건 기준으로 다시 생성했습니다.` : `새 출력 묶음: 발주 ${selectedPoNumbers.length}건 · 송장 ${preview.shippingGroupCount}행`);
+      const baseMessage = exact ? `동일한 발주 ${selectedPoNumbers.length}건 기준으로 다시 생성했습니다.` : `새 출력 묶음: 발주 ${selectedPoNumbers.length}건 · 송장 ${preview.shippingGroupCount}행`;
+      setResultMessage(`${baseMessage}${driveSaved ? " · Drive 자동저장 완료" : driveWarning ? ` · ${driveWarning}` : ""}`);
     } catch (cause) { closeReservedDownloadTarget(downloadTarget); setError(cause instanceof Error ? cause.message : "한진택배 업로드파일 생성 중 오류가 발생했습니다."); }
     finally { setGenerating(false); }
   }

@@ -54,6 +54,8 @@ export default function HanjinShipmentUploadSection({ waveId, baskets, trackingF
       const disposition = response.headers.get("Content-Disposition") || "";
       const fileNameMatch = disposition.match(/filename\*=UTF-8''(.+)$/);
       const fileName = fileNameMatch ? decodeURIComponent(fileNameMatch[1]) : `쉽먼트생성_업로드파일_${waveId}.xlsx`;
+      const driveSaved = response.headers.get("X-NOIDB-Drive-Saved") === "true";
+      const driveWarning = decodeURIComponent(response.headers.get("X-NOIDB-Drive-Save-Warning") || "");
 
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
@@ -67,7 +69,8 @@ export default function HanjinShipmentUploadSection({ waveId, baskets, trackingF
 
       setResultMessage(
         `송장번호가 확인된 ${includedCount}개 행으로 생성했습니다` +
-          (Number(excludedCount) > 0 ? ` (업로드파일에서 뺀 행 ${excludedCount}개 — ${excludedRowsRaw})` : "")
+          (Number(excludedCount) > 0 ? ` (업로드파일에서 뺀 행 ${excludedCount}개 — ${excludedRowsRaw})` : "") +
+          (driveSaved ? " · Drive 자동저장 완료" : driveWarning ? ` · ${driveWarning}` : "")
       );
       await onGenerated?.(fileName);
     } catch (err) {

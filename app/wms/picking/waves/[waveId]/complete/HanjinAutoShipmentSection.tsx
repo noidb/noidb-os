@@ -93,8 +93,10 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
       const disposition = response.headers.get("Content-Disposition") || "";
       const fileNameMatch = disposition.match(/filename\*=UTF-8''(.+)$/);
       const fileName = fileNameMatch ? decodeURIComponent(fileNameMatch[1]) : "쉽먼트생성_업로드파일.xlsx";
+      const driveSaved = response.headers.get("X-NOIDB-Drive-Saved") === "true";
+      const driveWarning = decodeURIComponent(response.headers.get("X-NOIDB-Drive-Save-Warning") || "");
       downloadBlobPreservingPage(await response.blob(), fileName, downloadTarget);
-      setResultMessage(`${generationLabel || "현재 묶음"}의 발주 ${generation.purchaseOrderNumbers.length}건만 Shipment로 생성했습니다.`);
+      setResultMessage(`${generationLabel || "현재 묶음"}의 발주 ${generation.purchaseOrderNumbers.length}건만 Shipment로 생성했습니다.${driveSaved ? " · Drive 자동저장 완료" : driveWarning ? ` · ${driveWarning}` : ""}`);
       await onGenerated?.(generation.generationId, fileName);
     } catch (cause) {
       closeReservedDownloadTarget(downloadTarget);
