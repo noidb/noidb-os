@@ -1,7 +1,6 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import AppNavigation from "@/app/AppNavigation";
 import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
 import { wmsColors, wmsOuterCard, wmsPrimaryButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
 
@@ -111,7 +110,6 @@ export default function WmsReprintCenterPage() {
   }
 
   return <main className="shell wms-work-center-shell" style={{ fontFamily: "sans-serif", color: wmsColors.ink, paddingBottom: "40px" }}>
-    <AppNavigation active="work-center" />
     <div style={{ margin: "18px 0 14px" }}>
       <p className="eyebrow">WAREHOUSE REPRINT</p>
       <h1 style={{ margin: "4px 0 6px", fontSize: "28px" }}>재출력센터</h1>
