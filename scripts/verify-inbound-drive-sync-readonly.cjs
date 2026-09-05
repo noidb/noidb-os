@@ -4,6 +4,7 @@ const vm = require("node:vm");
 const ts = require("typescript");
 
 class DriveOAuthNotConnectedError extends Error {}
+class DriveOAuthNotConfiguredError extends Error {}
 class DriveOAuthTokenInvalidError extends Error {}
 
 const calls = { blobRead: 0, folderResolve: 0, fileList: 0, fileDownload: 0, inboundPreview: 0 };
@@ -20,7 +21,7 @@ const dependencies = {
     },
     downloadOAuthDriveFile: async () => { calls.fileDownload += 1; return Buffer.from("fixture"); },
   },
-  "@/lib/wms/google-drive-oauth": { DriveOAuthNotConnectedError, DriveOAuthTokenInvalidError },
+  "@/lib/wms/google-drive-oauth": { DriveOAuthNotConfiguredError, DriveOAuthNotConnectedError, DriveOAuthTokenInvalidError },
 };
 
 const moduleFixture = { exports: {} };

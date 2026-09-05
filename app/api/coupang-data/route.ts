@@ -3,6 +3,7 @@ import ExcelJS from "exceljs";
 import JSZip from "jszip";
 import { NextRequest, NextResponse } from "next/server";
 import { fetchSheetRows } from "@/lib/wms/google-sheets";
+import { buildInboundCellPreview } from "@/lib/wms/inbound-cell-preview";
 import {
   analyzeInboundImportSafety,
   parseInboundSourceRows,
@@ -293,7 +294,14 @@ export async function POST(req: NextRequest) {
         overlapDuplicateEvents: safety.overlapDuplicateEventCount,
         previewToken: safety.previewToken,
       };
-      if (dryRun) return NextResponse.json({ ...responseSummary, sample: acceptedItems.slice(0, 2) });
+      if (dryRun) {
+        const [productRows, purchaseRows] = await Promise.all([
+          fetchSheetRows("제품DB", { valueRenderOption: "FORMULA" }),
+          fetchSheetRows("_발주이력"),
+        ]);
+        const cellPreview = buildInboundCellPreview(productRows, purchaseRows, historyRows, acceptedItems);
+        return NextResponse.json({ ...responseSummary, cellPreview, sample: acceptedItems.slice(0, 2) });
+      }
       if (!acceptedItems.length) {
         return NextResponse.json({ ...responseSummary, skipped: true, importedDatasets: 0 });
       }

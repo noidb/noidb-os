@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { downloadBlobPreservingPage } from "@/lib/wms/download-client";
 import type { InboundDateResult } from "@/lib/wms/inbound-results";
+import type { InboundCellPreview } from "@/lib/wms/inbound-cell-preview";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsGhostButton, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 
 interface DriveSyncPreview {
@@ -20,6 +21,7 @@ interface DriveSyncPreview {
     candidateEvents?: number;
     duplicateEvents?: number;
     overlapDuplicateEvents?: number;
+    cellPreview?: InboundCellPreview;
   };
 }
 
@@ -57,7 +59,7 @@ export default function WmsInboundPage() {
   const missingProductLinkCount = selected?.missingItems.filter(item => !item.productLink.trim()).length || 0;
 
   async function syncDrive() {
-    setBusy(true); setMessage("");
+    setBusy(true); setMessage(""); setSyncPreview(null);
     try {
       const response = await fetch("/api/wms/inbound-drive-sync", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -136,6 +138,16 @@ export default function WmsInboundPage() {
           </div> : null}
         </div> : null}
         {syncPreview?.modifiedFiles.length ? <div style={{ marginTop: "8px", fontSize: "11px", color: wmsColors.warn }}>수정 파일 {syncPreview.modifiedFiles.length}개는 중복 합산 방지를 위해 자동 반영하지 않습니다.</div> : null}
+        {syncPreview?.result?.cellPreview ? <details style={{ marginTop: "12px", fontSize: "12px", overflowWrap: "anywhere" }}>
+          <summary style={{ cursor: "pointer", minHeight: "36px" }}>제품DB 변경 미리보기 · {syncPreview.result.cellPreview.changes.length}셀</summary>
+          <p>아직 저장되지 않았습니다. 현재고·원가·이미지는 변경 대상에 포함되지 않습니다.</p>
+          {syncPreview.result.cellPreview.blockers.map(reason => <p key={reason} role="alert" style={{ color: wmsColors.warnText }}>{reason}</p>)}
+          {!syncPreview.result.cellPreview.blockers.length && !syncPreview.result.cellPreview.changes.length ? <p>변경할 셀이 없습니다.</p> : null}
+          {syncPreview.result.cellPreview.changes.map(change => <div key={`${change.row}-${change.column}`} style={{ padding: "8px 0", borderBottom: `1px solid ${wmsColors.border}` }}>
+            <strong>SKU {change.sku} · {change.field}</strong>
+            <div>제품DB {change.row}행 · {change.before === "" ? "빈칸" : change.before} → {change.after.toLocaleString()}</div>
+          </div>)}
+        </details> : null}
       </section>
       {loading ? <p>입고결과 계산 중...</p> : results.length === 0 ? (
         <section style={{ padding: "14px", border: `1px solid ${wmsColors.border}`, borderRadius: "14px", background: "#fff" }}>

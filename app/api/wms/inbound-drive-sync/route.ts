@@ -1,7 +1,7 @@
 import { get } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 import { downloadOAuthDriveFile, listOAuthDriveFolderFiles, resolveDriveFolderPath, type OAuthDriveFileInfo } from "@/lib/wms/google-drive-oauth-reader";
-import { DriveOAuthNotConnectedError, DriveOAuthTokenInvalidError } from "@/lib/wms/google-drive-oauth";
+import { DriveOAuthNotConfiguredError, DriveOAuthNotConnectedError, DriveOAuthTokenInvalidError } from "@/lib/wms/google-drive-oauth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -74,6 +74,9 @@ export async function POST(request: NextRequest) {
       message: INBOUND_APPLY_LOCK_MESSAGE,
     });
   } catch (error) {
+    if (error instanceof DriveOAuthNotConfiguredError) {
+      return NextResponse.json({ success: false, error: "입고파일 폴더 연결을 확인해 주세요." }, { status: 503 });
+    }
     if (error instanceof DriveOAuthNotConnectedError || error instanceof DriveOAuthTokenInvalidError) {
       return NextResponse.json(
         { success: false, code: "DRIVE_RECONNECT_REQUIRED", error: "Google Drive를 다시 연결해 주세요." },
