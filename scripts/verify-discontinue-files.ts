@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import JSZip from "jszip";
 import {
@@ -12,6 +13,11 @@ import {
 } from "../lib/wms/discontinue-files";
 
 const ROOT = "G:\\내 드라이브\\쿠팡데이터\\단종 및 해제";
+const BUNDLED = path.join(process.cwd(), "lib", "wms", "data", "discontinue-templates");
+
+function sha256(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
 
 function requireIncludes(value: string, expected: string, label: string) {
   if (!value.includes(expected)) throw new Error(`${label} 검증 실패: '${expected}' 없음`);
@@ -31,6 +37,10 @@ async function sheetXml(buffer: Buffer, file: string): Promise<string> {
 async function run() {
   const discontinueSource = await readFile(path.join(ROOT, DISCONTINUE_TEMPLATE_NAME));
   const releaseSource = await readFile(path.join(ROOT, RELEASE_TEMPLATE_NAME));
+  const bundledDiscontinue = await readFile(path.join(BUNDLED, DISCONTINUE_TEMPLATE_NAME));
+  const bundledRelease = await readFile(path.join(BUNDLED, RELEASE_TEMPLATE_NAME));
+  if (sha256(discontinueSource) !== sha256(bundledDiscontinue)) throw new Error("앱 내 단종 양식 복사본이 G: 원본과 다름");
+  if (sha256(releaseSource) !== sha256(bundledRelease)) throw new Error("앱 내 단종해제 양식 복사본이 G: 원본과 다름");
   const selected = [
     { skuId: "70000001", productName: "검증상품 하나, 실버, 17호" },
     { skuId: "70000002", productName: "검증상품 둘, 골드, 2P" },
@@ -63,6 +73,7 @@ async function run() {
     releaseSkuCount: release.itemCount,
     releaseRows: rowCount(releaseSheet),
     releaseOldDataRowsRemaining: 0,
+    bundledTemplatesMatchDriveOriginals: true,
   }, null, 2));
 }
 

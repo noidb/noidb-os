@@ -15,6 +15,7 @@ export const DISCONTINUE_COMMENT = "영구적 생산 중단에 의한 발주 중
 export const RELEASE_REASON = "공급사 공급 재개로 인한 상품 재공급";
 
 const LOCAL_TEMPLATE_FOLDER = "G:\\내 드라이브\\쿠팡데이터\\단종 및 해제";
+const BUNDLED_TEMPLATE_FOLDER = path.join(process.cwd(), "lib", "wms", "data", "discontinue-templates");
 const DRIVE_FOLDER_ENV = "GOOGLE_DRIVE_DISCONTINUE_FOLDER_ID";
 
 export interface DiscontinueFileItem {
@@ -78,12 +79,16 @@ async function templateBuffer(fileName: string): Promise<Buffer> {
     }
     if (matches.length === 1) return downloadDriveFile(matches[0].id);
     if (matches.length > 1) throw new Error("단종 및 해제 폴더에 같은 이름의 양식이 여러 개 있습니다. 폴더 연결을 확인해 주세요.");
-    if (process.env.VERCEL || process.env.NODE_ENV === "production") {
-      throw new Error(`단종 및 해제 폴더에서 '${fileName}' 양식을 찾지 못했습니다.`);
+  }
+  if (!process.env.VERCEL && process.env.NODE_ENV !== "production") {
+    try {
+      return await readFile(path.join(LOCAL_TEMPLATE_FOLDER, fileName));
+    } catch {
+      // 개발 PC에 G: 동기화 폴더가 없으면 검증된 앱 내 읽기 전용 복사본을 사용한다.
     }
   }
   try {
-    return await readFile(path.join(LOCAL_TEMPLATE_FOLDER, fileName));
+    return await readFile(path.join(BUNDLED_TEMPLATE_FOLDER, fileName));
   } catch {
     throw new Error(`단종 및 해제 폴더에서 '${fileName}' 양식을 찾지 못했습니다.`);
   }

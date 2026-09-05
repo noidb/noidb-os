@@ -3,7 +3,10 @@ const nextConfig = {
   reactStrictMode: true,
   experimental: {
     outputFileTracingIncludes: {
-      "/api/wms/**": ["./lib/wms/data/hanjin-template-static/*.xlsx"],
+      "/api/wms/**": [
+        "./lib/wms/data/hanjin-template-static/*.xlsx",
+        "./lib/wms/data/discontinue-templates/*.xlsx",
+      ],
     },
   },
 };
