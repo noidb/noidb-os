@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import {
   filterCurrentPurchaseOrders,
   loadSupplierHubPurchaseOrders,
@@ -14,10 +14,13 @@ export const runtime = "nodejs";
 // 폴더 안 파일 목록이 매 요청마다 바뀔 수 있으므로 정적 최적화를 막는다.
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const allOrders = await loadSupplierHubPurchaseOrders();
-    const orders = filterCurrentPurchaseOrders(allOrders);
+    // 신규 작업 선택 화면은 오늘 이후 발주만 보여주되, 이미 만들어진 출고작업을 다시
+    // 열 때는 입고예정일이 지난 원본도 반드시 조회할 수 있어야 한다.
+    const includePast = request.nextUrl.searchParams.get("includePast") === "1";
+    const orders = includePast ? allOrders : filterCurrentPurchaseOrders(allOrders);
     return NextResponse.json({ orders, upcomingInboundSummary: summarizeUpcomingInboundByDate(allOrders) });
   } catch (error) {
     return NextResponse.json(

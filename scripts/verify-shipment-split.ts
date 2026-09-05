@@ -4,34 +4,36 @@ import { createShipmentsInState, deleteShipmentFromState, renameShipmentInState 
 import type { ShipmentPurchaseOrder } from "../lib/wms/shipment/types";
 import type { BasketAssignment, PickingWave, PickingWaveItem } from "../lib/wms/picking-wave/types";
 
-function orders(count: number): ShipmentPurchaseOrder[] {
-  return Array.from({ length: count }, (_, index) => ({
+function orders(quantities: number[]): ShipmentPurchaseOrder[] {
+  return quantities.map((totalQuantity, index) => ({
     purchaseOrderNumber: String(100000000 + index),
     sourceWaveId: "WAVE-COMPLETED",
     basketNumber: String(index + 1),
     fulfillmentCenter: "인천36",
     expectedDate: "2026-09-10",
     skuCount: 2,
-    totalQuantity: 3,
+    totalQuantity,
     pickingCompletedAt: "2026-09-02T00:00:00.000Z",
   }));
 }
 
-function counts(total: number): number[] {
-  return previewShipmentSplit(orders(total), 200).map(preview => preview.purchaseOrderCount);
+function quantities(values: number[]): number[] {
+  return previewShipmentSplit(orders(values), 200).map(preview => preview.totalQuantity);
 }
 
-assert.deepEqual(counts(50), [50]);
-assert.deepEqual(counts(200), [200]);
-assert.deepEqual(counts(201), [200, 1]);
-assert.deepEqual(counts(450), [200, 200, 50]);
+assert.deepEqual(quantities([50, 50, 50, 50]), [200]);
+assert.deepEqual(quantities([50, 50, 50, 50, 50]), [200, 50]);
+assert.deepEqual(quantities([120, 90, 80]), [120, 170]);
+const oversized = previewShipmentSplit(orders([201]), 200);
+assert.deepEqual(oversized.map(item => item.totalQuantity), [201]);
+assert.equal(oversized[0].manualReviewRequired, true, "단일 발주가 최대수량을 넘으면 쪼개지 않고 수동 확인 대상으로 남겨야 합니다.");
 
-const previews = previewShipmentSplit(orders(201), 200);
+const previews = previewShipmentSplit(orders([100, 100, 1]), 200);
 const first = createShipmentsInState([], previews, "2026-09-02T01:00:00.000Z");
 assert.equal(first.created.length, 2);
 assert.equal(first.created[0].id, "SHP-20260902-001");
 assert.equal(first.created[1].id, "SHP-20260902-002");
-assert.equal(new Set(first.created.flatMap(shipment => shipment.purchaseOrders.map(order => order.purchaseOrderNumber))).size, 201);
+assert.equal(new Set(first.created.flatMap(shipment => shipment.purchaseOrders.map(order => order.purchaseOrderNumber))).size, 3);
 assert.throws(() => createShipmentsInState(first.all, [previews[0]], "2026-09-02T02:00:00.000Z"), /이미/);
 
 const renamed = renameShipmentInState(first.all, first.created[0].id, "수정 가능한 이름", "2026-09-02T02:00:00.000Z");
@@ -56,4 +58,4 @@ assert.deepEqual(candidates.map(candidate => candidate.purchaseOrderNumber), ["1
 assert.equal(candidates[0].totalQuantity, 3);
 assert.equal(JSON.stringify({ completedWave, inProgressWave, item, basket }), pickingSnapshot, "Shipment 후보 계산이 피킹 데이터를 변경하면 안 됩니다.");
 
-console.log("Shipment 분할 검증 통과: 50, 200, 201, 450, 완료 웨이브만 대상, 피킹 불변, 중복 차단, ID 유지, 삭제 복귀");
+console.log("Shipment 분할 검증 통과: 총수량 200 제한, 발주서 원자성, 초과발주 수동확인, 완료 웨이브만 대상, 피킹 불변, 중복 차단, ID 유지, 삭제 복귀");

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { renderVendorOrderImage } from "@/lib/wms/vendor-order/render-order-image";
-import { buildProductLinkShareText } from "@/lib/wms/vendor-order/export-text";
+import { buildKakaoOrderText } from "@/lib/wms/vendor-order/export-text";
 import type { VendorOrderDraftLine, VendorOrderDraftStatus } from "@/lib/wms/vendor-order/types";
 import type { PickingWave } from "@/lib/wms/picking-wave/types";
 import { wmsColors, wmsGreenDarkButton, wmsPrimaryButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
@@ -12,7 +12,6 @@ interface Props {
   vendorName: string;
   lines: VendorOrderDraftLine[];
   status: VendorOrderDraftStatus;
-  productLinksBySku: Record<string, string>;
   onMarkSent: () => void | Promise<void>;
   onReviseAgain: () => void | Promise<void>;
 }
@@ -33,9 +32,11 @@ interface Props {
  * (renderVendorOrderImage)는 카카오톡 공유가 파일 공유를 지원하지 않는 기기에서 대신 자동
  * 다운로드하는 폴백으로 계속 쓴다 — 기능 자체는 사라지지 않는다.
  */
-export default function VendorOrderExportPanel({ wave, vendorName, lines, status, productLinksBySku, onMarkSent, onReviseAgain }: Props) {
+export default function VendorOrderExportPanel({ wave, vendorName, lines, status, onMarkSent, onReviseAgain }: Props) {
   const [shareBusy, setShareBusy] = useState(false);
   const [shareFallbackMessage, setShareFallbackMessage] = useState<string | null>(null);
+  const [showMessagePreview, setShowMessagePreview] = useState(false);
+  const message = buildKakaoOrderText(vendorName, lines, wave.id);
 
   function downloadBlob(blob: Blob, fileName: string) {
     const url = URL.createObjectURL(blob);
@@ -74,9 +75,8 @@ export default function VendorOrderExportPanel({ wave, vendorName, lines, status
         setShareFallbackMessage("이 기기/브라우저는 파일 공유를 지원하지 않아 이미지를 대신 다운로드했습니다 — 카카오톡에서 직접 첨부해주세요.");
         return;
       }
-      const shareText = buildProductLinkShareText(lines, productLinksBySku);
-      const shareData: ShareData = { title: `노이드비 발주서 - ${vendorName}`, files: [file] };
-      if (shareText) shareData.text = shareText;
+      // 제품링크는 작업센터 내부 확인용이다. 거래처에 공유되는 내용에는 넣지 않는다.
+      const shareData: ShareData = { title: `노이드비 발주서 - ${vendorName}`, text: message, files: [file] };
       await nav.share!(shareData);
     } catch (error) {
       if (error instanceof Error && error.name !== "AbortError") {
@@ -84,6 +84,16 @@ export default function VendorOrderExportPanel({ wave, vendorName, lines, status
       }
     } finally {
       setShareBusy(false);
+    }
+  }
+
+  async function copyMessage() {
+    try {
+      await navigator.clipboard.writeText(message);
+      setShareFallbackMessage("카카오톡 발주 문구를 복사했습니다.");
+    } catch {
+      setShareFallbackMessage("문구를 복사하지 못했습니다. 메시지 미리보기를 열어 직접 복사해주세요.");
+      setShowMessagePreview(true);
     }
   }
 
@@ -97,16 +107,21 @@ export default function VendorOrderExportPanel({ wave, vendorName, lines, status
         <p style={{ fontSize: "11px", color: wmsColors.warn, marginBottom: "8px" }}>{shareFallbackMessage}</p>
       )}
 
-      {/* 실제로 쓰는 버튼은 이 3개뿐이다(2026-08-20) — 3열 동일 비율, 동일 높이·모서리·글자크기.
-       *  세 버튼 모두 배경색이 있는 기존 브랜드 토큰만 쓴다 — 흰색 버튼 금지(2026-08-20 실기기
-       *  추가 확인 5번): 진그레이(slate)/그린(greenDark)/베이지(secondary=sand) 3계열로 구분. */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "8px" }}>
+      {showMessagePreview && <pre style={{ margin: "0 0 8px", padding: "10px", border: `1px solid ${wmsColors.border}`, borderRadius: "9px", background: "#fff", whiteSpace: "pre-wrap", wordBreak: "keep-all", fontFamily: "inherit", fontSize: "11px", lineHeight: 1.55 }}>{message}</pre>}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "8px" }}>
+        <button type="button" onClick={() => setShowMessagePreview(value => !value)} style={{ ...wmsSecondaryButton, minHeight: "48px", fontSize: "12px" }}>
+          {showMessagePreview ? "미리보기 닫기" : "메시지 미리보기"}
+        </button>
+        <button type="button" onClick={() => void copyMessage()} style={{ ...wmsSecondaryButton, minHeight: "48px", fontSize: "12px" }}>
+          메시지 복사
+        </button>
         <button
           onClick={handleShare}
           disabled={shareBusy}
           style={{ ...wmsPrimaryButton, minHeight: "48px", fontSize: "12px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25, opacity: shareBusy ? 0.6 : 1 }}
         >
-          {shareBusy ? "여는 중..." : "카카오톡 공유"}
+          {shareBusy ? "여는 중..." : "카카오톡 열기"}
         </button>
         <button
           onClick={() => onMarkSent()}
@@ -116,9 +131,9 @@ export default function VendorOrderExportPanel({ wave, vendorName, lines, status
         </button>
         <button
           onClick={() => onReviseAgain()}
-          style={{ ...wmsSecondaryButton, minHeight: "48px", fontSize: "12px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25 }}
+          style={{ ...wmsSecondaryButton, gridColumn: "1 / -1", minHeight: "42px", fontSize: "12px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25 }}
         >
-          다시 수정
+          {status === "sent" ? "다시 수정" : "발주내용 수정"}
         </button>
       </div>
     </div>

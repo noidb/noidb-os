@@ -36,7 +36,11 @@ import type { PurchaseOrderSourceRecord } from "./purchase-order-source/types";
 
 const REPRINT_DETAIL_ENV = "GOOGLE_DRIVE_HANJIN_SHIPMENT_FOLDER_ID";
 const REPRINT_DETAIL_LOCAL_DIR = process.env.WMS_HANJIN_SHIPMENT_DIR || "G:\\내 드라이브\\쿠팡데이터\\한진택배 송장파일";
-const CONFIRMED_QUANTITY_ENV = "GOOGLE_DRIVE_PO_CONFIRMED_QUANTITY_FOLDER_ID";
+// 기존 운영 배포에는 같은 발주확정 완료 폴더가 이전 이름으로 연결돼 있다. 한진 결과파일은
+// 위의 전용 폴더만 사용하고, 확정수량 원본만 두 이름 중 실제 연결된 쪽을 읽는다.
+const CONFIRMED_QUANTITY_ENV = process.env.GOOGLE_DRIVE_PO_CONFIRMED_QUANTITY_FOLDER_ID?.trim()
+  ? "GOOGLE_DRIVE_PO_CONFIRMED_QUANTITY_FOLDER_ID"
+  : "GOOGLE_DRIVE_CONFIRMED_ORDER_FOLDER_ID";
 const CONFIRMED_QUANTITY_LOCAL_DIR =
   process.env.WMS_PO_CONFIRMED_QUANTITY_DIR || "G:\\내 드라이브\\쿠팡데이터\\발주서업로드완성";
 
@@ -50,13 +54,13 @@ async function listMatchingDriveOrLocalFiles(
   envName: string,
   localDir: string,
   namePattern: RegExp
-): Promise<{ name: string; buffer: Buffer }[]> {
+): Promise<{ name: string; buffer: Buffer; modifiedTime: string }[]> {
   if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
     const files = (await listDriveFilesFromEnv(envName))
       .filter(f => namePattern.test(f.name))
       .sort((a, b) => b.modifiedTime.localeCompare(a.modifiedTime));
-    const results: { name: string; buffer: Buffer }[] = [];
-    for (const file of files) results.push({ name: file.name, buffer: await downloadDriveFile(file.id) });
+    const results: { name: string; buffer: Buffer; modifiedTime: string }[] = [];
+    for (const file of files) results.push({ name: file.name, buffer: await downloadDriveFile(file.id), modifiedTime: file.modifiedTime });
     return results;
   }
 
@@ -74,8 +78,8 @@ async function listMatchingDriveOrLocalFiles(
     })
   );
   withStat.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  const results: { name: string; buffer: Buffer }[] = [];
-  for (const file of withStat) results.push({ name: file.name, buffer: await readFile(file.filePath) });
+  const results: { name: string; buffer: Buffer; modifiedTime: string }[] = [];
+  for (const file of withStat) results.push({ name: file.name, buffer: await readFile(file.filePath), modifiedTime: new Date(file.mtimeMs).toISOString() });
   return results;
 }
 
@@ -122,17 +126,21 @@ async function parseReprintDetailRowsFromBuffer(buffer: Buffer): Promise<Reprint
   return rows;
 }
 
-async function loadReprintDetailRows(): Promise<{ rows: ReprintDetailRow[]; fileNames: string[] }> {
+interface ReprintDetailFile {
+  name: string;
+  modifiedTime: string;
+  rows: ReprintDetailRow[];
+}
+
+async function loadReprintDetailFiles(): Promise<ReprintDetailFile[]> {
   const files = await listMatchingDriveOrLocalFiles(REPRINT_DETAIL_ENV, REPRINT_DETAIL_LOCAL_DIR, /^재출력_세부내역_.*\.xlsx$/i);
-  const rows: ReprintDetailRow[] = [];
-  const fileNames: string[] = [];
+  const parsedFiles: ReprintDetailFile[] = [];
   for (const file of files) {
     const parsed = await parseReprintDetailRowsFromBuffer(file.buffer);
     if (!parsed) continue;
-    rows.push(...parsed);
-    fileNames.push(file.name);
+    parsedFiles.push({ name: file.name, modifiedTime: file.modifiedTime, rows: parsed });
   }
-  return { rows, fileNames };
+  return parsedFiles;
 }
 
 function indexReprintRowsByPurchaseOrder(rows: ReprintDetailRow[]) {
@@ -154,7 +162,20 @@ export interface AutoShipmentTrackingPreview {
   matchedPurchaseOrderCount: number;
   missingPurchaseOrderNumbers: string[];
   conflictPurchaseOrderNumbers: string[];
+  candidateFiles?: AutoShipmentTrackingCandidate[];
+  selectedReprintFileName?: string;
+  selectionRequired?: boolean;
   canGenerate: boolean;
+}
+
+export interface AutoShipmentTrackingCandidate {
+  fileName: string;
+  modifiedTime?: string;
+  matchedPurchaseOrderCount: number;
+  missingPurchaseOrderNumbers: string[];
+  conflictPurchaseOrderNumbers: string[];
+  unexpectedPurchaseOrderNumbers: string[];
+  exactMatch: boolean;
 }
 
 /** 현재 generation의 PO 집합만 운송장 원본과 대조한다. 웨이브의 다른 PO는 검사하지 않는다. */
@@ -188,8 +209,77 @@ export function inspectAutoShipmentTrackingRows(requests: HanjinShipmentRequest[
 }
 
 export async function inspectAutoShipmentTracking(requests: HanjinShipmentRequest[]): Promise<AutoShipmentTrackingPreview> {
-  const reprint = await loadReprintDetailRows();
-  return inspectAutoShipmentTrackingRows(requests, reprint.rows);
+  const files = await loadReprintDetailFiles();
+  const candidates = files.map(file => inspectAutoShipmentTrackingCandidate(requests, file.name, file.rows, file.modifiedTime));
+  const exactCandidates = candidates.filter(candidate => candidate.exactMatch);
+  const selected = exactCandidates.length === 1 ? exactCandidates[0] : undefined;
+  const best = selected ?? [...candidates].sort((a, b) =>
+    b.matchedPurchaseOrderCount - a.matchedPurchaseOrderCount
+    || a.missingPurchaseOrderNumbers.length - b.missingPurchaseOrderNumbers.length
+    || a.unexpectedPurchaseOrderNumbers.length - b.unexpectedPurchaseOrderNumbers.length
+  )[0];
+
+  return {
+    requestedPurchaseOrderCount: new Set(requests.map(request => normalizeSkuId(request.purchaseOrderNumber))).size,
+    matchedPurchaseOrderCount: best?.matchedPurchaseOrderCount ?? 0,
+    missingPurchaseOrderNumbers: best?.missingPurchaseOrderNumbers ?? requests.map(request => normalizeSkuId(request.purchaseOrderNumber)),
+    conflictPurchaseOrderNumbers: best?.conflictPurchaseOrderNumbers ?? [],
+    candidateFiles: candidates,
+    selectedReprintFileName: selected?.fileName,
+    selectionRequired: exactCandidates.length > 1,
+    canGenerate: Boolean(selected),
+  };
+}
+
+export function inspectAutoShipmentTrackingCandidate(
+  requests: HanjinShipmentRequest[],
+  fileName: string,
+  rows: ReprintDetailRow[],
+  modifiedTime?: string
+): AutoShipmentTrackingCandidate {
+  const preview = inspectAutoShipmentTrackingRows(requests, rows);
+  const requestedPoSet = new Set(requests.map(request => normalizeSkuId(request.purchaseOrderNumber)));
+  const filePoSet = new Set<string>();
+  for (const row of rows) {
+    const parsed = parseShipmentLabel(row.kLabel);
+    for (const po of parsed?.purchaseOrderNumbers ?? []) filePoSet.add(normalizeSkuId(po));
+  }
+  const unexpectedPurchaseOrderNumbers = [...filePoSet].filter(po => !requestedPoSet.has(po)).sort();
+  return {
+    fileName,
+    modifiedTime,
+    matchedPurchaseOrderCount: preview.matchedPurchaseOrderCount,
+    missingPurchaseOrderNumbers: preview.missingPurchaseOrderNumbers,
+    conflictPurchaseOrderNumbers: preview.conflictPurchaseOrderNumbers,
+    unexpectedPurchaseOrderNumbers,
+    exactMatch: preview.canGenerate && unexpectedPurchaseOrderNumbers.length === 0 && filePoSet.size === requestedPoSet.size,
+  };
+}
+
+function selectExactReprintFile(
+  requests: HanjinShipmentRequest[],
+  files: ReprintDetailFile[],
+  selectedFileName?: string
+): ReprintDetailFile {
+  const candidates = files.map(file => ({ file, preview: inspectAutoShipmentTrackingCandidate(requests, file.name, file.rows, file.modifiedTime) }));
+  const exact = candidates.filter(candidate => candidate.preview.exactMatch);
+  if (selectedFileName) {
+    const selected = candidates.find(candidate => candidate.file.name === selectedFileName);
+    if (!selected) throw new AutoShipmentBlockedError([`선택한 한진 결과파일을 찾지 못했습니다: ${selectedFileName}`]);
+    if (!selected.preview.exactMatch) {
+      throw new AutoShipmentBlockedError([`선택한 한진 결과파일의 발주번호 집합이 현재 묶음과 정확히 일치하지 않습니다: ${selectedFileName}`]);
+    }
+    return selected.file;
+  }
+  if (exact.length === 1) return exact[0].file;
+  if (exact.length > 1) {
+    throw new AutoShipmentBlockedError([`정확히 일치하는 한진 결과파일이 ${exact.length}개입니다. 화면에서 사용할 파일을 선택해 주세요.`]);
+  }
+  const best = [...candidates].sort((a, b) => b.preview.matchedPurchaseOrderCount - a.preview.matchedPurchaseOrderCount)[0]?.preview;
+  const detail = best
+    ? `${best.fileName} (일치 ${best.matchedPurchaseOrderCount}, 누락 ${best.missingPurchaseOrderNumbers.length}, 다른 발주 ${best.unexpectedPurchaseOrderNumbers.length})`
+    : "후보 없음";
+  throw new AutoShipmentBlockedError([`현재 묶음의 발주번호 집합과 정확히 일치하는 한진 결과파일이 없습니다. 가장 가까운 후보: ${detail}`]);
 }
 
 /** 우리가 1단계에서 buildShipmentLabel로 만든 K열 문구를 되읽어 물류센터/입고예정일 표시문구/
@@ -373,14 +463,17 @@ export function findTrackingNumbersReusedAcrossShippingGroups(rows: readonly Par
 export async function buildAutoShipmentFile(
   requests: HanjinShipmentRequest[],
   sourceRecords: PurchaseOrderSourceRecord[],
-  templateBuffer?: Buffer
+  templateBuffer?: Buffer,
+  options: { selectedReprintFileName?: string } = {}
 ): Promise<AutoShipmentResult> {
   const groups = groupRequestsByCenterAndDate(requests);
 
-  const reprint = await loadReprintDetailRows();
-  if (reprint.rows.length === 0) {
+  const reprintFiles = await loadReprintDetailFiles();
+  if (reprintFiles.length === 0) {
     throw new AutoShipmentBlockedError(["현재 웨이브와 일치하는 재출력 파일을 찾지 못했습니다."]);
   }
+  const selectedReprintFile = selectExactReprintFile(requests, reprintFiles, options.selectedReprintFileName);
+  const reprint = { rows: selectedReprintFile.rows, fileNames: [selectedReprintFile.name] };
 
   const confirmedByPo = new Map<string, ParsedTrackingRow[]>();
   for (const source of sourceRecords) {

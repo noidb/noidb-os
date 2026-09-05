@@ -43,4 +43,6 @@ export interface ShipmentSplitPreview {
   totalQuantity: number;
   firstPurchaseOrderNumber: string;
   lastPurchaseOrderNumber: string;
+  /** 단일 발주서 자체가 최대수량을 넘지만 SKU 단위로 쪼개지 않았음을 표시한다. */
+  manualReviewRequired?: boolean;
 }

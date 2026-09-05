@@ -101,3 +101,26 @@ export async function buildGenerationBarcodeWorkbook(
   sheet.columns = [12, 14, 18, 48, 36, 18, 24, 14].map(width => ({ width }));
   return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
 }
+
+/** 재출력센터 전용. 발주서 원본 한 행을 원하는 장수만큼 넣고 구분행은 만들지 않는다. */
+export async function buildSingleBarcodeWorkbook(
+  record: PurchaseOrderSourceRecord,
+  catalog: ProductCatalogItem,
+  quantity: number
+): Promise<Buffer> {
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1000) throw new Error("바코드 출력수량은 1~1000 사이 정수여야 합니다.");
+  const skuId = normalizeSkuId(record.skuId);
+  const modelName = resolveBarcodeModelIdentifier(catalog);
+  if (!record.barcode.trim()) throw new Error(`SKU ${skuId}: 발주서 원본 바코드가 없습니다.`);
+  if (!modelName || !catalog.countryOfOrigin) throw new Error(`SKU ${skuId}: 영문·숫자 모델SKU/모델명 또는 제조국명이 없습니다.`);
+  const display = resolveDisplayNameAndOption(record.productName, record.optionName);
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("템플릿1");
+  sheet.addRow(["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"]);
+  for (let index = 0; index < quantity; index += 1) {
+    sheet.addRow([skuId, catalog.warehouseNumber, record.barcode, display.name, display.option, catalog.countryOfOrigin, modelName, "상품"]);
+  }
+  sheet.getRow(1).font = { bold: true };
+  sheet.columns = [12, 14, 18, 48, 36, 18, 24, 14].map(width => ({ width }));
+  return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
+}

@@ -58,6 +58,31 @@ export interface SupplierHubPurchaseOrder {
   capturedAt: string;
 }
 
+function purchaseOrderContentSignature(order: SupplierHubPurchaseOrder): string {
+  return JSON.stringify({
+    orderType: order.orderType,
+    fulfillmentCenter: order.fulfillmentCenter,
+    fulfillmentAddress: order.fulfillmentAddress,
+    fulfillmentContactPhone: order.fulfillmentContactPhone,
+    expectedDate: order.expectedDate,
+    items: order.items.map(item => [
+      item.lineNo,
+      item.productCode,
+      item.productName,
+      item.barcode,
+      item.purchaseType,
+      item.taxType,
+      item.orderedQuantity,
+      item.vendorConfirmedQuantity,
+      item.receivedQuantity,
+    ]),
+  });
+}
+
+export function hasSupplierHubPurchaseOrderContentChange(existing: SupplierHubPurchaseOrder, incoming: SupplierHubPurchaseOrder): boolean {
+  return purchaseOrderContentSignature(existing) !== purchaseOrderContentSignature(incoming);
+}
+
 function cellText(value: unknown): string {
   if (value && typeof value === "object") {
     const v = value as { richText?: { text?: string }[]; text?: string; result?: unknown };
@@ -338,17 +363,11 @@ export async function loadSupplierHubPurchaseOrdersFromDriveFiles(files: DriveFi
           continue;
         }
 
-        // 같은 발주번호의 후속 파일은 신규 발주로 다시 등록하지 않는다. 쿠팡에서 수정 가능한
-        // 일정 정보가 실제로 달라진 경우에만 그 필드들을 최신값으로 반영하고 상품/수량은 보존한다.
-        if (existing.expectedDate !== order.expectedDate || existing.fulfillmentCenter !== order.fulfillmentCenter) {
+        // 같은 발주번호의 후속 파일은 신규 발주로 만들지 않고 새 버전으로 본다. 일정뿐 아니라
+        // 상품·수량·주소가 바뀐 경우에도 최신 원본 전체를 반영하되 최초 발견 시각은 보존한다.
+        if (hasSupplierHubPurchaseOrderContentChange(existing, order)) {
           byPoNumber.set(order.purchaseOrderNumber, {
-            ...existing,
-            fulfillmentCenter: order.fulfillmentCenter,
-            fulfillmentAddress: order.fulfillmentAddress,
-            fulfillmentContactPhone: order.fulfillmentContactPhone,
-            expectedDate: order.expectedDate,
-            sourceFileName: order.sourceFileName,
-            // 일정 수정 파일이 나중에 올라와도 최초 감지일(화면의 최초 발주일)은 바꾸지 않는다.
+            ...order,
             capturedAt: existing.capturedAt,
           });
         }

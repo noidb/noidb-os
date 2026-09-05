@@ -29,7 +29,9 @@ export async function POST(request: NextRequest) {
     const sourceRequests = context.documents.map(document => ({ purchaseOrderNumber: document.purchaseOrderNumber, fulfillmentCenter: document.fulfillmentCenterName, expectedDate: document.expectedArrivalDate }));
     const templatePath = process.env.WMS_SHIPMENT_TEMPLATE_PATH || path.join(process.cwd(), "public", "templates", "ShipmentsUpload_PARCEL_template.xlsx");
     const templateBuffer = await readFile(templatePath);
-    const result = await buildAutoShipmentFile(sourceRequests, context.records, templateBuffer);
+    const result = await buildAutoShipmentFile(sourceRequests, context.records, templateBuffer, {
+      selectedReprintFileName: typeof body.selectedReprintFileName === "string" ? body.selectedReprintFileName : undefined,
+    });
 
     const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
     const fileName = `쉽먼트생성_업로드파일_${timestamp}.xlsx`;

@@ -19,6 +19,7 @@ export default function WmsShipmentPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [splitSize, setSplitSize] = useState(200);
   const [preview, setPreview] = useState<ShipmentSplitPreview[] | null>(null);
+  const [manualReviewConfirmed, setManualReviewConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +39,8 @@ export default function WmsShipmentPage() {
   const eligible = useMemo(() => candidates.filter(candidate => !candidate.alreadyAssignedShipmentId && !candidate.sourceConflict && candidate.fulfillmentCenter && candidate.expectedDate), [candidates]);
   const selectedCandidates = useMemo(() => eligible.filter(candidate => selected.has(candidate.purchaseOrderNumber)), [eligible, selected]);
   const allSelected = eligible.length > 0 && eligible.every(candidate => selected.has(candidate.purchaseOrderNumber));
-  function resetPreview() { setPreview(null); setError(null); }
+  const needsManualReview = Boolean(preview?.some(item => item.manualReviewRequired));
+  function resetPreview() { setPreview(null); setManualReviewConfirmed(false); setError(null); }
   function toggle(po: string) { setSelected(previous => { const next = new Set(previous); next.has(po) ? next.delete(po) : next.add(po); return next; }); resetPreview(); }
   function toggleAll() { setSelected(allSelected ? new Set() : new Set(eligible.map(candidate => candidate.purchaseOrderNumber))); resetPreview(); }
   function makePreview() {
@@ -78,10 +80,11 @@ export default function WmsShipmentPage() {
 
     <section style={{ ...wmsOuterCard, padding: "14px", marginBottom: "16px" }}>
       <h2 style={{ fontSize: "17px", margin: "0 0 10px" }}>분할 미리보기</h2>
-      <label style={{ display: "grid", gap: "5px", fontSize: "12px", fontWeight: 700, marginBottom: "10px" }}>Shipment당 발주서 수<input type="number" min={1} step={1} value={splitSize} onChange={event => { setSplitSize(Math.max(1, Math.floor(Number(event.target.value) || 1))); resetPreview(); }} style={{ minHeight: "44px", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "9px", padding: "0 12px", fontSize: "16px" }} /></label>
+      <label style={{ display: "grid", gap: "5px", fontSize: "12px", fontWeight: 700, marginBottom: "10px" }}>송장 한 묶음 최대 총수량<input type="number" min={1} step={1} value={splitSize} onChange={event => { setSplitSize(Math.max(1, Math.floor(Number(event.target.value) || 1))); resetPreview(); }} style={{ minHeight: "44px", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "9px", padding: "0 12px", fontSize: "16px" }} /></label>
       <button type="button" onClick={makePreview} disabled={!selectedCandidates.length} style={{ ...wmsPrimaryButton, width: "100%", opacity: selectedCandidates.length ? 1 : .5 }}>선택 발주서 분할 미리보기</button>
-      {preview && <div style={{ display: "grid", gap: "8px", marginTop: "12px" }}>{preview.map(item => <article key={item.sequence} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "10px", background: wmsColors.surface }}><strong>{item.suggestedName}</strong><div style={{ fontSize: "12px", color: wmsColors.muted, lineHeight: 1.6, marginTop: "4px" }}>발주서 {item.purchaseOrderCount}건 · SKU {item.skuCount}종 · 총 {item.totalQuantity}개<br />{item.fulfillmentCenter} · {item.expectedDate}<br />첫 발주번호 {item.firstPurchaseOrderNumber} · 마지막 발주번호 {item.lastPurchaseOrderNumber}</div></article>)}</div>}
-      {preview && <button type="button" onClick={() => void createShipments()} disabled={working} style={{ ...wmsGreenDarkButton, width: "100%", marginTop: "12px", opacity: working ? .55 : 1 }}>{working ? "생성 중..." : `${preview.length}개 Shipment 생성 확정`}</button>}
+      {preview && <div style={{ display: "grid", gap: "8px", marginTop: "12px" }}>{preview.map(item => <article key={item.sequence} style={{ border: `1px solid ${item.manualReviewRequired ? wmsColors.warn : wmsColors.border}`, borderRadius: "10px", padding: "10px", background: item.manualReviewRequired ? wmsColors.warnSoft : wmsColors.surface }}><strong>{item.suggestedName}</strong><div style={{ fontSize: "12px", color: wmsColors.muted, lineHeight: 1.6, marginTop: "4px" }}>발주서 {item.purchaseOrderCount}건 · SKU {item.skuCount}종 · 총 {item.totalQuantity}개<br />{item.fulfillmentCenter} · {item.expectedDate}<br />첫 발주번호 {item.firstPurchaseOrderNumber} · 마지막 발주번호 {item.lastPurchaseOrderNumber}</div>{item.manualReviewRequired && <div style={{ marginTop: "6px", color: wmsColors.warnText, fontSize: "12px", fontWeight: 800 }}>단일 발주서가 {splitSize}개를 초과합니다 · SKU 자동분할 없이 수동 확인 필요</div>}</article>)}</div>}
+      {needsManualReview && <label style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "10px", padding: "10px", background: wmsColors.warnSoft, borderRadius: "9px", fontSize: "12px", fontWeight: 800 }}><input type="checkbox" checked={manualReviewConfirmed} onChange={event => setManualReviewConfirmed(event.target.checked)} style={{ width: "20px", height: "20px" }} />한도를 넘는 발주서를 확인했습니다. 발주서는 쪼개지 않고 그대로 진행합니다.</label>}
+      {preview && <button type="button" onClick={() => void createShipments()} disabled={working || (needsManualReview && !manualReviewConfirmed)} style={{ ...wmsGreenDarkButton, width: "100%", marginTop: "12px", opacity: working || (needsManualReview && !manualReviewConfirmed) ? .55 : 1 }}>{working ? "생성 중..." : `${preview.length}개 Shipment 생성 확정`}</button>}
     </section>
 
     <section style={{ ...wmsOuterCard, padding: "14px" }}><h2 style={{ fontSize: "17px", margin: "0 0 10px" }}>생성된 Shipment</h2>{shipments.length === 0 ? <p style={{ color: wmsColors.muted }}>아직 생성된 Shipment가 없습니다.</p> : <div style={{ display: "grid", gap: "10px" }}>{shipments.map(shipment => { const first = shipment.purchaseOrders[0]; return <article key={shipment.id} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "11px", padding: "11px" }}>

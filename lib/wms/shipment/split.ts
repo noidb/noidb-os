@@ -82,16 +82,17 @@ export function buildShipmentCandidates(
 
 export function previewShipmentSplit(
   selected: readonly ShipmentPurchaseOrder[],
-  maxPurchaseOrders: number
+  maxTotalQuantity: number
 ): ShipmentSplitPreview[] {
-  if (!Number.isInteger(maxPurchaseOrders) || maxPurchaseOrders < 1) {
-    throw new Error("Shipment 분할 단위는 1 이상의 정수여야 합니다.");
+  if (!Number.isInteger(maxTotalQuantity) || maxTotalQuantity < 1) {
+    throw new Error("Shipment 최대수량은 1 이상의 정수여야 합니다.");
   }
   const duplicateCheck = new Set<string>();
   for (const order of selected) {
     if (duplicateCheck.has(order.purchaseOrderNumber)) throw new Error(`발주서 ${order.purchaseOrderNumber}가 중복 선택됐습니다.`);
     duplicateCheck.add(order.purchaseOrderNumber);
     if (!order.fulfillmentCenter || !order.expectedDate) throw new Error(`발주서 ${order.purchaseOrderNumber}의 물류센터 또는 입고예정일이 없습니다.`);
+    if (!Number.isFinite(order.totalQuantity) || order.totalQuantity <= 0) throw new Error(`발주서 ${order.purchaseOrderNumber}의 총수량이 올바르지 않습니다.`);
   }
 
   const groups = new Map<string, ShipmentPurchaseOrder[]>();
@@ -101,24 +102,46 @@ export function previewShipmentSplit(
   }
 
   const previews: ShipmentSplitPreview[] = [];
+  const appendPreview = (chunk: ShipmentPurchaseOrder[], manualReviewRequired = false) => {
+    if (!chunk.length) return;
+    const sequence = previews.length + 1;
+    previews.push({
+      sequence,
+      suggestedName: `Shipment ${sequence} · ${chunk[0].fulfillmentCenter} · ${chunk[0].expectedDate}`,
+      fulfillmentCenter: chunk[0].fulfillmentCenter,
+      expectedDate: chunk[0].expectedDate,
+      purchaseOrders: chunk,
+      purchaseOrderCount: chunk.length,
+      skuCount: chunk.reduce((sum, order) => sum + order.skuCount, 0),
+      totalQuantity: chunk.reduce((sum, order) => sum + order.totalQuantity, 0),
+      firstPurchaseOrderNumber: chunk[0].purchaseOrderNumber,
+      lastPurchaseOrderNumber: chunk[chunk.length - 1].purchaseOrderNumber,
+      manualReviewRequired,
+    });
+  };
   for (const orders of groups.values()) {
     const sorted = [...orders].sort((a, b) => a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber));
-    for (let offset = 0; offset < sorted.length; offset += maxPurchaseOrders) {
-      const chunk = sorted.slice(offset, offset + maxPurchaseOrders);
-      const sequence = previews.length + 1;
-      previews.push({
-        sequence,
-        suggestedName: `Shipment ${sequence} · ${chunk[0].fulfillmentCenter} · ${chunk[0].expectedDate}`,
-        fulfillmentCenter: chunk[0].fulfillmentCenter,
-        expectedDate: chunk[0].expectedDate,
-        purchaseOrders: chunk,
-        purchaseOrderCount: chunk.length,
-        skuCount: chunk.reduce((sum, order) => sum + order.skuCount, 0),
-        totalQuantity: chunk.reduce((sum, order) => sum + order.totalQuantity, 0),
-        firstPurchaseOrderNumber: chunk[0].purchaseOrderNumber,
-        lastPurchaseOrderNumber: chunk[chunk.length - 1].purchaseOrderNumber,
-      });
+    let chunk: ShipmentPurchaseOrder[] = [];
+    let chunkQuantity = 0;
+    for (const order of sorted) {
+      // 발주서는 배정의 최소 단위다. 단일 발주가 한도를 넘으면 별도 묶음으로 남겨
+      // 수동 확인을 요구할 뿐, SKU 행을 자동 분할하지 않는다.
+      if (order.totalQuantity > maxTotalQuantity) {
+        appendPreview(chunk);
+        chunk = [];
+        chunkQuantity = 0;
+        appendPreview([order], true);
+        continue;
+      }
+      if (chunk.length > 0 && chunkQuantity + order.totalQuantity > maxTotalQuantity) {
+        appendPreview(chunk);
+        chunk = [];
+        chunkQuantity = 0;
+      }
+      chunk.push(order);
+      chunkQuantity += order.totalQuantity;
     }
+    appendPreview(chunk);
   }
   return previews;
 }

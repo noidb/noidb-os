@@ -7,6 +7,9 @@ import { parsePurchaseOrderSource } from "./parser";
 import type { PurchaseOrderBinaryInput, PurchaseOrderDuplicate, PurchaseOrderIndex, PurchaseOrderSourceDocument } from "./types";
 
 const LOCAL_SOURCE_DIR = process.env.WMS_PURCHASE_ORDER_SOURCE_DIR || "G:\\내 드라이브\\쿠팡데이터\\발주서리스트다운";
+const DEFAULT_INDEX_CACHE_TTL_MS = 5 * 60 * 1000;
+let cachedIndex: { expiresAt: number; value: PurchaseOrderIndex } | null = null;
+let indexPromise: Promise<PurchaseOrderIndex> | null = null;
 
 async function expand(container: string, buffer: Buffer): Promise<PurchaseOrderBinaryInput[]> {
   if (!container.toLowerCase().endsWith(".zip")) return [{ sourceContainerFile: container, sourceEntryFile: container, buffer }];
@@ -80,4 +83,19 @@ export async function buildPurchaseOrderIndex(inputs?: PurchaseOrderBinaryInput[
     }
   }
   return { byPurchaseOrderNumber, duplicateFiles, identicalDuplicates, conflicts, parseErrors, sourceContainerCount: loaded.containers, sourceEntryCount: loaded.inputs.length };
+}
+
+/** 검색·미리보기에서 같은 Drive 원본을 버튼마다 다시 내려받지 않도록 하는 짧은 서버 캐시.
+ * 실제 파일 생성 직전에는 buildPurchaseOrderIndex()를 직접 호출해 최신 원본을 다시 검증한다. */
+export async function getCachedPurchaseOrderIndex(ttlMs = DEFAULT_INDEX_CACHE_TTL_MS): Promise<PurchaseOrderIndex> {
+  if (cachedIndex && cachedIndex.expiresAt > Date.now()) return cachedIndex.value;
+  if (!indexPromise) {
+    indexPromise = buildPurchaseOrderIndex().then(value => {
+      cachedIndex = { expiresAt: Date.now() + Math.max(1_000, ttlMs), value };
+      return value;
+    }).finally(() => {
+      indexPromise = null;
+    });
+  }
+  return indexPromise;
 }

@@ -208,7 +208,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   useEffect(() => {
     reload();
     refreshProductCatalog();
-    fetch("/api/wms/supplier-hub-orders", { cache: "no-store" })
+    fetch("/api/wms/supplier-hub-orders?includePast=1", { cache: "no-store" })
       .then(response => response.json())
       .then(data => {
         const orders = (data.orders || []) as { purchaseOrderNumber: string; expectedDate?: string; fulfillmentCenter?: string }[];
@@ -317,21 +317,34 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       vendorOrderRepository.listDrafts(wave.id),
       vendorOrderRepository.listLines(wave.id),
     ]);
-    const existingKeys = new Set(existingLines.map(line => `${line.vendorName}\u0000${line.skuId}`));
+    const existingByKey = new Map(existingLines.map(line => [`${line.vendorName}\u0000${line.skuId}`, line]));
     const draftById = new Map(existingDrafts.map(draft => [draft.id, draft]));
-    const lines: VendorOrderDraftLine[] = [];
+    const linesToSave: VendorOrderDraftLine[] = [];
+    let addedCount = 0;
+    let updatedCount = 0;
     for (const item of selectedItems) {
+      if (item.shortageQuantity <= 0) continue;
       const live = resolveLiveFields(item, liveCatalogByProductCode);
       const vendorName = live.vendorName || item.vendorName || UNASSIGNED_VENDOR_NAME;
       const skuId = live.liveSkuId || item.productCode;
       const key = `${vendorName}\u0000${skuId}`;
-      if (existingKeys.has(key)) continue;
-      existingKeys.add(key);
       const draftId = `${wave.id}::${vendorName}`;
       if (!draftById.has(draftId)) draftById.set(draftId, { id: draftId, waveId: wave.id, vendorName, status: "draft", createdAt: now, updatedAt: now });
-      const actualQuantity = Math.max(1, item.shortageQuantity || item.totalQuantity);
-      lines.push({
-        id: `${draftId}::manual-${skuId}`,
+      const actualQuantity = item.shortageQuantity;
+      const relatedPurchaseOrderNumbers = Array.from(new Set(item.sources.map(source => source.purchaseOrderNumber)));
+      const existing = existingByKey.get(key);
+      if (existing) {
+        const combinedActual = Math.max(existing.actualShortageQuantity || 0, actualQuantity);
+        const combinedPos = Array.from(new Set([...(existing.relatedPurchaseOrderNumbers || []), ...relatedPurchaseOrderNumbers]));
+        if (combinedActual === (existing.actualShortageQuantity || 0) && combinedPos.length === existing.relatedPurchaseOrderNumbers.length) continue;
+        const updated = { ...existing, actualShortageQuantity: combinedActual, shortageQuantity: toVendorOrderQuantity(combinedActual), relatedPurchaseOrderNumbers: combinedPos, updatedAt: now };
+        existingByKey.set(key, updated);
+        linesToSave.push(updated);
+        updatedCount += 1;
+        continue;
+      }
+      const created: VendorOrderDraftLine = {
+        id: `${draftId}::${skuId}`,
         draftId,
         waveId: wave.id,
         vendorName,
@@ -345,16 +358,25 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
         actualShortageQuantity: actualQuantity,
         shortageQuantity: toVendorOrderQuantity(actualQuantity),
         currentStock: live.catalogCurrentStock || item.catalogCurrentStock || "",
-        relatedPurchaseOrderNumbers: Array.from(new Set(item.sources.map(source => source.purchaseOrderNumber))),
+        relatedPurchaseOrderNumbers,
         memo: "피킹 목록에서 추가",
         isManuallyAdded: true,
         createdAt: now,
         updatedAt: now,
-      });
+      };
+      existingByKey.set(key, created);
+      linesToSave.push(created);
+      addedCount += 1;
     }
     const newDrafts = Array.from(draftById.values()).filter(draft => !existingDrafts.some(existing => existing.id === draft.id));
-    await Promise.all([...newDrafts.map(draft => vendorOrderRepository.saveDraft(draft)), ...lines.map(line => vendorOrderRepository.saveLine(line))]);
-    setVendorActionMessage(lines.length ? `${lines.length}개 SKU를 거래처 발주 초안에 추가했습니다.` : "이미 거래처 발주 초안에 있는 SKU입니다.");
+    // 공용 Blob 저장은 revision 기반이므로 여러 쓰기를 동시에 보내지 않고 순서대로 확정한다.
+    for (const draft of newDrafts) await vendorOrderRepository.saveDraft(draft);
+    for (const line of linesToSave) await vendorOrderRepository.saveLine(line);
+    setVendorActionMessage(
+      addedCount || updatedCount
+        ? `거래처 발주 초안 반영 완료 · 신규 ${addedCount}개 · 수량 갱신 ${updatedCount}개`
+        : "이미 같은 발주번호와 수량으로 거래처 발주 초안에 반영된 SKU입니다."
+    );
   }
 
   async function moveItemsToDiscontinueList(selectedItems: PickingWaveItem[]) {

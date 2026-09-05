@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import WorkCenterMenuButton from "./WorkCenterMenuButton";
 import { InboxIcon } from "../icons";
 import { wmsColors, wmsGhostButton, wmsPrimaryButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
@@ -20,6 +20,7 @@ import type { PickingWave } from "@/lib/wms/picking-wave/types";
  */
 export default function NewPurchaseOrdersUpdateButton() {
   const waveRepository = usePickingWaveRepository();
+  const autoCheckedRef = useRef(false);
   const [open, setOpen] = useState(false);
   const [orders, setOrders] = useState<SupplierHubPurchaseOrder[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +61,9 @@ export default function NewPurchaseOrdersUpdateButton() {
       }
       setImportResult(data as ImportLatestResult);
       const waves = await waveRepository.listWaves();
-      const activeWaves = waves.filter(wave => wave.status === "in_progress");
+      // 완료·발주확정 상태도 같은 출고작업의 후속 서류/재출력이 남아 있을 수 있으므로
+      // 보관 기능이 생기기 전까지는 저장된 모든 웨이브를 출고작업 후보로 유지한다.
+      const activeWaves = waves;
       setInProgressWaves(activeWaves);
       setInProgressPoNumbers(new Set(activeWaves.flatMap(wave => wave.sourcePurchaseOrderNumbers)));
       if (activeWaves[0]) {
@@ -70,13 +73,21 @@ export default function NewPurchaseOrdersUpdateButton() {
       }
       setShowAllOrders(false);
       await loadOrders();
-      setOpen(true);
+      setOpen((data.addedPurchaseOrderNumbers?.length || 0) + (data.updatedPurchaseOrderNumbers?.length || 0) > 0);
     } catch {
       setImportError("최신 발주서를 불러오지 못했습니다.");
     } finally {
       setImporting(false);
     }
   }
+
+  useEffect(() => {
+    if (autoCheckedRef.current) return;
+    autoCheckedRef.current = true;
+    void handleClick();
+    // 작업센터 진입 시 새 파일과 변경 버전을 한 번 자동 확인한다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const newlyAddedSet = new Set(importResult?.addedPurchaseOrderNumbers ?? []);
   const recentlyChangedSet = new Set([
@@ -97,7 +108,7 @@ export default function NewPurchaseOrdersUpdateButton() {
     if (!recommendationByTargetPo.has(rec.targetPurchaseOrderNumber)) recommendationByTargetPo.set(rec.targetPurchaseOrderNumber, rec);
   }
 
-  const label = importing ? "불러오는 중..." : "신규발주서 업데이트";
+  const label = importing ? "새 발주서 자동 확인 중..." : "새 발주서 다시 확인";
 
   return (
     <div>
@@ -315,16 +326,16 @@ export default function NewPurchaseOrdersUpdateButton() {
                             }}
                             style={{ ...wmsPrimaryButton, flex: 1, minHeight: "38px", fontSize: "11px", opacity: inProgressWaves.length === 0 ? 0.5 : 1 }}
                           >
-                            현재 웨이브에 추가
+                            기존 출고작업에 추가
                           </button>
                           <button
                             onClick={() => { window.location.href = `/wms/picking/waves?onlyPo=${encodeURIComponent(order.purchaseOrderNumber)}`; }}
                             style={{ ...wmsSecondaryButton, flex: 1, minHeight: "38px", fontSize: "11px" }}
                           >
-                            별도 작업
+                            새 출고작업
                           </button>
                         </div>
-                        {inProgressWaves.length === 0 && <div style={{ fontSize: "10px", color: wmsColors.muted, marginTop: "4px" }}>진행 중 웨이브가 없어 별도 작업만 가능합니다.</div>}
+                        {inProgressWaves.length === 0 && <div style={{ fontSize: "10px", color: wmsColors.muted, marginTop: "4px" }}>저장된 출고작업이 없어 새 출고작업으로 시작합니다.</div>}
                       </div>
                     )}
                   </div>

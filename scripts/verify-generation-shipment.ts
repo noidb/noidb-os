@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import ExcelJS from "exceljs";
-import { buildAutoShipmentFile, inspectAutoShipmentTracking, inspectAutoShipmentTrackingRows, type ReprintDetailRow } from "../lib/wms/hanjin-shipment-auto";
+import { buildAutoShipmentFile, inspectAutoShipmentTracking, inspectAutoShipmentTrackingCandidate, inspectAutoShipmentTrackingRows, type ReprintDetailRow } from "../lib/wms/hanjin-shipment-auto";
 import { summarizeFulfillmentCenterLabels } from "../lib/wms/fulfillment-center-label-summary";
 import type { PurchaseOrderSourceRecord } from "../lib/wms/purchase-order-source/types";
 import { buildShipmentOutputContext } from "../lib/wms/shipment-output-context";
@@ -17,6 +17,13 @@ const allMatched = inspectAutoShipmentTrackingRows(requests, trackingRows);
 assert.equal(allMatched.matchedPurchaseOrderCount, 10);
 assert.equal(allMatched.requestedPurchaseOrderCount, 10);
 assert.equal(allMatched.canGenerate, true);
+const exactFile = inspectAutoShipmentTrackingCandidate(requests, "exact.xlsx", trackingRows);
+assert.equal(exactFile.exactMatch, true);
+assert.deepEqual(exactFile.unexpectedPurchaseOrderNumbers, []);
+
+const mixedFile = inspectAutoShipmentTrackingCandidate(requests.slice(0, 8), "mixed.xlsx", trackingRows);
+assert.equal(mixedFile.exactMatch, false);
+assert.deepEqual(mixedFile.unexpectedPurchaseOrderNumbers, ["1008", "1009"]);
 
 const partial = inspectAutoShipmentTrackingRows(requests.slice(0, 8), trackingRows.slice(0, 6));
 assert.equal(partial.matchedPurchaseOrderCount, 6);
@@ -34,7 +41,7 @@ assert.deepEqual(labels[0].purchaseOrderNumbers, ["1000", "1001"]);
 assert.equal(labels[0].totalSku, 2);
 assert.equal(labels[0].totalQuantity, 10);
 
-console.log(JSON.stringify({ tenOfTen: allMatched, sixOfEight: partial, label: labels[0] }, null, 2));
+console.log(JSON.stringify({ tenOfTen: allMatched, exactFile, mixedFile, sixOfEight: partial, label: labels[0] }, null, 2));
 
 async function verifyActualFiles() {
   const response = await fetch("https://noidb-os.vercel.app/api/wms/picking-waves");

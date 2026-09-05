@@ -3,6 +3,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import {
   getIncomingPurchaseOrdersDir,
+  hasSupplierHubPurchaseOrderContentChange,
   loadSupplierHubPurchaseOrders,
   loadSupplierHubPurchaseOrdersFromDriveFiles,
   parseSupplierHubPurchaseOrderBuffer,
@@ -116,7 +117,7 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
     const updatedPurchaseOrderNumbers = latestOrders
       .filter(order => {
         const existing = previousByPo.get(order.purchaseOrderNumber);
-        return existing ? hasScheduleChange(existing, order) : false;
+        return existing ? hasSupplierHubPurchaseOrderContentChange(existing, order) : false;
       })
       .map(order => order.purchaseOrderNumber);
     const updatedScheduleChanges = latestOrders.flatMap(order => {
@@ -131,7 +132,7 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
     const skippedDuplicatePurchaseOrderNumbers = latestOrders
       .filter(order => {
         const existing = previousByPo.get(order.purchaseOrderNumber);
-        return existing ? !hasScheduleChange(existing, order) : false;
+        return existing ? !hasSupplierHubPurchaseOrderContentChange(existing, order) : false;
       })
       .map(order => order.purchaseOrderNumber);
     const finalByPo = new Map(previousOrders.map(order => [order.purchaseOrderNumber, order]));
@@ -139,15 +140,10 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
       const existing = finalByPo.get(order.purchaseOrderNumber);
       if (!existing) {
         finalByPo.set(order.purchaseOrderNumber, order);
-      } else if (hasScheduleChange(existing, order)) {
+      } else if (hasSupplierHubPurchaseOrderContentChange(existing, order)) {
         finalByPo.set(order.purchaseOrderNumber, {
-          ...existing,
-          fulfillmentCenter: order.fulfillmentCenter,
-          fulfillmentAddress: order.fulfillmentAddress,
-          fulfillmentContactPhone: order.fulfillmentContactPhone,
-          expectedDate: order.expectedDate,
-          sourceFileName: order.sourceFileName,
-          // 일정 변경은 입고예정일/센터만 반영하고 최초 발주일은 보존한다.
+          ...order,
+          // 최신 버전의 상품·수량·배송정보를 모두 반영하되 최초 발견 시각은 보존한다.
           capturedAt: existing.capturedAt,
         });
       }
@@ -188,7 +184,7 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
 
     const existing = existingByPo.get(parsed.purchaseOrderNumber);
     if (existing) {
-      if (!hasScheduleChange(existing, parsed)) {
+      if (!hasSupplierHubPurchaseOrderContentChange(existing, parsed)) {
         skippedDuplicatePurchaseOrderNumbers.push(parsed.purchaseOrderNumber);
         continue;
       }

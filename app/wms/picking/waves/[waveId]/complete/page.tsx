@@ -82,7 +82,7 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   useEffect(() => {
     reload();
     refreshCatalog();
-    fetch("/api/wms/supplier-hub-orders", { cache: "no-store" })
+    fetch("/api/wms/supplier-hub-orders?includePast=1", { cache: "no-store" })
       .then(response => response.json())
       .then(data => setOrderLogisticsByPo(Object.fromEntries((data.orders || []).map((order: { purchaseOrderNumber: string; fulfillmentCenter?: string; expectedDate?: string }) => [
         order.purchaseOrderNumber,

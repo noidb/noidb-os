@@ -8,6 +8,7 @@
     "build": "npm run verify:wms-rules && npm run verify:wims-extension && npm run verify:supply-status-extension && npm run verify:registration-idempotency && next build",
     "start": "next start",
     "verify:shipment-split": "npx --yes tsx scripts/verify-shipment-split.ts",
+    "verify:wms-order-versioning": "npx --yes tsx scripts/verify-wms-order-versioning.ts",
     "verify:supply-status-safe": "npx --yes tsx scripts/verify-supply-status-safe-updates.ts",
     "verify:wims-registration": "npx --yes tsx scripts/verify-wims-registration.ts",
     "verify:wims-extension": "node scripts/verify-wims-extension.cjs",

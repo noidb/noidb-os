@@ -141,6 +141,14 @@ export default function WmsWorkCenterPage() {
       </a>
 
       <ActiveWaveList className="wms-work-center-active-waves" />
+
+      <section style={{ marginTop: "18px", padding: "14px", border: `1px solid ${wmsColors.border}`, borderRadius: "14px", background: wmsColors.surface }}>
+        <div style={{ marginBottom: "9px" }}>
+          <h2 style={{ margin: 0, fontSize: "16px" }}>재출력센터</h2>
+          <p style={{ margin: "4px 0 0", color: wmsColors.muted, fontSize: "12px" }}>SKU·바코드·발주번호·상품명으로 찾아 바코드 한 장도 바로 다시 출력합니다.</p>
+        </div>
+        <a href="/wms/reprint" style={{ ...wmsPrimaryButton, minHeight: "48px", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box", textDecoration: "none" }}>재출력하기</a>
+      </section>
     </main>
   );
 }
