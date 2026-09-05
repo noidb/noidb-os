@@ -1,4 +1,4 @@
-import { getStoredRefreshToken } from "./google-drive-oauth-store";
+import { getValidDriveAccessToken } from "./google-drive-oauth";
 
 export interface WmsFolderConnectionStatus {
   key: string;
@@ -13,7 +13,13 @@ function configured(...names: string[]) {
 
 /** 비밀값이나 내부 환경변수명은 반환하지 않고 사용자용 연결 상태만 만든다. */
 export async function getWmsFolderConnectionStatuses(): Promise<WmsFolderConnectionStatus[]> {
-  const userDriveConnected = Boolean(await getStoredRefreshToken());
+  let userDriveConnected = false;
+  try {
+    await getValidDriveAccessToken();
+    userDriveConnected = true;
+  } catch {
+    userDriveConnected = false;
+  }
   return [
     { key: "purchase-order-source", label: "발주서 원본 폴더", description: "새 ZIP·XLSX 자동 확인", connected: configured("GOOGLE_DRIVE_COUPANG_PURCHASE_ORDER_FOLDER_ID") },
     { key: "po-template", label: "발주서 업로드양식 폴더", description: "발주번호에 맞는 양식 자동 탐색", connected: configured("GOOGLE_DRIVE_PO_FOR_CONFIRM_FOLDER_ID") },
