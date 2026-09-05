@@ -5,7 +5,7 @@ const path = require("node:path");
 const { createHash } = require("node:crypto");
 const base = "https://noidb-os.vercel.app";
 const waveId = "WAVE-20260902-926d76fa";
-const output = "tmp/work-center-production-check";
+const output = process.env.NOIDB_PRODUCTION_CHECK_OUTPUT || "tmp/work-center-production-check";
 const fingerprint = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
 async function snapshot() {

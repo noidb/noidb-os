@@ -6,6 +6,7 @@ import vm from "node:vm";
 const sourcePath = path.join(process.cwd(), "templates", "구글시트_상품DB_연동.gs");
 const source = fs.readFileSync(sourcePath, "utf8");
 const parserSource = fs.readFileSync(path.join(process.cwd(), "app", "api", "coupang-data", "route.ts"), "utf8");
+const safetySource = fs.readFileSync(path.join(process.cwd(), "lib", "wms", "inbound-import-safety.ts"), "utf8");
 const context = {
   console,
   Utilities: {
@@ -71,11 +72,14 @@ assert.equal(missing([poRow({ po: "A", qty: 12, confirmed: 0 })]), undefined, "�
 assert.equal(missing([poRow({ po: "A", qty: 12, confirmed: "0" })]), undefined, "확정수량 문자열 0도 치환 금지");
 assert.equal(missing([poRow({ po: "A", qty: 12, confirmed: "" })]), 12, "확정수량 빈값만 발주수량 대체");
 
-assert.match(parserSource, /row\["발주번호"\].*row\["번호"\]/s, "번호 헤더를 발주번호 후보로 인식");
+assert.match(parserSource, /parseInboundSourceRows/, "입고 원문을 공통 안전 파서로 처리");
+assert.match(safetySource, /"발주번호".*"번호"/s, "번호 헤더를 발주번호 후보로 인식");
+assert.match(safetySource, /actualAt.*po.*sku.*kind/s, "초 단위 시각·발주번호·SKU·방향 이벤트 식별");
+assert.match(safetySource, /과거 날짜-only 요약행.*일합계가 정확히 같을 때만/s, "시각 없는 과거 요약은 일합계 완전일치만 중복 인정");
 assert.match(source, /existingByFingerprint\[fingerprint\]/, "동일 파일 fingerprint 조회");
 assert.match(source, /skippedDatasets\+\+; return;/, "동일 fingerprint 재업로드 건너뛰기");
 
 console.log(JSON.stringify({
   ok: true,
-  scenarios: ["정상 완전입고", "지연 완전입고", "부분입고", "추가입고", "동일 SKU 복수 발주", "음수 방지", "취소 제외", "확정 0 보존", "빈 확정수량 대체", "동일 파일 재업로드 방지"],
+  scenarios: ["정상 완전입고", "지연 완전입고", "부분입고", "추가입고", "동일 SKU 복수 발주", "음수 방지", "취소 제외", "확정 0 보존", "빈 확정수량 대체", "동일 파일 재업로드 방지", "초 단위 이벤트 중복 방지", "과거 일합계 충돌 차단"],
 }));

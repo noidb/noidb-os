@@ -19,6 +19,8 @@ import WmsExitNav from "../WmsExitNav";
 import RefreshCatalogButton from "../RefreshCatalogButton";
 import ImageDiagnosticsPanel from "./ImageDiagnosticsPanel";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
+import { useReceivingDelays } from "@/lib/wms/vendor-order/use-receiving-delays";
+import { receivingDelayDate, type ReceivingDelaySummary } from "@/lib/wms/vendor-order/receiving-delay";
 import { openProductLinkPreview } from "@/lib/wms/product-link-preview";
 import { ExternalLinkIcon } from "../../../icons";
 import WaveIdentityEditor from "../WaveIdentityEditor";
@@ -116,6 +118,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [vendorActionMessage, setVendorActionMessage] = useState<string | null>(null);
   const [statusActionMessage, setStatusActionMessage] = useState<string | null>(null);
+  const receivingDelays = useReceivingDelays();
   const [vendorTransferItems, setVendorTransferItems] = useState<PickingWaveItem[] | null>(null);
   const [vendorTransferError, setVendorTransferError] = useState<string | null>(null);
   /** 하단 일괄처리 영역(미처리 SKU만 선택 + 선택 전량찾음/전량없음)의 DOM — 일괄처리 직후
@@ -805,6 +808,8 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
           <p style={{ fontSize: "11px", color: "#c0392b", margin: "0 0 10px" }}>{catalogRefreshError}</p>
         )}
 
+        {receivingDelays.error && <p style={{ fontSize: "11px", color: "#b42318" }}>{receivingDelays.error} <button type="button" onClick={() => void receivingDelays.refresh()} style={{ ...wmsGhostButton, minHeight: "34px" }}>지연 이력 다시 확인</button></p>}
+
         {checklistMode && (
           <ChecklistView
             key={wave.id}
@@ -818,6 +823,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
             onBulkDeleteImages={removeSelectedImageLinks}
             bulkProcessing={bulkProcessing}
             liveCatalogByProductCode={liveCatalogByProductCode}
+            receivingDelaySummaries={receivingDelays.summaries}
             bulkAreaRef={bulkAreaRef}
             onOpenDetail={openProductDetail}
             logisticsLabelsForItem={logisticsLabelsForItem}
@@ -1204,6 +1210,7 @@ function ChecklistView({
   onBulkDeleteImages,
   bulkProcessing,
   liveCatalogByProductCode,
+  receivingDelaySummaries,
   bulkAreaRef,
   onOpenDetail,
   logisticsLabelsForItem,
@@ -1220,6 +1227,7 @@ function ChecklistView({
   onBulkDeleteImages: () => void | Promise<void>;
   bulkProcessing: boolean;
   liveCatalogByProductCode: LiveCatalogLookup;
+  receivingDelaySummaries: Map<string, ReceivingDelaySummary>;
   bulkAreaRef: RefObject<HTMLDivElement>;
   onOpenDetail: (item: PickingWaveItem) => void;
   logisticsLabelsForItem: (item: PickingWaveItem) => string[];
@@ -1282,6 +1290,7 @@ function ChecklistView({
           const checked = checkedProductCodes.has(item.productCode);
           const isDone = item.status !== "pending";
           const live = resolveLiveFields(item, liveCatalogByProductCode);
+          const delay = receivingDelaySummaries.get(normalizeSkuId(live.liveSkuId || item.productCode));
           return (
             <div
               key={item.productCode}
@@ -1315,6 +1324,7 @@ function ChecklistView({
                   옵션 · {live.optionLabel || "옵션 없음"}
                 </div>
                 <div style={{ fontSize: "10px", color: wmsColors.muted }}>SKU {item.productCode}</div>
+                {delay?.active && <div style={{ marginTop: "4px", fontSize: "11px", color: "#a33b2e", fontWeight: 800, lineHeight: 1.4 }}>입고지연 · {receivingDelayDate(delay.recentDelayedAt)}{delay.memo ? ` · ${delay.memo}` : ""}</div>}
                 <div style={{ marginTop: "3px", fontSize: "10px", fontWeight: 800, color: wmsColors.slateDark, whiteSpace: "normal", lineHeight: 1.35 }}>
                   {logisticsLabelsForItem(item).join(" / ")}
                 </div>

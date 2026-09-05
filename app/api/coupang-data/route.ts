@@ -2,6 +2,12 @@ import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
 import { NextRequest, NextResponse } from "next/server";
+import { fetchSheetRows } from "@/lib/wms/google-sheets";
+import {
+  analyzeInboundImportSafety,
+  parseInboundSourceRows,
+  type InboundImportDataset,
+} from "@/lib/wms/inbound-import-safety";
 
 export const runtime = "nodejs";
 // 대량 SKU 파일은 Apps Script의 시트 갱신까지 기다려야 하므로 60초보다 넉넉하게 허용합니다.
@@ -243,59 +249,60 @@ export async function POST(req: NextRequest) {
     }
 
     if (mode === "inboundHistory") {
-      const datasets: { fingerprint: string; sourceFile: string; items: any[] }[] = [];
-      const uniqueSkus = new Set<string>();
-      let totalInbound = 0;
-      let totalOutbound = 0;
+      const datasets: InboundImportDataset[] = [];
       for (const file of files) {
         const { rows, buffer } = await xlsxRows(file);
-        const totals = new Map<string, { po: string; expectedDate: string; sku: string; name: string; inbound: number; outbound: number; prices: { date: string; price: number }[]; lastDate: string }>();
-        for (const row of toObjects(rows)) {
-          const sku = row["SKU번호"] || row["SKU ID"];
-          if (!sku) continue;
-          // 쿠팡 입고상세내역의 실제 헤더는 "번호"이며 값이 발주번호다. 다른 내보내기 형식의
-          // 명시적 헤더도 함께 지원하되 상품명/날짜로는 절대 추측 매칭하지 않는다.
-          const po = cleanText(row["발주번호"] || row["발주서번호"] || row["발주서 번호"] || row["번호"]);
-          const expectedDate = cleanText(row["입고예정일"] || row["입고예정일시"]);
-          const quantity = parseNumber(row["수량"] || row["입고수량"]);
-          const type = row["구분"];
-          const date = row["입고/반출시각"] || row["입고일"] || "";
-          const dateMatch = cleanText(date).match(/(20\d{2})[/.\-](\d{1,2})[/.\-](\d{1,2})/);
-          const actualDate = dateMatch ? `${dateMatch[1]}-${dateMatch[2].padStart(2, "0")}-${dateMatch[3].padStart(2, "0")}` : "";
-          const key = [po, expectedDate, sku, actualDate].join("|");
-          const current = totals.get(key) || { po, expectedDate, sku, name: row["SKU명"] || row["SKU 이름"], inbound: 0, outbound: 0, prices: [], lastDate: actualDate };
-          if (type === "발주" || type === "입고") current.inbound += quantity;
-          if (type === "반출") current.outbound += quantity;
-          if (type === "발주" || type === "입고") {
-            const price = parseNumber(row["공급가액"] || row["공급가"]);
-            if (price > 0 && date) current.prices.push({ date, price });
-          }
-          if (actualDate > current.lastDate) current.lastDate = actualDate;
-          totals.set(key, current);
-        }
-        const items = [...totals.values()].map(item => {
-          const prices = item.prices.sort((a, b) => a.date.localeCompare(b.date));
-          const latest = prices.at(-1)?.price || 0;
-          const previous = prices.length > 1 ? prices.at(-2)?.price || 0 : 0;
-          uniqueSkus.add(item.sku);
-          totalInbound += item.inbound;
-          totalOutbound += item.outbound;
-          return {
-            po: item.po, expectedDate: item.expectedDate, sku: item.sku, name: item.name,
-            totalInbound: item.inbound, outbound: item.outbound,
-            netInbound: item.inbound - item.outbound, lastDate: item.lastDate,
-            previousSupplyDate: prices.length > 1 ? prices.at(-2)?.date || "" : "",
-            previousSupplyPrice: previous,
-            latestSupplyDate: prices.at(-1)?.date || "",
-            latestSupplyPrice: latest,
-          };
+        const items = parseInboundSourceRows(toObjects(rows), file.name);
+        datasets.push({
+          fingerprint: createHash("sha256").update(buffer).digest("hex"),
+          sourceFile: file.name,
+          items,
         });
-        datasets.push({ fingerprint: createHash("sha256").update(buffer).digest("hex"), sourceFile: file.name, items });
       }
-      const responseSummary = { ok: true, mode, files: files.length, parsed: uniqueSkus.size, totalInbound, totalOutbound, netInbound: totalInbound - totalOutbound };
-      if (dryRun) return NextResponse.json({ ...responseSummary, sample: datasets.flatMap(dataset => dataset.items).slice(0, 2) });
-      const result = await callWebhook({ action: "importInboundSummary", datasets });
-      return NextResponse.json({ ...responseSummary, ...result });
+
+      // 파일 hash만으로는 기간이 겹치는 서로 다른 다운로드를 막을 수 없다. 현재 숨김 이력과
+      // 초 단위 입고 이벤트를 읽기 전용으로 대조한다. 신규 반영은 셀별 검증이 추가될 때까지 잠근다.
+      const historyRows = await fetchSheetRows("_입고요약");
+      const safety = analyzeInboundImportSafety(historyRows, datasets);
+      if (safety.conflicts.length) {
+        const sample = safety.conflicts.slice(0, 3)
+          .map(conflict => {
+            const [actualAt, purchaseOrder, sku] = conflict.eventKey.split("|");
+            return `${actualAt || "입고일 미확인"} · 발주 ${purchaseOrder || "미확인"} · SKU ${sku || "미확인"}: ${conflict.reason}`;
+          }).join(" / ");
+        throw new Error(`겹친 입고기록의 값이 달라 자동 반영을 중단했습니다. ${sample}`);
+      }
+      const expectedPreviewToken = cleanText(form.get("expectedPreviewToken"));
+      if (expectedPreviewToken && expectedPreviewToken !== safety.previewToken) {
+        throw new Error("미리 확인한 뒤 입고이력 또는 파일 내용이 달라졌습니다. 새 입고파일 확인부터 다시 해 주세요.");
+      }
+      const acceptedItems = safety.acceptedDatasets.flatMap(dataset => dataset.items);
+      const uniqueSkus = new Set(acceptedItems.map(item => item.sku));
+      const responseSummary = {
+        ok: true,
+        mode,
+        files: files.length,
+        parsed: uniqueSkus.size,
+        totalInbound: safety.candidateInbound,
+        totalOutbound: safety.candidateOutbound,
+        netInbound: safety.candidateInbound - safety.candidateOutbound,
+        sourceEvents: safety.sourceEventCount,
+        uniqueEvents: safety.uniqueEventCount,
+        candidateEvents: safety.candidateEventCount,
+        duplicateEvents: safety.duplicateEventCount,
+        overlapDuplicateEvents: safety.overlapDuplicateEventCount,
+        previewToken: safety.previewToken,
+      };
+      if (dryRun) return NextResponse.json({ ...responseSummary, sample: acceptedItems.slice(0, 2) });
+      if (!acceptedItems.length) {
+        return NextResponse.json({ ...responseSummary, skipped: true, importedDatasets: 0 });
+      }
+      return NextResponse.json({
+        ...responseSummary,
+        ok: false,
+        code: "INBOUND_APPLY_LOCKED",
+        error: "입고 중복 검토는 완료했습니다. 제품DB 반영은 셀별 변경 검증 후 사용할 수 있습니다. 기존 입고결과의 쿠폰·미입고 파일은 계속 생성할 수 있습니다.",
+      }, { status: 409 });
     }
 
     if (mode === "poList") {

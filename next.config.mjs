@@ -6,6 +6,7 @@ const nextConfig = {
       "/api/wms/**": [
         "./lib/wms/data/hanjin-template-static/*.xlsx",
         "./lib/wms/data/discontinue-templates/*.xlsx",
+        "./lib/wms/data/discontinue-templates/*.pdf",
         "./lib/wms/data/coupon-templates/*.xlsx",
       ],
     },

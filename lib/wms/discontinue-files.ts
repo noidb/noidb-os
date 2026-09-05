@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
+import { normalizeSkuId } from "./sku-normalize";
 import {
   downloadDriveFile,
   isDriveReaderConfigured,
@@ -11,6 +12,7 @@ import { downloadOAuthDriveFile, listOAuthDriveFolderFiles, resolveDriveFolderPa
 
 export const DISCONTINUE_TEMPLATE_NAME = "[양식]판매중지_SKU_영구생산중단.xlsx";
 export const RELEASE_TEMPLATE_NAME = "이메일발송용_노이드비_단종해제 SKU리스트.xlsx";
+export const DISCONTINUE_LETTER_TEMPLATE_NAME = "[샘플]로켓배송_단종요청_공문_20260723.pdf";
 export const DISCONTINUE_REASON = "리뉴얼 상품 없음 (NRO)";
 export const DISCONTINUE_COMMENT = "영구적 생산 중단에 의한 발주 중단";
 export const RELEASE_REASON = "공급사 공급 재개로 인한 상품 재공급";
@@ -44,11 +46,12 @@ function inlineCell(ref: string, value: string, style: number): string {
   return `<c r="${ref}" s="${style}" t="inlineStr"><is><t${preserve}>${xmlEscape(value)}</t></is></c>`;
 }
 
-function normalizedItems(items: DiscontinueFileItem[]): DiscontinueFileItem[] {
+export function normalizedDiscontinueItems(items: DiscontinueFileItem[]): DiscontinueFileItem[] {
   const unique = new Map<string, DiscontinueFileItem>();
   for (const item of items) {
-    const skuId = String(item.skuId || "").trim();
-    if (!skuId || unique.has(skuId)) continue;
+    const skuId = normalizeSkuId(String(item.skuId || ""));
+    if (!/^\d{1,20}$/.test(skuId)) throw new Error("선택한 SKU ID가 올바르지 않습니다. 목록을 다시 확인해 주세요.");
+    if (unique.has(skuId)) continue;
     unique.set(skuId, { skuId, productName: String(item.productName || "").trim() });
   }
   if (!unique.size) throw new Error("선택된 SKU가 없습니다.");
@@ -113,12 +116,16 @@ export async function loadReleaseTemplate(): Promise<Buffer> {
   return templateBuffer(RELEASE_TEMPLATE_NAME);
 }
 
+export async function loadDiscontinueLetterTemplate(): Promise<Buffer> {
+  return templateBuffer(DISCONTINUE_LETTER_TEMPLATE_NAME);
+}
+
 export async function buildDiscontinueWorkbook(
   source: Buffer,
   itemsInput: DiscontinueFileItem[],
   date: string,
 ): Promise<WorkbookBuildResult> {
-  const items = normalizedItems(itemsInput);
+  const items = normalizedDiscontinueItems(itemsInput);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("단종 요청 날짜 형식이 올바르지 않습니다.");
   const zip = await JSZip.loadAsync(source);
   const firstSheet = zip.file("xl/worksheets/sheet1.xml");
@@ -131,7 +138,7 @@ export async function buildDiscontinueWorkbook(
     const row = index + 3;
     return `<row r="${row}">${inlineCell(`A${row}`, item.skuId, 66)}${inlineCell(`B${row}`, DISCONTINUE_REASON, 66)}${inlineCell(`C${row}`, date, 66)}${inlineCell(`D${row}`, DISCONTINUE_COMMENT, 66)}</row>`;
   }).join("");
-  zip.file("xl/worksheets/sheet1.xml", replaceSheetData(originalFirstXml, fixedRows + dataRows, `D${items.length + 2}`));
+  zip.file("xl/worksheets/sheet1.xml", replaceSheetData(originalFirstXml, fixedRows + dataRows, `D${items.length + 2}`), { createFolders: false });
   const generated = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
   const verificationZip = await JSZip.loadAsync(generated);
   const generatedPreservedXml = await verificationZip.file("xl/worksheets/sheet2.xml")?.async("string");
@@ -143,7 +150,7 @@ export async function buildReleaseWorkbook(
   source: Buffer,
   itemsInput: DiscontinueFileItem[],
 ): Promise<WorkbookBuildResult> {
-  const items = normalizedItems(itemsInput);
+  const items = normalizedDiscontinueItems(itemsInput);
   const zip = await JSZip.loadAsync(source);
   const sheet = zip.file("xl/worksheets/sheet1.xml");
   if (!sheet) throw new Error("단종해제 양식의 입력 시트를 찾지 못했습니다.");
@@ -154,7 +161,7 @@ export async function buildReleaseWorkbook(
     return `<row r="${row}" spans="1:3" x14ac:dyDescent="0.25">${inlineCell(`A${row}`, item.skuId, 2)}${inlineCell(`B${row}`, RELEASE_REASON, 3)}${inlineCell(`C${row}`, item.productName || "", 2)}</row>`;
   }).join("");
   const generatedXml = replaceSheetData(originalXml, header + dataRows, `C${items.length + 1}`);
-  zip.file("xl/worksheets/sheet1.xml", generatedXml);
+  zip.file("xl/worksheets/sheet1.xml", generatedXml, { createFolders: false });
   const generated = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
   return { buffer: generated, itemCount: items.length, preservedWorksheetXml: true };
 }

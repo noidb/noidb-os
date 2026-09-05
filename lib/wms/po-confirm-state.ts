@@ -17,6 +17,9 @@ export interface PoConfirmationRecord {
   selectedRowCount: number;
   /** 브라우저로 내려받은 통합 서류의 표시 파일명. 실제 파일 bytes나 원본 경로는 저장하지 않는다. */
   generatedFileName?: string;
+  generatedFileHash?: string;
+  /** Explicit link recovery only; retain the complete previous record without recursive history. */
+  fileLinkBackups?: Array<{ savedAt: string; record: Omit<PoConfirmationRecord, "fileLinkBackups"> }>;
   documentGeneratedAt?: string;
   uploadedAt?: string;
   confirmedAt?: string;
@@ -57,6 +60,10 @@ export function isPoConfirmationRecord(value: unknown): value is PoConfirmationR
     isNonNegativeInteger(value.sourceRowCount) &&
     isNonNegativeInteger(value.selectedRowCount) &&
     isOptionalString(value.generatedFileName) &&
+    (value.generatedFileHash === undefined || (typeof value.generatedFileHash === "string" && /^[a-f0-9]{64}$/.test(value.generatedFileHash))) &&
+    (value.fileLinkBackups === undefined || (Array.isArray(value.fileLinkBackups) && value.fileLinkBackups.every(entry =>
+      isObject(entry) && typeof entry.savedAt === "string" && isObject(entry.record)
+      && entry.record.fileLinkBackups === undefined && isPoConfirmationRecord(entry.record)))) &&
     isOptionalString(value.documentGeneratedAt) &&
     isOptionalString(value.uploadedAt) &&
     isOptionalString(value.confirmedAt) &&
@@ -148,7 +155,14 @@ export function mergePoConfirmationRecords(
       continue;
     }
     if (merged[index].stage === "confirmed" && next.stage !== "confirmed") continue;
-    merged[index] = next;
+    if (merged[index].updatedAt > next.updatedAt) continue;
+    const previous = merged[index];
+    const keepRecoveredLink = Boolean(previous.fileLinkBackups?.length && previous.documentGeneratedAt === next.documentGeneratedAt);
+    merged[index] = {
+      ...next,
+      fileLinkBackups: previous.fileLinkBackups || next.fileLinkBackups,
+      ...(keepRecoveredLink ? { generatedFileName: previous.generatedFileName, generatedFileHash: previous.generatedFileHash } : {}),
+    };
   }
   return merged;
 }

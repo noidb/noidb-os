@@ -1,0 +1,26 @@
+import assert from "node:assert/strict";
+import { prepareVendorReassignment } from "../lib/wms/vendor-order/reassign-vendor";
+import type { VendorOrderDraft, VendorOrderDraftLine } from "../lib/wms/vendor-order/types";
+
+const now = "2026-09-06T00:00:00Z";
+const original: VendorOrderDraftLine = { id: "W::거래처A::SKU1", draftId: "W::거래처A", waveId: "W", vendorName: "거래처A", skuId: "80000001", modelName: "MODEL1", category: "반지", optionLabel: "실버, 20호", productName: "검증반지, 실버, 20호", imageUrl: "", barcode: "R100001", actualShortageQuantity: 3, shortageQuantity: 17, currentStock: "0", relatedPurchaseOrderNumbers: ["140000001"], memo: "세트 중 목걸이만", isManuallyAdded: true, receivedQuantity: 1, receivingDelayedAt: now, createdAt: now, updatedAt: now };
+const current = { ...original, shortageQuantity: 19, memo: "목걸이만 19개", updatedAt: "2026-09-06T00:01:00Z" };
+const source: VendorOrderDraft = { id: original.draftId, waveId: "W", vendorName: "거래처A", status: "draft", createdAt: now, updatedAt: now };
+const sent: VendorOrderDraft = { ...source, id: "W::전송거래처", vendorName: "전송거래처", status: "sent", sentAt: now, statusBeforeSent: "approved" };
+const input = { line: current, baseline: original, vendorName: " 거래처B ", latestLines: [original], latestDrafts: [source, sent], now: "2026-09-06T00:02:00Z" };
+const before = JSON.stringify(input);
+const moved = prepareVendorReassignment(input);
+assert.equal(JSON.stringify(input), before, "Planning must not mutate any existing object.");
+assert.equal(moved.line.id, original.id); assert.equal(moved.line.draftId, "W::거래처B"); assert.equal(moved.line.shortageQuantity, 19); assert.equal(moved.line.memo, current.memo); assert.equal(moved.line.receivedQuantity, 1); assert.equal(moved.line.receivingDelayedAt, now);
+assert.equal(moved.draft.status, "draft"); assert.equal(moved.createDraft, true);
+assert.deepEqual(moved.line, { ...current, vendorName: "거래처B", draftId: "W::거래처B", updatedAt: input.now });
+const existing = { ...moved.draft, status: "review" as const, createdAt: "2026-09-01T00:00:00Z" };
+const reused = prepareVendorReassignment({ ...input, latestDrafts: [source, existing, sent] });
+assert.equal(reused.createDraft, false); assert.deepEqual(reused.draft, existing); assert.equal(sent.status, "sent"); assert.equal(sent.sentAt, now);
+assert.throws(() => prepareVendorReassignment({ ...input, vendorName: sent.vendorName }), /승인·전송완료/);
+assert.throws(() => prepareVendorReassignment({ ...input, latestDrafts: [{ ...source, status: "sent" }] }), /승인·전송완료/);
+assert.throws(() => prepareVendorReassignment({ ...input, latestLines: [{ ...original, updatedAt: input.now }] }), /다른 화면/);
+assert.throws(() => prepareVendorReassignment({ ...input, latestLines: [] }), /다른 화면/);
+assert.throws(() => prepareVendorReassignment({ ...input, latestLines: [original, { ...original, id: "target-line", vendorName: "거래처B", draftId: "W::거래처B" }] }), /같은 SKU/);
+assert.throws(() => prepareVendorReassignment({ ...input, latestDrafts: [source, existing, existing] }), /발주서가 중복/);
+console.log("거래처 즉시이동 검증 PASS: 동일 line ID, 수량·메모·입고정보 보존, 기존 초안 재사용, 승인·전송완료/중복SKU/외부변경 차단");

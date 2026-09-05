@@ -75,6 +75,7 @@ export interface SheetTabProperties {
   sheetId: number;
   title: string;
   hidden: boolean;
+  gridColumnCount?: number;
 }
 
 async function fetchSpreadsheetTabs(): Promise<SheetTabProperties[]> {
@@ -90,6 +91,7 @@ async function fetchSpreadsheetTabs(): Promise<SheetTabProperties[]> {
     sheetId: Number(sheet?.properties?.sheetId || 0),
     title: String(sheet?.properties?.title || ""),
     hidden: Boolean(sheet?.properties?.hidden),
+    gridColumnCount: Number(sheet?.properties?.gridProperties?.columnCount || 0),
   }));
 }
 
@@ -138,6 +140,35 @@ export async function ensureHiddenSheet(sheetName: string, headers: string[]): P
   const sheetId = Number(data?.replies?.[0]?.addSheet?.properties?.sheetId || 0);
   await updateSheetCells(sheetName, headers.map((value, index) => ({ row: 1, col: index + 1, value })));
   return { sheetId, title: sheetName, hidden: true };
+}
+
+/** Explicit history-save only. Never call from a read or use for productDB columns.
+ * Existing cells are preserved; an empty optional trailing header is added after a sheet backup.
+ */
+export async function ensureHiddenSheetOptionalColumn(sheetName: string, baseHeaders: readonly string[], optionalHeader: string): Promise<void> {
+  const tabs = await fetchSpreadsheetTabs();
+  const existing = tabs.find(tab => tab.title === sheetName);
+  if (!existing) {
+    await ensureHiddenSheet(sheetName, [...baseHeaders, optionalHeader]);
+    return;
+  }
+  const column = baseHeaders.length;
+  const inspect = (rows: string[][]) => {
+    if (baseHeaders.some((header, index) => String(rows[0]?.[index] || "").trim() !== header)) throw new Error("이력 열 구성이 달라 메모 저장을 중단했습니다. 기존 데이터는 변경하지 않았습니다.");
+    const header = String(rows[0]?.[column] || "").trim();
+    if (header === optionalHeader) return true;
+    if (header || rows.slice(1).some(row => String(row[column] || "").trim())) throw new Error("이력의 메모 위치에 다른 데이터가 있어 저장을 중단했습니다. 관리자에게 확인해 주세요.");
+    return false;
+  };
+  if (inspect(await fetchSheetRows(sheetName))) return;
+  if (!existing.gridColumnCount) throw new Error("이력의 열 크기를 확인하지 못해 메모 저장을 중단했습니다.");
+  await backupSheetWithinSpreadsheet(sheetName);
+  if (inspect(await fetchSheetRows(sheetName))) return;
+  const requests: unknown[] = [];
+  if (existing.gridColumnCount < column + 1) requests.push({ appendDimension: { sheetId: existing.sheetId, dimension: "COLUMNS", length: column + 1 - existing.gridColumnCount } });
+  requests.push({ updateCells: { range: { sheetId: existing.sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: column, endColumnIndex: column + 1 }, rows: [{ values: [{ userEnteredValue: { stringValue: optionalHeader } }] }], fields: "userEnteredValue" } });
+  const response = await fetch(`${SHEETS_API_BASE}/${getWmsSpreadsheetId()}:batchUpdate`, { method: "POST", headers: { Authorization: `Bearer ${await getWmsGoogleAccessToken()}`, "Content-Type": "application/json" }, body: JSON.stringify({ requests }) });
+  if (!response.ok) throw new Error("입고지연 메모 칸을 준비하지 못했습니다. 기존 이력은 백업되었으며 다시 시도할 수 있습니다.");
 }
 
 /** 기존 행을 건드리지 않고 한 행만 append한다. 호출 전에 ensureHiddenSheet로 헤더를 검증한다. */

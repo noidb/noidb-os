@@ -19,6 +19,9 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const mutation: unknown = await request.json();
+    if (mutation && typeof mutation === "object" && "action" in mutation && mutation.action === "repairConfirmedFileLinks") {
+      return NextResponse.json({ ok: false, error: "출고작업에서 확정파일의 수량을 확인한 뒤 연결해 주세요." }, { status: 403, headers: noStoreHeaders });
+    }
     if (!isPickingWaveStoreMutation(mutation)) {
       return NextResponse.json({ ok: false, error: "저장 요청 형식이 올바르지 않습니다." }, { status: 400, headers: noStoreHeaders });
     }

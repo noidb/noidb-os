@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import ExcelJS from "exceljs";
@@ -44,12 +45,36 @@ async function run() {
   const bundled = await readFile(path.join(process.cwd(), "lib", "wms", "data", "coupon-templates", "쿠팡_프로모션쿠폰_양식.xlsx"));
   const hash = (buffer: Buffer) => createHash("sha256").update(buffer).digest("hex");
   if (hash(original) !== hash(bundled)) throw new Error("쿠폰 양식 복사본이 G: 원본과 다름");
+  const templateZip = await JSZip.loadAsync(bundled);
+  const generatedEntries = Object.keys(couponZip.files).sort();
+  const templateEntries = Object.keys(templateZip.files).sort();
+  if (JSON.stringify(generatedEntries) !== JSON.stringify(templateEntries)) throw new Error("쿠폰 양식 패키지 구성 보존 실패");
+  for (const entry of templateEntries.filter(name => name !== "xl/worksheets/sheet1.xml" && !templateZip.files[name].dir)) {
+    const [before, after] = await Promise.all([
+      templateZip.file(entry)!.async("nodebuffer"),
+      couponZip.file(entry)!.async("nodebuffer"),
+    ]);
+    if (hash(before) !== hash(after)) throw new Error(`쿠폰 양식 비입력영역 변경: ${entry}`);
+  }
+  const templateSheetXml = await templateZip.file("xl/worksheets/sheet1.xml")?.async("string") || "";
+  const withoutRows = (xml: string) => xml.replace(/<x:sheetData>[\s\S]*?<\/x:sheetData>/, "<x:sheetData></x:sheetData>");
+  if (withoutRows(templateSheetXml) !== withoutRows(couponXml)) throw new Error("쿠폰 양식 시트의 입력행 밖 구조가 변경됨");
+  const blankLinkWorkbook = new ExcelJS.Workbook();
+  await blankLinkWorkbook.xlsx.load(await buildMissingWorkbook([
+    { skuId: "SKU-NO-LINK", productName: "링크 없음", productLink: "" },
+  ]) as unknown as ExcelJS.Buffer);
+  const blankLinkSheet = blankLinkWorkbook.worksheets[0];
+  assert.equal(blankLinkSheet?.getCell("A2").text, "SKU-NO-LINK", "링크가 없어도 미입고 SKU를 누락하지 않음");
+  assert.equal(blankLinkSheet?.getCell("C2").text, "", "제품링크를 추측하지 않고 C열 빈칸 유지");
   const importRoute = await readFile(path.join(process.cwd(), "app", "api", "coupang-data", "route.ts"), "utf8");
   const syncRoute = await readFile(path.join(process.cwd(), "app", "api", "wms", "inbound-drive-sync", "route.ts"), "utf8");
-  if (!/mode === "inboundHistory"/.test(importRoute) || !/sku, actualDate/.test(importRoute)) throw new Error("입고 실제일 그룹 또는 운영 dry-run 보호 없음");
-  if (!/expectedFileIds/.test(syncRoute) || !/backupSheetWithinSpreadsheet\("제품DB"\)/.test(syncRoute)) throw new Error("입고 자동반영 미리보기 고정 또는 제품DB 백업 없음");
+  if (!/mode === "inboundHistory"/.test(importRoute) || !/analyzeInboundImportSafety/.test(importRoute)) throw new Error("입고 이벤트 안전 대조 또는 운영 dry-run 보호 없음");
+  const inboundBlock = importRoute.slice(importRoute.indexOf('if (mode === "inboundHistory")'), importRoute.indexOf('if (mode === "poList")'));
+  if (!/INBOUND_APPLY_LOCKED/.test(inboundBlock) || /importInboundSummary/.test(inboundBlock)) throw new Error("입고 신규 event-v2 쓰기가 읽기 전용으로 잠기지 않음");
+  if (!/action === "apply"/.test(syncRoute) || !/status: 409/.test(syncRoute) || !/form\.set\("dryRun", "true"\)/.test(syncRoute)) throw new Error("입고 Drive sync apply 차단 또는 읽기 전용 preview 없음");
+  if (/backupSheetWithinSpreadsheet|\bput\(|writeIndex/.test(syncRoute)) throw new Error("입고 Drive sync 잠금 상태에서 백업 또는 Drive index 쓰기 경로가 남음");
 
-  console.log(JSON.stringify({ actualDate: result.actualDate, purchaseOrders: 1, couponSku: 2, partialSku: 1, missingSku: 1, couponRows: 5, missingColumns: 3, missingProductLink: true, bundledTemplateMatchesDrive: true, productionDryRun: true, previewFingerprintLock: true, productDbBackupBeforeApply: true }, null, 2));
+  console.log(JSON.stringify({ actualDate: result.actualDate, purchaseOrders: 1, couponSku: 2, partialSku: 1, missingSku: 1, couponRows: 5, missingColumns: 3, missingProductLinkColumnPreserved: true, missingSkuNotDroppedWhenLinkBlank: true, bundledTemplateMatchesDrive: true, couponTemplatePackagePreserved: true, productionDryRun: true, previewEventLock: true, inboundApplyLocked: true }, null, 2));
 }
 
 run().catch(error => { console.error(error); process.exitCode = 1; });

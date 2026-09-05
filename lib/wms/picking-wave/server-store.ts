@@ -6,6 +6,7 @@ import { mergePoConfirmationRecords, removeTransientPoConfirmationRecordsForWave
 import { createShipmentsInState, deleteShipmentFromState, renameShipmentInState, updateShipmentGenerationInState, updateShipmentStatusInState } from "../shipment/state";
 import type { Shipment } from "../shipment/types";
 import { summarizeOutboundWork, kstWorkDate } from "../work-center";
+import { repairConfirmedFileLinks } from "../po-confirm-file-link";
 
 const BLOB_PATH = "noidb-wms/picking-waves/v1/store.json";
 const MAX_RETRIES = 6;
@@ -268,6 +269,8 @@ export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot,
     const key = basketKey(mutation.waveId, mutation.basketNumber);
     next.deletedBasketKeys[key] = mutation.deletedAt;
     next.baskets = next.baskets.filter(value => basketKey(value.waveId, value.basketNumber) !== key);
+  } else if (mutation.action === "repairConfirmedFileLinks") {
+    next.poConfirmationRecords = repairConfirmedFileLinks(next.poConfirmationRecords, mutation.before, mutation.fileName, mutation.contentHash, mutation.now);
   } else if (mutation.action === "upsertPoConfirmationRecords") {
     for (const record of mutation.records) delete next.deletedPoConfirmationNumbers[record.poNumber];
     next.poConfirmationRecords = mergePoConfirmationRecords(next.poConfirmationRecords, mutation.records);

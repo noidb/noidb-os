@@ -5,6 +5,7 @@ import type { ShipmentOutputGeneration } from "@/lib/wms/picking-wave/types";
 import type { AutoShipmentTrackingPreview } from "@/lib/wms/hanjin-shipment-auto";
 import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
+import ConfirmedFileLinkRecovery from "./ConfirmedFileLinkRecovery";
 
 interface Props {
   generation?: ShipmentOutputGeneration;
@@ -34,6 +35,7 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
   const [resultMessage, setResultMessage] = useState<string | null>(null);
   const [preview, setPreview] = useState<AutoShipmentTrackingPreview | null>(null);
   const [selectedReprintFileName, setSelectedReprintFileName] = useState<string | null>(null);
+  const [fileLinkBlocked, setFileLinkBlocked] = useState(true);
 
   useEffect(() => {
     if (!generation) { setPreview(null); setSelectedReprintFileName(null); return; }
@@ -71,7 +73,7 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
 
   async function handleGenerate() {
     const selectedCandidate = preview?.candidateFiles?.find(candidate => candidate.fileName === selectedReprintFileName);
-    if (!generation || (!preview?.canGenerate && !selectedCandidate?.exactMatch) || blockedByGeneration) return;
+    if (!generation || fileLinkBlocked || (!preview?.canGenerate && !selectedCandidate?.exactMatch) || blockedByGeneration) return;
     const downloadTarget = reserveDownloadTarget();
     setGenerating(true); setError(null); setReasons(null); setResultMessage(null);
     try {
@@ -116,9 +118,10 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
   const missing = preview?.missingPurchaseOrderNumbers.length || 0;
   const exactCandidates = preview?.candidateFiles?.filter(candidate => candidate.exactMatch) ?? [];
   const selectedCandidate = exactCandidates.find(candidate => candidate.fileName === selectedReprintFileName);
-  const canGenerate = Boolean(preview?.canGenerate || selectedCandidate);
+  const canGenerate = !fileLinkBlocked && Boolean(preview?.canGenerate || selectedCandidate);
 
   return <div>
+    <ConfirmedFileLinkRecovery key={generation.waveId} waveId={generation.waveId} onBlockedChange={setFileLinkBlocked} />
     <div style={{ marginBottom: "8px", padding: "9px", borderRadius: "8px", background: wmsColors.surfaceBeige, fontSize: "12px", lineHeight: 1.6 }}>
       <strong>현재 Shipment 대상 · {generationLabel || "현재 묶음"} · 발주 {total}건</strong><br />
       {checking ? "운송장 확인 중..." : `운송장 확인 ${matched}/${total} · 미확인 ${missing}`}

@@ -1,7 +1,9 @@
-import { appendSheetRow, ensureHiddenSheet, fetchExistingSheetRows, fetchSheetRows, updateSheetCells } from "./google-sheets";
+import { appendSheetRow, ensureHiddenSheet, ensureHiddenSheetOptionalColumn, fetchExistingSheetRows, fetchSheetRows, updateSheetCells } from "./google-sheets";
 import { normalizeSkuId, PRODUCT_DB_SHEET_NAME } from "./product-catalog";
 import { calculateReceivingCost } from "./receiving-cost";
 import { resolveDisplayNameAndOption } from "./display-name";
+import { summarizeReceivingDelayRows, validateReceivingDelayChange, type ReceivingDelaySummary } from "./vendor-order/receiving-delay";
+export type { ReceivingDelaySummary } from "./vendor-order/receiving-delay";
 
 export const STATUS_REQUEST_SHEET = "_WMS단종해제이력";
 export const RECEIVING_DELAY_SHEET = "_WMS입고지연이력";
@@ -42,13 +44,6 @@ export interface StatusRequestRecord {
   productLink: string;
   purchaseOrderNumber: string;
   sheetRow: number;
-}
-
-export interface ReceivingDelaySummary {
-  skuId: string;
-  recentDelayedAt: string;
-  active: boolean;
-  lastActionAt: string;
 }
 
 interface ProductSnapshot {
@@ -224,17 +219,21 @@ export async function recordStatusFileGeneration(input: {
   const skuIds = Array.from(new Set((input.skuIds || []).map(normalizeSkuId).filter(Boolean)));
   const requestIds = Array.from(new Set((input.requestIds || []).map(value => String(value || "").trim()).filter(Boolean)));
   if (!skuIds.length || !requestIds.length) throw new Error("파일 생성 이력의 SKU 또는 요청 정보가 비어 있습니다.");
-  const pending = await listStatusRequests();
-  const pendingById = new Map(pending.filter(item => item.supplyHubStatus === "처리대기").map(item => [item.id, item]));
-  const matched = requestIds.map(id => pendingById.get(id)).filter((item): item is StatusRequestRecord => Boolean(item));
+  const requests = await listStatusRequests();
+  // Reprinting a completed request only appends a generation record. It must
+  // neither require a status rollback nor change the original request row.
+  const requestsById = new Map(requests.map(item => [item.id, item]));
+  const matched = requestIds.map(id => requestsById.get(id)).filter((item): item is StatusRequestRecord => Boolean(item));
   const matchedSkuIds = Array.from(new Set(matched.map(item => normalizeSkuId(item.skuId))));
-  if (matched.length !== requestIds.length || matchedSkuIds.length !== skuIds.length || matchedSkuIds.some(id => !skuIds.includes(id))) {
-    throw new Error("현재 처리대기 목록과 생성 파일의 SKU가 달라 이력 저장을 중단했습니다.");
+  if (matched.length !== requestIds.length || matched.some(item => item.requestType !== input.kind) || matchedSkuIds.length !== skuIds.length || matchedSkuIds.some(id => !skuIds.includes(id))) {
+    throw new Error("선택한 요청 목록과 생성 파일의 SKU 또는 신청 종류가 달라 이력 저장을 중단했습니다.");
   }
+  const xlsxFileName = requiredText(input.xlsxFileName, "XLSX 파일명");
+  const pdfFileName = input.kind === "단종" ? requiredText(input.pdfFileName, "단종 공문 PDF 파일명") : "";
   await ensureHiddenSheet(STATUS_FILE_GENERATION_SHEET, [...STATUS_FILE_GENERATION_HEADERS]);
   const record: StatusFileGenerationRecord = {
     id: makeId("status-file"), kind: input.kind, skuIds, requestIds, generatedAt: new Date().toISOString(),
-    xlsxFileName: requiredText(input.xlsxFileName, "XLSX 파일명"), pdfFileName: String(input.pdfFileName || "").trim(),
+    xlsxFileName, pdfFileName,
     operator: String(input.operator || "자동").trim() || "자동",
   };
   await appendSheetRow(STATUS_FILE_GENERATION_SHEET, [
@@ -246,39 +245,32 @@ export async function recordStatusFileGeneration(input: {
 
 export async function recordReceivingDelay(input: {
   skuId: string; modelSku?: string; productName?: string; optionLabel?: string; vendorName?: string;
-  purchaseOrderNumber?: string; operator: string; delayed: boolean;
-}): Promise<void> {
+  purchaseOrderNumber?: string; operator: string; delayed: boolean; memo?: string; expectedLastActionAt?: string | null;
+}): Promise<ReceivingDelaySummary> {
   const skuId = normalizeSkuId(requiredText(input.skuId, "SKU ID"));
   const operator = requiredText(input.operator, "처리자");
-  await ensureHiddenSheet(RECEIVING_DELAY_SHEET, [...RECEIVING_DELAY_HEADERS]);
-  const rows = await fetchSheetRows(RECEIVING_DELAY_SHEET);
-  const existing = rows.slice(1).filter(row => normalizeSkuId(row[1]) === skuId);
-  const last = existing[existing.length - 1];
-  const active = last ? String(last[10] || "") === "입고지연" : false;
-  if (active === input.delayed) throw new Error(input.delayed ? `SKU ${skuId}는 이미 입고지연 상태입니다.` : `SKU ${skuId}는 입고지연 상태가 아닙니다.`);
+  let previous = (await listReceivingDelaySummaries()).find(summary => summary.skuId === skuId);
+  const initial = validateReceivingDelayChange(input, previous);
+  if (!initial.changed) return previous || { skuId, recentDelayedAt: "", active: false, lastActionAt: "", vendorName: "", memo: "" };
+  // Only this explicit mutation can create/extend the dedicated history tab. Reads never do.
+  await ensureHiddenSheetOptionalColumn(RECEIVING_DELAY_SHEET, RECEIVING_DELAY_HEADERS, "메모");
+  previous = (await listReceivingDelaySummaries()).find(summary => summary.skuId === skuId);
+  const change = validateReceivingDelayChange(input, previous);
+  if (!change.changed && previous) return previous;
   const now = new Date().toISOString();
   await appendSheetRow(RECEIVING_DELAY_SHEET, [
     makeId("delay"), skuId, input.modelSku || "", input.productName || "", input.optionLabel || "",
     input.vendorName || "", input.purchaseOrderNumber || "", input.delayed ? "입고지연" : "입고지연해제",
-    now, operator, input.delayed ? "입고지연" : "해제",
+    now, operator, input.delayed ? "입고지연" : "해제", change.memo,
   ]);
+  return { skuId, active: input.delayed, recentDelayedAt: input.delayed ? now : previous?.recentDelayedAt || "", lastActionAt: now, vendorName: input.vendorName || "", memo: change.memo };
 }
 
 export async function listReceivingDelaySummaries(): Promise<ReceivingDelaySummary[]> {
   const rows = await fetchExistingSheetRows(RECEIVING_DELAY_SHEET, { expectedHeaders: RECEIVING_DELAY_HEADERS });
-  const summaries = new Map<string, ReceivingDelaySummary>();
-  for (const row of rows.slice(1)) {
-    const skuId = normalizeSkuId(row[1]);
-    if (!skuId) continue;
-    const action = String(row[7] || "");
-    const actionAt = String(row[8] || "");
-    const previous = summaries.get(skuId) || { skuId, recentDelayedAt: "", active: false, lastActionAt: "" };
-    if (action === "입고지연") previous.recentDelayedAt = actionAt;
-    previous.active = String(row[10] || "") === "입고지연";
-    previous.lastActionAt = actionAt;
-    summaries.set(skuId, previous);
-  }
-  return Array.from(summaries.values());
+  const memoHeader = String(rows[0]?.[RECEIVING_DELAY_HEADERS.length] || "").trim();
+  if (memoHeader && memoHeader !== "메모") throw new Error("입고지연 메모 열 구성을 확인해 주세요.");
+  return summarizeReceivingDelayRows(memoHeader === "메모" ? rows : rows.map(row => row.slice(0, RECEIVING_DELAY_HEADERS.length)));
 }
 
 export async function applyReceivingCost(input: {

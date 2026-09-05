@@ -37,7 +37,7 @@ let currentPage;
 
 async function runCase(browser, width, target) {
   const context = await browser.newContext({ viewport: { width, height: width < 500 ? 844 : 1080 }, serviceWorkers: "block" });
-  const shipmentPreviews = [], previews = [], selectionMutations = [];
+  const shipmentPreviews = [], previews = [], selectionMutations = [], fileLinkMutations = [];
   const fixtureSnapshot = JSON.parse(JSON.stringify(snapshot));
   const href = `${root}/complete?generation=${target.generationId}#${target.anchor}`;
   await context.addInitScript(({ id, selectedId }) => {
@@ -89,6 +89,13 @@ async function runCase(browser, width, target) {
       // The completed-wave navigation scenario does not need a new confirmation template.
       return route.fulfill({ json: { folderAccessible: true, source: null, error: "격리 검증: 신규 발주확정 양식은 이 탐색 테스트에서 사용하지 않습니다." } });
     }
+    if (request.method() === "POST" && url.pathname === "/api/wms/po-confirm/file-link") {
+      const body = request.postDataJSON();
+      if (body.action === "preview") return route.fulfill({ json: { groups: target.repair ? [{ previousFileName:"missing.xlsx", purchaseOrderNumbers:poNumbers, candidates:[{token:"fixture-token",fileName:"PO_FOR_CONFIRM_선택발주_6건.xlsx",purchaseOrderCount:6,rowCount:6,totalConfirmedQuantity:30,quantityChanges:[]}] }] : [] } });
+      assert.equal(target.repair, true); assert.equal(body.confirmed,true); assert.equal(body.token,"fixture-token");
+      fileLinkMutations.push(body);
+      return route.fulfill({json:{connected:true,purchaseOrderCount:6,fileName:"PO_FOR_CONFIRM_선택발주_6건.xlsx"}});
+    }
     if (request.method() !== "GET") {
       forbidden.push(`${request.method()} ${url.pathname}`);
       return route.fulfill({ status: 400, json: { ok: false, error: "No business writes or file generation in navigation fixtures." } });
@@ -123,7 +130,7 @@ async function runCase(browser, width, target) {
       const summary = target.anchor === "hanjin-step-3" ? `현재 Shipment 대상 · 묶음 ${target.number} · 발주 2건` : `현재 출력세트: 묶음 ${target.number} · 발주 2건`;
       await targetSection.getByText(summary, { exact: false }).waitFor();
       await page.locator("#hanjin-step-3").getByRole("button", { name: /^Shipment 파일/ }).waitFor();
-      await page.waitForFunction(() => [...document.querySelectorAll("#hanjin-step-3 button")].some(button => !button.disabled && button.textContent.startsWith("Shipment 파일")));
+      if (!target.repair) await page.waitForFunction(() => [...document.querySelectorAll("#hanjin-step-3 button")].some(button => !button.disabled && button.textContent.startsWith("Shipment 파일")));
       assert(shipmentPreviews.length > 0);
       for (const poSet of shipmentPreviews) assert.deepEqual(poSet, generations[target.number - 1].purchaseOrderNumbers, "URL-selected PO set must not fall back to the latest generation.");
       assert.equal(await page.getByRole("button", { name: `묶음 ${target.number} · 발주 2건`, exact: true }).count(), 1);
@@ -136,12 +143,21 @@ async function runCase(browser, width, target) {
         const button = [...document.querySelectorAll(`#${id} button`)].find(element => element.textContent.trim() === text);
         const rect = button?.getBoundingClientRect();
         return Boolean(rect && rect.top >= 0 && rect.bottom <= innerHeight);
-      }, { id: target.anchor, text: target.anchor === "shipment-output-set" ? "Shipment 출력세트 생성" : "Shipment 파일 생성" });
+      }, { id: target.anchor, text: target.repair ? "이 수량 확인 · 확정파일 연결 복구" : target.anchor === "shipment-output-set" ? "Shipment 출력세트 생성" : "Shipment 파일 생성" });
     }
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `Horizontal overflow at ${width}`);
     const bounds = await targetSection.boundingBox();
     await page.screenshot({ path: path.join(output, `navigation-${target.anchor}-${target.number || "invalid"}-${width}.png`) });
     assert.equal(selectionMutations.length, 0, "Entering a generation deep link must not save selection automatically.");
+    if (target.repair) {
+      assert.equal(fileLinkMutations.length,0,"Preview must never repair automatically");
+      assert.equal(await page.locator("#hanjin-step-3").getByRole("button",{name:"Shipment 파일 생성",exact:true}).isEnabled(),false);
+      await page.getByRole("button",{name:"이 수량 확인 · 확정파일 연결 복구",exact:true}).click();
+      await page.getByRole("status").filter({hasText:"발주 6건의 확정파일 연결을 복구했습니다"}).waitFor();
+      assert.equal(fileLinkMutations.length,1);
+      assert.equal(await page.locator("#hanjin-step-3").getByRole("button",{name:"Shipment 파일 생성",exact:true}).isEnabled(),true);
+      assert.equal(await page.getByRole("button",{name:"이 수량 확인 · 확정파일 연결 복구",exact:true}).count(),0);
+    }
     let changedSelection = null;
     if (target.selectOther) {
       const beforePreviewCount = shipmentPreviews.length;
@@ -160,7 +176,7 @@ async function runCase(browser, width, target) {
     }
     await page.goBack();
     await page.getByRole("heading", { name: "오늘 할 일", exact: true }).waitFor();
-    await page.waitForFunction(expected => Math.abs(window.scrollY - expected) < 5, dashboardScroll);
+    await page.waitForFunction(expected => Math.abs(window.scrollY - Math.min(expected, document.documentElement.scrollHeight - innerHeight)) < 5, dashboardScroll);
     results.push({ width, anchor: target.anchor, selectedGeneration: target.generationId, invalidBlocked: Boolean(target.invalid), anchorTop: bounds.y, actionInViewport: !target.invalid, shipmentPreviewPoSets: shipmentPreviews, dashboardScrollRestored: dashboardScroll, changedSelection });
   } catch (error) {
     console.error(JSON.stringify({ width, target, url: page.url(), anchors: await page.evaluate(() => Object.fromEntries(["po-confirm", "hanjin-step-1", "hanjin-step-3", "shipment-output-set"].map(id => [id, document.getElementById(id)?.getBoundingClientRect().top]))).catch(() => ({})), shipmentPreviews, previews, scrollY: await page.evaluate(() => window.scrollY).catch(() => 0) }));
@@ -178,6 +194,7 @@ async function main() {
       await runCase(browser, width, { number: 1, generationId: generations[0].generationId, anchor: "hanjin-step-3", label: "Shipment 묶음 1 계속하기", selectOther: width === 390 });
       await runCase(browser, width, { number: 2, generationId: generations[1].generationId, anchor: "shipment-output-set", label: "묶음 2 · Shipment 출력세트" });
       await runCase(browser, width, { generationId: "GEN-DOES-NOT-EXIST", anchor: "hanjin-step-3", label: "잘못된 묶음 연결 검증", invalid: true });
+      await runCase(browser, width, { number:1,generationId:generations[0].generationId,anchor:"hanjin-step-3",label:"확정파일 연결 복구",repair:true });
     }
     assert.deepEqual(forbidden, []); assert.deepEqual(errors, []);
     console.log(JSON.stringify({ passed: true, apiIsolation: true, fileGeneration: 0, operatingWrites: 0, savedGenerations: 3, results }));

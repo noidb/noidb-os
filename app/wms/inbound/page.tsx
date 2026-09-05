@@ -11,7 +11,16 @@ interface DriveSyncPreview {
   newFiles: Array<{ id: string; name: string; modifiedTime: string; size: string }>;
   modifiedFiles: Array<{ id: string; name: string; modifiedTime: string; size: string }>;
   message?: string;
-  result?: { parsed?: number; totalInbound?: number; files?: number; skipped?: boolean };
+  result?: {
+    parsed?: number;
+    totalInbound?: number;
+    files?: number;
+    skipped?: boolean;
+    previewToken?: string;
+    candidateEvents?: number;
+    duplicateEvents?: number;
+    overlapDuplicateEvents?: number;
+  };
 }
 
 interface ApiFailure {
@@ -45,13 +54,14 @@ export default function WmsInboundPage() {
 
   useEffect(() => { void reload(); }, []);
   const selected = useMemo(() => results.find(item => item.actualDate === selectedDate), [results, selectedDate]);
+  const missingProductLinkCount = selected?.missingItems.filter(item => !item.productLink.trim()).length || 0;
 
-  async function syncDrive(action: "preview" | "apply") {
+  async function syncDrive() {
     setBusy(true); setMessage("");
     try {
       const response = await fetch("/api/wms/inbound-drive-sync", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, expectedFileIds: action === "apply" ? (syncPreview?.newFiles || []).map(file => file.id) : [] }),
+        body: JSON.stringify({ action: "preview" }),
       });
       const data = await response.json() as DriveSyncPreview & ApiFailure;
       if (!response.ok || !data.success) {
@@ -63,11 +73,7 @@ export default function WmsInboundPage() {
       }
       setDriveReconnectRequired(false);
       setSyncPreview(data);
-      if (data.applied) {
-        const completedMessage = data.result?.skipped ? "이미 반영된 파일이라 중복 적용하지 않았습니다." : `입고파일 ${data.newFiles.length}개 반영 완료 · 실제 입고 ${Number(data.result?.totalInbound || 0).toLocaleString()}개`;
-        await reload();
-        setMessage(completedMessage);
-      } else if (data.message) setMessage(data.message);
+      if (data.message) setMessage(data.message);
     } catch (error) { setMessage(error instanceof Error ? error.message : "입고파일 자동 확인에 실패했습니다."); }
     finally { setBusy(false); }
   }
@@ -84,9 +90,23 @@ export default function WmsInboundPage() {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.error || "파일을 만들지 못했습니다.");
       }
-      const fileName = decodeURIComponent(response.headers.get("X-NOIDB-File-Name") || `입고결과_${selected.actualDate}.zip`);
+      const decodeHeader = (name: string, fallback = "") => {
+        const value = response.headers.get(name) || fallback;
+        try { return decodeURIComponent(value); } catch { return value; }
+      };
+      const fileName = decodeHeader("X-NOIDB-File-Name", `입고결과_${selected.actualDate}.zip`);
+      const couponCount = Number(response.headers.get("X-NOIDB-Coupon-Count") || 0);
+      const missingCount = Number(response.headers.get("X-NOIDB-Missing-Count") || 0);
+      const driveSaved = response.headers.get("X-NOIDB-Drive-Saved") === "true";
+      const driveWarning = decodeHeader("X-NOIDB-Drive-Save-Warning");
+      const couponFileName = decodeHeader("X-NOIDB-Coupon-File-Name");
+      const missingFileName = decodeHeader("X-NOIDB-Missing-File-Name");
       downloadBlobPreservingPage(await response.blob(), fileName);
-      setMessage(`생성완료 · 실제 입고일 ${selected.actualDate} · 쿠폰 ${selected.receivedSkuCount}개 · 미입고 ${selected.missingSkuCount}개 · 정률 ${discountRate}%`);
+      const generatedFiles = [couponFileName, missingFileName].filter(Boolean).join(" / ");
+      const driveResult = driveSaved
+        ? " · Drive 저장 완료"
+        : ` · ${driveWarning || "Drive 자동저장에 실패했지만 내려받은 ZIP은 사용할 수 있습니다."}`;
+      setMessage(`생성완료 · 실제 입고일 ${selected.actualDate} · 쿠폰 ${couponCount.toLocaleString()}개 · 미입고 ${missingCount.toLocaleString()}개 · 정률 ${discountRate}%${generatedFiles ? ` · 파일 ${generatedFiles}` : ""}${driveResult}`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "파일을 만들지 못했습니다."); }
     finally { setBusy(false); }
   }
@@ -99,7 +119,7 @@ export default function WmsInboundPage() {
       <section style={{ padding: "12px", marginBottom: "12px", border: `1px solid ${wmsColors.border}`, borderRadius: "12px", background: wmsColors.surfaceBeige }}>
         <strong style={{ display: "block", fontSize: "14px" }}>입고파일 자동 확인</strong>
         <p style={{ margin: "4px 0 9px", fontSize: "11px", color: wmsColors.muted }}>Google Drive의 입고상세내역 다운로드 폴더에서 새 XLSX만 찾습니다.</p>
-        <button type="button" onClick={() => syncDrive("preview")} disabled={busy} style={{ ...wmsGhostButton, width: "100%", minHeight: "42px", opacity: busy ? .5 : 1 }}>{busy ? "확인 중..." : "새 입고파일 확인"}</button>
+        <button type="button" onClick={syncDrive} disabled={busy} style={{ ...wmsGhostButton, width: "100%", minHeight: "42px", opacity: busy ? .5 : 1 }}>{busy ? "확인 중..." : "새 입고파일 확인"}</button>
         {driveReconnectRequired ? <div style={{ marginTop: "8px", padding: "10px", border: `1px solid ${wmsColors.warn}`, borderRadius: "10px", background: wmsColors.warnSoft }}>
           <strong style={{ display: "block", marginBottom: "6px", fontSize: "12px", color: wmsColors.warnText }}>Google Drive 연결이 만료되었습니다.</strong>
           <a href="/api/auth/google-drive/start" target="_blank" rel="noopener noreferrer" style={{ ...wmsPrimaryButton, display: "flex", alignItems: "center", justifyContent: "center", width: "100%", minHeight: "44px", boxSizing: "border-box", textDecoration: "none" }}>Google Drive 다시 연결</a>
@@ -108,10 +128,14 @@ export default function WmsInboundPage() {
         {syncPreview?.newFiles.length ? <div style={{ marginTop: "8px", fontSize: "11px", lineHeight: 1.5 }}>
           <strong>새 파일 {syncPreview.newFiles.length}개</strong>
           {syncPreview.newFiles.map(file => <div key={file.id}>{file.name}</div>)}
-          {syncPreview.result ? <div style={{ marginTop: "4px", color: wmsColors.greenDark }}>예상 실제입고 {Number(syncPreview.result.totalInbound || 0).toLocaleString()}개 · SKU {Number(syncPreview.result.parsed || 0).toLocaleString()}개</div> : null}
+          {syncPreview.result ? <div style={{ marginTop: "4px", color: wmsColors.greenDark }}>
+            새 입고이벤트 {Number(syncPreview.result.candidateEvents || 0).toLocaleString()}건 · 예상 실제입고 {Number(syncPreview.result.totalInbound || 0).toLocaleString()}개 · SKU {Number(syncPreview.result.parsed || 0).toLocaleString()}개
+            {Number(syncPreview.result.duplicateEvents || 0) + Number(syncPreview.result.overlapDuplicateEvents || 0) > 0
+              ? ` · 겹침 ${Number(syncPreview.result.duplicateEvents || 0) + Number(syncPreview.result.overlapDuplicateEvents || 0)}건 제외`
+              : ""}
+          </div> : null}
         </div> : null}
         {syncPreview?.modifiedFiles.length ? <div style={{ marginTop: "8px", fontSize: "11px", color: wmsColors.warn }}>수정 파일 {syncPreview.modifiedFiles.length}개는 중복 합산 방지를 위해 자동 반영하지 않습니다.</div> : null}
-        {syncPreview?.canApply ? <button type="button" onClick={() => syncDrive("apply")} disabled={busy} style={{ ...wmsPrimaryButton, width: "100%", minHeight: "44px", marginTop: "8px" }}>검토한 새 파일 {syncPreview.newFiles.length}개 반영</button> : null}
       </section>
       {loading ? <p>입고결과 계산 중...</p> : results.length === 0 ? (
         <section style={{ padding: "14px", border: `1px solid ${wmsColors.border}`, borderRadius: "14px", background: "#fff" }}>
@@ -120,6 +144,12 @@ export default function WmsInboundPage() {
         </section>
       ) : (
         <>
+          <label style={{ display: "block", marginBottom: "8px" }}>
+            <span style={{ display: "block", marginBottom: "4px", fontSize: "11px", fontWeight: 800, color: wmsColors.muted }}>전체 실제 입고일 {results.length}개</span>
+            <select value={selectedDate} onChange={event => setSelectedDate(event.target.value)} style={{ width: "100%", minHeight: "42px", boxSizing: "border-box", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "9px", background: "#fff", padding: "7px 10px", fontSize: "14px", fontWeight: 800 }}>
+              {results.map(result => <option key={result.actualDate} value={result.actualDate}>{result.actualDate}</option>)}
+            </select>
+          </label>
           <div style={{ display: "flex", gap: "6px", overflowX: "auto", paddingBottom: "6px", marginBottom: "8px" }}>
             {results.slice(0, 5).map(result => <button key={result.actualDate} type="button" onClick={() => setSelectedDate(result.actualDate)} style={{ ...wmsGhostButton, whiteSpace: "nowrap", minHeight: "38px", background: selectedDate === result.actualDate ? wmsColors.greenSoft : "#fff", color: selectedDate === result.actualDate ? wmsColors.greenDark : wmsColors.ink }}>{result.actualDate}</button>)}
           </div>
@@ -129,6 +159,7 @@ export default function WmsInboundPage() {
               {[["발주", selected.purchaseOrderCount], ["입고 SKU", selected.receivedSkuCount], ["부분입고 SKU", selected.partialSkuCount], ["미입고 SKU", selected.missingSkuCount]].map(([label, value]) => <div key={String(label)} style={{ padding: "10px", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: wmsColors.surfaceBeige }}><div style={{ fontSize: "10px", color: wmsColors.muted }}>{label}</div><strong style={{ fontSize: "20px" }}>{value}개</strong></div>)}
             </div>
             {selected.nameConflicts.length ? <p style={{ padding: "9px", borderRadius: "9px", background: wmsColors.warnSoft, color: wmsColors.warn, fontSize: "12px" }}>상품명 확인 필요 {selected.nameConflicts.length}개 · 충돌을 해결하기 전에는 파일을 만들지 않습니다.</p> : null}
+            {missingProductLinkCount ? <p style={{ padding: "9px", borderRadius: "9px", background: wmsColors.warnSoft, color: wmsColors.warn, fontSize: "12px" }}>미입고 상품의 제품링크가 없는 SKU {missingProductLinkCount}개 · SKU는 빼지 않고 미입고 파일 C열을 빈칸으로 만듭니다.</p> : null}
             <label style={{ display: "block", marginBottom: "10px" }}>
               <span style={{ display: "block", marginBottom: "4px", fontSize: "12px", fontWeight: 800 }}>할인방식 정률 · 할인율</span>
               <span style={{ display: "flex", alignItems: "center", gap: "6px" }}><input type="number" min={1} max={100} step={1} value={discountRate} onChange={event => setDiscountRate(event.target.value)} inputMode="numeric" style={{ width: "100%", minHeight: "44px", boxSizing: "border-box", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "9px", padding: "8px 10px", fontSize: "16px", fontWeight: 800, textAlign: "right" }} /><strong>%</strong></span>

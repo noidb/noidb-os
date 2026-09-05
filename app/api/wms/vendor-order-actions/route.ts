@@ -14,8 +14,9 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    if (request?.nextUrl.searchParams.get("scope") === "delays") return NextResponse.json({ success: true, delaySummaries: await listReceivingDelaySummaries() });
     const [statusRequests, delaySummaries, statusFileGenerations] = await Promise.all([listStatusRequests(), listReceivingDelaySummaries(), listStatusFileGenerations()]);
     return NextResponse.json({ success: true, statusRequests, delaySummaries, statusFileGenerations });
   } catch (error) {
@@ -44,8 +45,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, record });
     }
     if (body.action === "delay") {
-      await recordReceivingDelay(body);
-      return NextResponse.json({ success: true });
+      const summary = await recordReceivingDelay(body);
+      return NextResponse.json({ success: true, summary });
     }
     if (body.action === "receiving-cost") {
       const result = await applyReceivingCost(body);

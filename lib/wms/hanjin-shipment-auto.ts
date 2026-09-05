@@ -1,5 +1,6 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import {
   downloadDriveFile,
@@ -319,6 +320,7 @@ export interface ConfirmedQuantitySourceRow extends ParsedTrackingRow {
 export interface ConfirmedQuantitySourceFile {
   name: string;
   modifiedTime?: string;
+  contentHash?: string;
   rows: ConfirmedQuantitySourceRow[] | null;
 }
 
@@ -383,8 +385,8 @@ export async function parseConfirmedQuantityRowsFromBuffer(buffer: Buffer): Prom
   return rows;
 }
 
-async function loadConfirmedQuantityFiles(expectedFileNames: readonly string[]): Promise<ConfirmedQuantitySourceFile[]> {
-  const exactNames = new Set(expectedFileNames.map(normalizedFileName).filter(Boolean));
+export async function loadConfirmedQuantityFiles(expectedFileNames?: readonly string[]): Promise<ConfirmedQuantitySourceFile[]> {
+  const exactNames = expectedFileNames ? new Set(expectedFileNames.map(normalizedFileName).filter(Boolean)) : undefined;
   const files = await listMatchingDriveOrLocalFiles(
     CONFIRMED_QUANTITY_ENV,
     CONFIRMED_QUANTITY_LOCAL_DIR,
@@ -394,6 +396,7 @@ async function loadConfirmedQuantityFiles(expectedFileNames: readonly string[]):
   return Promise.all(files.map(async file => ({
     name: file.name,
     modifiedTime: file.modifiedTime,
+    contentHash: createHash("sha256").update(file.buffer).digest("hex"),
     rows: await parseConfirmedQuantityRowsFromBuffer(file.buffer),
   })));
 }
@@ -412,7 +415,7 @@ export function resolveStoredAutoShipmentGeneration(
   ownerId: string,
   generationId: string,
   requestedPurchaseOrderNumbers: readonly string[],
-): { purchaseOrderNumbers: string[]; confirmedQuantityFileNameByPo: Record<string, string> } {
+): { purchaseOrderNumbers: string[]; confirmedQuantityFileNameByPo: Record<string, string>; confirmedQuantityFileHashByName: Record<string, string> } {
   const normalizedOwnerId = ownerId.trim();
   const normalizedGenerationId = generationId.trim();
   const requested = requestedPurchaseOrderNumbers.map(normalizeSkuId).filter(Boolean);
@@ -439,6 +442,7 @@ export function resolveStoredAutoShipmentGeneration(
   }
 
   const confirmedQuantityFileNameByPo: Record<string, string> = {};
+  const confirmedQuantityFileHashByName: Record<string, string> = {};
   for (const po of stored) {
     const records = snapshot.poConfirmationRecords.filter(record => normalizeSkuId(record.poNumber) === po);
     if (records.length !== 1) {
@@ -454,10 +458,14 @@ export function resolveStoredAutoShipmentGeneration(
     if (!fileName) reasons.push(`발주번호 ${po}: 생성한 발주확정 파일명이 저장되어 있지 않습니다.`);
     if (!record.sourceFileHash || record.selectedRowCount <= 0) reasons.push(`발주번호 ${po}: 발주확정 원본 검사 정보가 없어 생성을 차단했습니다.`);
     if (fileName) confirmedQuantityFileNameByPo[po] = fileName;
+    if (fileName && record.generatedFileHash) {
+      if (confirmedQuantityFileHashByName[fileName] && confirmedQuantityFileHashByName[fileName] !== record.generatedFileHash) reasons.push(`발주번호 ${po}: 확정파일 연결 내용이 충돌합니다.`);
+      confirmedQuantityFileHashByName[fileName] = record.generatedFileHash;
+    }
   }
 
   if (reasons.length > 0) throw new AutoShipmentBlockedError([...new Set(reasons)]);
-  return { purchaseOrderNumbers: generation!.purchaseOrderNumbers, confirmedQuantityFileNameByPo };
+  return { purchaseOrderNumbers: generation!.purchaseOrderNumbers, confirmedQuantityFileNameByPo, confirmedQuantityFileHashByName };
 }
 
 function nonNegativeInteger(value: string): number | null {
@@ -640,13 +648,17 @@ export async function buildAutoShipmentFile(
   requests: HanjinShipmentRequest[],
   sourceRecords: PurchaseOrderSourceRecord[],
   templateBuffer?: Buffer,
-  options: { selectedReprintFileName?: string; confirmedQuantityFileNameByPo?: Record<string, string> } = {}
+  options: { selectedReprintFileName?: string; confirmedQuantityFileNameByPo?: Record<string, string>; confirmedQuantityFileHashByName?: Record<string, string> } = {}
 ): Promise<AutoShipmentResult> {
   const groups = groupRequestsByCenterAndDate(requests);
 
   const confirmedQuantityFileNameByPo = options.confirmedQuantityFileNameByPo || {};
   const expectedConfirmedFileNames = [...new Set(Object.values(confirmedQuantityFileNameByPo).map(normalizedFileName).filter(Boolean))];
   const confirmedFiles = await loadConfirmedQuantityFiles(expectedConfirmedFileNames);
+  for (const file of confirmedFiles) {
+    const expectedHash = options.confirmedQuantityFileHashByName?.[normalizedFileName(file.name)];
+    if (expectedHash && expectedHash !== file.contentHash) throw new AutoShipmentBlockedError(["연결 후 확정파일의 내용이 변경되었습니다. 발주확정 수량을 다시 확인해 주세요."]);
+  }
   const confirmed = resolveConfirmedQuantityRowsForShipment(requests, sourceRecords, confirmedFiles, confirmedQuantityFileNameByPo);
 
   const reprintFiles = await loadReprintDetailFiles();

@@ -1,0 +1,2 @@
+# Original business-form PDFs must stay byte-identical, including line endings.
+lib/wms/data/discontinue-templates/*.pdf binary

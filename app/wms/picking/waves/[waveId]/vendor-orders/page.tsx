@@ -20,6 +20,11 @@ import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsG
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { deriveArchivedVendorOrderWorkspace } from "@/lib/wms/vendor-order/derive-drafts";
+import { useReceivingDelays } from "@/lib/wms/vendor-order/use-receiving-delays";
+import { receivingDelayDate, type ReceivingDelaySummary } from "@/lib/wms/vendor-order/receiving-delay";
+import { normalizeSkuId } from "@/lib/wms/sku-normalize";
+import ReceivingDelayDialog from "./ReceivingDelayDialog";
+import { prepareVendorReassignment } from "@/lib/wms/vendor-order/reassign-vendor";
 import Barcode from "./Barcode";
 import VendorOrderExportPanel from "./ExportPanel";
 import ProductSearchAddSheet from "./ProductSearchAddSheet";
@@ -47,6 +52,8 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
   const [draftsByVendor, setDraftsByVendor] = useState<Record<string, VendorOrderDraft>>({});
   const [removedLineIds, setRemovedLineIds] = useState<Set<string>>(new Set());
   const [dirty, setDirty] = useState(false);
+  const lineBaselines = useRef(new Map<string, VendorOrderDraftLine>());
+  const vendorMoving = useRef(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [searchAddVendor, setSearchAddVendor] = useState<string | null>(null);
@@ -57,6 +64,10 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
   const [liveCatalogByProductCode, setLiveCatalogByProductCode] = useState<LiveCatalogLookup>(new Map());
   const [pendingReorderLines, setPendingReorderLines] = useState<VendorOrderDraftLine[]>([]);
   const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(new Set());
+  const receivingDelays = useReceivingDelays();
+  const [delayTarget, setDelayTarget] = useState<{ line: VendorOrderDraftLine; previous?: ReceivingDelaySummary } | null>(null);
+  const [delayError, setDelayError] = useState<string | null>(null);
+  const [delayMessage, setDelayMessage] = useState<string | null>(null);
   const archivedWorkspace = useMemo(
     () => rawWave || isManualWorkspace ? null : deriveArchivedVendorOrderWorkspace(params.waveId, Object.values(draftsByVendor), lines),
     [draftsByVendor, isManualWorkspace, lines, params.waveId, rawWave],
@@ -81,6 +92,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
         ]);
         setPendingReorderLines(allVendorLines.filter(line => (line.reorderPendingQuantity || 0) > 0));
         setWave(loadedWave);
+        lineBaselines.current = new Map(existingLines.map(line => [line.id, line]));
         setDraftsByVendor(Object.fromEntries(existingDrafts.map(draft => [draft.vendorName, draft])));
 
         const now = new Date().toISOString();
@@ -182,6 +194,32 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
     setLines(prev => prev.filter(existing => existing.id !== line.id));
     setRemovedLineIds(prev => new Set(prev).add(line.id));
     setDirty(true);
+  }
+
+  async function changeVendor(lineId: string, vendorName: string) {
+    if (saving || vendorMoving.current) throw new Error("발주서를 저장하고 있습니다. 잠시 기다려 주세요.");
+    const line = lines.find(candidate => candidate.id === lineId);
+    if (!line) throw new Error("이동할 발주 품목을 찾지 못했습니다.");
+    vendorMoving.current = true; setSaving(true); setSaveError(null);
+    let catalogSaved = false;
+    try {
+      const [latestLines, latestDrafts] = await Promise.all([vendorOrderRepository.listLines(params.waveId), vendorOrderRepository.listDrafts(params.waveId)]);
+      const plan = prepareVendorReassignment({ line, vendorName, baseline: lineBaselines.current.get(lineId), latestLines, latestDrafts, now: new Date().toISOString() });
+      const response = await fetch("/api/wms/product-catalog/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuId: line.skuId, vendorName: plan.line.vendorName }) });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || "제품DB 거래처 저장에 실패했습니다.");
+      catalogSaved = true;
+      if (plan.createDraft) await vendorOrderRepository.saveDraft(plan.draft);
+      await vendorOrderRepository.saveLine(plan.line);
+      lineBaselines.current.set(plan.line.id, plan.line);
+      const nextLines = lines.map(candidate => candidate.id === lineId ? plan.line : candidate);
+      setLines(nextLines);
+      setDraftsByVendor(previous => ({ ...previous, [plan.draft.vendorName]: plan.draft }));
+      setLiveCatalogByProductCode(previous => { const next = new Map(previous); for (const [key, value] of next) if (value.skuId === line.skuId) next.set(key, { ...value, vendorName: plan.line.vendorName }); return next; });
+      setDirty(Boolean(removedLineIds.size || nextLines.some(candidate => JSON.stringify(candidate) !== JSON.stringify(lineBaselines.current.get(candidate.id)))));
+    } catch (reason) {
+      throw new Error(`${catalogSaved ? "제품DB 거래처는 저장됐지만 발주 초안 이동은 완료되지 않았습니다. 입력한 수량·메모를 유지했으니 다시 시도해 주세요. " : ""}${reason instanceof Error ? reason.message : "거래처 이동에 실패했습니다."}`);
+    } finally { vendorMoving.current = false; setSaving(false); }
   }
 
   function removeSelectedLines() {
@@ -339,6 +377,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
     for (const vendorName of vendorNames) await vendorOrderRepository.saveDraft(nextDraftsByVendor[vendorName]);
     setDraftsByVendor(nextDraftsByVendor);
     setLines(linesToSave);
+    lineBaselines.current = new Map(linesToSave.map(line => [line.id, line]));
 
     setRemovedLineIds(new Set());
     setDirty(false);
@@ -354,6 +393,24 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
   async function toggleSent(vendorName: string) {
     const draft = draftsByVendor[vendorName];
     await persistAll({ vendorName, status: draft?.status === "sent" ? (draft.statusBeforeSent || "approved") : "sent" });
+  }
+
+  async function saveReceivingDelay(memo: string) {
+    if (!delayTarget) return;
+    setDelayError(null);
+    const { line, previous } = delayTarget;
+    try {
+      const live = liveCatalogByProductCode.get(line.skuId);
+      const summary = await receivingDelays.save({
+        skuId: line.skuId, modelSku: live?.modelSku || line.modelName,
+        productName: line.productName, optionLabel: resolveDisplayNameAndOption(line.productName, line.optionLabel).option,
+        vendorName: line.vendorName, purchaseOrderNumber: line.relatedPurchaseOrderNumbers.join(" / "),
+        operator: rawWave?.workerName || "WMS 거래처 발주", delayed: !previous?.active,
+        memo, expectedLastActionAt: previous?.lastActionAt || null,
+      });
+      setDelayMessage(`SKU ${line.skuId} ${summary.active ? "입고지연을 저장했습니다. 다음 출고작업에도 표시됩니다." : "입고지연을 해제했습니다."}`);
+      setDelayTarget(null);
+    } catch (reason) { setDelayError(reason instanceof Error ? reason.message : "입고지연 저장에 실패했습니다."); }
   }
 
   if (loading) {
@@ -399,6 +456,9 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
             ? `${params.waveId} · 원래 출고작업과 분리된 과거 거래처 발주 데이터입니다. 저장된 품목과 상태는 그대로 보존되었습니다.`
           : `${wave.displayName || wave.id} · 부족 수량을 제품DB "거래처" 기준으로 자동 분리했습니다. 거래처 정보가 없는 SKU는 "${UNASSIGNED_VENDOR_NAME}"로 별도 표시됩니다. 자동 발송은 없으며, 승인은 직접 눌러야 합니다.`}
       </p>
+
+      {receivingDelays.error && <p role="alert" style={{ color: "#b42318", fontSize: "12px" }}>{receivingDelays.error} <button type="button" onClick={() => void receivingDelays.refresh()} style={{ ...wmsGhostButton, minHeight: "36px" }}>지연 이력 다시 확인</button></p>}
+      {delayMessage && <p role="status" style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{delayMessage}</p>}
 
       {isPreview && (
         <p style={{ fontSize: "12px", color: wmsColors.warn, background: wmsColors.warnSoft, borderRadius: "8px", padding: "8px 10px", marginBottom: "14px" }}>
@@ -446,7 +506,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
         <div style={{ display: "flex", flexDirection: "column", gap: "16px", marginBottom: "20px" }}>
           {groups.map(group => {
             const status = statusOf(group.vendorName);
-            const editable = !isPreview && (status === "draft" || status === "review" || status === "resend_needed");
+            const editable = !isPreview && !saving && (status === "draft" || status === "review" || status === "resend_needed");
             const totalOrderQuantity = group.lines.reduce((sum, l) => sum + l.shortageQuantity, 0);
             const totalActualShortage = group.lines.reduce((sum, l) => sum + (l.actualShortageQuantity ?? l.shortageQuantity), 0);
             const lowStockProducts = lowStockByVendor.get(group.vendorName) || [];
@@ -476,7 +536,11 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                       editable={editable}
                       knownVendorNames={knownVendorNames}
                       productLink={liveCatalogByProductCode.get(line.skuId)?.productLink || ""}
+                      delaySummary={receivingDelays.summaries.get(normalizeSkuId(line.skuId))}
+                      delayDisabled={receivingDelays.loading || receivingDelays.saving || Boolean(receivingDelays.error) || saving}
+                      onDelay={() => { setDelayError(null); setDelayTarget({ line, previous: receivingDelays.summaries.get(normalizeSkuId(line.skuId)) }); }}
                       onChange={patch => updateLine(line.id, patch)}
+                      onChangeVendor={name => changeVendor(line.id, name)}
                       onStep={delta => stepQuantity(line, delta)}
                       onRemove={() => removeLine(line)}
                     />
@@ -567,6 +631,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
           onSelect={product => addProductFromSearch(searchAddVendor, product)}
         />
       )}
+      {delayTarget && <ReceivingDelayDialog line={delayTarget.line} previous={delayTarget.previous} busy={receivingDelays.saving} error={delayError} onClose={() => setDelayTarget(null)} onSave={memo => void saveReceivingDelay(memo)} />}
     </main>
   );
 }
@@ -584,7 +649,11 @@ function VendorOrderLineCard({
   editable,
   knownVendorNames,
   productLink,
+  delaySummary,
+  delayDisabled,
+  onDelay,
   onChange,
+  onChangeVendor,
   onStep,
   onRemove,
 }: {
@@ -593,7 +662,11 @@ function VendorOrderLineCard({
   knownVendorNames: string[];
   /** 제품DB "제품링크" 실시간 조회값 — 없으면 "" (임의 URL 생성 금지, 2026-08-19 5차 실사용 테스트 신규) */
   productLink: string;
+  delaySummary?: ReceivingDelaySummary;
+  delayDisabled: boolean;
+  onDelay: () => void;
   onChange: (patch: Partial<VendorOrderDraftLine>) => void;
+  onChangeVendor: (vendorName: string) => Promise<void>;
   onStep: (delta: number) => void;
   onRemove: () => void;
 }) {
@@ -673,17 +746,8 @@ function VendorOrderLineCard({
     setVendorSaving(true);
     setVendorSaveError(null);
     try {
-      const response = await fetch("/api/wms/product-catalog/update", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ skuId: line.skuId, vendorName: name }),
-      });
-      const data = await response.json();
-      if (!response.ok || !data.success) setVendorSaveError(data.error || "제품DB 거래처 저장에 실패했습니다.");
-      else {
-        onChange({ vendorName: name });
-        setEditingVendor(false);
-      }
+      await onChangeVendor(name);
+      setEditingVendor(false);
     } catch (error) {
       setVendorSaveError(error instanceof Error ? error.message : "제품DB 거래처 저장 중 오류가 발생했습니다.");
     } finally {
@@ -711,7 +775,7 @@ function VendorOrderLineCard({
   }
 
   return (
-    <div style={{ ...wmsOuterCard, padding: "12px", marginBottom: "10px" }}>
+    <div data-vendor-sku={line.skuId} style={{ ...wmsOuterCard, padding: "12px", marginBottom: "10px" }}>
       <button
         type="button"
         onClick={() => editable && setImageEditOpen(true)}
@@ -923,6 +987,12 @@ function VendorOrderLineCard({
           </div>
         </div>
       </div>
+
+      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "8px", marginTop: "12px" }}>
+        {delaySummary?.active && <span style={{ color: "#a33b2e", fontSize: "12px", fontWeight: 800 }}>입고지연 · {receivingDelayDate(delaySummary.recentDelayedAt)}</span>}
+        <button type="button" disabled={delayDisabled} onClick={onDelay} style={{ ...wmsGhostButton, minHeight: "40px", fontSize: "12px", color: delaySummary?.active ? "#a33b2e" : wmsColors.ink }}>{delaySummary?.active ? "입고지연 해제" : "입고지연"}</button>
+      </div>
+      {delaySummary?.active && delaySummary.memo && <p style={{ margin: "6px 0 0", fontSize: "12px", color: wmsColors.muted, overflowWrap: "anywhere" }}>{delaySummary.memo}</p>}
 
       {editable && (
         <div style={{ marginTop: "14px", display: "flex", flexDirection: "column", gap: "6px", paddingTop: "10px", borderTop: `1px dashed ${wmsColors.border}` }}>

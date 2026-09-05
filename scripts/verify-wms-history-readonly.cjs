@@ -48,11 +48,15 @@ async function run() {
       return { ok: true, json: async () => ({ values: sheets.get(name) }) };
     },
   });
+  const receivingDelay = loadModule("lib/wms/vendor-order/receiving-delay.ts", {
+    "../sku-normalize": { normalizeSkuId: value => String(value || "").trim() },
+  });
   const actions = loadModule("lib/wms/vendor-order-actions.ts", {
     "./google-sheets": spreadsheet,
     "./product-catalog": { normalizeSkuId: value => String(value || "").trim(), PRODUCT_DB_SHEET_NAME: "제품DB" },
     "./receiving-cost": { calculateReceivingCost: () => { throw new Error("조회 중 원가 계산 호출 금지"); } },
     "./display-name": { resolveDisplayNameAndOption: () => { throw new Error("조회 중 상품 변경 호출 금지"); } },
+    "./vendor-order/receiving-delay": receivingDelay,
   });
   const route = loadModule("app/api/wms/vendor-order-actions/route.ts", {
     "next/server": { NextResponse: { json: (body, init) => ({ body, status: init?.status || 200 }) } },
@@ -76,10 +80,13 @@ async function run() {
   assert.equal(populated.body.statusRequests[0].skuId, "70000001");
   assert.equal(populated.body.statusRequests[0].sheetRow, 3, "빈 행이 있어도 실제 시트 행번호를 보존해야 합니다.");
   assert.equal(populated.body.delaySummaries[0].active, true);
+  assert.equal(populated.body.delaySummaries[0].memo, "", "메모 없는 구형 이력을 읽어도 열을 만들지 않습니다.");
   assert.equal(populated.body.statusFileGenerations[0].xlsxFileName, "요청.xlsx");
   assert.equal(JSON.stringify([...sheets.entries()]), before, "조회 전후 모든 값이 같아야 합니다.");
 
   sheets.set(actions.STATUS_REQUEST_SHEET, [["잘못된 헤더"]]);
+  const delaysOnly = await route.GET({ nextUrl: new URL("http://localhost/api/wms/vendor-order-actions?scope=delays") });
+  assert.equal(delaysOnly.status, 200, "피킹의 지연 조회는 무관한 단종 시트 오류에 막히지 않습니다.");
   const mismatch = await route.GET();
   assert.equal(mismatch.status, 500);
   assert.match(mismatch.body.error, /열 구성/);

@@ -30,7 +30,11 @@ export async function buildCouponWorkbook(items: InboundResultItem[], discountRa
   const xml = await sheet.async("string");
   const fixed = `${templateRow(xml, 1)}${templateRow(xml, 2)}${templateRow(xml, 3)}`;
   const rows = items.map((item, index) => couponRow(index + 4, item, discountRate, index === 0)).join("");
-  zip.file("xl/worksheets/sheet1.xml", xml.replace(/<x:sheetData>[\s\S]*?<\/x:sheetData>/, `<x:sheetData>${fixed}${rows}</x:sheetData>`));
+  zip.file(
+    "xl/worksheets/sheet1.xml",
+    xml.replace(/<x:sheetData>[\s\S]*?<\/x:sheetData>/, `<x:sheetData>${fixed}${rows}</x:sheetData>`),
+    { createFolders: false },
+  );
   return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
 }
 
