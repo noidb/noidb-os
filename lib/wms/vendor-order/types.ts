@@ -77,6 +77,8 @@ export interface VendorOrderDraftLine {
    *  없으면 0으로 취급한다. 이 값을 저장해도 제품DB(구글시트) 현재고는 자동으로 바뀌지 않는다 —
    *  재고 자동 반영은 별도 사용자 지시가 있을 때까지 구현하지 않는다. */
   receivedQuantity?: number;
+  receivedUsedImmediatelyAt?: string;
+  receivingHistory?: Array<{ savedAt: string; record: Omit<VendorOrderDraftLine, "receivingHistory"> }>;
   /** 거래처발주 입고처리에서 입력한 부가세 별도 개당 단가. */
   receivedUnitPrice?: number;
   /** receivedUnitPrice의 10% 부가세(기존 원가 정수 처리와 같은 반올림). */

@@ -53,6 +53,7 @@ export type PickingWaveStoreMutation =
   | { action: "saveVendorDraft"; draft: VendorOrderDraft }
   | { action: "deleteVendorDraft"; draftId: string; deletedAt: string }
   | { action: "saveVendorLine"; line: VendorOrderDraftLine }
+  | { action: "saveSimpleReceiving"; before: VendorOrderDraftLine; input: { quantity: number; unitPrice: number; usedImmediately: boolean }; now: string }
   | { action: "deleteVendorLine"; lineId: string; deletedAt: string }
   | { action: "saveWarehouseZone"; zone: WarehouseZone }
   | { action: "saveWarehouseShelf"; shelf: Shelf }

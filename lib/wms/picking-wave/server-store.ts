@@ -7,6 +7,7 @@ import { createShipmentsInState, deleteShipmentFromState, renameShipmentInState,
 import type { Shipment } from "../shipment/types";
 import { summarizeOutboundWork, kstWorkDate } from "../work-center";
 import { repairConfirmedFileLinks } from "../po-confirm-file-link";
+import { saveSimpleReceivingLine, assertReceivingRecordPreserved } from "../simple-vendor-receiving";
 
 const BLOB_PATH = "noidb-wms/picking-waves/v1/store.json";
 const MAX_RETRIES = 6;
@@ -196,7 +197,12 @@ async function writeLocalSnapshot(snapshot: PickingWaveStoreSnapshot): Promise<v
 
 export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot, mutation: PickingWaveStoreMutation): PickingWaveStoreSnapshot {
   const next = normalizeSnapshot(structuredClone(current));
-  if (mutation.action === "setOutboundWorkState") {
+  if (mutation.action === "saveSimpleReceiving") {
+    const matches = next.vendorOrderLines.filter(line => line.id === mutation.before.id);
+    if (matches.length !== 1 || !next.vendorOrderDrafts.some(draft => draft.id === matches[0].draftId)) throw new Error("입고할 발주 품목을 다시 확인해 주세요.");
+    const saved = saveSimpleReceivingLine(matches[0], mutation.before, mutation.input, mutation.now);
+    next.vendorOrderLines = next.vendorOrderLines.map(line => line.id === saved.id ? saved : line);
+  } else if (mutation.action === "setOutboundWorkState") {
     const wave = next.waves.find(item => item.id === mutation.waveId);
     if (!wave) throw new Error("저장된 출고작업을 찾을 수 없습니다.");
     const prior = next.outboundWorkStates?.[wave.id];
@@ -289,6 +295,7 @@ export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot,
     next.vendorOrderDrafts = next.vendorOrderDrafts.filter(value => value.id !== mutation.draftId);
     next.vendorOrderLines = next.vendorOrderLines.filter(value => value.draftId !== mutation.draftId);
   } else if (mutation.action === "saveVendorLine") {
+    assertReceivingRecordPreserved(next.vendorOrderLines.find(line => line.id === mutation.line.id), mutation.line);
     if (next.deletedVendorDraftIds[mutation.line.draftId]) throw new Error("삭제된 거래처 발주서에는 라인을 저장할 수 없습니다.");
     next.vendorOrderLines = mergeByKey(next.vendorOrderLines, [mutation.line], value => value.id, next.deletedVendorLineIds, true);
   } else if (mutation.action === "deleteVendorLine") {

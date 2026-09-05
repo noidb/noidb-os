@@ -1,4 +1,5 @@
 "use client";
+import SimpleReceiving from "@/app/wms/vendor-orders/SimpleReceiving";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
@@ -533,6 +534,12 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                     <input type="checkbox" aria-label={`${line.productName} 선택`} checked={selectedLineIds.has(line.id)} onChange={() => setSelectedLineIds(prev => { const next = new Set(prev); if (next.has(line.id)) next.delete(line.id); else next.add(line.id); return next; })} style={{ width: "24px", height: "24px", marginTop: "12px" }} />
                     <VendorOrderLineCard
                       line={line}
+                      onReceivingSaved={saved => {
+                        const receipt = { receivedQuantity:saved.receivedQuantity, receivedUnitPrice:saved.receivedUnitPrice, receivedVat:saved.receivedVat, receivedCostVatIncluded:saved.receivedCostVatIncluded, receivedUsedImmediatelyAt:saved.receivedUsedImmediatelyAt, receivedCostAppliedAt:saved.receivedCostAppliedAt, receivingHistory:saved.receivingHistory, updatedAt:saved.updatedAt };
+                        setLines(previous => previous.map(item => item.id === saved.id ? {...item,...receipt} : item));
+                        const baseline = lineBaselines.current.get(saved.id);
+                        if(baseline) lineBaselines.current.set(saved.id,{...baseline,...receipt});
+                      }}
                       editable={editable}
                       knownVendorNames={knownVendorNames}
                       productLink={liveCatalogByProductCode.get(line.skuId)?.productLink || ""}
@@ -646,6 +653,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
  */
 function VendorOrderLineCard({
   line,
+  onReceivingSaved,
   editable,
   knownVendorNames,
   productLink,
@@ -658,6 +666,7 @@ function VendorOrderLineCard({
   onRemove,
 }: {
   line: VendorOrderDraftLine;
+  onReceivingSaved: (line: VendorOrderDraftLine) => void;
   editable: boolean;
   knownVendorNames: string[];
   /** 제품DB "제품링크" 실시간 조회값 — 없으면 "" (임의 URL 생성 금지, 2026-08-19 5차 실사용 테스트 신규) */
@@ -994,6 +1003,7 @@ function VendorOrderLineCard({
       </div>
       {delaySummary?.active && delaySummary.memo && <p style={{ margin: "6px 0 0", fontSize: "12px", color: wmsColors.muted, overflowWrap: "anywhere" }}>{delaySummary.memo}</p>}
 
+      <SimpleReceiving lineId={line.id} onSaved={onReceivingSaved} />
       {editable && (
         <div style={{ marginTop: "14px", display: "flex", flexDirection: "column", gap: "6px", paddingTop: "10px", borderTop: `1px dashed ${wmsColors.border}` }}>
           {!editingVendor ? (
