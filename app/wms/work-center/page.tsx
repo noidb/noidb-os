@@ -142,6 +142,17 @@ export default function WmsWorkCenterPage() {
 
       <ActiveWaveList className="wms-work-center-active-waves" />
 
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: "10px", marginTop: "18px" }}>
+        <a href="/wms/inbound" style={{ padding: "14px", border: `1px solid ${wmsColors.green}`, borderRadius: "14px", background: wmsColors.greenSoft, color: wmsColors.greenDark, textDecoration: "none" }}>
+          <strong style={{ display: "block", fontSize: "15px" }}>입고결과·쿠폰</strong>
+          <span style={{ display: "block", marginTop: "4px", fontSize: "12px" }}>실제 입고일 기준 쿠폰·미입고 파일</span>
+        </a>
+        <a href="/wms/vendor-orders/status-requests" style={{ padding: "14px", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "14px", background: wmsColors.surfaceBeige, color: wmsColors.ink, textDecoration: "none" }}>
+          <strong style={{ display: "block", fontSize: "15px" }}>단종·해제 관리</strong>
+          <span style={{ display: "block", marginTop: "4px", fontSize: "12px" }}>대기 SKU와 신청파일 생성</span>
+        </a>
+      </div>
+
       <section style={{ marginTop: "18px", padding: "14px", border: `1px solid ${wmsColors.border}`, borderRadius: "14px", background: wmsColors.surface }}>
         <div style={{ marginBottom: "9px" }}>
           <h2 style={{ margin: 0, fontSize: "16px" }}>재출력센터</h2>
