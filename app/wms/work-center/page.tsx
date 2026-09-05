@@ -137,6 +137,10 @@ export default function WmsWorkCenterPage() {
         </div>
         <a href="/wms/reprint" style={{ ...wmsPrimaryButton, minHeight: "48px", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box", textDecoration: "none" }}>재출력하기</a>
       </section>
+
+      <a href="/wms/settings/folder-connections" style={{ display: "block", marginTop: "12px", padding: "12px", border: `1px solid ${wmsColors.border}`, borderRadius: "12px", color: wmsColors.muted, background: "#fff", textAlign: "center", textDecoration: "none", fontSize: "12px", fontWeight: 800 }}>
+        파일폴더 연결 상태
+      </a>
     </main>
   );
 }
