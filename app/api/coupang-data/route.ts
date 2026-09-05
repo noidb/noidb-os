@@ -1,12 +1,11 @@
-import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
 import { NextRequest, NextResponse } from "next/server";
 import { fetchSheetRows } from "@/lib/wms/google-sheets";
 import { buildInboundCellPreview } from "@/lib/wms/inbound-cell-preview";
+import { readInboundWorkbook } from "@/lib/wms/inbound-import-context";
 import {
   analyzeInboundImportSafety,
-  parseInboundSourceRows,
   type InboundImportDataset,
 } from "@/lib/wms/inbound-import-safety";
 
@@ -252,13 +251,7 @@ export async function POST(req: NextRequest) {
     if (mode === "inboundHistory") {
       const datasets: InboundImportDataset[] = [];
       for (const file of files) {
-        const { rows, buffer } = await xlsxRows(file);
-        const items = parseInboundSourceRows(toObjects(rows), file.name);
-        datasets.push({
-          fingerprint: createHash("sha256").update(buffer).digest("hex"),
-          sourceFile: file.name,
-          items,
-        });
+        datasets.push(await readInboundWorkbook(Buffer.from(await file.arrayBuffer()), file.name));
       }
 
       // 파일 hash만으로는 기간이 겹치는 서로 다른 다운로드를 막을 수 없다. 현재 숨김 이력과

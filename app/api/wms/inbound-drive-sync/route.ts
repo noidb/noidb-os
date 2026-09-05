@@ -1,88 +1,58 @@
-import { get } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
-import { downloadOAuthDriveFile, listOAuthDriveFolderFiles, resolveDriveFolderPath, type OAuthDriveFileInfo } from "@/lib/wms/google-drive-oauth-reader";
+import { downloadOAuthDriveFile, listOAuthDriveFolderFiles, resolveDriveFolderPath } from "@/lib/wms/google-drive-oauth-reader";
 import { DriveOAuthNotConfiguredError, DriveOAuthNotConnectedError, DriveOAuthTokenInvalidError } from "@/lib/wms/google-drive-oauth";
+import { WmsGoogleNotConfiguredError } from "@/lib/wms/google-service-account";
+import { hasNoidbActionSession, isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
+import { readInboundWorkbook, loadInboundImportContext, inboundPreviewSummary } from "@/lib/wms/inbound-import-context";
+import { applyInboundTransaction, InboundCommitUncertainError } from "@/lib/wms/inbound-import-transaction";
+import { createInboundTransactionStore } from "@/lib/wms/inbound-import-store";
+import type { InboundImportDataset } from "@/lib/wms/inbound-import-safety";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 180;
-
-const INDEX_PATH = "noidb-wms/inbound-drive-index.json";
 const FOLDER_PATH = ["쿠팡데이터", "입고상세내역 다운로드"];
-const INBOUND_APPLY_LOCK_MESSAGE = "입고 중복 검토는 완료했습니다. 제품DB 반영은 셀별 변경 검증 후 사용할 수 있습니다. 기존 입고결과의 쿠폰·미입고 파일은 계속 생성할 수 있습니다.";
+// Performance cache only, never an import ledger. Files are read fresh before apply.
+const parsedCache = new Map<string, InboundImportDataset>();
 
-interface IndexEntry { modifiedTime: string; size: string; name: string; }
-type SyncIndex = Record<string, IndexEntry>;
-
-async function readIndex(): Promise<SyncIndex> {
-  if (!process.env.VERCEL) return {};
-  try {
-    const result = await get(INDEX_PATH, { access: "private", useCache: false });
-    if (!result || result.statusCode !== 200 || !result.stream) return {};
-    return JSON.parse(await new Response(result.stream).text()) as SyncIndex;
-  } catch { return {}; }
-}
-
-function descriptor(file: OAuthDriveFileInfo) {
-  return { id: file.id, name: file.name, modifiedTime: file.modifiedTime, size: file.size };
-}
-
-async function callInboundPreview(origin: string, files: OAuthDriveFileInfo[]) {
-  const form = new FormData();
-  form.set("mode", "inboundHistory");
-  form.set("dryRun", "true");
+async function loadContext(fresh: boolean) {
+  const folder = await resolveDriveFolderPath(FOLDER_PATH);
+  const files = (await listOAuthDriveFolderFiles(folder)).filter(file => /\.xlsx$/i.test(file.name)).sort((a, b) => a.id.localeCompare(b.id));
+  const datasets: InboundImportDataset[] = [];
   for (const file of files) {
-    const buffer = await downloadOAuthDriveFile(file.id);
-    form.append("files", new File([new Uint8Array(buffer)], file.name, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+    const key = JSON.stringify([file.id, file.name, file.modifiedTime, file.size]);
+    let dataset = fresh ? undefined : parsedCache.get(key);
+    if (!dataset) {
+      dataset = await readInboundWorkbook(await downloadOAuthDriveFile(file.id), file.name);
+      if (parsedCache.size >= 50) parsedCache.delete(parsedCache.keys().next().value!);
+      parsedCache.set(key, dataset);
+    }
+    datasets.push(dataset);
   }
-  const response = await fetch(`${origin}/api/coupang-data`, { method: "POST", body: form, cache: "no-store" });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.ok) throw new Error(data.error || "입고상세내역 반영에 실패했습니다.");
-  return data;
+  const descriptors = files.map(({ id, name, modifiedTime, size }) => ({ id, name, modifiedTime, size }));
+  return { context: await loadInboundImportContext(datasets, JSON.stringify(descriptors)), files: descriptors };
 }
 
 export async function POST(request: NextRequest) {
+  const body = await request.json().catch(() => null);
+  if (!body || !["preview", "apply"].includes(body.action)) return NextResponse.json({ success: false, error: "입고 확인 화면에서 다시 시도해 주세요." }, { status: 400 });
+  if (body.action === "apply") {
+    if (!isSameOriginActionRequest(request) || !hasNoidbActionSession(request)) return NextResponse.json({ success: false, error: "관리자 잠금 해제가 필요합니다." }, { status: 401 });
+    if (body.confirmed !== true || typeof body.expectedPreviewToken !== "string" || !/^[a-f0-9]{64}$/.test(body.expectedPreviewToken)) return NextResponse.json({ success: false, error: "변경 내용을 확인한 뒤 저장해 주세요." }, { status: 400 });
+  }
   try {
-    const body = await request.json().catch(() => ({}));
-    const action = body.action === "apply" ? "apply" : "preview";
-    if (action === "apply") {
-      return NextResponse.json({
-        success: false,
-        code: "INBOUND_APPLY_LOCKED",
-        error: INBOUND_APPLY_LOCK_MESSAGE,
-      }, { status: 409 });
+    if (body.action === "apply") {
+      const result = await applyInboundTransaction(body.expectedPreviewToken, async () => (await loadContext(true)).context, createInboundTransactionStore());
+      return NextResponse.json({ success: true, backupCreated: true, ...result });
     }
-    const folderId = await resolveDriveFolderPath(FOLDER_PATH);
-    const allFiles = (await listOAuthDriveFolderFiles(folderId)).filter(file => /\.xlsx$/i.test(file.name));
-    const index = await readIndex();
-    const changed = allFiles.filter(file => !index[file.id] || index[file.id].modifiedTime !== file.modifiedTime || index[file.id].size !== file.size);
-    const modified = changed.filter(file => Boolean(index[file.id]));
-    const newFiles = changed.filter(file => !index[file.id]);
-    if (modified.length) {
-      return NextResponse.json({ success: true, canApply: false, newFiles: newFiles.map(descriptor), modifiedFiles: modified.map(descriptor), message: "기존 입고파일이 수정되어 중복 합산을 막았습니다. 수정 파일은 별도 확인이 필요합니다." });
-    }
-    if (!newFiles.length) return NextResponse.json({ success: true, canApply: false, newFiles: [], modifiedFiles: [], message: "새 입고파일이 없습니다." });
-    const result = await callInboundPreview(request.nextUrl.origin, newFiles);
-    return NextResponse.json({
-      success: true,
-      canApply: false,
-      applied: false,
-      backupCreated: false,
-      newFiles: newFiles.map(descriptor),
-      modifiedFiles: [],
-      result,
-      message: INBOUND_APPLY_LOCK_MESSAGE,
-    });
+    const { context, files } = await loadContext(false);
+    return NextResponse.json({ success: true, canApply: context.incoming.length > 0 && !context.cellPreview.blockers.length,
+      applied: false, backupCreated: false, newFiles: files, modifiedFiles: [], result: inboundPreviewSummary(context),
+      message: context.incoming.length ? "변경할 셀을 확인한 뒤 저장해 주세요." : "모두 반영된 입고입니다. 추가로 저장할 내용이 없습니다." });
   } catch (error) {
-    if (error instanceof DriveOAuthNotConfiguredError) {
-      return NextResponse.json({ success: false, error: "입고파일 폴더 연결을 확인해 주세요." }, { status: 503 });
-    }
-    if (error instanceof DriveOAuthNotConnectedError || error instanceof DriveOAuthTokenInvalidError) {
-      return NextResponse.json(
-        { success: false, code: "DRIVE_RECONNECT_REQUIRED", error: "Google Drive를 다시 연결해 주세요." },
-        { status: 401 },
-      );
-    }
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "입고파일 자동 확인에 실패했습니다." }, { status: 400 });
+    if (error instanceof DriveOAuthNotConfiguredError || error instanceof WmsGoogleNotConfiguredError) return NextResponse.json({ success: false, error: "입고파일과 제품DB 연결을 확인해 주세요." }, { status: 503 });
+    if (error instanceof DriveOAuthNotConnectedError || error instanceof DriveOAuthTokenInvalidError) return NextResponse.json({ success: false, code: "DRIVE_RECONNECT_REQUIRED", error: "Google Drive를 다시 연결해 주세요." }, { status: 401 });
+    if (error instanceof InboundCommitUncertainError) return NextResponse.json({ success: false, code: "INBOUND_RESULT_CHECK_REQUIRED", error: error.message }, { status: 409 });
+    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "입고 확인에 실패했습니다." }, { status: 409 });
   }
 }

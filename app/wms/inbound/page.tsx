@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { downloadBlobPreservingPage } from "@/lib/wms/download-client";
 import type { InboundDateResult } from "@/lib/wms/inbound-results";
 import type { InboundCellPreview } from "@/lib/wms/inbound-cell-preview";
+import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsGhostButton, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 
 interface DriveSyncPreview {
@@ -40,6 +41,7 @@ export default function WmsInboundPage() {
   const [message, setMessage] = useState("");
   const [syncPreview, setSyncPreview] = useState<DriveSyncPreview | null>(null);
   const [driveReconnectRequired, setDriveReconnectRequired] = useState(false);
+  const [showApplyConfirm, setShowApplyConfirm] = useState(false);
 
   async function reload() {
     setLoading(true); setMessage("");
@@ -59,7 +61,7 @@ export default function WmsInboundPage() {
   const missingProductLinkCount = selected?.missingItems.filter(item => !item.productLink.trim()).length || 0;
 
   async function syncDrive() {
-    setBusy(true); setMessage(""); setSyncPreview(null);
+    setBusy(true); setMessage(""); setSyncPreview(null); setShowApplyConfirm(false);
     try {
       const response = await fetch("/api/wms/inbound-drive-sync", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -78,6 +80,27 @@ export default function WmsInboundPage() {
       if (data.message) setMessage(data.message);
     } catch (error) { setMessage(error instanceof Error ? error.message : "입고파일 자동 확인에 실패했습니다."); }
     finally { setBusy(false); }
+  }
+
+  async function applyInbound() {
+    const expectedPreviewToken = syncPreview?.result?.previewToken;
+    if (busy || !syncPreview?.canApply || !expectedPreviewToken) return;
+    setBusy(true); setMessage("");
+    try {
+      if (!await ensureNoidbActionSession()) return;
+      const response = await fetch("/api/wms/inbound-drive-sync", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "apply", confirmed: true, expectedPreviewToken }),
+      });
+      const data = await response.json();
+      setShowApplyConfirm(false); setSyncPreview(null);
+      if (!response.ok || !data.success) throw new Error(data.error || "저장 결과를 확인하지 못했습니다. 새 입고파일 확인을 다시 눌러 주세요.");
+      await reload();
+      setMessage(data.alreadyApplied ? "이미 저장된 입고입니다. 중복으로 반영하지 않았습니다." : `백업 후 저장완료 · 입고 ${data.importedEvents}건 · 제품DB ${data.changedCells}셀`);
+    } catch (error) {
+      setShowApplyConfirm(false); setSyncPreview(null);
+      setMessage(error instanceof Error ? error.message : "저장 결과를 확인하지 못했습니다. 새 입고파일 확인을 눌러 주세요.");
+    } finally { setBusy(false); }
   }
 
   async function generate() {
@@ -120,7 +143,7 @@ export default function WmsInboundPage() {
       <p style={{ margin: "0 0 12px", fontSize: "12px", color: wmsColors.muted }}>실제 입고일과 발주번호+SKU 누적입고를 기준으로 자동 계산합니다.</p>
       <section style={{ padding: "12px", marginBottom: "12px", border: `1px solid ${wmsColors.border}`, borderRadius: "12px", background: wmsColors.surfaceBeige }}>
         <strong style={{ display: "block", fontSize: "14px" }}>입고파일 자동 확인</strong>
-        <p style={{ margin: "4px 0 9px", fontSize: "11px", color: wmsColors.muted }}>Google Drive의 입고상세내역 다운로드 폴더에서 새 XLSX만 찾습니다.</p>
+        <p style={{ margin: "4px 0 9px", fontSize: "11px", color: wmsColors.muted }}>입고파일을 확인하고, 이미 반영한 내역을 제외한 변경 내용을 보여줍니다.</p>
         <button type="button" onClick={syncDrive} disabled={busy} style={{ ...wmsGhostButton, width: "100%", minHeight: "42px", opacity: busy ? .5 : 1 }}>{busy ? "확인 중..." : "새 입고파일 확인"}</button>
         {driveReconnectRequired ? <div style={{ marginTop: "8px", padding: "10px", border: `1px solid ${wmsColors.warn}`, borderRadius: "10px", background: wmsColors.warnSoft }}>
           <strong style={{ display: "block", marginBottom: "6px", fontSize: "12px", color: wmsColors.warnText }}>Google Drive 연결이 만료되었습니다.</strong>
@@ -128,7 +151,7 @@ export default function WmsInboundPage() {
           <p style={{ margin: "6px 0 0", fontSize: "10px", color: wmsColors.muted }}>연결을 마치고 이 화면으로 돌아와 새 입고파일 확인을 다시 누르세요.</p>
         </div> : null}
         {syncPreview?.newFiles.length ? <div style={{ marginTop: "8px", fontSize: "11px", lineHeight: 1.5 }}>
-          <strong>새 파일 {syncPreview.newFiles.length}개</strong>
+          <strong>확인 파일 {syncPreview.newFiles.length}개</strong>
           {syncPreview.newFiles.map(file => <div key={file.id}>{file.name}</div>)}
           {syncPreview.result ? <div style={{ marginTop: "4px", color: wmsColors.greenDark }}>
             새 입고이벤트 {Number(syncPreview.result.candidateEvents || 0).toLocaleString()}건 · 예상 실제입고 {Number(syncPreview.result.totalInbound || 0).toLocaleString()}개 · SKU {Number(syncPreview.result.parsed || 0).toLocaleString()}개
@@ -148,7 +171,22 @@ export default function WmsInboundPage() {
             <div>제품DB {change.row}행 · {change.before === "" ? "빈칸" : change.before} → {change.after.toLocaleString()}</div>
           </div>)}
         </details> : null}
+        {syncPreview?.canApply && syncPreview.result?.previewToken ? <button type="button" disabled={busy} onClick={() => setShowApplyConfirm(true)} style={{ ...wmsPrimaryButton, width: "100%", minHeight: "44px", marginTop: "12px" }}>변경 내용 확인 · 입고 저장</button> : null}
       </section>
+      {showApplyConfirm && syncPreview?.result?.cellPreview ? <div style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,.4)", padding: "12px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <section role="dialog" aria-modal="true" aria-labelledby="inbound-confirm-title" style={{ width: "100%", maxWidth: "520px", maxHeight: "90dvh", overflowY: "auto", padding: "16px", boxSizing: "border-box", background: wmsColors.background, borderRadius: "14px", overflowWrap: "anywhere" }}>
+          <h2 id="inbound-confirm-title" style={{ fontSize: "18px", margin: "0 0 8px" }}>입고 저장 확인</h2>
+          <p style={{ fontSize: "13px" }}>입고 {syncPreview.result.candidateEvents}건 · {syncPreview.result.cellPreview.purchaseOrders.length}개 발주 · {syncPreview.result.cellPreview.skus.length} SKU</p>
+          <p style={{ fontSize: "12px" }}>현재 입고이력과 제품DB를 백업한 뒤 아래 셀을 저장합니다. 현재고·원가·이미지는 유지합니다.</p>
+          <div style={{ maxHeight: "45dvh", overflowY: "auto", fontSize: "12px" }}>
+            {syncPreview.result.cellPreview.changes.map(change => <p key={`${change.row}-${change.column}`}>SKU {change.sku} · {change.field} · {change.before || "빈칸"} → {change.after.toLocaleString()}</p>)}
+          </div>
+          <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+            <button type="button" disabled={busy} onClick={() => setShowApplyConfirm(false)} style={{ ...wmsGhostButton, flex: 1, minHeight: "44px" }}>취소</button>
+            <button type="button" disabled={busy} onClick={() => void applyInbound()} style={{ ...wmsPrimaryButton, flex: 1, minHeight: "44px" }}>{busy ? "저장 중..." : "확인 · 백업 후 저장"}</button>
+          </div>
+        </section>
+      </div> : null}
       {loading ? <p>입고결과 계산 중...</p> : results.length === 0 ? (
         <section style={{ padding: "14px", border: `1px solid ${wmsColors.border}`, borderRadius: "14px", background: "#fff" }}>
           <strong style={{ fontSize: "14px" }}>아직 반영된 입고상세내역이 없습니다.</strong>

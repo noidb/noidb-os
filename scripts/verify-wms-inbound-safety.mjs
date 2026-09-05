@@ -72,7 +72,7 @@ assert.equal(missing([poRow({ po: "A", qty: 12, confirmed: 0 })]), undefined, "�
 assert.equal(missing([poRow({ po: "A", qty: 12, confirmed: "0" })]), undefined, "확정수량 문자열 0도 치환 금지");
 assert.equal(missing([poRow({ po: "A", qty: 12, confirmed: "" })]), 12, "확정수량 빈값만 발주수량 대체");
 
-assert.match(parserSource, /parseInboundSourceRows/, "입고 원문을 공통 안전 파서로 처리");
+assert.match(parserSource, /readInboundWorkbook/, "입고 원문을 공통 워크북 파서로 처리");
 assert.match(safetySource, /"발주번호".*"번호"/s, "번호 헤더를 발주번호 후보로 인식");
 assert.match(safetySource, /actualAt.*po.*sku.*kind/s, "초 단위 시각·발주번호·SKU·방향 이벤트 식별");
 assert.match(safetySource, /과거 날짜-only 요약행.*일합계가 정확히 같을 때만/s, "시각 없는 과거 요약은 일합계 완전일치만 중복 인정");

@@ -1,81 +1,58 @@
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const vm = require("node:vm");
-const ts = require("typescript");
-
-class DriveOAuthNotConnectedError extends Error {}
-class DriveOAuthNotConfiguredError extends Error {}
-class DriveOAuthTokenInvalidError extends Error {}
-
-const calls = { blobRead: 0, folderResolve: 0, fileList: 0, fileDownload: 0, inboundPreview: 0 };
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const ts = require('typescript');
+const calls = { reads: 0, downloads: 0, transactions: 0 };
+let authenticated = false, sameOrigin = true;
+const token = 'a'.repeat(64);
+const context = { incoming: [{}], cellPreview: { blockers: [] } };
+class ConfigError extends Error {}
 const dependencies = {
-  "@vercel/blob": { get: async () => { calls.blobRead += 1; return null; } },
-  "next/server": { NextResponse: class {
-    static json(body, init = {}) { return { body, status: init.status || 200 }; }
-  } },
-  "@/lib/wms/google-drive-oauth-reader": {
-    resolveDriveFolderPath: async () => { calls.folderResolve += 1; return "fixture-folder"; },
-    listOAuthDriveFolderFiles: async () => {
-      calls.fileList += 1;
-      return [{ id: "fixture-file", name: "입고.xlsx", modifiedTime: "2026-09-05T00:00:00Z", size: "100" }];
+  'next/server': { NextResponse: { json: (body, init = {}) => ({ body, status: init.status || 200 }) } },
+  '@/lib/wms/google-drive-oauth-reader': {
+    resolveDriveFolderPath: async () => { calls.reads++; return 'folder'; },
+    listOAuthDriveFolderFiles: async () => [{ id: 'file', name: 'test.xlsx', size: '1', modifiedTime: 'today' }],
+    downloadOAuthDriveFile: async () => { calls.downloads++; return Buffer.from('fixture'); },
+  },
+  '@/lib/wms/google-drive-oauth': { DriveOAuthNotConfiguredError: ConfigError, DriveOAuthNotConnectedError: ConfigError, DriveOAuthTokenInvalidError: ConfigError },
+  '@/lib/wms/google-service-account': { WmsGoogleNotConfiguredError: ConfigError },
+  '@/lib/wms/noidb-action-auth': { hasNoidbActionSession: () => authenticated, isSameOriginActionRequest: () => sameOrigin },
+  '@/lib/wms/inbound-import-context': {
+    readInboundWorkbook: async () => ({}), loadInboundImportContext: async () => context,
+    inboundPreviewSummary: () => ({ previewToken: token, candidateEvents: 1 }),
+  },
+  '@/lib/wms/inbound-import-transaction': {
+    InboundCommitUncertainError: class extends Error {},
+    applyInboundTransaction: async (expected, fresh, store) => {
+      calls.transactions++; assert.equal(expected, token); assert.equal(store, 'store');
+      const before = calls.downloads; assert.equal((await fresh()), context);
+      assert.equal(calls.downloads, before + 1, 'apply re-downloads cached files');
+      return { applied: true, importedEvents: 1, changedCells: 2 };
     },
-    downloadOAuthDriveFile: async () => { calls.fileDownload += 1; return Buffer.from("fixture"); },
   },
-  "@/lib/wms/google-drive-oauth": { DriveOAuthNotConfiguredError, DriveOAuthNotConnectedError, DriveOAuthTokenInvalidError },
+  '@/lib/wms/inbound-import-store': { createInboundTransactionStore: () => 'store' },
 };
-
-const moduleFixture = { exports: {} };
-vm.runInNewContext(ts.transpileModule(
-  fs.readFileSync("app/api/wms/inbound-drive-sync/route.ts", "utf8"),
-  { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } },
-).outputText, {
-  module: moduleFixture,
-  exports: moduleFixture.exports,
-  Buffer,
-  console,
-  process,
-  FormData,
-  File,
-  Uint8Array,
-  Response,
-  fetch: async (_url, init) => {
-    calls.inboundPreview += 1;
-    assert.equal(init.method, "POST");
-    assert.equal(init.body.get("mode"), "inboundHistory");
-    assert.equal(init.body.get("dryRun"), "true", "Drive sync may call only the read-only inbound preview");
-    return new Response(JSON.stringify({ ok: true, previewToken: "fixture-token", candidateEvents: 1 }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  },
-  require(name) {
-    assert(Object.hasOwn(dependencies, name), `Unexpected dependency ${name}`);
-    return dependencies[name];
-  },
-});
-
+const fixture = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('app/api/wms/inbound-drive-sync/route.ts', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText, { module: fixture, exports: fixture.exports, Buffer, require(name) {
+  assert.ok(Object.hasOwn(dependencies, name), `Unexpected dependency ${name}`); return dependencies[name];
+} });
+const post = body => fixture.exports.POST({ json: async () => body });
 (async () => {
-  const apply = await moduleFixture.exports.POST({
-    json: async () => ({ action: "apply", expectedFileIds: ["fixture-file"], expectedPreviewToken: "fixture-token" }),
-    nextUrl: { origin: "http://127.0.0.1:3114" },
-  });
-  assert.equal(apply.status, 409);
-  assert.equal(apply.body.code, "INBOUND_APPLY_LOCKED");
-  assert.match(apply.body.error, /제품DB 반영은 셀별 변경 검증 후 사용할 수 있습니다/);
-  assert.deepEqual(calls, { blobRead: 0, folderResolve: 0, fileList: 0, fileDownload: 0, inboundPreview: 0 }, "apply must not read/write Drive, back up Sheet, or call the inbound webhook");
-
-  const preview = await moduleFixture.exports.POST({
-    json: async () => ({ action: "preview" }),
-    nextUrl: { origin: "http://127.0.0.1:3114" },
-  });
-  assert.equal(preview.status, 200);
-  assert.equal(preview.body.canApply, false);
-  assert.equal(preview.body.applied, false);
-  assert.equal(preview.body.backupCreated, false);
-  assert.match(preview.body.message, /기존 입고결과의 쿠폰·미입고 파일은 계속 생성할 수 있습니다/);
-  assert.equal(calls.inboundPreview, 1);
-  console.log("입고 Drive sync 읽기 전용 PASS: apply 409, 백업/Sheet/Drive 쓰기 0, preview canApply false");
-})().catch(error => {
-  console.error(error);
-  process.exitCode = 1;
-});
+  const apply = { action: 'apply', confirmed: true, expectedPreviewToken: token };
+  assert.equal((await post(apply)).status, 401);
+  authenticated = true; sameOrigin = false;
+  assert.equal((await post(apply)).status, 401);
+  sameOrigin = true;
+  assert.equal((await post({ ...apply, confirmed: false })).status, 400);
+  assert.equal((await post({ ...apply, expectedPreviewToken: 'invalid' })).status, 400);
+  assert.deepEqual(calls, { reads: 0, downloads: 0, transactions: 0 });
+  const preview = await post({ action: 'preview' });
+  assert.equal(preview.status, 200); assert.equal(preview.body.canApply, true);
+  assert.equal(preview.body.applied, false); assert.equal(preview.body.backupCreated, false);
+  await post({ action: 'preview' });
+  assert.equal(calls.downloads, 1); assert.equal(calls.transactions, 0, 'preview never writes');
+  assert.equal((await post(apply)).status, 200); assert.equal(calls.transactions, 1);
+  console.log('Inbound route PASS: auth/origin/confirmation gates before reads, read-only preview, fresh apply files; no operating writes');
+})().catch(error => { console.error(error); process.exitCode = 1; });

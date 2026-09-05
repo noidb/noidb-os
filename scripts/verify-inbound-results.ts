@@ -76,7 +76,7 @@ async function run() {
   if (!/mode === "inboundHistory"/.test(importRoute) || !/analyzeInboundImportSafety/.test(importRoute)) throw new Error("입고 이벤트 안전 대조 또는 운영 dry-run 보호 없음");
   const inboundBlock = importRoute.slice(importRoute.indexOf('if (mode === "inboundHistory")'), importRoute.indexOf('if (mode === "poList")'));
   if (!/INBOUND_APPLY_LOCKED/.test(inboundBlock) || /importInboundSummary/.test(inboundBlock)) throw new Error("입고 신규 event-v2 쓰기가 읽기 전용으로 잠기지 않음");
-  if (!/action === "apply"/.test(syncRoute) || !/status: 409/.test(syncRoute) || !/form\.set\("dryRun", "true"\)/.test(syncRoute)) throw new Error("입고 Drive sync apply 차단 또는 읽기 전용 preview 없음");
+  if (!/hasNoidbActionSession/.test(syncRoute) || !/isSameOriginActionRequest/.test(syncRoute) || !/applyInboundTransaction/.test(syncRoute)) throw new Error("입고 Drive sync 인증 또는 트랜잭션 보호 없음");
   if (/backupSheetWithinSpreadsheet|\bput\(|writeIndex/.test(syncRoute)) throw new Error("입고 Drive sync 잠금 상태에서 백업 또는 Drive index 쓰기 경로가 남음");
 
   console.log(JSON.stringify({ actualDate: result.actualDate, purchaseOrders: 1, couponSku: 2, partialSku: 1, missingSku: 1, couponRows: 5, missingColumns: 3, missingProductLinkColumnPreserved: true, missingSkuNotDroppedWhenLinkBlank: true, bundledTemplateMatchesVerifiedHash: true, comparedLocalOriginal, couponTemplatePackagePreserved: true, productionDryRun: true, previewEventLock: true, inboundApplyLocked: true }, null, 2));
