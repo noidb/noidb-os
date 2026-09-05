@@ -211,6 +211,7 @@ export default function NewPurchaseOrdersUpdateButton() {
                 const totalQuantity = order.items.reduce((sum, item) => sum + item.orderedQuantity, 0);
                 const completedChange = completedChangeByPo.get(order.purchaseOrderNumber);
                 const canChooseWork = recentlyChangedSet.has(order.purchaseOrderNumber) && !inProgressPoNumbers.has(order.purchaseOrderNumber);
+                const targetWave = targetWaveByPo[order.purchaseOrderNumber] || inProgressWaves[0]?.id;
                 return (
                   <div key={order.purchaseOrderNumber} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "12px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "4px", marginBottom: "8px" }}>
@@ -318,22 +319,20 @@ export default function NewPurchaseOrdersUpdateButton() {
                           </select>
                         )}
                         <div style={{ display: "flex", gap: "6px" }}>
-                          <button
-                            disabled={inProgressWaves.length === 0}
-                            onClick={() => {
-                              const targetWave = targetWaveByPo[order.purchaseOrderNumber] || inProgressWaves[0]?.id;
-                              if (targetWave) window.location.href = `/wms/picking/waves?addPo=${encodeURIComponent(order.purchaseOrderNumber)}&targetWave=${encodeURIComponent(targetWave)}`;
-                            }}
-                            style={{ ...wmsPrimaryButton, flex: 1, minHeight: "38px", fontSize: "11px", opacity: inProgressWaves.length === 0 ? 0.5 : 1 }}
+                          <a
+                            href={inProgressWaves.length > 0 && targetWave ? `/wms/picking/waves?addPo=${encodeURIComponent(order.purchaseOrderNumber)}&targetWave=${encodeURIComponent(targetWave)}` : undefined}
+                            aria-disabled={inProgressWaves.length === 0}
+                            tabIndex={inProgressWaves.length === 0 ? -1 : undefined}
+                            style={{ ...wmsPrimaryButton, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", textDecoration: "none", flex: 1, minHeight: "38px", fontSize: "11px", opacity: inProgressWaves.length === 0 ? 0.5 : 1, cursor: inProgressWaves.length === 0 ? "default" : "pointer" }}
                           >
                             기존 출고작업에 추가
-                          </button>
-                          <button
-                            onClick={() => { window.location.href = `/wms/picking/waves?onlyPo=${encodeURIComponent(order.purchaseOrderNumber)}`; }}
-                            style={{ ...wmsSecondaryButton, flex: 1, minHeight: "38px", fontSize: "11px" }}
+                          </a>
+                          <a
+                            href={`/wms/picking/waves?onlyPo=${encodeURIComponent(order.purchaseOrderNumber)}`}
+                            style={{ ...wmsSecondaryButton, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", textDecoration: "none", flex: 1, minHeight: "38px", fontSize: "11px" }}
                           >
                             새 출고작업
-                          </button>
+                          </a>
                         </div>
                         {inProgressWaves.length === 0 && <div style={{ fontSize: "10px", color: wmsColors.muted, marginTop: "4px" }}>저장된 출고작업이 없어 새 출고작업으로 시작합니다.</div>}
                       </div>

@@ -6,8 +6,127 @@ import { normalizeSkuId } from "./sku-normalize";
 import type { ProductCatalogItem } from "./product-catalog";
 import type { PurchaseOrderSourceRecord } from "./purchase-order-source/types";
 import type { ShipmentOutputGroup } from "./shipment-output-context";
+import type { BarTenderPrintGroup } from "./shipment-print-client";
+import type { ParsedTrackingRow } from "./hanjin-upload";
 
 const BARTENDER_HEADERS = ["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"] as const;
+
+export interface ManifestBarcodeGroup {
+  shipmentNumber: string;
+  fulfillmentCenter: string;
+  expectedDate: string;
+  purchaseOrderNumbers: string[];
+  items: { purchaseOrderNumber: string; skuId: string; barcode: string; quantity: number }[];
+}
+
+/** 브라우저에서 대조한 동봉내역서 순서만 받아, 출력 값은 서버의 발주서·제품DB로 다시 검증한다. */
+export async function buildManifestOrderedBarcodeWorkbook(
+  manifestGroups: unknown,
+  records: readonly PurchaseOrderSourceRecord[],
+  catalogItems: readonly ProductCatalogItem[],
+  finalQuantityRows: readonly ParsedTrackingRow[],
+): Promise<Buffer> {
+  if (!Array.isArray(manifestGroups) || manifestGroups.length === 0 || records.length === 0 || finalQuantityRows.length === 0) {
+    throw new Error("동봉내역서 순서를 확인하지 못했습니다. Shipment 출력세트 화면에서 다시 생성해 주세요.");
+  }
+  const sourceByKey = new Map<string, PurchaseOrderSourceRecord>();
+  const finalByKey = new Map<string, { row: ParsedTrackingRow; quantity: number }>();
+  const catalogBySku = new Map<string, ProductCatalogItem[]>();
+  const keyFor = (po: string, sku: string) => `${normalizeSkuId(po)}\u0000${normalizeSkuId(sku)}`;
+  const dateKey = (value: string) => value.replace(/\D/g, "");
+  for (const record of records) {
+    const key = keyFor(record.purchaseOrderNumber, normalizeSkuId(record.skuId));
+    if (sourceByKey.has(key)) throw new Error(`발주서 ${record.purchaseOrderNumber}의 SKU ${record.skuId} 원본이 중복되어 바코드 생성을 차단했습니다.`);
+    sourceByKey.set(key, record);
+  }
+  for (const row of finalQuantityRows) {
+    const key = keyFor(row.purchaseOrderNumber, row.skuId);
+    if (finalByKey.has(key)) throw new Error(`쉽먼트 XLSX의 발주서 ${row.purchaseOrderNumber} SKU ${row.skuId}가 중복되어 바코드 생성을 차단했습니다.`);
+    const quantity = Number(String(row.shippedQuantity || "").replace(/,/g, "").trim());
+    if (!Number.isSafeInteger(quantity) || quantity < 1) {
+      throw new Error(`쉽먼트 XLSX의 발주서 ${row.purchaseOrderNumber} SKU ${row.skuId}: 최종 납품수량을 확인할 수 없습니다.`);
+    }
+    finalByKey.set(key, { row, quantity });
+  }
+  for (const [key, final] of finalByKey) {
+    const record = sourceByKey.get(key);
+    if (!record) throw new Error(`쉽먼트 XLSX에 현재 선택 발주 원본에 없는 SKU가 포함되어 있습니다: ${final.row.purchaseOrderNumber}/${final.row.skuId}`);
+    if (final.row.barcode.trim() !== record.barcode || final.row.fulfillmentCenter !== record.fulfillmentCenterName || dateKey(final.row.expectedDate) !== dateKey(record.expectedArrivalDate)) {
+      throw new Error(`쉽먼트 XLSX의 발주서 ${record.purchaseOrderNumber} SKU ${record.skuId}: 바코드·물류센터·입고예정일이 현재 발주서 원본과 다릅니다.`);
+    }
+    if (final.quantity > record.orderedQuantity) {
+      throw new Error(`쉽먼트 XLSX의 발주서 ${record.purchaseOrderNumber} SKU ${record.skuId}: 최종 납품수량 ${final.quantity}개가 발주수량 ${record.orderedQuantity}개를 초과합니다.`);
+    }
+  }
+  if (finalByKey.size !== sourceByKey.size) {
+    throw new Error(`쉽먼트 XLSX에 현재 선택 발주 상품 ${sourceByKey.size - finalByKey.size}행의 최종 납품수량이 누락되어 바코드 생성을 차단했습니다.`);
+  }
+  for (const item of catalogItems) {
+    const sku = normalizeSkuId(item.skuId);
+    catalogBySku.set(sku, [...(catalogBySku.get(sku) || []), item]);
+  }
+  const usedRows = new Set<string>();
+  const usedPurchaseOrders = new Set<string>();
+  const usedShipments = new Set<string>();
+  const outputGroups: BarTenderPrintGroup[] = [];
+  for (const raw of manifestGroups) {
+    if (!raw || typeof raw !== "object") throw new Error("동봉내역서 묶음 정보가 올바르지 않습니다.");
+    const group = raw as Partial<ManifestBarcodeGroup>;
+    const shipmentNumber = String(group.shipmentNumber || "").trim();
+    const fulfillmentCenter = String(group.fulfillmentCenter || "").trim();
+    const expectedDate = String(group.expectedDate || "").trim();
+    if (!/^\d{8}$/.test(shipmentNumber) || usedShipments.has(shipmentNumber)) throw new Error("쉽먼트번호가 없거나 중복되어 바코드 생성을 차단했습니다.");
+    usedShipments.add(shipmentNumber);
+    if (!Array.isArray(group.purchaseOrderNumbers) || !group.purchaseOrderNumbers.length || !Array.isArray(group.items) || !group.items.length) {
+      throw new Error(`쉽먼트 ${shipmentNumber}: 발주번호 또는 동봉내역서 상품목록이 없습니다.`);
+    }
+    const purchaseOrderNumbers = group.purchaseOrderNumbers.map(value => String(value).trim());
+    for (const po of purchaseOrderNumbers) {
+      if (!po || usedPurchaseOrders.has(po)) throw new Error("발주번호가 여러 쉽먼트에 중복되어 바코드 생성을 차단했습니다.");
+      usedPurchaseOrders.add(po);
+    }
+    const groupPurchaseOrders = new Set(purchaseOrderNumbers);
+    const matchedPurchaseOrders = new Set<string>();
+    const barcodeRows: BarTenderPrintGroup["barcodeRows"] = [];
+    for (const item of group.items) {
+      if (!item || typeof item !== "object") throw new Error(`쉽먼트 ${shipmentNumber}: 동봉내역서 상품정보가 올바르지 않습니다.`);
+      const po = String(item.purchaseOrderNumber || "").trim();
+      const sku = normalizeSkuId(String(item.skuId || ""));
+      const key = keyFor(po, sku);
+      const record = sourceByKey.get(key);
+      if (!record || !groupPurchaseOrders.has(po)) throw new Error(`쉽먼트 ${shipmentNumber}: 선택 발주 외 SKU ${sku}가 포함되어 있습니다.`);
+      if (usedRows.has(key)) throw new Error(`발주서 ${po}의 SKU ${sku}가 중복되어 바코드 생성을 차단했습니다.`);
+      const final = finalByKey.get(key);
+      if (!final) throw new Error(`발주서 ${po}의 SKU ${sku}: 쉽먼트 XLSX 최종 납품수량이 없습니다.`);
+      if (String(item.barcode || "").trim() !== record.barcode || !Number.isInteger(item.quantity) || item.quantity !== final.quantity || item.quantity < 1) {
+        throw new Error(`발주서 ${po}의 SKU ${sku}: 동봉내역서 바코드·수량이 발주서 원본 또는 쉽먼트 XLSX 최종 납품수량과 다릅니다.`);
+      }
+      if (record.fulfillmentCenterName !== fulfillmentCenter || record.expectedArrivalDate !== expectedDate) {
+        throw new Error(`발주서 ${po}: 동봉내역서 물류센터·입고예정일이 현재 발주서 원본과 다릅니다.`);
+      }
+      const matches = catalogBySku.get(sku) || [];
+      if (matches.length !== 1) throw new Error(`SKU ${sku}: 제품DB 매칭 ${matches.length}건(정확히 1건 필요)`);
+      const catalog = matches[0];
+      const modelName = resolveBarcodeModelIdentifier(catalog);
+      if (!modelName || !catalog.countryOfOrigin) throw new Error(`SKU ${sku}: 영문·숫자 모델SKU/모델명 또는 제조국명이 없습니다.`);
+      const display = resolveDisplayNameAndOption(record.productName, record.optionName);
+      barcodeRows.push({
+        purchaseOrderNumber: po, fulfillmentCenter, expectedDate, skuId: sku,
+        barcode: record.barcode, productName: display.name, optionLabel: display.option,
+        quantity: final.quantity, sourceRowNumber: record.sourceRow,
+        warehouseNumber: "", embeddedModelName: "", embeddedCountryOfOrigin: "", trackingNumber: "",
+        modelName, countryOfOrigin: catalog.countryOfOrigin,
+      });
+      usedRows.add(key);
+      matchedPurchaseOrders.add(po);
+    }
+    if (matchedPurchaseOrders.size !== groupPurchaseOrders.size) throw new Error(`쉽먼트 ${shipmentNumber}: 동봉내역서에 누락된 발주번호가 있습니다.`);
+    outputGroups.push({ shipmentNumber, fulfillmentCenter, expectedDate, purchaseOrderNumbers, barcodeRows });
+  }
+  if (usedRows.size !== sourceByKey.size) throw new Error(`동봉내역서에 발주서 상품 ${sourceByKey.size - usedRows.size}행이 누락되어 바코드 생성을 차단했습니다.`);
+  const { buildBarTenderWorkbook } = await import("./shipment-print-client");
+  return Buffer.from(await buildBarTenderWorkbook(outputGroups));
+}
 
 function addBarTenderDataSheet(workbook: ExcelJS.Workbook, rows: (string | number)[][]): ExcelJS.Worksheet {
   const sheet = workbook.addWorksheet("템플릿1");
@@ -135,7 +254,7 @@ export async function buildSingleBarcodeWorkbook(
   for (let index = 0; index < quantity; index += 1) {
     rows.push([skuId, index + 1, record.barcode, display.name, display.option, catalog.countryOfOrigin, modelName, "상품"]);
   }
-  addBarTenderDataSheet(workbook, rows);
+  addBarTenderDataSheet(workbook, rows.reverse());
   return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
 }
 

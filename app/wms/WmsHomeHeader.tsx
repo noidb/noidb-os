@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { WMS_DESKTOP_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
 import { HomeIcon } from "./icons";
 import { useWmsUndo } from "@/lib/wms/undo-context";
+import { goBackInWms, installWmsNavigationHistory } from "@/lib/wms/navigation-history";
 
 /**
  * 모든 /wms/* 화면에 공통으로 보이는 HOME 버튼 (2026-08-19 4차 실사용 테스트 반영).
@@ -18,60 +19,10 @@ export default function WmsHomeHeader() {
   const isHome = pathname === "/wms/work-center";
   const { canUndo, undoLabel, undoing, undoLast } = useWmsUndo();
 
-  useEffect(() => {
-    const storageKey = "noidb_wms_navigation_stack_v1";
-    const pendingKey = "noidb_wms_navigation_restore_v1";
-    const currentUrl = `${window.location.pathname}${window.location.search}`;
-    let stack: { url: string; scrollY: number }[] = [];
-    try { stack = JSON.parse(sessionStorage.getItem(storageKey) || "[]"); } catch { stack = []; }
-    if (stack.at(-1)?.url !== currentUrl) stack = [...stack.slice(-19), { url: currentUrl, scrollY: 0 }];
-    sessionStorage.setItem(storageKey, JSON.stringify(stack));
-
-    try {
-      const pending = JSON.parse(sessionStorage.getItem(pendingKey) || "null") as { url?: string; scrollY?: number } | null;
-      if (pending?.url === currentUrl) {
-        sessionStorage.removeItem(pendingKey);
-        requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo({ top: Math.max(0, pending.scrollY || 0), behavior: "auto" })));
-      }
-    } catch { sessionStorage.removeItem(pendingKey); }
-
-    let scheduled = false;
-    const savePosition = () => {
-      if (scheduled) return;
-      scheduled = true;
-      requestAnimationFrame(() => {
-        scheduled = false;
-        try {
-          const latest = JSON.parse(sessionStorage.getItem(storageKey) || "[]") as { url: string; scrollY: number }[];
-          const index = latest.map(entry => entry.url).lastIndexOf(currentUrl);
-          if (index >= 0) {
-            latest[index] = { ...latest[index], scrollY: window.scrollY };
-            sessionStorage.setItem(storageKey, JSON.stringify(latest));
-          }
-        } catch { /* 다음 이동에서 새 기록을 만듭니다. */ }
-      });
-    };
-    window.addEventListener("scroll", savePosition, { passive: true });
-    return () => { savePosition(); window.removeEventListener("scroll", savePosition); };
-  }, [pathname]);
+  useEffect(() => installWmsNavigationHistory(), []);
 
   function goBack() {
-    const storageKey = "noidb_wms_navigation_stack_v1";
-    const pendingKey = "noidb_wms_navigation_restore_v1";
-    try {
-      const stack = JSON.parse(sessionStorage.getItem(storageKey) || "[]") as { url: string; scrollY: number }[];
-      const currentUrl = `${window.location.pathname}${window.location.search}`;
-      while (stack.length > 1 && stack.at(-1)?.url === currentUrl) stack.pop();
-      const previous = stack.at(-1);
-      if (previous) {
-        sessionStorage.setItem(storageKey, JSON.stringify(stack));
-        sessionStorage.setItem(pendingKey, JSON.stringify(previous));
-        router.push(previous.url);
-        return;
-      }
-    } catch { /* 브라우저 기본 이동으로 이어집니다. */ }
-    if (window.history.length > 1) router.back();
-    else router.push("/wms/work-center");
+    goBackInWms(() => router.replace("/wms/work-center"));
   }
 
   // 작업센터는 AI 상품등록 화면과 공유하는 AppNavigation을 직접 렌더링한다.
@@ -80,12 +31,12 @@ export default function WmsHomeHeader() {
 
   return (
     <div
+      className="wms-global-header-shell"
       style={{
         width: "100%",
         maxWidth: WMS_DESKTOP_WIDTH,
         boxSizing: "border-box",
         margin: "0 auto",
-        padding: "calc(env(safe-area-inset-top) + 8px) 12px 0",
       }}
     >
       {/* AI 상품등록 화면(app/page.tsx)과 같은 브랜드 로고(.brandLockup/.brandMark, app/globals.css
@@ -137,6 +88,14 @@ export default function WmsHomeHeader() {
           </a>
       </div>
       </div>
+      <style jsx>{`
+        .wms-global-header-shell { padding: calc(env(safe-area-inset-top) + 8px) 24px 0; }
+        .wms-global-header-actions { min-width: 0; flex-wrap: wrap; }
+        @media (max-width: 760px) {
+          .wms-global-header-shell { padding: calc(env(safe-area-inset-top) + 8px) 12px 0; }
+          .wms-global-header { align-items: flex-start; }
+        }
+      `}</style>
     </div>
   );
 }

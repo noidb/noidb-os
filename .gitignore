@@ -45,3 +45,5 @@ env/
 automation/coupang-po/.state/
 automation/coupang-po/config.json
 automation/coupang-po/*.log
+public/barcode-reader/zxing_reader.wasm
+public/barcode-reader/ocr/

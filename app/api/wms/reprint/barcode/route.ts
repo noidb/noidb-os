@@ -16,24 +16,34 @@ export async function GET(request: NextRequest) {
   try {
     const query = request.nextUrl.searchParams.get("q")?.trim().toLocaleLowerCase("ko") || "";
     if (query.length < 2) return NextResponse.json({ error: "SKU, 바코드, 발주번호 또는 상품명을 2글자 이상 입력해주세요." }, { status: 400 });
-    const terms = query.split(/[\n,;\t]+/).map(term => term.trim()).filter(term => term.length >= 2).slice(0, 200);
+    const terms = [...new Set(query.split(/[\n,;\t]+/).map(term => term.trim()).filter(term => term.length >= 2))];
+    if (!terms.length || terms.length > 200) return NextResponse.json({ error: "검색어는 2글자 이상, 한 번에 200개 이하로 입력해 주세요." }, { status: 400 });
+    const exact = request.nextUrl.searchParams.get("exact") === "1";
+    const matchedTerms = new Set<string>();
     const index = await getCachedPurchaseOrderIndex();
     const matches = new Map<string, { record: PurchaseOrderSourceRecord; order: number }>();
     for (const document of index.byPurchaseOrderNumber.values()) {
       for (const record of document.records) {
         const searchable = [record.skuId, record.barcode, record.purchaseOrderNumber, record.productName, record.optionName, record.fulfillmentCenterName, record.expectedArrivalDate]
           .join(" ").toLocaleLowerCase("ko");
-        const order = terms.findIndex(term => searchable.includes(term));
+        const orders = terms.flatMap((term, position) => {
+          const matches = exact ? record.barcode.toLowerCase() === term : /^\d+$/.test(term)
+            ? record.barcode.endsWith(term) || record.skuId === term || record.purchaseOrderNumber === term
+            : searchable.includes(term);
+          if (matches) matchedTerms.add(term);
+          return matches ? [position] : [];
+        });
+        const order = orders[0] ?? -1;
         if (order >= 0) {
           const key = resultKey(record);
           const previous = matches.get(key);
           if (!previous || record.expectedArrivalDate.localeCompare(previous.record.expectedArrivalDate) > 0) matches.set(key, { record, order });
         }
-        if (matches.size >= 200) break;
+        if (matches.size > 200) return NextResponse.json({ error: "검색 결과가 200종을 넘습니다. 바코드 번호를 더 길게 입력해 주세요. 일부만 담지 않았습니다." }, { status: 400 });
       }
-      if (matches.size >= 200) break;
     }
     return NextResponse.json({
+      unmatchedTerms: terms.filter(term => !matchedTerms.has(term)),
       results: [...matches.values()].sort((a, b) => a.order - b.order).map(({ record }) => ({
         purchaseOrderNumber: record.purchaseOrderNumber,
         skuId: record.skuId,
@@ -54,6 +64,13 @@ export async function POST(request: NextRequest) {
     const body = await request.json() as { purchaseOrderNumber?: unknown; skuId?: unknown; quantity?: unknown; items?: unknown };
     if (Array.isArray(body.items)) {
       if (body.items.length < 1 || body.items.length > 200) return NextResponse.json({ error: "한 번에 1~200개 SKU를 선택해 주세요." }, { status: 400 });
+      const seen = new Set<string>();
+      for (const raw of body.items) {
+        if (!raw || typeof raw !== "object" || !Number.isInteger(raw.quantity) || raw.quantity < 1 || raw.quantity > 1000) return NextResponse.json({ error: "각 상품의 장수는 1~1000 사이 정수여야 합니다." }, { status: 400 });
+        const sku = normalizeSkuId(String(raw.skuId ?? ""));
+        if (!sku || seen.has(sku)) return NextResponse.json({ error: "같은 SKU가 여러 번 포함됐습니다. 한 행의 장수를 수정해 주세요." }, { status: 400 });
+        seen.add(sku);
+      }
       const index = await buildPurchaseOrderIndex();
       const catalogResult = await fetchProductCatalog();
       if (!catalogResult.configured) return NextResponse.json({ error: "제품DB 연결을 확인해 주세요." }, { status: 503 });

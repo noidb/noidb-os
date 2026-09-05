@@ -40,7 +40,7 @@ export default function ShipmentOutputSetSection({ waveId, items, generation, ge
   }
   const activeGeneration = generation;
 
-  async function generateFullSet(downloadTarget: ReturnType<typeof reserveDownloadTarget>) {
+  async function loadPrintGroups() {
     const expected = new Set(activeGeneration.purchaseOrderNumbers.map(String));
     const expectedDateTokens = [...new Set(items.flatMap(item => item.sources)
       .filter(source => expected.has(source.purchaseOrderNumber))
@@ -98,7 +98,11 @@ export default function ShipmentOutputSetSection({ waveId, items, generation, ge
       const extra = [...matchedSet].filter(po => !expected.has(po));
       throw new Error(`출력세트 발주 완전성 검증 실패 (누락 ${missing.length} · 예상 외 ${extra.length} · 중복 ${matchedPos.length - matchedSet.size})`);
     }
+    return { groups, workbookName: workbook.name };
+  }
 
+  async function generateFullSet(downloadTarget: ReturnType<typeof reserveDownloadTarget>) {
+    const { groups } = await loadPrintGroups();
     const centerLabelResponse = await fetch("/api/wms/fulfillment-center-labels", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ purchaseOrderNumbers: activeGeneration.purchaseOrderNumbers }),
@@ -131,10 +135,23 @@ export default function ShipmentOutputSetSection({ waveId, items, generation, ge
     try {
       if (kind === "all") await generateFullSet(downloadTarget);
       else {
+        const printSource = kind === "barcode" ? await loadPrintGroups() : undefined;
+        const manifestGroups = printSource?.groups.map(group => ({
+          shipmentNumber: group.shipmentNumber,
+          fulfillmentCenter: group.fulfillmentCenter,
+          expectedDate: group.expectedDate,
+          purchaseOrderNumbers: group.purchaseOrderNumbers,
+          items: group.barcodeRows.map(row => ({
+            purchaseOrderNumber: row.purchaseOrderNumber,
+            skuId: row.skuId,
+            barcode: row.barcode,
+            quantity: row.quantity,
+          })),
+        }));
         const endpoint = kind === "barcode" ? "/api/wms/generation-barcode-output" : "/api/wms/fulfillment-center-labels";
         const response = await fetch(endpoint, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ purchaseOrderNumbers: activeGeneration.purchaseOrderNumbers }),
+          body: JSON.stringify({ purchaseOrderNumbers: activeGeneration.purchaseOrderNumbers, manifestGroups, expectedWorkbookName: printSource?.workbookName }),
         });
         if (!response.ok) {
           const data = await response.json().catch(() => ({}));

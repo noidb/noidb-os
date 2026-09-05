@@ -357,7 +357,9 @@ export async function buildFourUpLabelPdf(groups: ShipmentPrintGroup[]): Promise
  * 각 쉽먼트 첫 행은 상품 바코드를 비워 구분표로 출력하고, 다음 행부터 최종 납품수량만큼
  * 상품행을 반복한다. 동봉내역서의 상품 순서는 matchShipmentPrintGroups에서 이미 보존된다.
  */
-export async function buildBarTenderWorkbook(groups: ShipmentPrintGroup[]): Promise<Uint8Array> {
+export type BarTenderPrintGroup = Pick<ShipmentPrintGroup, "shipmentNumber" | "purchaseOrderNumbers" | "fulfillmentCenter" | "expectedDate" | "barcodeRows">;
+
+export async function buildBarTenderWorkbook(groups: readonly BarTenderPrintGroup[]): Promise<Uint8Array> {
   const ExcelJS = (await import("exceljs")).default;
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("템플릿1");
