@@ -193,7 +193,8 @@ export default function ActiveWaveList({ className }: { className?: string }) {
               summary={summary}
               actions={(
                 <>
-                  <a href={workCenterDestination(summary.wave)}>계속하기</a>
+                  <a href={workCenterDestination(summary.wave)}>{summary.wave.status === "in_progress" ? "피킹 계속" : "계속하기"}</a>
+                  {summary.wave.status === "in_progress" && <a href={`/wms/picking/waves/${encodeURIComponent(summary.wave.id)}/complete`} style={{ background: wmsColors.surfaceBeige, color: wmsColors.ink, border: `1px solid ${wmsColors.border}` }}>서류 작업</a>}
                 </>
               )}
             />

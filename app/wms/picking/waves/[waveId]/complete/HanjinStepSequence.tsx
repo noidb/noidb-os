@@ -84,26 +84,52 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
     setGenerations(outputGenerations);
   }
 
+  async function markOutputSetGenerated(generationId: string, fileName: string) {
+    const wave = await repository.getWave(waveId);
+    if (!wave) return;
+    const now = new Date().toISOString();
+    const outputGenerations = (wave.outputGenerations || []).map(generation => generation.generationId === generationId
+      ? { ...generation, outputSetFileName: fileName, outputSetGeneratedAt: now, updatedAt: now }
+      : generation);
+    await repository.saveWave({ ...wave, outputGenerations, updatedAt: now });
+    setGenerations(outputGenerations);
+  }
+
+  async function removeUnusedGeneration(generationId: string) {
+    const wave = await repository.getWave(waveId);
+    const target = wave?.outputGenerations?.find(generation => generation.generationId === generationId);
+    if (!wave || !target || target.status === "shipment_generated") return;
+    const outputGenerations = (wave.outputGenerations || []).filter(generation => generation.generationId !== generationId);
+    await repository.saveWave({ ...wave, outputGenerations, updatedAt: new Date().toISOString() });
+    setGenerations(outputGenerations);
+    if (activeGenerationId === generationId) setActiveGenerationId(outputGenerations.at(-1)?.generationId || null);
+  }
+
   const activeGeneration = generations.find(generation => generation.generationId === activeGenerationId) || generations.at(-1);
+  const recentGenerations = [...generations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5);
 
   const step1Status = step1Done ? "done" as const : "current" as const;
 
   return (
     <div>
-      <ShipmentWorkflowStepCard step={2} title="송장출력용 업로드파일 생성" subtitle="한진택배 업로드용 — 로켓입고 요청" status={step1Status}>
+      <ShipmentWorkflowStepCard step={2} title="송장출력용 업로드파일" subtitle="발주서 단위로 묶음을 자동 제안하고 선택한 발주 집합을 다음 단계까지 고정합니다." status={step1Status}>
         <HanjinUploadSection baskets={baskets} items={items} generations={generations} onGenerated={saveGeneration} />
       </ShipmentWorkflowStepCard>
 
-      {generations.length > 0 && <div style={{ marginBottom: "10px", fontSize: "11px" }}>
-        <strong>저장된 출력 묶음</strong>
+      {recentGenerations.length > 0 && <div style={{ marginBottom: "10px", fontSize: "11px" }}>
+        <strong>최근 출력 묶음</strong>
         <div style={{ display: "flex", gap: "6px", overflowX: "auto", paddingTop: "6px" }}>
-          {generations.map((generation, index) => <button key={generation.generationId} type="button" onClick={() => setActiveGenerationId(generation.generationId)} style={{ border: `1px solid ${generation.generationId === activeGeneration?.generationId ? wmsColors.slate : wmsColors.border}`, borderRadius: "999px", background: generation.generationId === activeGeneration?.generationId ? "rgba(83,109,120,0.12)" : "#fff", padding: "7px 10px", whiteSpace: "nowrap" }}>
-            묶음 {index + 1} · 발주 {generation.purchaseOrderNumbers.length}건
-          </button>)}
+          {recentGenerations.map(generation => {
+            const originalIndex = generations.findIndex(item => item.generationId === generation.generationId);
+            return <span key={generation.generationId} style={{ display: "inline-flex", border: `1px solid ${generation.generationId === activeGeneration?.generationId ? wmsColors.slate : wmsColors.border}`, borderRadius: "999px", background: generation.generationId === activeGeneration?.generationId ? "rgba(83,109,120,0.12)" : "#fff", whiteSpace: "nowrap", overflow: "hidden" }}>
+              <button type="button" onClick={() => setActiveGenerationId(generation.generationId)} style={{ border: 0, background: "transparent", padding: "7px 9px", fontSize: "11px" }}>묶음 {originalIndex + 1} · 발주 {generation.purchaseOrderNumbers.length}건</button>
+              {generation.status !== "shipment_generated" && <button type="button" aria-label={`묶음 ${originalIndex + 1} 삭제`} onClick={() => void removeUnusedGeneration(generation.generationId)} style={{ border: 0, borderLeft: `1px solid ${wmsColors.border}`, background: "transparent", padding: "0 8px", color: wmsColors.muted }}>×</button>}
+            </span>;
+          })}
         </div>
       </div>}
 
-      <ShipmentWorkflowStepCard step={3} title="Shipment 파일 생성" subtitle="현재 generation의 운송장 자동 확인 + 발주서 원본 SKU·바코드·수량 사용" status="current">
+      <ShipmentWorkflowStepCard step={3} title="Shipment 업로드파일" subtitle="현재 묶음의 한진 결과를 자동 확인하고 발주서 원본 SKU·바코드·수량만 사용합니다." status={activeGeneration?.status === "shipment_generated" ? "done" : "current"}>
         <HanjinAutoShipmentSection
           generation={activeGeneration}
           generationLabel={activeGeneration ? `묶음 ${generations.findIndex(item => item.generationId === activeGeneration.generationId) + 1}` : undefined}
@@ -116,8 +142,8 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
         />
       </ShipmentWorkflowStepCard>
 
-      <ShipmentWorkflowStepCard step={4} title="Shipment 출력세트 생성" subtitle="현재 generation 발주만 표시한 물류센터 라벨 포함" status="current">
-        <ShipmentOutputSetSection waveId={waveId} items={items} generation={activeGeneration} generationLabel={activeGeneration ? `묶음 ${generations.findIndex(item => item.generationId === activeGeneration.generationId) + 1}` : undefined} />
+      <ShipmentWorkflowStepCard step={4} title="Shipment 출력세트" subtitle="현재 묶음의 발주만 포함하며 상태와 관계없이 언제든 다시 생성할 수 있습니다." status={activeGeneration?.outputSetGeneratedAt ? "done" : "current"}>
+        <ShipmentOutputSetSection waveId={waveId} items={items} generation={activeGeneration} generationLabel={activeGeneration ? `묶음 ${generations.findIndex(item => item.generationId === activeGeneration.generationId) + 1}` : undefined} onGenerated={markOutputSetGenerated} />
       </ShipmentWorkflowStepCard>
     </div>
   );

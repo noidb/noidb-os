@@ -3,8 +3,12 @@ import ExcelJS from "exceljs";
 import { resolveDisplayNameAndOption } from "../lib/wms/display-name";
 import { buildBarTenderWorkbook, type ShipmentPrintGroup } from "../lib/wms/shipment-print-client";
 import { buildSingleBarcodeWorkbook } from "../lib/wms/shipment-output-files";
+import { buildDefaultConfirmedQuantities } from "../lib/wms/picking-wave/po-confirm-rows";
 
 async function main() {
+  assert.deepEqual(buildDefaultConfirmedQuantities([
+    { skuId: "SKU-ORDERED", productName: "테스트", originalQuantity: 12, foundQuantity: 0, shortageQuantity: 12 },
+  ]), { "SKU-ORDERED": 12 }, "발주확정 기본수량은 피킹수량이 아니라 발주수량이어야 한다");
   const split = resolveDisplayNameAndOption(
     "노이드비 써지컬스틸 큐빅포인트 투라인 여성 반지, 실버, 25호",
     "",

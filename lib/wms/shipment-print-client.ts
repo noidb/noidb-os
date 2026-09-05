@@ -500,6 +500,71 @@ export async function buildSkuBarcodePdf(groups: ShipmentPrintGroup[], onProgres
   return output.save();
 }
 
+function transactionStatementCanvas(group: ShipmentPrintGroup, rows: ShipmentPrintGroup["barcodeRows"], pageNumber: number, pageCount: number): HTMLCanvasElement {
+  const element = canvas(1240, 1754);
+  const ctx = element.getContext("2d")!;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, element.width, element.height);
+  ctx.fillStyle = "#111";
+  ctx.textAlign = "left";
+  ctx.font = '900 48px "Noto Sans KR", "Malgun Gothic", sans-serif';
+  ctx.fillText("거래명세서", 70, 90);
+  ctx.font = '700 24px "Noto Sans KR", "Malgun Gothic", sans-serif';
+  ctx.fillText(`물류센터  ${group.fulfillmentCenter}`, 70, 145);
+  ctx.fillText(`입고예정일  ${group.expectedDate}`, 70, 182);
+  ctx.fillText(`Shipment  ${group.shipmentNumber}`, 70, 219);
+  ctx.fillText(`발주번호  ${group.purchaseOrderNumbers.join(" / ")}`, 70, 256);
+  ctx.textAlign = "right";
+  ctx.fillText(`${pageNumber}/${pageCount}`, 1170, 90);
+  ctx.textAlign = "left";
+
+  const columns = [70, 250, 780, 1100];
+  const headerY = 320;
+  ctx.fillStyle = "#ece8e2";
+  ctx.fillRect(60, headerY - 36, 1120, 54);
+  ctx.fillStyle = "#111";
+  ctx.font = '800 22px "Noto Sans KR", "Malgun Gothic", sans-serif';
+  ctx.fillText("SKU ID", columns[0], headerY);
+  ctx.fillText("상품명 / 옵션", columns[1], headerY);
+  ctx.fillText("바코드", columns[2], headerY);
+  ctx.textAlign = "right";
+  ctx.fillText("수량", columns[3] + 60, headerY);
+  ctx.textAlign = "left";
+
+  rows.forEach((row, index) => {
+    const y = headerY + 65 + index * 58;
+    ctx.strokeStyle = "#ddd8d1";
+    ctx.beginPath(); ctx.moveTo(60, y + 18); ctx.lineTo(1180, y + 18); ctx.stroke();
+    ctx.fillStyle = "#111";
+    ctx.font = '600 19px "Noto Sans KR", "Malgun Gothic", sans-serif';
+    ctx.fillText(row.skuId, columns[0], y);
+    const name = `${row.productName}${row.optionLabel ? ` / ${row.optionLabel}` : ""}`;
+    ctx.font = `600 ${fitText(ctx, name, 500, 19, 10)}px "Noto Sans KR", "Malgun Gothic", sans-serif`;
+    ctx.fillText(name, columns[1], y);
+    ctx.fillText(row.barcode, columns[2], y);
+    ctx.textAlign = "right";
+    ctx.font = '800 21px "Noto Sans KR", "Malgun Gothic", sans-serif';
+    ctx.fillText(String(row.quantity), columns[3] + 60, y);
+    ctx.textAlign = "left";
+  });
+  return element;
+}
+
+export async function buildTransactionStatementPdf(groups: ShipmentPrintGroup[]): Promise<Uint8Array> {
+  const output = await PDFDocument.create();
+  const rowsPerPage = 22;
+  for (const group of groups) {
+    const pageCount = Math.max(1, Math.ceil(group.barcodeRows.length / rowsPerPage));
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+      const rows = group.barcodeRows.slice(pageIndex * rowsPerPage, (pageIndex + 1) * rowsPerPage);
+      const image = await output.embedPng(await canvasPng(transactionStatementCanvas(group, rows, pageIndex + 1, pageCount)));
+      const page = output.addPage(A4);
+      page.drawImage(image, { x: 0, y: 0, width: A4[0], height: A4[1] });
+    }
+  }
+  return output.save();
+}
+
 export async function buildShipmentPrintZip(files: { name: string; bytes: Uint8Array }[]): Promise<Blob> {
   const zip = new JSZip();
   files.forEach(file => zip.file(file.name, file.bytes));

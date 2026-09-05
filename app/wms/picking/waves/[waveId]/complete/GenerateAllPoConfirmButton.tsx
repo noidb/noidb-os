@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { readFileAsBase64 } from "@/lib/wms/file-base64";
-import { buildPoConfirmRows, type PoConfirmRow } from "@/lib/wms/picking-wave/po-confirm-rows";
+import { buildDefaultConfirmedQuantities, buildPoConfirmRows, type PoConfirmRow } from "@/lib/wms/picking-wave/po-confirm-rows";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import type { BasketAssignment, PickingWave, PickingWaveItem } from "@/lib/wms/picking-wave/types";
 import {
@@ -107,7 +107,8 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
   useEffect(() => {
     const initial: Record<string, Record<string, number>> = {};
     for (const [poNumber, rows] of rowsByPo) {
-      initial[poNumber] = Object.fromEntries(rows.map(row => [row.skuId, row.foundQuantity]));
+      // 발주확정 서류는 실물 피킹과 독립한다. 기본 확정수량은 발주수량이며 예외만 사용자가 수정한다.
+      initial[poNumber] = buildDefaultConfirmedQuantities(rows);
     }
     setConfirmedByPo(initial);
   }, [rowsByPo]);
@@ -331,7 +332,7 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
             poNumber,
             quantities: (rowsByPo.get(poNumber) || []).map(row => ({
               skuId: row.skuId,
-              confirmedQuantity: confirmedByPo[poNumber]?.[row.skuId] ?? row.foundQuantity,
+              confirmedQuantity: confirmedByPo[poNumber]?.[row.skuId] ?? row.originalQuantity,
             })),
           })),
           expectedSourceHash: source.fileHash,
@@ -399,9 +400,11 @@ export default function GenerateAllPoConfirmButton({ wave, items, baskets, onWav
         if (card.sourceSummary?.sourceConfirmed) confirmed.add(card.poNumber);
       }
       const allCurrentWaveConfirmed = wave.sourcePurchaseOrderNumbers.every(currentPo => confirmed.has(currentPo));
+      const pickingFinished = wave.status !== "in_progress";
       const updatedWave: PickingWave = {
         ...wave,
-        status: allCurrentWaveConfirmed ? "order_confirmed" : "result_confirmed",
+        // 서류를 먼저 처리해도 실물 피킹 상태를 강제로 완료시키지 않는다.
+        status: pickingFinished ? (allCurrentWaveConfirmed ? "order_confirmed" : wave.status) : "in_progress",
         orderConfirmedAt: allCurrentWaveConfirmed ? now : undefined,
         updatedAt: now,
       };

@@ -8,6 +8,7 @@ import {
   buildFourUpLabelPdf,
   buildMergedManifestPdf,
   buildShipmentPrintZip,
+  buildTransactionStatementPdf,
   inspectShipmentPdf,
   matchShipmentPrintGroups,
   parseBarcodeWorkbook,
@@ -16,7 +17,7 @@ import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
 
 interface EncodedSource { name: string; base64: string }
-interface Props { waveId: string; items: PickingWaveItem[]; generation?: ShipmentOutputGeneration; generationLabel?: string }
+interface Props { waveId: string; items: PickingWaveItem[]; generation?: ShipmentOutputGeneration; generationLabel?: string; onGenerated?: (generationId: string, fileName: string) => Promise<void> | void }
 
 function decodeFile(source: EncodedSource, type: string): File {
   const binary = atob(source.base64);
@@ -28,7 +29,7 @@ function sameSet(left: Set<string>, right: Set<string>): boolean {
   return left.size === right.size && [...left].every(value => right.has(value));
 }
 
-export default function ShipmentOutputSetSection({ waveId, items, generation, generationLabel }: Props) {
+export default function ShipmentOutputSetSection({ waveId, items, generation, generationLabel, onGenerated }: Props) {
   const [generating, setGenerating] = useState<"all" | "barcode" | "label" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -98,15 +99,30 @@ export default function ShipmentOutputSetSection({ waveId, items, generation, ge
       throw new Error(`출력세트 발주 완전성 검증 실패 (누락 ${missing.length} · 예상 외 ${extra.length} · 중복 ${matchedPos.length - matchedSet.size})`);
     }
 
-    const [labelsPdf, manifestsPdf, barcodeXlsx] = await Promise.all([
-      buildFourUpLabelPdf(groups), buildMergedManifestPdf(groups), buildBarTenderWorkbook(groups),
+    const centerLabelResponse = await fetch("/api/wms/fulfillment-center-labels", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ purchaseOrderNumbers: activeGeneration.purchaseOrderNumbers }),
+    });
+    if (!centerLabelResponse.ok) {
+      const data = await centerLabelResponse.json().catch(() => ({}));
+      throw new Error(data.error || "물류센터 라벨을 생성하지 못했습니다.");
+    }
+    const [labelsPdf, manifestsPdf, barcodeXlsx, transactionPdf, centerLabelXlsx] = await Promise.all([
+      buildFourUpLabelPdf(groups), buildMergedManifestPdf(groups), buildBarTenderWorkbook(groups), buildTransactionStatementPdf(groups),
+      centerLabelResponse.arrayBuffer().then(buffer => new Uint8Array(buffer)),
     ]);
-    const zip = await buildShipmentPrintZip([
+    const outputFiles = [
       { name: "01_부착문서_4분할.pdf", bytes: labelsPdf },
       { name: "02_동봉내역서_통합.pdf", bytes: manifestsPdf },
-      { name: `바코드출력_${outputDateToken}_최종.xlsx`, bytes: barcodeXlsx },
-    ]);
-    downloadBlobPreservingPage(zip, `Shipment_출력세트_${outputDateToken}_${activeGeneration.generationId}.zip`, downloadTarget);
+      { name: `03_바코드출력_${outputDateToken}_최종.xlsx`, bytes: barcodeXlsx },
+      { name: "04_물류센터_라벨.xlsx", bytes: centerLabelXlsx },
+      { name: "05_거래명세서.pdf", bytes: transactionPdf },
+    ];
+    const fileList = new TextEncoder().encode(["Shipment 출력세트 생성 파일", ...outputFiles.map(file => file.name), "06_생성파일목록.txt"].join("\r\n"));
+    const zip = await buildShipmentPrintZip([...outputFiles, { name: "06_생성파일목록.txt", bytes: fileList }]);
+    const fileName = `Shipment_출력세트_${outputDateToken}_${activeGeneration.generationId}.zip`;
+    downloadBlobPreservingPage(zip, fileName, downloadTarget);
+    await onGenerated?.(activeGeneration.generationId, fileName);
   }
 
   async function generate(kind: "all" | "barcode" | "label") {
@@ -139,7 +155,7 @@ export default function ShipmentOutputSetSection({ waveId, items, generation, ge
 
   return <div>
     <div style={{ marginBottom: "8px", padding: "9px", borderRadius: "8px", background: wmsColors.surfaceBeige, fontSize: "12px", fontWeight: 800 }}>
-      현재 출력세트: {generationLabel || "현재 묶음"} · 발주 {generation.purchaseOrderNumbers.length}건 · 4분할 라벨 PDF + 통합 거래명세서 PDF + 바코드 XLSX
+      현재 출력세트: {generationLabel || "현재 묶음"} · 발주 {generation.purchaseOrderNumbers.length}건 · 부착문서 + 동봉내역서 + 바코드 + 물류센터 라벨 + 거래명세서
     </div>
     {error && <p style={{ margin: "0 0 8px", color: "#c0392b", fontSize: "11px", whiteSpace: "pre-wrap" }}>{error}</p>}
     {message && <p style={{ margin: "0 0 8px", color: wmsColors.greenDark, fontSize: "11px" }}>{message}</p>}

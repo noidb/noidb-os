@@ -199,8 +199,8 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
 
         <ShipmentWorkflowStepCard
           step={1}
-          title="발주확정 파일 생성"
-          subtitle="선택한 발주만 쿠팡 업로드용 XLSX 한 개로 생성"
+          title="발주확정 통합파일"
+          subtitle="발주수량을 기본 확정수량으로 사용하며 상태와 관계없이 다시 생성할 수 있습니다."
           status="done"
         >
           <GenerateAllPoConfirmButton
@@ -251,9 +251,6 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   return (
     <main style={pageStyle}>
       <WmsExitNav />
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <RefreshCatalogButton onClick={refreshCatalog} loading={catalogRefreshing} />
-      </div>
       <div style={{ textAlign: "center", padding: "16px 0" }}>
         <div style={{ fontSize: "40px" }}>✅</div>
         <WaveIdentityEditor wave={wave} onSave={async updated => { await waveRepository.saveWave(updated); setWave(updated); }} />
@@ -271,7 +268,7 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
 
       <details style={{ marginTop: "20px", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: "#fff" }}>
         <summary style={{ cursor: "pointer", padding: "12px", fontSize: "14px", fontWeight: 800 }}>
-          발주서별 완료 상태 · {basketStatuses.filter(item => item.done).length}/{basketStatuses.length}
+          발주서별 완료상태 · {basketStatuses.filter(item => item.done).length}/{basketStatuses.length}
         </summary>
         <div style={{ display: "flex", flexDirection: "column", gap: "6px", padding: "0 10px 10px" }}>
           {basketStatuses.map(basket => (
@@ -318,41 +315,30 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
       </div>
 
       {/* 4~6단계: 부족분 유무에 따른 다음 단계 */}
-      {reachedResultConfirm && (
+      {reachedResultConfirm && shortageQuantity > 0 && (
         <div style={{ marginTop: "16px" }}>
-          {shortageQuantity > 0 ? (
-            <div style={{ border: `2px solid ${wmsColors.warn}`, borderRadius: "12px", padding: "14px", background: wmsColors.warnSoft }}>
-              <div style={{ fontSize: "12px", color: wmsColors.warn, fontWeight: 700, marginBottom: "6px" }}>{vendorOrderStatusText}</div>
-              <div style={{ fontSize: "12px", color: wmsColors.ink, marginBottom: "10px" }}>
-                부족분 거래처 발주서 {shortageVendorCount}건
-                <br />
-                부족 SKU {shortageItems.length}개 · 총 부족수량 {shortageQuantity}개
-              </div>
-              <a href={`/wms/picking/waves/${wave.id}/vendor-orders`} style={{ display: "block", textDecoration: "none" }}>
-                <button style={{ ...wmsPrimaryButton, width: "100%" }}>
-                  {vendorLines.length === 0 ? "부족분 거래처 발주서 생성" : "부족분 거래처 발주서 확인"}
-                </button>
-              </a>
+          <div style={{ border: `2px solid ${wmsColors.warn}`, borderRadius: "12px", padding: "14px", background: wmsColors.warnSoft }}>
+            <div style={{ fontSize: "12px", color: wmsColors.warn, fontWeight: 700, marginBottom: "6px" }}>{vendorOrderStatusText}</div>
+            <div style={{ fontSize: "12px", color: wmsColors.ink, marginBottom: "10px" }}>
+              부족분 거래처 발주서 {shortageVendorCount}건
+              <br />
+              부족 SKU {shortageItems.length}개 · 총 부족수량 {shortageQuantity}개
             </div>
-          ) : (
-            <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "14px", background: wmsColors.greenSoft }}>
-              <div style={{ fontSize: "12px", color: wmsColors.greenDark, fontWeight: 700, marginBottom: "6px" }}>현재 부족분이 없습니다.</div>
-              <p style={{ fontSize: "12px", color: wmsColors.ink, margin: "0 0 10px" }}>부족분이 없습니다. 발주확정을 진행할 수 있습니다.</p>
-              <a href={`/wms/picking/waves/${wave.id}/vendor-orders`} style={{ fontSize: "12px", color: wmsColors.muted }}>
-                필요하면 수동으로 거래처 발주서 만들기 →
-              </a>
-            </div>
-          )}
+            <a href={`/wms/picking/waves/${wave.id}/vendor-orders`} style={{ display: "block", textDecoration: "none" }}>
+              <button style={{ ...wmsPrimaryButton, width: "100%" }}>
+                {vendorLines.length === 0 ? "부족분 거래처 발주서 생성" : "부족분 거래처 발주서 확인"}
+              </button>
+            </a>
+          </div>
         </div>
       )}
 
-      {reachedResultConfirm && (
-        <div style={{ marginTop: "20px" }}>
+      <div style={{ marginTop: "20px" }}>
           <ShipmentWorkflowStepCard
             step={1}
-            title="발주확정 파일 생성"
-            subtitle="선택한 발주만 쿠팡 업로드용 XLSX 한 개로 생성"
-            status="current"
+            title="발주확정 통합파일"
+            subtitle="발주수량을 기본 확정수량으로 사용하고 예외만 수정합니다. 실제 피킹과 독립적으로 다시 생성할 수 있습니다."
+            status={wave.orderConfirmedAt ? "done" : "current"}
           >
             <GenerateAllPoConfirmButton
               wave={wave}
@@ -366,8 +352,7 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
           </ShipmentWorkflowStepCard>
 
           <HanjinStepSequence waveId={wave.id} baskets={baskets} items={items} />
-        </div>
-      )}
+      </div>
 
       <a href="/wms/picking/waves" style={{ display: "block", textDecoration: "none", marginTop: "20px" }}>
         <button style={{ ...wmsGhostButton, width: "100%" }}>목록으로</button>

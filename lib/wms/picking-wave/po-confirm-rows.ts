@@ -15,6 +15,10 @@ export interface PoConfirmRow {
   shortageQuantity: number;
 }
 
+export function buildDefaultConfirmedQuantities(rows: PoConfirmRow[]): Record<string, number> {
+  return Object.fromEntries(rows.map(row => [row.skuId, row.originalQuantity]));
+}
+
 export function buildPoConfirmRows(items: PickingWaveItem[], purchaseOrderNumber: string): PoConfirmRow[] {
   return sortWarehouseProducts(items.filter(item => item.sources.some(source => source.purchaseOrderNumber === purchaseOrderNumber)))
     .map(item => {

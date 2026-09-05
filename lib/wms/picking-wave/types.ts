@@ -133,6 +133,8 @@ export interface ShipmentOutputGeneration {
   expectedShippingGroupCount: number;
   invoiceFileName: string;
   shipmentFileName?: string;
+  outputSetFileName?: string;
+  outputSetGeneratedAt?: string;
   status: "invoice_generated" | "shipment_generated";
 }
 
