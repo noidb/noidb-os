@@ -116,7 +116,14 @@ async function verifyPublishedZip() {
   assert.deepEqual(archivedFiles, expectedFiles, "공개 ZIP의 파일 목록이 확장 소스와 같아야 합니다.");
   for (const filename of expectedFiles) {
     const archived = await zip.file(filename).async("nodebuffer");
-    assert.deepEqual(archived, fs.readFileSync(path.join(sourceDir, filename)), `공개 ZIP의 ${filename}이 최신 소스와 같아야 합니다.`);
+    const source = fs.readFileSync(path.join(sourceDir, filename));
+    // Git checkout/archive changes CRLF/LF across Windows and Linux. Compare every
+    // text character after newline normalization; binary assets remain byte-exact.
+    if (/\.(?:md|js|json|html|css|txt)$/i.test(filename)) {
+      assert.equal(archived.toString("utf8").replace(/\r\n/g, "\n"), source.toString("utf8").replace(/\r\n/g, "\n"), `공개 ZIP의 ${filename}이 최신 소스와 같아야 합니다.`);
+    } else {
+      assert.deepEqual(archived, source, `공개 ZIP의 ${filename}이 최신 소스와 같아야 합니다.`);
+    }
   }
 }
 
