@@ -172,6 +172,17 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
       <span style={{ color: preview?.canGenerate ? wmsColors.greenDark : wmsColors.warnText }}>{preview?.canGenerate ? "Source-of-Truth 검증 완료" : preview ? "생성 차단" : "선택 발주 원본 검증 중"}</span>
       {preview?.blockingReasons.length ? <div style={{ color: "#b33f35" }}>{preview.blockingReasons.join(" · ")}</div> : null}
     </div>
+    {preview?.shippingGroups?.length ? <details style={{ marginBottom: "9px", border: `1px solid ${wmsColors.border}`, borderRadius: "9px", background: "#fff" }}>
+      <summary style={{ padding: "10px", cursor: "pointer", fontSize: "12px", fontWeight: 800 }}>
+        자동 송장 묶음 {preview.shippingGroups.length}개 · 발주서 단위 최대 200개
+      </summary>
+      <div style={{ display: "grid", gap: "6px", padding: "0 9px 9px" }}>
+        {preview.shippingGroups.map((group, index) => <div key={`${group.fulfillmentCenterName}-${group.expectedArrivalDate}-${index}`} style={{ padding: "8px", borderRadius: "8px", background: wmsColors.surfaceBeige, fontSize: "11px", lineHeight: 1.55 }}>
+          <strong>묶음 {index + 1} · {group.fulfillmentCenterName} · 수량 {group.totalQuantity}개</strong><br />
+          <span style={{ color: wmsColors.muted }}>{group.expectedArrivalDate} · 발주 {group.purchaseOrderNumbers.length}건 · {group.purchaseOrderNumbers.join(" / ")}</span>
+        </div>)}
+      </div>
+    </details> : null}
     <div style={{ display: "flex", gap: "7px", marginBottom: "8px" }}>
       <button type="button" onClick={() => setSelected(new Set(allPoNumbers))} style={{ ...wmsGhostButton, flex: 1, minHeight: "38px" }}>전체선택</button>
       <button type="button" onClick={() => setSelected(new Set())} style={{ ...wmsGhostButton, flex: 1, minHeight: "38px" }}>전체해제</button>

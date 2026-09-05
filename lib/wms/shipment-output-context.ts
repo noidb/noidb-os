@@ -27,6 +27,12 @@ export interface ShipmentOutputPreview {
   conflictPurchaseOrderNumbers: string[];
   fulfillmentCenterCount: number;
   shippingGroupCount: number;
+  shippingGroups: Array<{
+    fulfillmentCenterName: string;
+    expectedArrivalDate: string;
+    purchaseOrderNumbers: string[];
+    totalQuantity: number;
+  }>;
   expectedInvoiceRowCount: number;
   missingAddressPurchaseOrders: string[];
   missingPhonePurchaseOrders: string[];
@@ -130,6 +136,12 @@ export async function buildShipmentOutputContext(
     conflictPurchaseOrderNumbers: conflicts,
     fulfillmentCenterCount: new Set(documents.map(item => item.fulfillmentCenterName)).size,
     shippingGroupCount: groups.length,
+    shippingGroups: groups.map(group => ({
+      fulfillmentCenterName: group.fulfillmentCenterName,
+      expectedArrivalDate: group.expectedArrivalDate,
+      purchaseOrderNumbers: [...group.purchaseOrderNumbers],
+      totalQuantity: group.records.reduce((sum, record) => sum + record.orderedQuantity, 0),
+    })),
     expectedInvoiceRowCount: groups.length,
     missingAddressPurchaseOrders: missingAddress,
     missingPhonePurchaseOrders: missingPhone,
