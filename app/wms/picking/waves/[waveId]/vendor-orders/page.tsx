@@ -19,6 +19,7 @@ import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsGhostButton, wmsSlateDarkButton, wmsWarnButton, wmsOuterCard } from "@/lib/wms/ui-tokens";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
+import { deriveArchivedVendorOrderWorkspace } from "@/lib/wms/vendor-order/derive-drafts";
 import Barcode from "./Barcode";
 import VendorOrderExportPanel from "./ExportPanel";
 import ProductSearchAddSheet from "./ProductSearchAddSheet";
@@ -55,6 +56,10 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
   const [liveCatalogByProductCode, setLiveCatalogByProductCode] = useState<LiveCatalogLookup>(new Map());
   const [pendingReorderLines, setPendingReorderLines] = useState<VendorOrderDraftLine[]>([]);
   const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(new Set());
+  const archivedWorkspace = useMemo(
+    () => rawWave || isManualWorkspace ? null : deriveArchivedVendorOrderWorkspace(params.waveId, Object.values(draftsByVendor), lines),
+    [draftsByVendor, isManualWorkspace, lines, params.waveId, rawWave],
+  );
 
   /** 제품링크는 발주서 라인에 저장하지 않고 항상 제품DB에서 SKU 기준으로 최신값을 읽는다 —
    *  기존 웨이브/라인은 이 필드가 생기기 전에 만들어졌을 수 있어, 저장된 스냅샷 대신 실시간
@@ -96,6 +101,11 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
           const preview = recalculateAutoVendorOrderLines(params.waveId, waveItems, existingLines, now);
           setLines(preview.lines);
           setIsPreview(true);
+        } else {
+          // 원래 웨이브가 보관/삭제된 과거 발주서는 저장된 거래처 발주 품목을 그대로 복구한다.
+          // 재계산할 원본 웨이브가 없으므로 기존 라인을 수정하거나 삭제하지 않는다.
+          setLines(existingLines);
+          setIsPreview(false);
         }
       } finally {
         setLoading(false);
@@ -347,7 +357,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
     );
   }
 
-  if (!rawWave && !isManualWorkspace) {
+  if (!rawWave && !isManualWorkspace && !archivedWorkspace) {
     return (
       <main style={pageStyle}>
         <WmsExitNav />
@@ -360,7 +370,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
   // 웨이브 없이 만든 수동 거래처 발주서 화면에서는 실제 PickingWave가 없으므로, 화면 표시에만 쓰는
   // 가상 웨이브 객체로 대신한다(저장소에는 어디에도 쓰지 않음 — 표시 전용 로컬 상수).
   const wave: PickingWave =
-    rawWave ??
+    rawWave ?? archivedWorkspace ??
     {
       id: MANUAL_VENDOR_WORKSPACE_ID,
       status: "completed",
@@ -378,6 +388,8 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
       <p style={{ fontSize: "12px", color: wmsColors.muted, margin: "0 0 16px" }}>
         {isManualWorkspace
           ? '웨이브 없이 수동으로 만든 거래처 발주서입니다. "+ 발주서 수동 추가"와 "상품 검색 추가"로 상품을 넣어주세요.'
+          : archivedWorkspace
+            ? `${params.waveId} · 원래 출고작업과 분리된 과거 거래처 발주 데이터입니다. 저장된 품목과 상태는 그대로 보존되었습니다.`
           : `${wave.displayName || wave.id} · 부족 수량을 제품DB "거래처" 기준으로 자동 분리했습니다. 거래처 정보가 없는 SKU는 "${UNASSIGNED_VENDOR_NAME}"로 별도 표시됩니다. 자동 발송은 없으며, 승인은 직접 눌러야 합니다.`}
       </p>
 

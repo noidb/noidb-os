@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { deriveVendorOrderDrafts } from "../lib/wms/vendor-order/derive-drafts";
+import { deriveArchivedVendorOrderWorkspace, deriveVendorOrderDrafts } from "../lib/wms/vendor-order/derive-drafts";
 import type { VendorOrderDraft, VendorOrderDraftLine } from "../lib/wms/vendor-order/types";
 
 const line = {
@@ -18,4 +18,9 @@ const sent = { ...derived[0], status: "sent" as const } satisfies VendorOrderDra
 const preserved = deriveVendorOrderDrafts([sent], [line]);
 assert.equal(preserved.length, 1);
 assert.equal(preserved[0].status, "sent", "기존 발주서 상태를 읽기용 복구가 덮어쓰면 안 됩니다.");
-console.log("거래처 발주 연결 검증 통과: 품목만 남은 발주서 초안 복구, 기존 전송상태 보존");
+
+const archivedWorkspace = deriveArchivedVendorOrderWorkspace(line.waveId, derived, [line]);
+assert.equal(archivedWorkspace?.id, line.waveId);
+assert.deepEqual(archivedWorkspace?.sourcePurchaseOrderNumbers, ["PO-1"]);
+assert.equal(deriveArchivedVendorOrderWorkspace("EMPTY", [], []), null, "거래처 발주 데이터까지 없는 작업을 임의 복구하면 안 됩니다.");
+console.log("거래처 발주 연결 검증 통과: 품목만 남은 발주서 초안·상세 복구, 기존 전송상태 보존");
