@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { deriveArchivedVendorOrderWorkspace, deriveVendorOrderDrafts } from "../lib/wms/vendor-order/derive-drafts";
+import { deriveArchivedVendorOrderWorkspace, deriveVendorOrderDrafts, indexVendorOrderLinesBySku } from "../lib/wms/vendor-order/derive-drafts";
 import type { VendorOrderDraft, VendorOrderDraftLine } from "../lib/wms/vendor-order/types";
 
 const line = {
@@ -23,4 +23,8 @@ const archivedWorkspace = deriveArchivedVendorOrderWorkspace(line.waveId, derive
 assert.equal(archivedWorkspace?.id, line.waveId);
 assert.deepEqual(archivedWorkspace?.sourcePurchaseOrderNumbers, ["PO-1"]);
 assert.equal(deriveArchivedVendorOrderWorkspace("EMPTY", [], []), null, "거래처 발주 데이터까지 없는 작업을 임의 복구하면 안 됩니다.");
-console.log("거래처 발주 연결 검증 통과: 품목만 남은 발주서 초안·상세 복구, 기존 전송상태 보존");
+const movedLine = { ...line, id: "WAVE-1::거래처B::SKU-1", draftId: "WAVE-1::거래처B", vendorName: "거래처B", updatedAt: "2026-09-03T00:00:00.000Z" };
+const indexedBySku = indexVendorOrderLinesBySku([line, movedLine]);
+assert.equal(indexedBySku.size, 1, "거래처가 바뀐 같은 SKU를 별도 발주행으로 중복 생성하면 안 됩니다.");
+assert.equal(indexedBySku.get(line.skuId)?.vendorName, "거래처B", "사용자가 가장 최근에 수정한 거래처를 보존해야 합니다.");
+console.log("거래처 발주 연결 검증 통과: 초안·상세 복구, 전송상태 보존, 동일 SKU 중복 이동 차단");

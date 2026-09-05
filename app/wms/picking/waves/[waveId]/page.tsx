@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObjec
 import { useRouter } from "next/navigation";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
+import { indexVendorOrderLinesBySku } from "@/lib/wms/vendor-order/derive-drafts";
 import { toVendorOrderQuantity } from "@/lib/wms/vendor-order/aggregate";
 import type { VendorOrderDraft, VendorOrderDraftLine } from "@/lib/wms/vendor-order/types";
 import { resolveGroup, sortPickingWaveItems, type PickingGroup } from "@/lib/wms/picking-wave/grouping";
@@ -317,7 +318,9 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       vendorOrderRepository.listDrafts(wave.id),
       vendorOrderRepository.listLines(wave.id),
     ]);
-    const existingByKey = new Map(existingLines.map(line => [`${line.vendorName}\u0000${line.skuId}`, line]));
+    // 같은 SKU를 다시 이동해도 거래처명이 달라졌다는 이유로 두 발주서에 중복 생성하지 않는다.
+    // 사용자가 거래처 발주 화면에서 고친 거래처를 우선 보존하고 수량/발주번호만 갱신한다.
+    const existingBySku = indexVendorOrderLinesBySku(existingLines);
     const draftById = new Map(existingDrafts.map(draft => [draft.id, draft]));
     const linesToSave: VendorOrderDraftLine[] = [];
     let addedCount = 0;
@@ -327,22 +330,21 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       const live = resolveLiveFields(item, liveCatalogByProductCode);
       const vendorName = live.vendorName || item.vendorName || UNASSIGNED_VENDOR_NAME;
       const skuId = live.liveSkuId || item.productCode;
-      const key = `${vendorName}\u0000${skuId}`;
-      const draftId = `${wave.id}::${vendorName}`;
-      if (!draftById.has(draftId)) draftById.set(draftId, { id: draftId, waveId: wave.id, vendorName, status: "draft", createdAt: now, updatedAt: now });
       const actualQuantity = item.shortageQuantity;
       const relatedPurchaseOrderNumbers = Array.from(new Set(item.sources.map(source => source.purchaseOrderNumber)));
-      const existing = existingByKey.get(key);
+      const existing = existingBySku.get(skuId);
       if (existing) {
         const combinedActual = Math.max(existing.actualShortageQuantity || 0, actualQuantity);
         const combinedPos = Array.from(new Set([...(existing.relatedPurchaseOrderNumbers || []), ...relatedPurchaseOrderNumbers]));
         if (combinedActual === (existing.actualShortageQuantity || 0) && combinedPos.length === existing.relatedPurchaseOrderNumbers.length) continue;
         const updated = { ...existing, actualShortageQuantity: combinedActual, shortageQuantity: toVendorOrderQuantity(combinedActual), relatedPurchaseOrderNumbers: combinedPos, updatedAt: now };
-        existingByKey.set(key, updated);
+        existingBySku.set(skuId, updated);
         linesToSave.push(updated);
         updatedCount += 1;
         continue;
       }
+      const draftId = `${wave.id}::${vendorName}`;
+      if (!draftById.has(draftId)) draftById.set(draftId, { id: draftId, waveId: wave.id, vendorName, status: "draft", createdAt: now, updatedAt: now });
       const created: VendorOrderDraftLine = {
         id: `${draftId}::${skuId}`,
         draftId,
@@ -364,7 +366,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
         createdAt: now,
         updatedAt: now,
       };
-      existingByKey.set(key, created);
+      existingBySku.set(skuId, created);
       linesToSave.push(created);
       addedCount += 1;
     }

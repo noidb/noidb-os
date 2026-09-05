@@ -29,6 +29,17 @@ export function deriveVendorOrderDrafts(
   return [...result.values()];
 }
 
+export function indexVendorOrderLinesBySku(
+  lines: readonly VendorOrderDraftLine[],
+): Map<string, VendorOrderDraftLine> {
+  const result = new Map<string, VendorOrderDraftLine>();
+  for (const line of lines) {
+    const current = result.get(line.skuId);
+    if (!current || line.updatedAt > current.updatedAt) result.set(line.skuId, line);
+  }
+  return result;
+}
+
 /**
  * 예전 출고작업이 보관되거나 사라졌어도 거래처 발주 데이터가 남아 있으면 상세 화면을 연다.
  * 표시용 객체만 만들며 PickingWave 저장소에는 쓰지 않는다.
