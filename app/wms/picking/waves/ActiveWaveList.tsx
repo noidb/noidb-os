@@ -78,7 +78,7 @@ function nextAction(wave: PickingWave): string {
   const generations = wave.outputGenerations || [];
   if (generations.length > 0) {
     const progress = summarizeOutputGenerations(generations);
-    if (progress.pending > 0) return `Shipment 묶음 ${progress.completed + 1} 계속하기`;
+    if (progress.pendingPurchaseOrders > 0) return `남은 발주 ${progress.pendingPurchaseOrders}건 Shipment 계속하기`;
     return "Shipment 출력세트·재출력";
   }
   if (wave.status === "order_confirmed") return "송장출력용 파일";
@@ -91,7 +91,7 @@ function businessStatus(wave: PickingWave): string {
   const generations = wave.outputGenerations || [];
   if (generations.length > 0) {
     const progress = summarizeOutputGenerations(generations);
-    return `Shipment 묶음 ${progress.completed}/${progress.total}`;
+    return `Shipment 발주 ${progress.completedPurchaseOrders}/${progress.purchaseOrderTotal}`;
   }
   if (wave.status === "order_confirmed") return "발주확정";
   if (wave.status === "result_confirmed") return "결과 확인완료";
@@ -152,7 +152,7 @@ export function WaveSummaryCard({
           {delayLabel(shippingByDate) && <span style={{ color: wmsColors.warn }}>{delayLabel(shippingByDate)}</span>}
         </div>
         {generationProgress.total > 0 && <div style={{ marginTop: "4px", fontSize: "11px", color: wmsColors.muted }}>
-          Shipment 완료 {generationProgress.completed}개 · 처리 대기 {generationProgress.pending}개
+          Shipment 발주 완료 {generationProgress.completedPurchaseOrders}/{generationProgress.purchaseOrderTotal}건 · 미처리 {generationProgress.pendingPurchaseOrders}건
         </div>}
         <div className="wms-active-wave-progress" aria-label={`진행률 ${progress}%`}>
           <span style={{ width: `${progress}%` }} />

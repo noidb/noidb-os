@@ -9,7 +9,7 @@ import HanjinAutoShipmentSection from "./HanjinAutoShipmentSection";
 import type { HanjinGenerationResult } from "./HanjinUploadSection";
 import ShipmentOutputSetSection from "./ShipmentOutputSetSection";
 import ShipmentWorkflowStepCard from "./ShipmentWorkflowStepCard";
-import { chooseOutputGenerationId } from "@/lib/wms/output-generation-progress";
+import { chooseOutputGenerationId, isSupersededOutputGeneration } from "@/lib/wms/output-generation-progress";
 
 interface Props {
   waveId: string;
@@ -120,7 +120,10 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
   }
 
   const activeGeneration = generations.find(generation => generation.generationId === activeGenerationId) || generations.at(-1);
-  const recentGenerations = [...generations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5);
+  const recentGenerations = generations
+    .filter(generation => !isSupersededOutputGeneration(generation, generations))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 5);
 
   const step1Status = step1Done ? "done" as const : "current" as const;
 

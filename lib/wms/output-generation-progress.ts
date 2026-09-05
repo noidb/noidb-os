@@ -4,14 +4,41 @@ export interface OutputGenerationProgress {
   total: number;
   completed: number;
   pending: number;
+  superseded: number;
+  purchaseOrderTotal: number;
+  completedPurchaseOrders: number;
+  pendingPurchaseOrders: number;
 }
 
 export function summarizeOutputGenerations(generations: readonly ShipmentOutputGeneration[]): OutputGenerationProgress {
-  let completed = 0;
-  for (const generation of generations) {
-    if (generation.status === "shipment_generated") completed += 1;
-  }
-  return { total: generations.length, completed, pending: generations.length - completed };
+  const allPurchaseOrders = new Set(generations.flatMap(generation => generation.purchaseOrderNumbers));
+  const completedPurchaseOrderSet = new Set(generations
+    .filter(generation => generation.status === "shipment_generated")
+    .flatMap(generation => generation.purchaseOrderNumbers));
+  const completed = generations.filter(generation => generation.status === "shipment_generated").length;
+  const unfinished = generations.filter(generation => generation.status !== "shipment_generated");
+  const superseded = unfinished.filter(generation => generation.purchaseOrderNumbers.every(po => completedPurchaseOrderSet.has(po))).length;
+  const pending = unfinished.length - superseded;
+  return {
+    total: completed + pending,
+    completed,
+    pending,
+    superseded,
+    purchaseOrderTotal: allPurchaseOrders.size,
+    completedPurchaseOrders: completedPurchaseOrderSet.size,
+    pendingPurchaseOrders: [...allPurchaseOrders].filter(po => !completedPurchaseOrderSet.has(po)).length,
+  };
+}
+
+export function isSupersededOutputGeneration(
+  generation: ShipmentOutputGeneration,
+  generations: readonly ShipmentOutputGeneration[],
+): boolean {
+  if (generation.status === "shipment_generated") return false;
+  const completedPurchaseOrders = new Set(generations
+    .filter(item => item.status === "shipment_generated")
+    .flatMap(item => item.purchaseOrderNumbers));
+  return generation.purchaseOrderNumbers.every(po => completedPurchaseOrders.has(po));
 }
 
 export function chooseOutputGenerationId(
@@ -19,11 +46,12 @@ export function chooseOutputGenerationId(
   sharedId?: string,
   sessionId?: string | null,
 ): string | null {
-  const shared = generations.find(generation => generation.generationId === sharedId);
-  const session = generations.find(generation => generation.generationId === sessionId);
+  const actionable = generations.filter(generation => !isSupersededOutputGeneration(generation, generations));
+  const shared = actionable.find(generation => generation.generationId === sharedId);
+  const session = actionable.find(generation => generation.generationId === sessionId);
   if (shared && shared.status !== "shipment_generated") return shared.generationId;
   if (session && session.status !== "shipment_generated") return session.generationId;
-  const firstIncomplete = generations.find(generation => generation.status !== "shipment_generated");
+  const firstIncomplete = actionable.find(generation => generation.status !== "shipment_generated");
   if (firstIncomplete) return firstIncomplete.generationId;
-  return shared?.generationId || session?.generationId || generations.at(-1)?.generationId || null;
+  return shared?.generationId || session?.generationId || actionable.at(-1)?.generationId || null;
 }

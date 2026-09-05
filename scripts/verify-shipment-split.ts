@@ -95,9 +95,12 @@ const generationFixture = [
   { generationId: "done-1", waveId: "W", purchaseOrderNumbers: ["1"], createdAt: "2026-09-01", updatedAt: "2026-09-01", expectedShippingGroupCount: 1, invoiceFileName: "1.xlsx", shipmentFileName: "1-shipment.xlsx", status: "shipment_generated" as const },
   { generationId: "pending-1", waveId: "W", purchaseOrderNumbers: ["2"], createdAt: "2026-09-02", updatedAt: "2026-09-02", expectedShippingGroupCount: 1, invoiceFileName: "2.xlsx", status: "invoice_generated" as const },
   { generationId: "done-2", waveId: "W", purchaseOrderNumbers: ["3"], createdAt: "2026-09-03", updatedAt: "2026-09-03", expectedShippingGroupCount: 1, invoiceFileName: "3.xlsx", shipmentFileName: "3-shipment.xlsx", status: "shipment_generated" as const },
+  { generationId: "stale-duplicate", waveId: "W", purchaseOrderNumbers: ["1", "3"], createdAt: "2026-09-04", updatedAt: "2026-09-04", expectedShippingGroupCount: 2, invoiceFileName: "stale.xlsx", status: "invoice_generated" as const },
 ];
-assert.deepEqual(summarizeOutputGenerations(generationFixture), { total: 3, completed: 2, pending: 1 });
+assert.deepEqual(summarizeOutputGenerations(generationFixture), { total: 3, completed: 2, pending: 1, superseded: 1, purchaseOrderTotal: 3, completedPurchaseOrders: 2, pendingPurchaseOrders: 1 });
 assert.equal(chooseOutputGenerationId(generationFixture, "done-2", "done-1"), "pending-1", "완료 묶음보다 미완료 묶음을 먼저 열어야 합니다.");
+const allCoveredFixture = generationFixture.map(generation => generation.generationId === "pending-1" ? { ...generation, status: "shipment_generated" as const, shipmentFileName: "2-shipment.xlsx" } : generation);
+assert.equal(chooseOutputGenerationId(allCoveredFixture, "stale-duplicate", "stale-duplicate"), "done-2", "완료 발주와 중복되는 오래된 미완료 묶음은 다음 작업에서 제외해야 합니다.");
 
 const completedWave: PickingWave = { id: "WAVE-C", status: "completed", sourcePurchaseOrderNumbers: ["123456789"], completedGroupIds: [], productDbConfigured: true, createdAt: "2026-09-01", updatedAt: "2026-09-02", completedAt: "2026-09-02", shippingGroups: [{ key: "인천36-20260910", expectedDate: "2026-09-10", fulfillmentCenter: "인천36", purchaseOrderNumbers: ["123456789"] }] };
 const inProgressWave: PickingWave = { ...completedWave, id: "WAVE-P", status: "in_progress", sourcePurchaseOrderNumbers: ["987654321"], completedAt: undefined };
