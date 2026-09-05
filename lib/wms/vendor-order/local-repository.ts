@@ -1,5 +1,6 @@
 import type { VendorOrderDraft, VendorOrderDraftLine } from "./types";
 import type { VendorOrderRepository } from "./repository";
+import { deriveVendorOrderDrafts } from "./derive-drafts";
 
 /** localStorage 기반 임시 저장소. lib/wms/picking-wave/local-repository.ts와 동일한 패턴. */
 
@@ -42,7 +43,7 @@ export function replaceLocalVendorOrderSnapshot(snapshot: { vendorOrderDrafts: V
 
 export class LocalVendorOrderRepository implements VendorOrderRepository {
   async listDrafts(waveId: string): Promise<VendorOrderDraft[]> {
-    return readList<VendorOrderDraft>(KEYS.drafts).filter(draft => draft.waveId === waveId);
+    return deriveVendorOrderDrafts(readList<VendorOrderDraft>(KEYS.drafts), readList<VendorOrderDraftLine>(KEYS.lines)).filter(draft => draft.waveId === waveId);
   }
 
   async saveDraft(draft: VendorOrderDraft): Promise<void> {
@@ -76,7 +77,7 @@ export class LocalVendorOrderRepository implements VendorOrderRepository {
   }
 
   async listAllDrafts(): Promise<VendorOrderDraft[]> {
-    return readList<VendorOrderDraft>(KEYS.drafts);
+    return deriveVendorOrderDrafts(readList<VendorOrderDraft>(KEYS.drafts), readList<VendorOrderDraftLine>(KEYS.lines));
   }
 
   async listAllLines(): Promise<VendorOrderDraftLine[]> {

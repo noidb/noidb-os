@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import AppNavigation from "@/app/AppNavigation";
-import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import ActiveWaveList from "@/app/wms/picking/waves/ActiveWaveList";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import { UNASSIGNED_VENDOR_NAME } from "@/lib/wms/vendor-order/types";
@@ -19,59 +18,37 @@ import UpcomingInboundSummary from "./UpcomingInboundSummary";
  * 여러 개면 기존 웨이브 목록 화면으로 보낸다(웨이브를 가로지르는 통합 목록 화면은 아직 없음).
  */
 function ShortageVendorOrdersBanner() {
-  const waveRepository = usePickingWaveRepository();
   const vendorOrderRepository = useVendorOrderRepository();
-  const [summary, setSummary] = useState<{ vendorCount: number; skuCount: number; totalShortage: number; waveIds: string[] } | null>(null);
+  const [summary, setSummary] = useState<{ pendingVendors: number; pendingSku: number; sentVendors: number; sentSku: number } | null>(null);
 
   useEffect(() => {
     (async () => {
-      const waves = await waveRepository.listWaves();
-      const relevantWaves = waves.filter(wave => wave.status !== "in_progress");
-      const vendorNames = new Set<string>();
-      let skuCount = 0;
-      let totalShortage = 0;
-      const waveIds: string[] = [];
-
-      for (const wave of relevantWaves) {
-        const lines = await vendorOrderRepository.listLines(wave.id);
-        if (lines.length === 0) continue;
-        waveIds.push(wave.id);
-        for (const line of lines) {
-          vendorNames.add(line.vendorName || UNASSIGNED_VENDOR_NAME);
-          skuCount += 1;
-          totalShortage += line.shortageQuantity;
-        }
-      }
-      setSummary({ vendorCount: vendorNames.size, skuCount, totalShortage, waveIds });
+      const [drafts, lines] = await Promise.all([vendorOrderRepository.listAllDrafts(), vendorOrderRepository.listAllLines()]);
+      const statusByDraft = new Map(drafts.map(draft => [draft.id, draft.status]));
+      const pendingLines = lines.filter(line => statusByDraft.get(line.draftId) !== "sent");
+      const sentLines = lines.filter(line => statusByDraft.get(line.draftId) === "sent");
+      setSummary({
+        pendingVendors: new Set(pendingLines.map(line => line.vendorName || UNASSIGNED_VENDOR_NAME)).size,
+        pendingSku: pendingLines.length,
+        sentVendors: new Set(sentLines.map(line => line.vendorName || UNASSIGNED_VENDOR_NAME)).size,
+        sentSku: sentLines.length,
+      });
     })();
-  }, [waveRepository, vendorOrderRepository]);
+  }, [vendorOrderRepository]);
 
   if (!summary) return null;
 
-  const href = summary.waveIds.length === 1 ? `/wms/picking/waves/${summary.waveIds[0]}/vendor-orders` : "/wms/picking/waves";
-
   return (
-    <a href={href} style={{ display: "block", textDecoration: "none", marginBottom: "18px" }}>
-      <div
-        style={{
-          border: `1px solid ${summary.vendorCount > 0 ? wmsColors.warn : wmsColors.border}`,
-          background: summary.vendorCount > 0 ? wmsColors.warnSoft : wmsColors.surfaceBeige,
-          borderRadius: "14px",
-          padding: "12px",
-        }}
-      >
-        {summary.vendorCount > 0 ? (
-          <>
-            <div style={{ fontSize: "13px", fontWeight: 800, color: wmsColors.warn }}>부족분 거래처별 발주서 {summary.vendorCount}건</div>
-            <div style={{ fontSize: "11px", color: wmsColors.ink, marginTop: "2px" }}>
-              부족 SKU {summary.skuCount}개 · 총 부족수량 {summary.totalShortage}개
-            </div>
-          </>
-        ) : (
-          <div style={{ fontSize: "12px", color: wmsColors.muted }}>현재 부족분이 없습니다.</div>
-        )}
-      </div>
-    </a>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: "8px", marginBottom: "18px" }}>
+      {summary.pendingSku > 0 && <a href="/wms/vendor-orders/manage" style={{ display: "block", textDecoration: "none", border: `1px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: "14px", padding: "12px" }}>
+        <strong style={{ display: "block", fontSize: "13px", color: wmsColors.warn }}>거래처 발주 대기</strong>
+        <span style={{ display: "block", marginTop: "3px", fontSize: "11px", color: wmsColors.ink }}>업체 {summary.pendingVendors}곳 · 부족 SKU {summary.pendingSku}개</span>
+      </a>}
+      {summary.sentSku > 0 && <a href="/wms/vendor-orders/receiving" style={{ display: "block", textDecoration: "none", border: `1px solid ${wmsColors.green}`, background: wmsColors.greenSoft, borderRadius: "14px", padding: "12px" }}>
+        <strong style={{ display: "block", fontSize: "13px", color: wmsColors.greenDark }}>거래처 입고 대기</strong>
+        <span style={{ display: "block", marginTop: "3px", fontSize: "11px", color: wmsColors.ink }}>업체 {summary.sentVendors}곳 · SKU {summary.sentSku}개</span>
+      </a>}
+    </div>
   );
 }
 

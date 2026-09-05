@@ -1,0 +1,21 @@
+import assert from "node:assert/strict";
+import { deriveVendorOrderDrafts } from "../lib/wms/vendor-order/derive-drafts";
+import type { VendorOrderDraft, VendorOrderDraftLine } from "../lib/wms/vendor-order/types";
+
+const line = {
+  id: "WAVE-1::거래처A::SKU-1", draftId: "WAVE-1::거래처A", waveId: "WAVE-1", vendorName: "거래처A", skuId: "SKU-1",
+  modelName: "M1", category: "반지", optionLabel: "실버, 17호", productName: "상품", imageUrl: "", barcode: "R1",
+  shortageQuantity: 12, currentStock: "0", relatedPurchaseOrderNumbers: ["PO-1"], memo: "", isManuallyAdded: false,
+  createdAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-09-02T00:00:00.000Z",
+} satisfies VendorOrderDraftLine;
+
+const derived = deriveVendorOrderDrafts([], [line]);
+assert.equal(derived.length, 1);
+assert.equal(derived[0].id, line.draftId);
+assert.equal(derived[0].status, "draft", "상위 카드가 없는 품목은 외부 전송 상태를 추측하지 않고 초안으로 복구해야 합니다.");
+
+const sent = { ...derived[0], status: "sent" as const } satisfies VendorOrderDraft;
+const preserved = deriveVendorOrderDrafts([sent], [line]);
+assert.equal(preserved.length, 1);
+assert.equal(preserved[0].status, "sent", "기존 발주서 상태를 읽기용 복구가 덮어쓰면 안 됩니다.");
+console.log("거래처 발주 연결 검증 통과: 품목만 남은 발주서 초안 복구, 기존 전송상태 보존");

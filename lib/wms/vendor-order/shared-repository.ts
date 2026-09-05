@@ -2,6 +2,7 @@ import type { VendorOrderRepository } from "./repository";
 import type { VendorOrderDraft, VendorOrderDraftLine } from "./types";
 import { LocalVendorOrderRepository, readLocalVendorOrderSnapshot, replaceLocalVendorOrderSnapshot } from "./local-repository";
 import type { PickingWaveStoreMutation, PickingWaveStoreSnapshot } from "../picking-wave/shared-store-types";
+import { deriveVendorOrderDrafts } from "./derive-drafts";
 
 const MIGRATION_KEY = "noidb_vendor_order_shared_migration_v1";
 const DIRTY_KEY = "noidb_vendor_order_shared_dirty_v1";
@@ -49,12 +50,12 @@ export class SharedVendorOrderRepository implements VendorOrderRepository {
     mirror(await requestSnapshot(mutation));
   }
 
-  async listDrafts(waveId: string) { try { return (await this.refresh()).vendorOrderDrafts.filter(value => value.waveId === waveId); } catch { return this.local.listDrafts(waveId); } }
+  async listDrafts(waveId: string) { try { const snapshot = await this.refresh(); return deriveVendorOrderDrafts(snapshot.vendorOrderDrafts, snapshot.vendorOrderLines).filter(value => value.waveId === waveId); } catch { return this.local.listDrafts(waveId); } }
   async saveDraft(draft: VendorOrderDraft) { return this.save(() => this.local.saveDraft(draft), { action: "saveVendorDraft", draft }); }
   async deleteDraft(draftId: string) { await this.ensureMigrated(); mirror(await requestSnapshot({ action: "deleteVendorDraft", draftId, deletedAt: new Date().toISOString() })); }
   async listLines(waveId: string) { try { return (await this.refresh()).vendorOrderLines.filter(value => value.waveId === waveId); } catch { return this.local.listLines(waveId); } }
   async saveLine(line: VendorOrderDraftLine) { return this.save(() => this.local.saveLine(line), { action: "saveVendorLine", line }); }
   async deleteLine(lineId: string) { await this.ensureMigrated(); mirror(await requestSnapshot({ action: "deleteVendorLine", lineId, deletedAt: new Date().toISOString() })); }
-  async listAllDrafts() { try { return (await this.refresh()).vendorOrderDrafts; } catch { return this.local.listAllDrafts(); } }
+  async listAllDrafts() { try { const snapshot = await this.refresh(); return deriveVendorOrderDrafts(snapshot.vendorOrderDrafts, snapshot.vendorOrderLines); } catch { return this.local.listAllDrafts(); } }
   async listAllLines() { try { return (await this.refresh()).vendorOrderLines; } catch { return this.local.listAllLines(); } }
 }

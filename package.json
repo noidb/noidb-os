@@ -5,7 +5,7 @@
   "description": "NOID-B OS",
   "scripts": {
     "dev": "next dev",
-    "build": "npm run verify:wms-rules && npm run verify:wims-extension && npm run verify:supply-status-extension && npm run verify:registration-idempotency && next build",
+    "build": "npm run verify:wms-rules && npm run verify:vendor-orders && npm run verify:wims-extension && npm run verify:supply-status-extension && npm run verify:registration-idempotency && next build",
     "start": "next start",
     "verify:shipment-split": "npx --yes tsx scripts/verify-shipment-split.ts",
     "verify:wms-order-versioning": "npx --yes tsx scripts/verify-wms-order-versioning.ts",
@@ -21,6 +21,7 @@
     "verify:shipment-manifest-order": "npx --yes tsx scripts/verify-shipment-manifest-order.ts",
     "verify:discontinue-files": "npx --yes tsx scripts/verify-discontinue-files.ts",
     "verify:inbound-results": "npx --yes tsx scripts/verify-inbound-results.ts",
+    "verify:vendor-orders": "npx --yes tsx scripts/verify-vendor-order-linkage.ts",
     "verify:wms-rules": "npx --yes tsx scripts/verify-wms-rules.ts",
     "verify:registration-followups": "npm run verify:product-label && npm run verify:safe-product-file-write && npm run verify:registration-file-stage && npm run verify:registration-idempotency && npm run verify:shipment-manifest-order && npm run verify:wms-rules",
     "coupang:collect": "node automation/coupang-po/collector.mjs --once",
