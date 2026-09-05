@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
 import { resolveDisplayNameAndOption } from "../lib/wms/display-name";
 import { buildBarTenderWorkbook, type ShipmentPrintGroup } from "../lib/wms/shipment-print-client";
-import { buildSingleBarcodeWorkbook } from "../lib/wms/shipment-output-files";
+import { buildBatchBarcodeWorkbook, buildSingleBarcodeWorkbook } from "../lib/wms/shipment-output-files";
 import { buildDefaultConfirmedQuantities } from "../lib/wms/picking-wave/po-confirm-rows";
 
 async function main() {
@@ -67,7 +67,26 @@ async function main() {
   assert.equal(singleSheet.getRow(2).getCell(5).value, "실버, 25호");
   assert.equal(singleSheet.getRow(2).getCell(8).value, "상품");
 
-  console.log("WMS 고정 규칙 검증 통과: 브랜드 제거, 첫 쉼표 옵션 분리, 호수 보존, BarTender XLSX, 구분행, 전체 역순, 바코드 1장 재출력");
+  const batchBytes = await buildBatchBarcodeWorkbook([
+    {
+      record: { purchaseOrderNumber: "139999999", sourceContainerFile: "fixture", sourceEntryFile: "po.xlsx", sourceSheet: "상품목록", sourceRow: 22, fulfillmentCenterName: "인천36", expectedArrivalDate: "2026-08-28", recipientName: "", phone: "", postalCode: "", address: "", skuId: "50138268", barcode: "R123456789001", productName: "노이드비 첫 상품, 실버", optionName: "실버", orderedQuantity: 1 },
+      catalog: { skuId: "50138268", modelSku: "TEST-1", modelName: "", category: "", gender: "", productName: "", optionLabel: "", imageUrl: "", warehouseNumber: "A-1", boxNumber: "", currentStock: "", currentStatus: "", costVatIncluded: "", vendorName: "", barcode: "R123456789001", countryOfOrigin: "중국", productLink: "" },
+      quantity: 1,
+    },
+    {
+      record: { purchaseOrderNumber: "139999998", sourceContainerFile: "fixture", sourceEntryFile: "po.xlsx", sourceSheet: "상품목록", sourceRow: 23, fulfillmentCenterName: "인천36", expectedArrivalDate: "2026-08-28", recipientName: "", phone: "", postalCode: "", address: "", skuId: "50138269", barcode: "R123456789002", productName: "노이드비 둘째 상품, 골드", optionName: "골드", orderedQuantity: 1 },
+      catalog: { skuId: "50138269", modelSku: "TEST-2", modelName: "", category: "", gender: "", productName: "", optionLabel: "", imageUrl: "", warehouseNumber: "A-2", boxNumber: "", currentStock: "", currentStatus: "", costVatIncluded: "", vendorName: "", barcode: "R123456789002", countryOfOrigin: "중국", productLink: "" },
+      quantity: 2,
+    },
+  ]);
+  const batchWorkbook = new ExcelJS.Workbook();
+  await batchWorkbook.xlsx.load(batchBytes as unknown as ArrayBuffer);
+  const batchSheet = batchWorkbook.getWorksheet("템플릿1");
+  assert(batchSheet);
+  assert.equal(batchSheet.rowCount, 4, "2종 3장 선택 재출력은 헤더 외 상품행이 정확히 3개여야 합니다.");
+  assert.deepEqual([2, 3, 4].map(row => batchSheet.getRow(row).getCell(1).value), ["50138269", "50138269", "50138268"], "선택 재출력 파일은 실제 적재 순서를 위해 전체 역순이어야 합니다.");
+
+  console.log("WMS 고정 규칙 검증 통과: 브랜드 제거, 첫 쉼표 옵션 분리, 호수 보존, BarTender XLSX, 구분행, 전체 역순, 바코드 1장·다건 재출력");
 }
 
 main().catch(error => {

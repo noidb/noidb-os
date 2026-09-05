@@ -124,3 +124,33 @@ export async function buildSingleBarcodeWorkbook(
   sheet.columns = [12, 14, 18, 48, 36, 18, 24, 14].map(width => ({ width }));
   return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
 }
+
+export interface BatchBarcodeWorkbookItem {
+  record: PurchaseOrderSourceRecord;
+  catalog: ProductCatalogItem;
+  quantity: number;
+}
+
+/** 재출력센터 다건 출력 전용. 화면에 담은 순서를 실제 적재 순서로 유지하도록 전체 행을 역순 저장한다. */
+export async function buildBatchBarcodeWorkbook(items: readonly BatchBarcodeWorkbookItem[]): Promise<Buffer> {
+  if (items.length < 1 || items.length > 200) throw new Error("한 파일에는 바코드를 1~200종까지 담을 수 있습니다.");
+  const outputRows: (string | number)[][] = [];
+  for (const { record, catalog, quantity } of items) {
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1000) throw new Error("바코드 출력수량은 SKU별 1~1000 사이 정수여야 합니다.");
+    const skuId = normalizeSkuId(record.skuId);
+    const modelName = resolveBarcodeModelIdentifier(catalog);
+    if (!record.barcode.trim()) throw new Error(`SKU ${skuId}: 발주서 원본 바코드가 없습니다.`);
+    if (!modelName || !catalog.countryOfOrigin) throw new Error(`SKU ${skuId}: 영문·숫자 모델SKU/모델명 또는 제조국명이 없습니다.`);
+    const display = resolveDisplayNameAndOption(record.productName, record.optionName);
+    for (let index = 0; index < quantity; index += 1) {
+      outputRows.push([skuId, catalog.warehouseNumber, record.barcode, display.name, display.option, catalog.countryOfOrigin, modelName, "상품"]);
+    }
+  }
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("템플릿1");
+  sheet.addRow(["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"]);
+  for (const row of outputRows.reverse()) sheet.addRow(row);
+  sheet.getRow(1).font = { bold: true };
+  sheet.columns = [12, 14, 18, 48, 36, 18, 24, 14].map(width => ({ width }));
+  return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
+}
