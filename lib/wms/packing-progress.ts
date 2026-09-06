@@ -40,7 +40,6 @@ export function nextPackingProgress(wave: PickingWave, items: PickingWaveItem[],
   if (packingGenerationKey(wave) !== input.generationKey) throw new Error("송장 또는 출력 대상이 변경되었습니다. 동봉내역서를 다시 불러와 주세요.");
   validatePackingRows(wave,items,input.rows);
   const manifestKey = packingManifestKey(input.rows);
-  if (prior?.dispatchedAt) throw new Error("이미 출고완료된 작업입니다. 기존 검수 기록을 보존합니다.");
   if (!Array.isArray(input.checkedKeys) || new Set(input.checkedKeys).size !== input.checkedKeys.length || input.checkedKeys.some(key => !input.rows.some(row => row.key === key))) throw new Error("검수 체크 대상을 확인해 주세요.");
   const shipmentNumbers = [...new Set(input.rows.map(row => row.shipmentNumber))];
   const dispatchedShipmentNumbers = input.dispatched
@@ -49,5 +48,6 @@ export function nextPackingProgress(wave: PickingWave, items: PickingWaveItem[],
   if (new Set(dispatchedShipmentNumbers).size !== dispatchedShipmentNumbers.length || dispatchedShipmentNumbers.some(shipmentNumber => !shipmentNumbers.includes(shipmentNumber))) throw new Error("Shipment 출고상태를 확인해 주세요.");
   if (prior && (prior.manifestKey !== manifestKey || prior.generationKey !== input.generationKey) && input.checkedKeys.length) throw new Error("출력 내용이 바뀌었습니다. 변경된 목록의 검수를 처음부터 확인해 주세요.");
   if (input.dispatched && input.checkedKeys.length !== input.rows.length) throw new Error("모든 상품의 바코드 부착·박스 포장을 확인한 뒤 출고완료해 주세요.");
-  return { generationKey: input.generationKey, manifestKey, rows: input.rows, checkedKeys: input.checkedKeys, dispatchedShipmentNumbers, updatedAt: now, ...(input.dispatched ? { dispatchedAt: now } : {}) };
+  const allDispatched = shipmentNumbers.length > 0 && dispatchedShipmentNumbers.length === shipmentNumbers.length;
+  return { generationKey: input.generationKey, manifestKey, rows: input.rows, checkedKeys: input.checkedKeys, dispatchedShipmentNumbers, updatedAt: now, ...(allDispatched ? { dispatchedAt: now } : {}) };
 }

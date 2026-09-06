@@ -75,7 +75,7 @@ export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[
     const dates = [...new Set(matchingGroups.map(group => group.expectedDate))];
     const isSingleDestination = centers.length === 1 && dates.length === 1;
     const key = isSingleDestination ? `${dates[0]}\u0000${centers[0]}` : generation.generationId;
-    const target = packingTargetMap.get(key) || { center: isSingleDestination ? centers[0] : "복수 물류센터", expectedDate: isSingleDestination ? dates[0] : "", generationIds: [], shipmentCount: 0, quantity: 0 };
+    const target = packingTargetMap.get(key) || { center: centers.join(" / ") || "물류센터 미확인", expectedDate: dates.join(" / "), generationIds: [], shipmentCount: 0, quantity: 0 };
     target.generationIds.push(generation.generationId);
     target.shipmentCount += generation.expectedShippingGroupCount;
     target.quantity += items.reduce((sum, item) => sum + item.sources.filter(source => generationPoSet.has(source.purchaseOrderNumber)).reduce((sourceSum, source) => {
