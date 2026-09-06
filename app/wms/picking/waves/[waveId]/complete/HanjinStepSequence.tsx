@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import type { BasketAssignment, PickingWaveItem, ShipmentOutputGeneration } from "@/lib/wms/picking-wave/types";
-import { wmsColors } from "@/lib/wms/ui-tokens";
+import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import HanjinUploadSection from "./HanjinUploadSection";
 import HanjinAutoShipmentSection from "./HanjinAutoShipmentSection";
 import type { HanjinGenerationResult } from "./HanjinUploadSection";
@@ -142,6 +142,14 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
       <ShipmentWorkflowStepCard id="shipment-output-set" step={4} title="Shipment 출력세트" subtitle="현재 묶음의 발주만 포함하며 상태와 관계없이 언제든 다시 생성할 수 있습니다." status={activeGeneration?.outputSetGeneratedAt ? "done" : "current"}>
         <ShipmentOutputSetSection waveId={waveId} items={items} generation={activeGeneration} generationLabel={activeGeneration ? "송장파일 생성 대상" : undefined} onGenerated={markOutputSetGenerated} />
       </ShipmentWorkflowStepCard>
+      <div style={{ marginTop: "16px" }}>
+        <a href={`/wms/picking/waves/${encodeURIComponent(waveId)}`} style={{ ...wmsPrimaryButton, display: "flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box", width: "100%", minHeight: "56px", textDecoration: "none" }}>
+          실제 피킹 시작하기 →
+        </a>
+        <p style={{ margin: "8px 0 0", color: wmsColors.muted, fontSize: "12px", textAlign: "center" }}>
+          출력물을 준비한 뒤 눌러 주세요. 같은 작업의 피킹 화면으로 이동하며, 기존 피킹 기록은 유지됩니다.
+        </p>
+      </div>
     </div>
   );
 }

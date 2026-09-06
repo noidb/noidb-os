@@ -177,6 +177,20 @@ async function runCase(browser, width, target) {
     await page.goBack();
     await page.getByRole("heading", { name: "오늘 할 일", exact: true }).waitFor();
     await page.waitForFunction(expected => Math.abs(window.scrollY - Math.min(expected, document.documentElement.scrollHeight - innerHeight)) < 5, dashboardScroll);
+    if (target.anchor === "shipment-output-set") {
+      await page.goto(`${base}${href}`);
+      const pickingLink = page.getByRole("link", { name: "실제 피킹 시작하기 →", exact: true });
+      await pickingLink.waitFor();
+      assert.equal(await pickingLink.getAttribute("href"), root);
+      await pickingLink.scrollIntoViewIfNeeded();
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.screenshot({ path: path.join(output, `picking-next-step-${width}.png`) });
+      await pickingLink.click();
+      await page.waitForURL(url => url.pathname === root && !url.search);
+      await page.getByText("검증 반지 1", { exact: false }).first().waitFor();
+      assert.deepEqual(fixtureSnapshot.items, snapshot.items, "Opening picking must preserve existing quantities and allocations.");
+      assert.equal(selectionMutations.length, 0, "Opening picking must not change the wave or output selection.");
+    }
     results.push({ width, anchor: target.anchor, selectedGeneration: target.generationId, invalidBlocked: Boolean(target.invalid), anchorTop: bounds.y, actionInViewport: !target.invalid, shipmentPreviewPoSets: shipmentPreviews, dashboardScrollRestored: dashboardScroll, changedSelection });
   } catch (error) {
     console.error(JSON.stringify({ width, target, url: page.url(), anchors: await page.evaluate(() => Object.fromEntries(["po-confirm", "hanjin-step-1", "hanjin-step-3", "shipment-output-set"].map(id => [id, document.getElementById(id)?.getBoundingClientRect().top]))).catch(() => ({})), shipmentPreviews, previews, scrollY: await page.evaluate(() => window.scrollY).catch(() => 0) }));
