@@ -140,7 +140,7 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
       </ShipmentWorkflowStepCard>
 
       <ShipmentWorkflowStepCard id="shipment-output-set" step={4} title="Shipment 출력세트" subtitle="현재 묶음의 발주만 포함하며 상태와 관계없이 언제든 다시 생성할 수 있습니다." status={activeGeneration?.outputSetGeneratedAt ? "done" : "current"}>
-        <ShipmentOutputSetSection waveId={waveId} items={items} generation={activeGeneration} generationLabel={activeGeneration ? "송장파일 생성 대상" : undefined} onGenerated={markOutputSetGenerated} />
+        <ShipmentOutputSetSection waveId={waveId} items={items} generation={activeGeneration} generationLabel={activeGeneration ? "송장파일 생성 대상" : undefined} packingHref={`/wms/picking/waves/${encodeURIComponent(waveId)}/packing`} onGenerated={markOutputSetGenerated} />
       </ShipmentWorkflowStepCard>
       <div style={{ marginTop: "16px" }}>
         <a href={`/wms/picking/waves/${encodeURIComponent(waveId)}`} style={{ ...wmsPrimaryButton, display: "flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box", width: "100%", minHeight: "56px", textDecoration: "none" }}>

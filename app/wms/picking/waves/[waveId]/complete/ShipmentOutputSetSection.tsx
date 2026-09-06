@@ -13,9 +13,9 @@ import {
 import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
 
-interface Props { waveId: string; items: PickingWaveItem[]; generation?: ShipmentOutputGeneration; generationLabel?: string; onGenerated?: (generationId: string, fileName: string) => Promise<void> | void }
+interface Props { waveId: string; items: PickingWaveItem[]; generation?: ShipmentOutputGeneration; generationLabel?: string; packingHref?: string; onGenerated?: (generationId: string, fileName: string) => Promise<void> | void }
 
-export default function ShipmentOutputSetSection({ waveId, items, generation, generationLabel, onGenerated }: Props) {
+export default function ShipmentOutputSetSection({ waveId, items, generation, generationLabel, packingHref, onGenerated }: Props) {
   const [generating, setGenerating] = useState<"all" | "barcode" | "label" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,6 +107,20 @@ export default function ShipmentOutputSetSection({ waveId, items, generation, ge
     </div>
     {error && <p style={{ margin: "0 0 8px", color: "#c0392b", fontSize: "11px", whiteSpace: "pre-wrap" }}>{error}</p>}
     {message && <p style={{ margin: "0 0 8px", color: wmsColors.greenDark, fontSize: "11px" }}>{message}</p>}
+    {packingHref && <><a
+      href={`${packingHref}?generation=${encodeURIComponent(activeGeneration.generationId)}`}
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box",
+        width: "100%", minHeight: "52px", marginBottom: "8px", borderRadius: "10px",
+        border: `2px solid ${wmsColors.slateDark}`, background: "#fff", color: wmsColors.slateDark,
+        fontSize: "15px", fontWeight: 900, textDecoration: "none",
+      }}
+    >
+      상품 이미지로 확인
+    </a>
+    <p style={{ margin: "-2px 0 10px", color: wmsColors.muted, fontSize: "11px", lineHeight: 1.5 }}>
+      현재 묶음의 동봉내역서 순서대로 이미지·SKU·바코드·수량을 확인하고 상품링크를 열 수 있습니다.
+    </p></>}
     <button type="button" onClick={() => void generate("all")} disabled={generating !== null} style={{ ...wmsPrimaryButton, width: "100%", minHeight: "52px", marginBottom: "8px", opacity: generating ? 0.6 : 1 }}>
       {generating === "all" ? "Shipment 출력세트 생성 중..." : "Shipment 출력세트 생성"}
     </button>

@@ -1,14 +1,20 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import type { PickingWaveStoreSnapshot } from "@/lib/wms/picking-wave/shared-store-types";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { loadShipmentPrintGroups, createShipmentPrintLoadCache } from "@/lib/wms/load-shipment-print-groups";
 import { buildBarTenderWorkbook, type ShipmentPrintGroup } from "@/lib/wms/shipment-print-client";
 import { packingGenerationKey, packingManifestKey, type PackingProgress, type PackingRow } from "@/lib/wms/packing-progress";
 import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
+import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
+import { openProductLinkPreview } from "@/lib/wms/product-link-preview";
+import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 import { wmsColors, wmsPrimaryButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
 
 export default function PackingPage({ params }: { params: { waveId: string } }) {
+  const searchParams = useSearchParams();
+  const requestedGenerationId = searchParams.get("generation")?.trim() || "";
   const [snapshot,setSnapshot] = useState<PickingWaveStoreSnapshot>();
   const [groups,setGroups] = useState<ShipmentPrintGroup[]>([]);
   const [catalog,setCatalog] = useState<ProductCatalogItem[]>([]);
@@ -33,7 +39,11 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
       const saved: PickingWaveStoreSnapshot = data.snapshot; const target = saved.waves.find(w => w.id === params.waveId);
       if (!target) throw new Error("출고작업을 찾을 수 없습니다.");
       setSnapshot(saved);setProgress(saved.packingProgress?.[params.waveId]);
-      const generations = (target.outputGenerations || []).filter(g => !g.supersededByGenerationId && g.status === "shipment_generated" && g.shipmentFileName);
+      const availableGenerations = (target.outputGenerations || []).filter(g => !g.supersededByGenerationId && g.status === "shipment_generated" && g.shipmentFileName);
+      const generations = requestedGenerationId
+        ? availableGenerations.filter(generation => generation.generationId === requestedGenerationId)
+        : availableGenerations;
+      if (requestedGenerationId && generations.length === 0) throw new Error("선택한 송장 묶음의 Shipment 파일을 찾을 수 없습니다. 서류 화면에서 현재 묶음을 다시 확인해 주세요.");
       if (!generations.length) throw new Error("Shipment 파일을 생성한 뒤 동봉내역서를 불러올 수 있습니다. 서류 화면에서 먼저 완료해 주세요.");
       const targetItems = saved.items.filter(i => i.waveId === params.waveId);
       const loaded: ShipmentPrintGroup[] = []; const products = new Map<string,ProductCatalogItem>();
@@ -47,14 +57,15 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
         }
         source.catalog.forEach(item=>products.set(item.skuId,item));
       }
-      if (target.sourcePurchaseOrderNumbers.some(po=>!seenPos.has(po))) throw new Error("아직 Shipment가 생성되지 않은 발주서가 있습니다. 모든 발주의 Shipment 파일을 먼저 생성해 주세요.");
+      const requiredPurchaseOrders = requestedGenerationId ? generations.flatMap(generation => generation.purchaseOrderNumbers) : target.sourcePurchaseOrderNumbers;
+      if (requiredPurchaseOrders.some(po=>!seenPos.has(po))) throw new Error("현재 송장 묶음에 아직 Shipment가 생성되지 않은 발주서가 있습니다. 서류 화면에서 다시 확인해 주세요.");
       setGroups(loaded);setCatalog([...products.values()]);
       const lastShipment = sessionStorage.getItem(`noidb:packing-shipment:${params.waveId}`);
       setSelected(loaded.find(g => g.shipmentNumber === lastShipment)?.shipmentNumber || loaded[0]?.shipmentNumber || "");
     } catch(e) {setError(e instanceof Error ? e.message : "동봉내역서를 불러오지 못했습니다.");}
     finally {setLoading(false);}
   }
-  useEffect(()=>{void load();},[params.waveId]); // Explicit reload retrieves current files and shared checks.
+  useEffect(()=>{void load();},[params.waveId, requestedGenerationId]); // Explicit reload retrieves current files and shared checks.
 
   async function save(keys: string[], dispatch = false) {
     if (!wave || busy) return;
@@ -101,14 +112,15 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
         <p style={{fontSize:12}}>아래 번호는 이 Shipment 동봉내역서의 상품 순서입니다.</p>
         {group.barcodeRows.map((row,index)=>{
           if (search && !`${row.productName} ${row.optionLabel} ${row.skuId} ${row.barcode}`.toLowerCase().includes(search.toLowerCase())) return null;
-          const product = catalog.find(p=>p.skuId===row.skuId);const item = snapshot?.items.find(i=>i.waveId===params.waveId && i.productCode===row.skuId);
+          const normalizedSku = normalizeSkuId(row.skuId);
+          const product = catalog.find(p=>normalizeSkuId(p.skuId)===normalizedSku);const item = snapshot?.items.find(i=>i.waveId===params.waveId && normalizeSkuId(i.productCode)===normalizedSku);
           const key = rows.find(r=>r.shipmentNumber===group.shipmentNumber && r.key===JSON.stringify([group.shipmentNumber,index,row.skuId,row.barcode,row.quantity]))!.key;
-          const quantityKey=`${group.shipmentNumber}:${index}`;const image = product?.imageUrl || item?.imageUrl;
+          const quantityKey=`${group.shipmentNumber}:${index}`;const image = product?.imageUrl || item?.imageUrl;const displayImage = getWmsDisplayImageUrl(image);
           const link = product?.productLink && /^https?:\/\//i.test(product.productLink) ? product.productLink : "";
           return <article key={key} data-packing-sku={row.skuId} style={{border:`1px solid ${wmsColors.border}`,borderRadius:12,padding:12,marginBottom:10,background:checked.has(key)?wmsColors.greenSoft:"#fff"}}>
             <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
-              {image && <a href={image} target="_blank" rel="noopener noreferrer"><img src={image} alt={row.productName} width={64} height={64} style={{objectFit:"contain",borderRadius:8}} /></a>}
-              <div style={{minWidth:0,flex:1,overflowWrap:"anywhere"}}><strong>{index+1}. {row.productName}</strong><div>{row.optionLabel}</div><div style={{fontSize:12}}>SKU {row.skuId} · {row.barcode}</div><strong style={{fontSize:18}}>이 Shipment에 {row.quantity}개</strong><div>{link ? <a href={link} target="_blank" rel="noopener noreferrer">상품 링크 열기 ↗</a> : <span style={{fontSize:12}}>상품 링크 미등록</span>} · <a target="_blank" rel="noopener noreferrer" href={`/wms/products/${encodeURIComponent(row.skuId)}?fromWave=${encodeURIComponent(params.waveId)}`}>상품정보 보기</a></div></div>
+              {displayImage ? <button type="button" onClick={()=>link && openProductLinkPreview(link)} disabled={!link} aria-label={link ? `${row.skuId} 제품링크 열기` : `${row.skuId} 제품링크 없음`} style={{width:76,height:76,flex:"0 0 76px",padding:4,border:`1px solid ${wmsColors.border}`,borderRadius:10,background:"#fff",cursor:link?"pointer":"default"}}><img src={displayImage} alt={row.productName} width={66} height={66} style={{display:"block",objectFit:"contain",borderRadius:8}} /></button> : <div style={{width:76,height:76,flex:"0 0 76px",display:"grid",placeItems:"center",border:`1px solid ${wmsColors.border}`,borderRadius:10,color:wmsColors.muted,fontSize:11,textAlign:"center"}}>이미지<br/>없음</div>}
+              <div style={{minWidth:0,flex:1,overflowWrap:"anywhere"}}><strong>{index+1}. {row.productName}</strong><div>{row.optionLabel}</div><div style={{fontSize:12}}>SKU {row.skuId} · {row.barcode}</div><strong style={{fontSize:18}}>이 Shipment에 {row.quantity}개</strong><div>{link ? <button type="button" onClick={()=>openProductLinkPreview(link)} style={{border:0,padding:"6px 0",background:"transparent",color:"#1677c8",fontWeight:800,textDecoration:"underline",cursor:"pointer"}}>상품 링크 열기 ↗</button> : <span style={{fontSize:12}}>상품 링크 미등록</span>} · <a target="_blank" rel="noopener noreferrer" href={`/wms/products/${encodeURIComponent(row.skuId)}?fromWave=${encodeURIComponent(params.waveId)}`}>상품정보 보기</a></div></div>
             </div>
             <label style={{display:"flex",gap:8,alignItems:"center",minHeight:48,fontWeight:700}}><input aria-label={`${row.skuId} 포장 확인`} type="checkbox" checked={checked.has(key)} disabled={busy || stale || dispatched} onChange={()=>void save(checked.has(key)?[...checked].filter(k=>k!==key):[...checked,key])} style={{width:24,height:24}} />{row.quantity}개 확인 · 바코드 부착 · 박스 포장</label>
             <details><summary>바코드 분실·손상 → 재발행</summary>{(!row.modelName || !row.countryOfOrigin) && <p style={{color:wmsColors.warn,fontSize:12}}>재발행에 필요한 제조국·영문 모델 정보가 없습니다. 상품정보를 확인한 뒤 목록을 새로고침해 주세요.</p>}<div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:8}}><label>장수 <input aria-label={`${row.skuId} 재발행 장수`} type="number" min={1} max={row.quantity} value={reprintQty[quantityKey] || "1"} onChange={e=>setReprintQty({...reprintQty,[quantityKey]:e.target.value})} style={{width:65,minHeight:40}} /></label><button disabled={busy || stale || !row.modelName || !row.countryOfOrigin} style={wmsSecondaryButton} onClick={()=>void reprint(group,index)}>이 상품 바코드 재발행</button></div></details>
