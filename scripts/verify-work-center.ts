@@ -59,11 +59,11 @@ const packingRows = [
 const packing = { ...full, packingProgress: { [wave.id]: { generationKey: "GEN", manifestKey: "MANIFEST", rows: packingRows, checkedKeys: ["ROW1"], updatedAt: stamp } } };
 assert.equal(buildWorkCenterOverview(packing).works[0].nextLabel, "Shipment 서류작업 확인");
 const documentsDone = { ...full, waves: [{ ...fullWave, shipmentDocumentsCompletedAt: stamp }] };
-assert.equal(buildWorkCenterOverview(documentsDone).works[0].nextLabel, "통합피킹");
-assert.equal(buildWorkCenterOverview(documentsDone).works[0].nextHref, `/wms/picking/waves/${wave.id}`);
+assert.equal(buildWorkCenterOverview(documentsDone).works[0].nextLabel, "통합피킹 · Shipment별 출고작업 선택");
+assert.equal(buildWorkCenterOverview(documentsDone).works[0].nextHref, `/wms/picking/waves/${wave.id}/complete`);
 const integratedDone = { ...full, waves: [{ ...fullWave, shipmentDocumentsCompletedAt: stamp, integratedPickingCompletedAt: stamp }] };
-assert.equal(buildWorkCenterOverview(integratedDone).works[0].nextLabel, "Shipment별 출고작업");
-assert.equal(buildWorkCenterOverview(integratedDone).works[0].nextHref, `/wms/picking/waves/${wave.id}/packing`);
+assert.equal(buildWorkCenterOverview(integratedDone).works[0].nextLabel, "통합피킹 · Shipment별 출고작업 선택");
+assert.equal(buildWorkCenterOverview(integratedDone).works[0].nextHref, `/wms/picking/waves/${wave.id}/complete`);
 const splitGenerations = { ...full, waves: [{ ...fullWave, outputGenerations: [
   { ...generation, generationId: "DONGTAN-1", purchaseOrderNumbers: ["PO1"], expectedShippingGroupCount: 1 },
   { ...generation, generationId: "DONGTAN-2", purchaseOrderNumbers: ["PO2"], expectedShippingGroupCount: 1 },

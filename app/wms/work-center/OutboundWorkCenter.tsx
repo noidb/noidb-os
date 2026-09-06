@@ -65,6 +65,7 @@ export default function OutboundWorkCenter() {
     {work.delay && <p className={styles.warning}>{work.delay}</p>}
     <p className={styles.nextLabel}>다음 작업: {work.nextLabel}</p>
     <a className={styles.primary} href={work.nextHref}>{work.nextHref.includes("/packing") ? "출고작업 계속하기 →" : work.id === next?.id ? "계속하기 →" : `${work.nextLabel} →`}</a>
+    {work.packingTargets.length > 0 && !work.nextHref.includes("/packing") && <a className={styles.secondary} href={`${work.pickingHref}/packing`}>Shipment별 출고작업 바로가기 →</a>}
     {work.state && work.state.status !== "active" && <details className={styles.details}>
       <summary>서류·피킹·발주·작업 관리</summary>
       <p className={styles.muted}>같은 출고작업을 이어갑니다. 남은 발주 때문에 새 작업을 만들 필요가 없습니다.</p>

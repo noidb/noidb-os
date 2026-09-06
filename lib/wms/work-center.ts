@@ -97,12 +97,9 @@ export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[
   let nextLabel = "1단계 · 발주확정 통합파일";
   let nextHref = `${base}/complete#po-confirm`;
   const packingIsActive = Boolean(packingGeneration && (packingGeneration.outputSetGeneratedAt || packingRows.length) && !packingProgress?.dispatchedAt);
-  if (wave.integratedPickingCompletedAt) {
-    nextLabel = "Shipment별 출고작업";
-    nextHref = `${base}/packing`;
-  } else if (wave.shipmentDocumentsCompletedAt) {
-    nextLabel = "통합피킹";
-    nextHref = base;
+  if (wave.shipmentDocumentsCompletedAt) {
+    nextLabel = "통합피킹 · Shipment별 출고작업 선택";
+    nextHref = `${base}/complete`;
   } else if (packingIsActive && packingHref && packingLabel) {
     nextLabel = "Shipment 서류작업 확인";
     nextHref = `${base}/complete`;

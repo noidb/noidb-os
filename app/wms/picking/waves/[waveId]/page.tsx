@@ -1397,7 +1397,10 @@ function PickingListBottomBar({ wave, items, onWaveChange }: { wave: PickingWave
     if (wave.integratedPickingCompletedAt) return <div style={barStyle}><p style={{ margin: "0 0 8px", fontWeight: 800, color: wmsColors.greenDark }}>통합피킹 완료</p><a href={`/wms/picking/waves/${encodeURIComponent(wave.id)}/packing`} style={{ textDecoration: "none" }}><button style={{ ...wmsPrimaryButton, width: "100%" }}>Shipment별 출고작업</button></a></div>;
     return <div style={barStyle}>
       <p style={{ margin: "0 0 8px", fontWeight: 800 }}>{completed ? "통합피킹을 모두 처리했습니다." : `통합피킹 진행 중 · 미처리 SKU ${remainingCount}개`}</p>
-      <button type="button" disabled={!completed} onClick={() => { if (!window.confirm("통합피킹을 완료하고 Shipment별 출고작업으로 이동할까요?")) return; const now = new Date().toISOString(); void onWaveChange({ ...wave, integratedPickingCompletedAt: now, updatedAt: now }).then(() => { window.location.href = `/wms/picking/waves/${encodeURIComponent(wave.id)}/packing`; }); }} style={{ ...wmsPrimaryButton, width: "100%", opacity: completed ? 1 : .45 }}>통합피킹 완료</button>
+      <div style={{ display: "grid", gap: "8px" }}>
+        <button type="button" onClick={() => { if (!window.confirm("통합피킹을 완료 처리할까요? 미처리 SKU가 있어도 Shipment별 작업은 별도로 계속할 수 있습니다.")) return; const now = new Date().toISOString(); void onWaveChange({ ...wave, integratedPickingCompletedAt: now, updatedAt: now }).then(() => { window.location.href = `/wms/picking/waves/${encodeURIComponent(wave.id)}/packing`; }); }} style={{ ...wmsPrimaryButton, width: "100%" }}>통합피킹 완료</button>
+        <a href={`/wms/picking/waves/${encodeURIComponent(wave.id)}/packing`} style={{ textDecoration: "none" }}><button type="button" style={{ ...wmsPrimaryButton, width: "100%" }}>통합피킹 없이 Shipment별 출고작업</button></a>
+      </div>
     </div>;
   }
 
