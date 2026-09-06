@@ -30,6 +30,9 @@ const firstShipmentDone=applyPickingWaveStoreMutation(first,{...mutation,checked
 assert.deepEqual(firstShipmentDone.packingProgress![wave.id].dispatchedShipmentNumbers,["50000000"]);
 const secondShipmentDoneWithoutChecks=applyPickingWaveStoreMutation(first,{...mutation,dispatchedShipmentNumbers:["50000001"],expectedUpdatedAt:mutation.now,now:"2026-09-06T01:31:00Z"});
 assert.deepEqual(secondShipmentDoneWithoutChecks.packingProgress![wave.id].dispatchedShipmentNumbers,["50000001"],"shipment dispatch status is independent from optional item checks");
+const otherCenterRows=[{...rows[0],key:"OTHER",shipmentNumber:"50000002"}];
+const preservedAcrossCenters=applyPickingWaveStoreMutation(firstShipmentDone,{...mutation,rows:otherCenterRows,checkedKeys:[],dispatchedShipmentNumbers:["50000000","50000002"],expectedUpdatedAt:"2026-09-06T01:30:00Z",now:"2026-09-06T01:40:00Z"});
+assert.deepEqual(preservedAcrossCenters.packingProgress![wave.id].dispatchedShipmentNumbers,["50000000","50000002"],"completed Shipment status must survive switching centers");
 assert.deepEqual(final.items,snapshot.items);assert.deepEqual(final.waves,snapshot.waves);
 const reopened=applyPickingWaveStoreMutation(final,{...mutation,dispatchedShipmentNumbers:["50000001"],expectedUpdatedAt:"2026-09-06T02:00:00Z",now:"2026-09-06T03:00:00Z"});
 assert.deepEqual(reopened.packingProgress![wave.id].dispatchedShipmentNumbers,["50000001"]);assert.equal(reopened.packingProgress![wave.id].dispatchedAt,undefined);

@@ -36,6 +36,8 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
   const checked = new Set(stale ? [] : progress?.checkedKeys || []);
   const dispatched = Boolean(progress?.dispatchedAt);
   const dispatchedShipments = new Set(progress?.dispatchedShipmentNumbers || (dispatched ? groups.map(group => group.shipmentNumber) : []));
+  const pendingGroups = groups.filter(group=>!dispatchedShipments.has(group.shipmentNumber));
+  const completedGroups = groups.filter(group=>dispatchedShipments.has(group.shipmentNumber));
   const centerTargets: Array<{ key: string; generationIds: string[]; label: string; href: string }> = (() => {
     if (!wave) return [];
     const map = new Map<string,{centers:string[];dates:string[];ids:string[];shipments:number}>();
@@ -57,7 +59,7 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
       if (!response.ok || !data.snapshot) throw new Error(data.error || "출고작업을 불러오지 못했습니다.");
       const saved: PickingWaveStoreSnapshot = data.snapshot; const target = saved.waves.find(w => w.id === params.waveId);
       if (!target) throw new Error("출고작업을 찾을 수 없습니다.");
-      setSnapshot(saved);setProgress(saved.packingProgress?.[params.waveId]);
+      const savedProgress=saved.packingProgress?.[params.waveId];setSnapshot(saved);setProgress(savedProgress);
       const availableGenerations = (target.outputGenerations || []).filter(g => !g.supersededByGenerationId && g.status === "shipment_generated" && g.shipmentFileName);
       if (!requestedGenerationIds.length) { setGroups([]);setCatalog([]);setSelected("");return; }
       const generations = requestedGenerationIds.length
@@ -82,7 +84,8 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
       setGroups(loaded);setCatalog([...products.values()]);
       setSelectedForDispatch([]);
       const lastShipment = sessionStorage.getItem(`noidb:packing-shipment:${params.waveId}`);
-      setSelected(loaded.find(g => g.shipmentNumber === lastShipment)?.shipmentNumber || loaded[0]?.shipmentNumber || "");
+      const completedShipmentNumbers=new Set(savedProgress?.dispatchedShipmentNumbers||[]);const pendingLoaded=loaded.filter(group=>!completedShipmentNumbers.has(group.shipmentNumber));
+      setSelected(pendingLoaded.find(g => g.shipmentNumber === lastShipment)?.shipmentNumber || pendingLoaded[0]?.shipmentNumber || "");
     } catch(e) {setError(e instanceof Error ? e.message : "동봉내역서를 불러오지 못했습니다.");}
     finally {setLoading(false);}
   }
@@ -95,7 +98,9 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
     try {
       const response = await fetch("/api/wms/packing-progress",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({waveId:wave.id,generationKey:currentKey,rows,checkedKeys:keys,dispatchedShipmentNumbers:dispatch?groups.map(group=>group.shipmentNumber):shipmentStatuses,expectedUpdatedAt:progress?.updatedAt || null,dispatched:dispatch,confirmed:dispatch})});
       const data = await response.json(); if (!response.ok) throw new Error(data.error || "검수 기록 저장 실패");
-      setProgress(data.progress);setMessage(dispatch ? "택배 출고완료로 저장했습니다." : "검수 기록 저장 완료");
+      setProgress(data.progress);setMessage(dispatch ? "택배 출고완료로 저장했습니다." : "Shipment 출고상태를 저장했습니다.");
+      const savedShipments=new Set<string>(data.progress?.dispatchedShipmentNumbers||[]);
+      if (savedShipments.has(selected)) {const nextGroup=groups.find(group=>!savedShipments.has(group.shipmentNumber));setSelected(nextGroup?.shipmentNumber||"");}
     } catch(e) {setError(e instanceof Error ? e.message : "저장 실패");} finally {setBusy(false);}
   }
   async function removeCurrentGeneration() {
@@ -144,11 +149,12 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
     {groups.length > 0 && <>
       <p><strong>Shipment {groups.length}개 · 출고완료 {groups.filter(group=>dispatchedShipments.has(group.shipmentNumber)).length}개 · 미출고 {groups.filter(group=>!dispatchedShipments.has(group.shipmentNumber)).length}개</strong></p>
       <div style={{border:`1px solid ${wmsColors.border}`,borderRadius:12,padding:12,marginBottom:12,background:wmsColors.surfaceBeige}}>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}><button type="button" style={wmsSecondaryButton} onClick={()=>setSelectedForDispatch(groups.filter(group=>!dispatchedShipments.has(group.shipmentNumber)).map(group=>group.shipmentNumber))}>미출고 전체선택</button><button type="button" style={wmsSecondaryButton} onClick={()=>setSelectedForDispatch([])}>전체해제</button></div>
-        {groups.map(group=><label key={group.shipmentNumber} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",fontWeight:700}}><input type="checkbox" checked={selectedForDispatch.includes(group.shipmentNumber)} disabled={dispatchedShipments.has(group.shipmentNumber)} onChange={event=>setSelectedForDispatch(current=>event.target.checked?[...current,group.shipmentNumber]:current.filter(value=>value!==group.shipmentNumber))}/><span>{group.fulfillmentCenter} · {group.shipmentNumber} · {group.barcodeRows.reduce((sum,row)=>sum+row.quantity,0)}개 · {dispatchedShipments.has(group.shipmentNumber)?"출고완료":"미출고"}</span></label>)}
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}><button type="button" style={wmsSecondaryButton} onClick={()=>setSelectedForDispatch(pendingGroups.map(group=>group.shipmentNumber))}>미출고 전체선택</button><button type="button" style={wmsSecondaryButton} onClick={()=>setSelectedForDispatch([])}>전체해제</button></div>
+        {pendingGroups.map(group=><label key={group.shipmentNumber} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",fontWeight:700}}><input type="checkbox" checked={selectedForDispatch.includes(group.shipmentNumber)} onChange={event=>setSelectedForDispatch(current=>event.target.checked?[...current,group.shipmentNumber]:current.filter(value=>value!==group.shipmentNumber))}/><span>{group.fulfillmentCenter} · {group.shipmentNumber} · {group.barcodeRows.reduce((sum,row)=>sum+row.quantity,0)}개 · 미출고</span></label>)}
+        {pendingGroups.length===0&&<p style={{margin:"6px 0",color:wmsColors.greenDark,fontWeight:800}}>이 물류센터의 Shipment가 모두 출고완료됐습니다.</p>}
         <button type="button" disabled={busy||selectedForDispatch.length===0} style={{...wmsPrimaryButton,width:"100%",marginTop:8,opacity:busy||selectedForDispatch.length===0?.5:1}} onClick={()=>{if(!window.confirm(`선택한 Shipment ${selectedForDispatch.length}개를 출고완료로 변경할까요?`))return;const next=[...new Set([...dispatchedShipments,...selectedForDispatch])];void save([...checked],false,next).then(()=>setSelectedForDispatch([]));}}>선택 Shipment {selectedForDispatch.length}개 출고완료</button>
       </div>
-      <label>포장할 Shipment <select aria-label="포장할 Shipment" value={selected} onChange={e=>{setSelected(e.target.value);sessionStorage.setItem(`noidb:packing-shipment:${params.waveId}`,e.target.value);setSearch("");}} style={{width:"100%",minHeight:48,margin:"8px 0",fontSize:15}}>{groups.map(g=><option key={g.shipmentNumber} value={g.shipmentNumber}>{g.fulfillmentCenter} · {g.shipmentNumber} · {g.barcodeRows.reduce((n,r)=>n+r.quantity,0)}개</option>)}</select></label>
+      {pendingGroups.length>0&&<label>포장할 Shipment <select aria-label="포장할 Shipment" value={pendingGroups.some(group=>group.shipmentNumber===selected)?selected:""} onChange={e=>{setSelected(e.target.value);sessionStorage.setItem(`noidb:packing-shipment:${params.waveId}`,e.target.value);setSearch("");}} style={{width:"100%",minHeight:48,margin:"8px 0",fontSize:15}}><option value="" disabled>미출고 Shipment를 선택하세요</option>{pendingGroups.map(g=><option key={g.shipmentNumber} value={g.shipmentNumber}>{g.fulfillmentCenter} · {g.shipmentNumber} · {g.barcodeRows.reduce((n,r)=>n+r.quantity,0)}개</option>)}</select></label>}
       <input aria-label="상품 검색" placeholder="상품명·SKU·바코드 검색 (내역서 순서 유지)" value={search} onChange={e=>setSearch(e.target.value)} style={{boxSizing:"border-box",width:"100%",minHeight:44,marginBottom:12}} />
       {groups.filter(g=>g.shipmentNumber===selected).map(group=><section key={group.shipmentNumber}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}><h2 style={{fontSize:18,marginBottom:4}}>{group.fulfillmentCenter} · Shipment {group.shipmentNumber}</h2><strong style={{padding:"5px 9px",borderRadius:999,background:dispatchedShipments.has(group.shipmentNumber)?wmsColors.greenSoft:"#f3ece4",color:dispatchedShipments.has(group.shipmentNumber)?"#365f4e":wmsColors.warn}}>{dispatchedShipments.has(group.shipmentNumber)?"출고완료":"미출고"}</strong></div><p style={{fontSize:12}}>입고예정일 {group.expectedDate} · 발주 {group.purchaseOrderNumbers.join(", ")}</p>
@@ -170,6 +176,7 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
         })}
         {(()=>{const shipped=dispatchedShipments.has(group.shipmentNumber);return <button type="button" disabled={busy} style={{...wmsPrimaryButton,width:"100%",margin:"4px 0 16px",background:shipped?"#365f4e":wmsColors.greenDark,opacity:busy?.5:1}} onClick={()=>{if(!window.confirm(shipped?`${group.fulfillmentCenter} Shipment ${group.shipmentNumber}을 미출고로 되돌릴까요?`:`${group.fulfillmentCenter} Shipment ${group.shipmentNumber}의 실제 출고가 완료됐습니까?`))return;const next=shipped?[...dispatchedShipments].filter(value=>value!==group.shipmentNumber):[...dispatchedShipments,group.shipmentNumber];void save([...checked],false,next);}}>{shipped?"출고완료 · 미출고로 변경":"이 Shipment 출고완료"}</button>;})()}
       </section>)}
+      {completedGroups.length>0&&<details style={{border:`1px solid ${wmsColors.border}`,borderRadius:12,padding:12,marginTop:10}}><summary style={{fontWeight:800,cursor:"pointer"}}>출고완료 {completedGroups.length}개 보기</summary>{completedGroups.map(group=><div key={group.shipmentNumber} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"10px 0",borderBottom:`1px solid ${wmsColors.border}`}}><span>{group.fulfillmentCenter} · {group.shipmentNumber} · 출고완료</span><button type="button" disabled={busy} style={wmsSecondaryButton} onClick={()=>{if(!window.confirm(`${group.fulfillmentCenter} Shipment ${group.shipmentNumber}을 미출고로 되돌릴까요?`))return;void save([...checked],false,[...dispatchedShipments].filter(value=>value!==group.shipmentNumber));}}>미출고로 변경</button></div>)}</details>}
     </>}
   </main>;
 }

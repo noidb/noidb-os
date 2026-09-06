@@ -45,9 +45,9 @@ export function nextPackingProgress(wave: PickingWave, items: PickingWaveItem[],
   const dispatchedShipmentNumbers = input.dispatched
     ? shipmentNumbers
     : input.dispatchedShipmentNumbers || prior?.dispatchedShipmentNumbers || [];
-  if (new Set(dispatchedShipmentNumbers).size !== dispatchedShipmentNumbers.length || dispatchedShipmentNumbers.some(shipmentNumber => !shipmentNumbers.includes(shipmentNumber))) throw new Error("Shipment 출고상태를 확인해 주세요.");
+  const priorDispatchedShipments = new Set(prior?.dispatchedShipmentNumbers || []);
+  if (new Set(dispatchedShipmentNumbers).size !== dispatchedShipmentNumbers.length || dispatchedShipmentNumbers.some(shipmentNumber => !shipmentNumbers.includes(shipmentNumber) && !priorDispatchedShipments.has(shipmentNumber))) throw new Error("Shipment 출고상태를 확인해 주세요.");
   if (prior && (prior.manifestKey !== manifestKey || prior.generationKey !== input.generationKey) && input.checkedKeys.length) throw new Error("출력 내용이 바뀌었습니다. 변경된 목록의 검수를 처음부터 확인해 주세요.");
   if (input.dispatched && input.checkedKeys.length !== input.rows.length) throw new Error("모든 상품의 바코드 부착·박스 포장을 확인한 뒤 출고완료해 주세요.");
-  const allDispatched = shipmentNumbers.length > 0 && dispatchedShipmentNumbers.length === shipmentNumbers.length;
-  return { generationKey: input.generationKey, manifestKey, rows: input.rows, checkedKeys: input.checkedKeys, dispatchedShipmentNumbers, updatedAt: now, ...(allDispatched ? { dispatchedAt: now } : {}) };
+  return { generationKey: input.generationKey, manifestKey, rows: input.rows, checkedKeys: input.checkedKeys, dispatchedShipmentNumbers, updatedAt: now, ...(input.dispatched ? { dispatchedAt: now } : {}) };
 }
