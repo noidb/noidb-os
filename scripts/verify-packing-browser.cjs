@@ -76,4 +76,3 @@ async function main(){
  console.log(JSON.stringify({passed:true,results}));
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
-

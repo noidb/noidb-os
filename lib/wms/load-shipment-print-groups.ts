@@ -89,4 +89,3 @@ export async function loadShipmentPrintGroups(waveId: string, items: PickingWave
     }
     return { groups, workbookName: workbook.name, catalog };
   }
-
