@@ -40,14 +40,14 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
   const completedGroups = groups.filter(group=>dispatchedShipments.has(group.shipmentNumber));
   const centerTargets: Array<{ key: string; generationIds: string[]; label: string; href: string }> = (() => {
     if (!wave) return [];
-    const map = new Map<string,{centers:string[];dates:string[];ids:string[];shipments:number}>();
+    const map = new Map<string,{centers:string[];dates:string[];ids:string[];purchaseOrders:string[];shipments:number}>();
     for (const generation of (wave.outputGenerations || []).filter(candidate=>!candidate.supersededByGenerationId&&candidate.status==="shipment_generated"&&candidate.shipmentFileName)) {
       const poSet=new Set(generation.purchaseOrderNumbers);const matched=(wave.shippingGroups||[]).filter(group=>group.purchaseOrderNumbers.some(po=>poSet.has(po)));
       const centers=[...new Set(matched.map(group=>group.fulfillmentCenter))];const dates=[...new Set(matched.map(group=>group.expectedDate))];
       const single=centers.length===1&&dates.length===1;const key=single?`${dates[0]}\u0000${centers[0]}`:generation.generationId;
-      const target=map.get(key)||{centers:[],dates:[],ids:[],shipments:0};centers.forEach(center=>{if(!target.centers.includes(center))target.centers.push(center);});dates.forEach(date=>{if(!target.dates.includes(date))target.dates.push(date);});target.ids.push(generation.generationId);target.shipments+=generation.expectedShippingGroupCount;map.set(key,target);
+      const target=map.get(key)||{centers:[],dates:[],ids:[],purchaseOrders:[],shipments:0};centers.forEach(center=>{if(!target.centers.includes(center))target.centers.push(center);});dates.forEach(date=>{if(!target.dates.includes(date))target.dates.push(date);});generation.purchaseOrderNumbers.forEach(po=>{if(!target.purchaseOrders.includes(po))target.purchaseOrders.push(po);});target.ids.push(generation.generationId);target.shipments+=generation.expectedShippingGroupCount;map.set(key,target);
     }
-    return [...map.entries()].map(([key,target])=>({key,generationIds:target.ids,label:`${target.centers.join(" / ") || "물류센터 미확인"}${target.dates.length?` · ${target.dates.join(" / ")}`:""} · Shipment ${target.shipments}개`,href:`${base}/packing?generations=${encodeURIComponent(target.ids.join(","))}`})).sort((a,b)=>a.label.localeCompare(b.label,"ko-KR",{numeric:true}));
+    return [...map.entries()].map(([key,target])=>{const shipmentNumbers=[...new Set((snapshot?.baskets||[]).filter(basket=>target.purchaseOrders.includes(basket.purchaseOrderNumber)).map(basket=>basket.shipmentNumber).filter((value):value is string=>Boolean(value)))];return {key,generationIds:target.ids,complete:shipmentNumbers.length>0&&shipmentNumbers.every(shipmentNumber=>dispatchedShipments.has(shipmentNumber)),label:`${target.centers.join(" / ") || "물류센터 미확인"}${target.dates.length?` · ${target.dates.join(" / ")}`:""} · Shipment ${target.shipments}개`,href:`${base}/packing?generations=${encodeURIComponent(target.ids.join(","))}`};}).filter(target=>!target.complete).sort((a,b)=>a.label.localeCompare(b.label,"ko-KR",{numeric:true}));
   })();
   const currentCenterTarget=centerTargets.find(target=>target.generationIds.join(",")===requestedGenerationKey);
   const currentCenterTargetKey=currentCenterTarget?.key||"";
@@ -100,6 +100,7 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
       const data = await response.json(); if (!response.ok) throw new Error(data.error || "검수 기록 저장 실패");
       setProgress(data.progress);setMessage(dispatch ? "택배 출고완료로 저장했습니다." : "Shipment 출고상태를 저장했습니다.");
       const savedShipments=new Set<string>(data.progress?.dispatchedShipmentNumbers||[]);
+      if (groups.length>0&&groups.every(group=>savedShipments.has(group.shipmentNumber))) {window.location.href=`${base}/packing`;return;}
       if (savedShipments.has(selected)) {const nextGroup=groups.find(group=>!savedShipments.has(group.shipmentNumber));setSelected(nextGroup?.shipmentNumber||"");}
     } catch(e) {setError(e instanceof Error ? e.message : "저장 실패");} finally {setBusy(false);}
   }
