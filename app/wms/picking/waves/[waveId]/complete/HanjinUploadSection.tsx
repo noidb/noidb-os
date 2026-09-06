@@ -49,6 +49,9 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
   const allPoNumbers = useMemo(() => [...new Set(baskets.map(basket => basket.purchaseOrderNumber).filter(Boolean))], [baskets]);
   const basketByPo = useMemo(() => new Map(baskets.map(basket => [basket.purchaseOrderNumber, basket])), [baskets]);
   const metricsByPo = useMemo(() => collectPoMetrics(items), [items]);
+  const [groupsOpen, setGroupsOpen] = useState(false);
+  const previousGroups = useRef<string[][] | null>(null);
+  const [invoiceGroups, setInvoiceGroups] = useState<string[][] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openCenters, setOpenCenters] = useState<Set<string>>(new Set());
   const [generating, setGenerating] = useState(false);
@@ -81,7 +84,9 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
     sessionStorage.setItem(persistenceKey, JSON.stringify({ selected: [...selected], openCenters: [...openCenters] }));
   }, [openCenters, persistenceKey, selected, stateHydrated]);
   const selectedPoNumbers = useMemo(() => allPoNumbers.filter(po => selected.has(po)), [allPoNumbers, selected]);
-  const selectionFingerprint = useMemo(() => [...selectedPoNumbers].sort().join("|"), [selectedPoNumbers]);
+  const selectedKey = [...selectedPoNumbers].sort().join("|");
+  useEffect(() => { setInvoiceGroups(null); }, [selectedKey]);
+  const selectionFingerprint = JSON.stringify(["250-balanced-v1", selectedKey, invoiceGroups]);
 
   const centerGroups = useMemo(() => {
     const groups = new Map<string, string[]>();
@@ -112,14 +117,14 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
     setError(null);
     // 여러 체크박스를 연속 조작할 때 중간 선택마다 무거운 원본 인덱스를 다시 만들지 않는다.
     const timer = window.setTimeout(() => {
-      fetch("/api/wms/hanjin-upload/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purchaseOrderNumbers: selectedPoNumbers }), signal: controller.signal })
+      fetch("/api/wms/hanjin-upload/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purchaseOrderNumbers: selectedPoNumbers, invoiceGroups: invoiceGroups ?? undefined }), signal: controller.signal })
         .then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.error || "완전성 검사 실패"); return data.preview as ShipmentOutputPreview; })
         .then(nextPreview => { previewCacheRef.current.set(selectionFingerprint, nextPreview); writeSessionPreview(sessionKey, nextPreview); if (active) setPreview(nextPreview); })
         .catch(cause => { if (active && !(cause instanceof DOMException && cause.name === "AbortError")) setError(cause instanceof Error ? cause.message : "송장 완전성 검사에 실패했습니다."); })
         .finally(() => { if (active) setPreviewLoading(false); });
     }, 120);
     return () => { active = false; window.clearTimeout(timer); controller.abort(); };
-  }, [selectedPoNumbers, selectionFingerprint]);
+  }, [selectedPoNumbers, selectionFingerprint, invoiceGroups]);
 
   const selectedMetrics = useMemo(() => {
     const skuIds = new Set<string>(); let quantity = 0;
@@ -141,14 +146,15 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
   }
 
   async function handleGenerate() {
-    if (!preview?.canGenerate || selectedPoNumbers.length === 0) return;
+    if (generating || previewLoading || !preview?.canGenerate || selectedPoNumbers.length === 0) return;
+    if (generations.some(g => !g.supersededByGenerationId && g.purchaseOrderNumbers.some(po => selected.has(po)) && g.purchaseOrderNumbers.some(po => !selected.has(po)))) { setError("기존 출력 대상의 일부 발주만 겹칩니다. 기존 대상 전체를 선택하거나 겹치지 않는 발주를 선택해 주세요."); return; }
     const exact = generations.find(generation => samePoSet(generation.purchaseOrderNumbers, selectedPoNumbers));
-    const overlap = generations.find(generation => !samePoSet(generation.purchaseOrderNumbers, selectedPoNumbers) && generation.purchaseOrderNumbers.some(po => selected.has(po)));
-    if (overlap && !window.confirm("이전에 만든 다른 출력 묶음과 일부 발주가 겹칩니다. 새 묶음으로 계속 생성하시겠습니까?")) return;
+    const overlap = generations.find(generation => !generation.supersededByGenerationId && !samePoSet(generation.purchaseOrderNumbers, selectedPoNumbers) && generation.purchaseOrderNumbers.some(po => selected.has(po)));
+    if (overlap && !window.confirm("기존 출력 대상과 발주가 겹칩니다. 이전 기록을 보존하고 이번 송장파일 대상으로 Shipment와 출력세트를 새로 연결하시겠습니까?")) return;
     const downloadTarget = reserveDownloadTarget();
     setGenerating(true); setError(null); setResultMessage(null);
     try {
-      const response = await fetch("/api/wms/hanjin-upload/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purchaseOrderNumbers: selectedPoNumbers }) });
+      const response = await fetch("/api/wms/hanjin-upload/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purchaseOrderNumbers: selectedPoNumbers, invoiceGroups: preview.shippingGroups.map(group => group.purchaseOrderNumbers) }) });
       if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error || "한진택배 업로드파일 생성에 실패했습니다."); }
       const addedSet = new Set(decodeURIComponent(response.headers.get("X-Added-Po-Numbers") || "").split(",").filter(Boolean));
       if (addedSet.size !== selectedPoNumbers.length || selectedPoNumbers.some(po => !addedSet.has(po))) throw new Error("생성 결과의 발주번호 집합이 요청과 일치하지 않아 다운로드를 차단했습니다.");
@@ -175,14 +181,22 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
       <span style={{ color: preview?.canGenerate ? wmsColors.greenDark : wmsColors.warnText }}>{preview?.canGenerate ? "Source-of-Truth 검증 완료" : preview ? "생성 차단" : "선택 발주 원본 검증 중"}</span>
       {preview?.blockingReasons.length ? <div style={{ color: "#b33f35" }}>{preview.blockingReasons.join(" · ")}</div> : null}
     </div>
-    {preview?.shippingGroups?.length ? <details style={{ marginBottom: "9px", border: `1px solid ${wmsColors.border}`, borderRadius: "9px", background: "#fff" }}>
+    {preview?.shippingGroups?.length ? <details open={groupsOpen} onToggle={event => setGroupsOpen(event.currentTarget.open)} style={{ marginBottom: "9px", border: `1px solid ${wmsColors.border}`, borderRadius: "9px", background: "#fff" }}>
       <summary style={{ padding: "10px", cursor: "pointer", fontSize: "12px", fontWeight: 800 }}>
-        자동 송장 묶음 {preview.shippingGroups.length}개 · 발주서 단위 최대 200개
+        자동 송장 묶음 {preview.shippingGroups.length}개 · 발주서 단위 최대 250개 · 직접 변경 가능
       </summary>
       <div style={{ display: "grid", gap: "6px", padding: "0 9px 9px" }}>
+        <button type="button" disabled={generating} onClick={() => setInvoiceGroups(null)} style={wmsGhostButton}>250개 자동 추천으로 되돌리기</button>
         {preview.shippingGroups.map((group, index) => <div key={`${group.fulfillmentCenterName}-${group.expectedArrivalDate}-${index}`} style={{ padding: "8px", borderRadius: "8px", background: wmsColors.surfaceBeige, fontSize: "11px", lineHeight: 1.55 }}>
           <strong>묶음 {index + 1} · {group.fulfillmentCenterName} · 수량 {group.totalQuantity}개</strong><br />
-          <span style={{ color: wmsColors.muted }}>{group.expectedArrivalDate} · 발주 {group.purchaseOrderNumbers.length}건 · {group.purchaseOrderNumbers.join(" / ")}</span>
+          <span style={{ color: wmsColors.muted }}>{group.expectedArrivalDate} · 발주 {group.purchaseOrderNumbers.length}건</span>
+          {group.purchaseOrderNumbers.map(po => <label key={po} style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:6}}><span style={{flex:1,minWidth:130}}>발주 {po} · {metricsByPo.get(po)?.quantity || 0}개</span><select aria-label={`발주 ${po} 송장 묶음`} value={index} disabled={generating} style={{minHeight:40,maxWidth:'100%'}} onChange={event => {
+            previousGroups.current=invoiceGroups;
+            const next=preview.shippingGroups.map(g=>[...g.purchaseOrderNumbers]);
+            next[index]=next[index].filter(value=>value!==po);
+            const target=Number(event.target.value); if(target===next.length) next.push([po]); else next[target].push(po);
+            setInvoiceGroups(next.filter(g=>g.length));
+          }}>{preview.shippingGroups.map((target,i)=>target.fulfillmentCenterName===group.fulfillmentCenterName && target.expectedArrivalDate===group.expectedArrivalDate ? <option key={i} value={i}>송장 {i+1} · {target.totalQuantity}개</option> : null)}<option value={preview.shippingGroups.length}>새 송장으로 분리</option></select></label>)}
         </div>)}
       </div>
     </details> : null}
@@ -210,6 +224,8 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
         </section>;
       })}
     </div>
+    {invoiceGroups && !preview && !previewLoading && <button type="button" onClick={() => setInvoiceGroups(previousGroups.current)} style={wmsGhostButton}>마지막 변경 취소</button>}
+    {invoiceGroups && !preview && <button type="button" onClick={() => setInvoiceGroups(null)} style={wmsGhostButton}>250개 자동 추천으로 되돌리기</button>}
     {error && <p style={{ fontSize: "11px", color: "#c0392b", marginBottom: "8px" }}>{error}</p>}
     {resultMessage && <p style={{ fontSize: "11px", color: wmsColors.greenDark, marginBottom: "8px" }}>{resultMessage}</p>}
     <button onClick={handleGenerate} disabled={generating || previewLoading || !preview?.canGenerate || selectedPoNumbers.length === 0} style={{ ...wmsPrimaryButton, width: "100%", opacity: generating || previewLoading || !preview?.canGenerate ? 0.6 : 1 }}>{generating ? "생성 중..." : previewLoading ? "원본 검증 중..." : exactGeneration ? "동일 선택 송장파일 다시 생성" : "선택 발주 송장파일 생성"}</button>

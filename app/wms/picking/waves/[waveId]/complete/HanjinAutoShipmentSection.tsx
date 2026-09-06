@@ -17,7 +17,7 @@ interface Props {
 const TRACKING_PREVIEW_SESSION_TTL_MS = 60 * 1000;
 
 function trackingPreviewKey(generation: ShipmentOutputGeneration) {
-  return `noidb:wms:shipment-preview:${[...generation.purchaseOrderNumbers].sort().join("|")}`;
+  return `noidb:wms:shipment-preview:${JSON.stringify([generation.generationId, generation.invoiceGroups, [...generation.purchaseOrderNumbers].sort()])}`;
 }
 
 function readTrackingPreview(key: string): AutoShipmentTrackingPreview | null {
@@ -54,7 +54,7 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
     fetch("/api/wms/hanjin-upload/shipment-preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ purchaseOrderNumbers: generation.purchaseOrderNumbers }),
+      body: JSON.stringify({ purchaseOrderNumbers: generation.purchaseOrderNumbers, invoiceGroups: generation.invoiceGroups }),
       signal: controller.signal,
     }).then(async response => {
       const data = await response.json();

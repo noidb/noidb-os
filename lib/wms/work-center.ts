@@ -35,7 +35,7 @@ export interface OutboundWorkSummary {
 /** Display projection only. It never changes picking, PO confirmation, or shipment state. */
 export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[], state: OutboundWorkState | undefined, today: string): OutboundWorkSummary {
   const base = `/wms/picking/waves/${encodeURIComponent(wave.id)}`;
-  const generations = wave.outputGenerations || [];
+  const generations = (wave.outputGenerations || []).filter(generation => !generation.supersededByGenerationId);
   const purchaseOrders = new Set(wave.sourcePurchaseOrderNumbers);
   const shipmentPos = new Set(generations.filter(g => g.status === "shipment_generated").flatMap(g => g.purchaseOrderNumbers).filter(po => purchaseOrders.has(po)));
   const outputPos = new Set(generations.filter(g => g.status === "shipment_generated" && g.outputSetGeneratedAt && g.outputSetFileName).flatMap(g => g.purchaseOrderNumbers).filter(po => purchaseOrders.has(po)));

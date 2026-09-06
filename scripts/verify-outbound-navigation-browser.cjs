@@ -127,13 +127,13 @@ async function runCase(browser, width, target) {
       assert.equal(await page.locator("#shipment-output-set").getByRole("button", { name: "Shipment 출력세트 생성", exact: true }).count(), 0);
       assert.deepEqual(shipmentPreviews, [], "Unknown generation must not preview a different group.");
     } else {
-      const summary = target.anchor === "hanjin-step-3" ? `현재 Shipment 대상 · 묶음 ${target.number} · 발주 2건` : `현재 출력세트: 묶음 ${target.number} · 발주 2건`;
+      const summary = target.anchor === "hanjin-step-3" ? `현재 Shipment 대상 · 송장파일 생성 대상 · 발주 2건` : `현재 출력세트: 송장파일 생성 대상 · 발주 2건`;
       await targetSection.getByText(summary, { exact: false }).waitFor();
       await page.locator("#hanjin-step-3").getByRole("button", { name: /^Shipment 파일/ }).waitFor();
       if (!target.repair) await page.waitForFunction(() => [...document.querySelectorAll("#hanjin-step-3 button")].some(button => !button.disabled && button.textContent.startsWith("Shipment 파일")));
       assert(shipmentPreviews.length > 0);
       for (const poSet of shipmentPreviews) assert.deepEqual(poSet, generations[target.number - 1].purchaseOrderNumbers, "URL-selected PO set must not fall back to the latest generation.");
-      assert.equal(await page.getByRole("button", { name: `묶음 ${target.number} · 발주 2건`, exact: true }).count(), 1);
+      assert.equal(await page.getByRole("button", { name: `묶음 ${target.number} · 발주 2건`, exact: true }).count(), 0);
       if (target.anchor === "shipment-output-set") assert.equal(await targetSection.getByRole("button", { name: "Shipment 출력세트 생성", exact: true }).isEnabled(), true);
     }
     // Let debounced source validation and nested generation rendering settle, without manually scrolling.
@@ -191,7 +191,7 @@ async function main() {
   const browser = await chromium.launch({ headless: true, channel: process.env.NOIDB_TEST_BROWSER || "chrome" });
   try {
     for (const width of [390, 1920]) {
-      await runCase(browser, width, { number: 1, generationId: generations[0].generationId, anchor: "hanjin-step-3", label: "Shipment 묶음 1 계속하기", selectOther: width === 390 });
+      await runCase(browser, width, { number: 1, generationId: generations[0].generationId, anchor: "hanjin-step-3", label: "Shipment 묶음 1 계속하기", selectOther: false });
       await runCase(browser, width, { number: 2, generationId: generations[1].generationId, anchor: "shipment-output-set", label: "묶음 2 · Shipment 출력세트" });
       await runCase(browser, width, { generationId: "GEN-DOES-NOT-EXIST", anchor: "hanjin-step-3", label: "잘못된 묶음 연결 검증", invalid: true });
       await runCase(browser, width, { number:1,generationId:generations[0].generationId,anchor:"hanjin-step-3",label:"확정파일 연결 복구",repair:true });

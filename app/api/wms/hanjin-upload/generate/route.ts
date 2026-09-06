@@ -11,6 +11,7 @@ import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
 export const runtime = "nodejs";
 
 interface RequestBody {
+  invoiceGroups?: unknown;
   requests?: HanjinShipmentRequest[];
   purchaseOrderNumbers?: string[];
 }
@@ -25,7 +26,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "생성할 발주서/물류센터 목록이 없습니다." }, { status: 400 });
     }
 
-    const result = await buildHanjinUploadFile(purchaseOrderNumbers);
+    const result = await buildHanjinUploadFile(purchaseOrderNumbers, body.invoiceGroups);
     if (result.addedPurchaseOrderNumbers.length === 0) {
       return NextResponse.json(
         {

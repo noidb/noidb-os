@@ -11,6 +11,7 @@ export interface OutputGenerationProgress {
 }
 
 export function summarizeOutputGenerations(generations: readonly ShipmentOutputGeneration[], sourcePurchaseOrderNumbers?: readonly string[]): OutputGenerationProgress {
+  generations = generations.filter(generation => !generation.supersededByGenerationId);
   const allPurchaseOrders = new Set(sourcePurchaseOrderNumbers ?? generations.flatMap(generation => generation.purchaseOrderNumbers));
   const completedPurchaseOrderSet = new Set(generations
     .filter(generation => generation.status === "shipment_generated")
@@ -34,9 +35,10 @@ export function isSupersededOutputGeneration(
   generation: ShipmentOutputGeneration,
   generations: readonly ShipmentOutputGeneration[],
 ): boolean {
+  if (generation.supersededByGenerationId) return true;
   if (generation.status === "shipment_generated") return false;
   const completedPurchaseOrders = new Set(generations
-    .filter(item => item.status === "shipment_generated")
+    .filter(item => !item.supersededByGenerationId && item.status === "shipment_generated")
     .flatMap(item => item.purchaseOrderNumbers));
   return generation.purchaseOrderNumbers.every(po => completedPurchaseOrders.has(po));
 }

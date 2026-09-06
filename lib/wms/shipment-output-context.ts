@@ -4,7 +4,7 @@ import type { CenterAddressResolution } from "./center-address/types";
 import { resolveDestinationSupplements } from "./purchase-order-source/destination";
 import { buildPurchaseOrderIndex } from "./purchase-order-source/index";
 import type { PurchaseOrderIndex, PurchaseOrderSourceDocument, PurchaseOrderSourceRecord } from "./purchase-order-source/types";
-import { DEFAULT_MAX_INVOICE_QUANTITY, splitShipmentOutputDocuments } from "./shipment-output-split";
+import { DEFAULT_MAX_INVOICE_QUANTITY, splitShipmentOutputDocuments, validateInvoiceGroups } from "./shipment-output-split";
 
 export interface ShipmentOutputGroup {
   key: string;
@@ -66,7 +66,7 @@ function normalizedAddress(value: string) {
 
 export async function buildShipmentOutputContext(
   requestedPurchaseOrderNumbers: readonly string[],
-  options: { index?: PurchaseOrderIndex; requireDestination?: boolean } = {}
+  options: { index?: PurchaseOrderIndex; requireDestination?: boolean; invoiceGroups?: unknown } = {}
 ): Promise<ShipmentOutputContext> {
   const index = options.index || await buildPurchaseOrderIndex();
   const purchaseOrderNumbers = [...new Set(requestedPurchaseOrderNumbers.map(normalizeSkuId).filter(Boolean))];
@@ -94,10 +94,12 @@ export async function buildShipmentOutputContext(
     destinationGroups.set(key, [...(destinationGroups.get(key) || []), { document, postalCode, postalCodeSource: resolution?.source || "" }]);
   }
   const oversizedPurchaseOrderNumbers: string[] = [];
+  const destinationByPo = new Map([...destinationGroups].flatMap(([key, entries]) => entries.map(entry => [entry.document.purchaseOrderNumber, key] as const)));
+  const manualGroups = options.invoiceGroups === undefined ? null : validateInvoiceGroups(options.invoiceGroups, documents, destinationByPo);
   const groups: ShipmentOutputGroup[] = [];
   for (const [destinationKey, entries] of destinationGroups) {
     const entryByPo = new Map(entries.map(entry => [entry.document.purchaseOrderNumber, entry]));
-    const batches = splitShipmentOutputDocuments(entries.map(entry => entry.document));
+    const batches = manualGroups ? manualGroups.filter(group => destinationByPo.get(group[0]) === destinationKey).map(group => ({ documents: group.map(po => entryByPo.get(po)!.document), manualReviewRequired: false })) : splitShipmentOutputDocuments(entries.map(entry => entry.document));
     batches.forEach((batch, batchIndex) => {
       const first = batch.documents[0];
       const firstEntry = entryByPo.get(first.purchaseOrderNumber)!;

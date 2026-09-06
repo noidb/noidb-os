@@ -46,9 +46,9 @@ function sourceDocuments(values: number[]): PurchaseOrderSourceDocument[] {
   });
 }
 const outputBatches = splitShipmentOutputDocuments(sourceDocuments([50, 50, 50, 50, 50]));
-assert.deepEqual(outputBatches.map(batch => batch.totalQuantity), [200, 50], "실제 송장 출력 경로도 200개 기준으로 분할해야 합니다.");
+assert.deepEqual(outputBatches.map(batch => batch.totalQuantity), [250], "실제 송장 출력 경로는 250개 기준으로 분할해야 합니다.");
 assert.deepEqual(outputBatches.flatMap(batch => batch.documents.map(document => document.purchaseOrderNumber)), sourceDocuments([50, 50, 50, 50, 50]).map(document => document.purchaseOrderNumber), "발주서가 누락되거나 둘로 쪼개지면 안 됩니다.");
-const oversizedOutput = splitShipmentOutputDocuments(sourceDocuments([201]));
+const oversizedOutput = splitShipmentOutputDocuments(sourceDocuments([251]));
 assert.equal(oversizedOutput[0].documents.length, 1);
 assert.equal(oversizedOutput[0].manualReviewRequired, true);
 

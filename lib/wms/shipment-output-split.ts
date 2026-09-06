@@ -1,49 +1,24 @@
 import type { PurchaseOrderSourceDocument } from "./purchase-order-source/types";
-
-export const DEFAULT_MAX_INVOICE_QUANTITY = 200;
-
-export interface ShipmentOutputDocumentBatch {
-  documents: PurchaseOrderSourceDocument[];
-  totalQuantity: number;
-  manualReviewRequired: boolean;
+export const DEFAULT_MAX_INVOICE_QUANTITY = 250;
+export interface ShipmentOutputDocumentBatch { documents: PurchaseOrderSourceDocument[]; totalQuantity: number; manualReviewRequired: boolean }
+const quantity=(d:PurchaseOrderSourceDocument)=>d.records.reduce((s,r)=>s+(Number.isFinite(r.orderedQuantity)?r.orderedQuantity:0),0);
+/** Balance whole POs within one verified destination. Oversized single POs remain blocked. */
+export function splitShipmentOutputDocuments(source:readonly PurchaseOrderSourceDocument[],maxTotalQuantity=DEFAULT_MAX_INVOICE_QUANTITY):ShipmentOutputDocumentBatch[]{
+ if(!Number.isInteger(maxTotalQuantity)||maxTotalQuantity<1)throw new Error('송장 최대수량은 1 이상의 정수여야 합니다.');
+ const sorted=[...source].sort((a,b)=>quantity(b)-quantity(a)||a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber));
+ const regular=sorted.filter(d=>quantity(d)<=maxTotalQuantity),oversized=sorted.filter(d=>quantity(d)>maxTotalQuantity);
+ let result:ShipmentOutputDocumentBatch[]=[];
+ for(let count=Math.max(1,Math.ceil(regular.reduce((s,d)=>s+quantity(d),0)/maxTotalQuantity));count<=Math.max(1,regular.length);count++){
+  const bins:ShipmentOutputDocumentBatch[]=Array.from({length:count},()=>({documents:[],totalQuantity:0,manualReviewRequired:false}));let fits=true;
+  for(const doc of regular){const bin=[...bins].sort((a,b)=>a.totalQuantity-b.totalQuantity).find(b=>b.totalQuantity+quantity(doc)<=maxTotalQuantity);if(!bin){fits=false;break;}bin.documents.push(doc);bin.totalQuantity+=quantity(doc);}
+  if(fits){result=bins.filter(b=>b.documents.length);break;}
+ }
+ return [...result,...oversized.map(d=>({documents:[d],totalQuantity:quantity(d),manualReviewRequired:true}))];
 }
-
-function documentQuantity(document: PurchaseOrderSourceDocument): number {
-  return document.records.reduce((sum, record) => sum + (Number.isFinite(record.orderedQuantity) ? record.orderedQuantity : 0), 0);
-}
-
-/**
- * 한 송장에 들어갈 발주서를 총수량 한도까지 묶는다. 발주서 한 건은 항상 원자 단위이며
- * 단일 발주가 한도를 넘으면 쪼개지 않고 수동 분할 확인 대상으로 별도 반환한다.
- */
-export function splitShipmentOutputDocuments(
-  source: readonly PurchaseOrderSourceDocument[],
-  maxTotalQuantity = DEFAULT_MAX_INVOICE_QUANTITY,
-): ShipmentOutputDocumentBatch[] {
-  if (!Number.isInteger(maxTotalQuantity) || maxTotalQuantity < 1) throw new Error("송장 최대수량은 1 이상의 정수여야 합니다.");
-  const documents = [...source].sort((left, right) => left.purchaseOrderNumber.localeCompare(right.purchaseOrderNumber));
-  const batches: ShipmentOutputDocumentBatch[] = [];
-  let pending: PurchaseOrderSourceDocument[] = [];
-  let pendingQuantity = 0;
-
-  const flush = () => {
-    if (!pending.length) return;
-    batches.push({ documents: pending, totalQuantity: pendingQuantity, manualReviewRequired: false });
-    pending = [];
-    pendingQuantity = 0;
-  };
-
-  for (const document of documents) {
-    const quantity = documentQuantity(document);
-    if (quantity > maxTotalQuantity) {
-      flush();
-      batches.push({ documents: [document], totalQuantity: quantity, manualReviewRequired: true });
-      continue;
-    }
-    if (pending.length && pendingQuantity + quantity > maxTotalQuantity) flush();
-    pending.push(document);
-    pendingQuantity += quantity;
-  }
-  flush();
-  return batches;
+export function validateInvoiceGroups(groups:unknown,documents:readonly PurchaseOrderSourceDocument[],destinationByPo:Map<string,string>):string[][]{
+ if(!Array.isArray(groups)||!groups.length||groups.some(g=>!Array.isArray(g)||!g.length||g.some(po=>typeof po!=='string')))throw new Error('송장 묶음을 다시 확인해 주세요.');
+ const plan=groups as string[][],flat=plan.flat(),docs=new Map(documents.map(d=>[d.purchaseOrderNumber,d]));
+ if(new Set(flat).size!==flat.length||flat.length!==docs.size||flat.some(po=>!docs.has(po)))throw new Error('송장 묶음에 발주 누락·중복 또는 다른 발주가 있습니다.');
+ for(const group of plan){if(new Set(group.map(po=>destinationByPo.get(po))).size!==1)throw new Error('센터·입고예정일·배송지가 다른 발주는 같은 송장으로 합칠 수 없습니다.');if(group.reduce((s,po)=>s+quantity(docs.get(po)!),0)>DEFAULT_MAX_INVOICE_QUANTITY)throw new Error('송장 묶음은 총수량 250개 이하로 조정해 주세요.');}
+ return plan.map(g=>[...g]);
 }

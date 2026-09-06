@@ -212,9 +212,20 @@ export function inspectAutoShipmentTrackingRows(requests: HanjinShipmentRequest[
   };
 }
 
-export async function inspectAutoShipmentTracking(requests: HanjinShipmentRequest[]): Promise<AutoShipmentTrackingPreview> {
+export function matchesInvoiceTrackingGroups(invoiceGroups: string[][] | undefined, rows: ReprintDetailRow[]): boolean {
+  if (!invoiceGroups) return true;
+  const index = indexReprintRowsByPurchaseOrder(rows), used = new Set<string>();
+  for (const group of invoiceGroups) {
+    const tracking = new Set(group.flatMap(po => (index.get(normalizeSkuId(po)) || []).map(row => row.trackingNumber)));
+    if (tracking.size !== 1 || ![...tracking][0] || group.some(po => !index.has(normalizeSkuId(po)))) return false;
+    const number = [...tracking][0]; if (used.has(number)) return false; used.add(number);
+  }
+  return true;
+}
+
+export async function inspectAutoShipmentTracking(requests: HanjinShipmentRequest[], invoiceGroups?: string[][]): Promise<AutoShipmentTrackingPreview> {
   const files = await loadReprintDetailFiles();
-  const candidates = files.map(file => inspectAutoShipmentTrackingCandidate(requests, file.name, file.rows, file.modifiedTime));
+  const candidates = files.map(file => inspectAutoShipmentTrackingCandidate(requests, file.name, file.rows, file.modifiedTime, invoiceGroups));
   const exactCandidates = candidates.filter(candidate => candidate.exactMatch);
   const selected = exactCandidates.length === 1 ? exactCandidates[0] : undefined;
   const best = selected ?? [...candidates].sort((a, b) =>
@@ -239,7 +250,8 @@ export function inspectAutoShipmentTrackingCandidate(
   requests: HanjinShipmentRequest[],
   fileName: string,
   rows: ReprintDetailRow[],
-  modifiedTime?: string
+  modifiedTime?: string,
+  invoiceGroups?: string[][]
 ): AutoShipmentTrackingCandidate {
   const preview = inspectAutoShipmentTrackingRows(requests, rows);
   const requestedPoSet = new Set(requests.map(request => normalizeSkuId(request.purchaseOrderNumber)));
@@ -256,16 +268,17 @@ export function inspectAutoShipmentTrackingCandidate(
     missingPurchaseOrderNumbers: preview.missingPurchaseOrderNumbers,
     conflictPurchaseOrderNumbers: preview.conflictPurchaseOrderNumbers,
     unexpectedPurchaseOrderNumbers,
-    exactMatch: preview.canGenerate && unexpectedPurchaseOrderNumbers.length === 0 && filePoSet.size === requestedPoSet.size,
+    exactMatch: matchesInvoiceTrackingGroups(invoiceGroups, rows) && preview.canGenerate && unexpectedPurchaseOrderNumbers.length === 0 && filePoSet.size === requestedPoSet.size,
   };
 }
 
 function selectExactReprintFile(
   requests: HanjinShipmentRequest[],
   files: ReprintDetailFile[],
-  selectedFileName?: string
+  selectedFileName?: string,
+  invoiceGroups?: string[][]
 ): ReprintDetailFile {
-  const candidates = files.map(file => ({ file, preview: inspectAutoShipmentTrackingCandidate(requests, file.name, file.rows, file.modifiedTime) }));
+  const candidates = files.map(file => ({ file, preview: inspectAutoShipmentTrackingCandidate(requests, file.name, file.rows, file.modifiedTime, invoiceGroups) }));
   const exact = candidates.filter(candidate => candidate.preview.exactMatch);
   if (selectedFileName) {
     const selected = candidates.find(candidate => candidate.file.name === selectedFileName);
@@ -415,7 +428,7 @@ export function resolveStoredAutoShipmentGeneration(
   ownerId: string,
   generationId: string,
   requestedPurchaseOrderNumbers: readonly string[],
-): { purchaseOrderNumbers: string[]; confirmedQuantityFileNameByPo: Record<string, string>; confirmedQuantityFileHashByName: Record<string, string> } {
+): { purchaseOrderNumbers: string[]; invoiceGroups?: string[][]; confirmedQuantityFileNameByPo: Record<string, string>; confirmedQuantityFileHashByName: Record<string, string> } {
   const normalizedOwnerId = ownerId.trim();
   const normalizedGenerationId = generationId.trim();
   const requested = requestedPurchaseOrderNumbers.map(normalizeSkuId).filter(Boolean);
@@ -434,6 +447,7 @@ export function resolveStoredAutoShipmentGeneration(
       : "같은 Shipment 묶음 식별값이 중복되어 생성을 차단했습니다.");
   }
   const generation = candidates[0];
+  if (generation?.supersededByGenerationId) reasons.push("새 송장파일로 대체된 이전 대상입니다. 작업센터에서 현재 대상을 열어 주세요.");
   const stored = generation?.purchaseOrderNumbers.map(normalizeSkuId).filter(Boolean) || [];
   const storedSet = new Set(stored);
   if (generation && (stored.length === 0 || storedSet.size !== stored.length)) reasons.push("저장된 Shipment 묶음의 발주번호가 비어 있거나 중복됐습니다.");
@@ -465,7 +479,7 @@ export function resolveStoredAutoShipmentGeneration(
   }
 
   if (reasons.length > 0) throw new AutoShipmentBlockedError([...new Set(reasons)]);
-  return { purchaseOrderNumbers: generation!.purchaseOrderNumbers, confirmedQuantityFileNameByPo, confirmedQuantityFileHashByName };
+  return { purchaseOrderNumbers: generation!.purchaseOrderNumbers, invoiceGroups: generation!.invoiceGroups, confirmedQuantityFileNameByPo, confirmedQuantityFileHashByName };
 }
 
 function nonNegativeInteger(value: string): number | null {
@@ -648,7 +662,7 @@ export async function buildAutoShipmentFile(
   requests: HanjinShipmentRequest[],
   sourceRecords: PurchaseOrderSourceRecord[],
   templateBuffer?: Buffer,
-  options: { selectedReprintFileName?: string; confirmedQuantityFileNameByPo?: Record<string, string>; confirmedQuantityFileHashByName?: Record<string, string> } = {}
+  options: { invoiceGroups?: string[][]; selectedReprintFileName?: string; confirmedQuantityFileNameByPo?: Record<string, string>; confirmedQuantityFileHashByName?: Record<string, string> } = {}
 ): Promise<AutoShipmentResult> {
   const groups = groupRequestsByCenterAndDate(requests);
 
@@ -665,7 +679,8 @@ export async function buildAutoShipmentFile(
   if (reprintFiles.length === 0) {
     throw new AutoShipmentBlockedError(["현재 웨이브와 일치하는 재출력 파일을 찾지 못했습니다."]);
   }
-  const selectedReprintFile = selectExactReprintFile(requests, reprintFiles, options.selectedReprintFileName);
+  const selectedReprintFile = selectExactReprintFile(requests, reprintFiles, options.selectedReprintFileName, options.invoiceGroups);
+  if (!matchesInvoiceTrackingGroups(options.invoiceGroups, selectedReprintFile.rows)) throw new AutoShipmentBlockedError(["이번 송장파일의 분할과 한진 재출력 결과가 다릅니다. 새 송장 업로드 결과를 확인해 주세요."]);
   const reprint = { rows: selectedReprintFile.rows, fileNames: [selectedReprintFile.name] };
 
   const confirmedByPo = new Map<string, ParsedTrackingRow[]>();
@@ -748,7 +763,7 @@ export async function buildAutoShipmentFile(
       for (const row of confirmedRows) resolvedRows.push({ ...row, trackingNumber });
     }
 
-    // 같은 센터·날짜라도 한진 송장파일은 총수량 200개 기준으로 발주서 단위 분할될 수 있다.
+    // 같은 센터·날짜라도 한진 송장파일은 총수량 250개 기준으로 발주서 단위 분할될 수 있다.
     // 각 발주번호가 정확히 한 운송장에만 연결되면 여러 운송장번호를 정상으로 인정한다.
   }
 

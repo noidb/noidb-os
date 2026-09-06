@@ -43,6 +43,7 @@ export async function POST(request: NextRequest) {
     const result = await buildAutoShipmentFile(sourceRequests, context.records, templateBuffer, {
       selectedReprintFileName: typeof body.selectedReprintFileName === "string" ? body.selectedReprintFileName : undefined,
       confirmedQuantityFileNameByPo: storedGeneration.confirmedQuantityFileNameByPo,
+      invoiceGroups: storedGeneration.invoiceGroups,
       confirmedQuantityFileHashByName: storedGeneration.confirmedQuantityFileHashByName,
     });
 

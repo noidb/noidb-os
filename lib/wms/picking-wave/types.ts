@@ -141,6 +141,8 @@ export interface ShipmentOutputGeneration {
   updatedAt: string;
   expectedShippingGroupCount: number;
   invoiceFileName: string;
+  invoiceGroups?: string[][];
+  supersededByGenerationId?: string;
   shipmentFileName?: string;
   outputSetFileName?: string;
   outputSetGeneratedAt?: string;
