@@ -28,7 +28,8 @@ assert.equal(final.outboundWorkStates![wave.id].status,"completed");assert.ok(fi
 assert.deepEqual(final.packingProgress![wave.id].dispatchedShipmentNumbers,["50000000","50000001"]);
 const firstShipmentDone=applyPickingWaveStoreMutation(first,{...mutation,checkedKeys:["K0"],dispatchedShipmentNumbers:["50000000"],expectedUpdatedAt:mutation.now,now:"2026-09-06T01:30:00Z"});
 assert.deepEqual(firstShipmentDone.packingProgress![wave.id].dispatchedShipmentNumbers,["50000000"]);
-assert.throws(()=>applyPickingWaveStoreMutation(first,{...mutation,dispatchedShipmentNumbers:["50000001"],expectedUpdatedAt:mutation.now,now:"2026-09-06T01:31:00Z"}),/모든 상품/);
+const secondShipmentDoneWithoutChecks=applyPickingWaveStoreMutation(first,{...mutation,dispatchedShipmentNumbers:["50000001"],expectedUpdatedAt:mutation.now,now:"2026-09-06T01:31:00Z"});
+assert.deepEqual(secondShipmentDoneWithoutChecks.packingProgress![wave.id].dispatchedShipmentNumbers,["50000001"],"shipment dispatch status is independent from optional item checks");
 assert.deepEqual(final.items,snapshot.items);assert.deepEqual(final.waves,snapshot.waves);
 assert.throws(()=>applyPickingWaveStoreMutation(final,{...mutation,expectedUpdatedAt:"2026-09-06T02:00:00Z"}),/이미 출고완료/);
 console.log("Packing PASS: multi-center SKU, separate persistent checks, stale conflict, full coverage, quantities, barcode, dispatch gates, original records unchanged");

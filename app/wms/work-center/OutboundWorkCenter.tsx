@@ -63,17 +63,9 @@ export default function OutboundWorkCenter() {
     <p className={styles.metrics}>발주 {work.purchaseOrderCount}건 · SKU {work.skuCount}개 · 총수량 {work.totalQuantity}개 · 센터 {work.centerCount}곳</p>
     {work.expectedDates.length > 0 && <p className={styles.muted}>입고예정일 {work.expectedDates.join(" / ")}</p>}
     {work.delay && <p className={styles.warning}>{work.delay}</p>}
-    <p className={styles.nextLabel}>다음 할 일: {work.nextLabel}</p>
-    <a className={styles.primary} href={work.nextHref}>{work.nextHref.includes("/packing") ? "상품 확인·바코드 부착 계속하기 →" : work.id === next?.id ? "계속하기 →" : `${work.nextLabel} →`}</a>
-    {work.packingHref && work.packingHref !== work.nextHref && <div className={styles.packingShortcut}>
-      <p>{work.packingLabel}</p>
-      <a href={work.packingHref}>상품 확인·바코드 부착 바로가기 →</a>
-    </div>}
-    {work.packingTargets.length > 0 && <details className={styles.packingTargets}>
-      <summary>Shipment별 상품 확인·바코드 부착</summary>
-      <div>{work.packingTargets.map(target => <a key={target.key} href={target.href}>{target.label} →</a>)}</div>
-    </details>}
-    <details className={styles.details}>
+    <p className={styles.nextLabel}>다음 작업: {work.nextLabel}</p>
+    <a className={styles.primary} href={work.nextHref}>{work.nextHref.includes("/packing") ? "출고작업 계속하기 →" : work.id === next?.id ? "계속하기 →" : `${work.nextLabel} →`}</a>
+    {work.state && work.state.status !== "active" && <details className={styles.details}>
       <summary>서류·피킹·발주·작업 관리</summary>
       <p className={styles.muted}>같은 출고작업을 이어갑니다. 남은 발주 때문에 새 작업을 만들 필요가 없습니다.</p>
       <div className={styles.actions}>
@@ -81,13 +73,9 @@ export default function OutboundWorkCenter() {
       </div>
       <p className={styles.muted}>피킹 {work.pickedSkuCount}/{work.skuCount} · Shipment 미처리 발주 {work.remainingShipmentPoCount}건 · 출력세트 미기록 발주 {work.remainingOutputPoCount}건</p>
       <div className={styles.actions}>
-        {work.state && work.state.status !== "active" ? <button type="button" onClick={() => setChange({ work, status: "active" })}>작업 중으로 복원</button> : <>
-          <a href={work.packingHref || `${work.pickingHref}/packing`}>상품 확인·바코드 부착·출고완료</a>
-          <button type="button" onClick={() => setChange({ work, status: "archived" })}>보관하기</button>
-        </>}
+        <button type="button" onClick={() => setChange({ work, status: "active" })}>작업 중으로 복원</button>
       </div>
-      {!work.canComplete && (!work.state || work.state.status === "active") && <p className={styles.muted}>미처리 피킹·Shipment·출력세트 기록이 남아 있습니다. 계속 진행하거나 보관할 수 있습니다.</p>}
-    </details>
+    </details>}
   </article>;
 
   return <main className={`shell wms-work-center-shell ${styles.shell}`}>

@@ -50,14 +50,14 @@ assert.deepEqual(oldSave.outboundWorkStates, archived.outboundWorkStates, "legac
 const fullWave = { ...wave, selectedOutputGenerationId: "GEN-1", outputGenerations: [{ ...generation, purchaseOrderNumbers: wave.sourcePurchaseOrderNumbers, expectedShippingGroupCount: 3, outputSetFileName: "set.zip", outputSetGeneratedAt: stamp }] };
 const full = { ...snapshot, waves: [fullWave] };
 assert.equal(buildWorkCenterOverview(full).works[0].canComplete, true);
-assert.equal(buildWorkCenterOverview(full).works[0].nextHref, `/wms/picking/waves/${wave.id}/packing?generation=GEN-1`);
-assert.match(buildWorkCenterOverview(full).works[0].nextLabel, /Shipment 3개 · 상품 확인·바코드 부착/);
+assert.equal(buildWorkCenterOverview(full).works[0].nextHref, `/wms/picking/waves/${wave.id}/packing`);
+assert.equal(buildWorkCenterOverview(full).works[0].nextLabel, "상품 확인·출고상태 관리");
 const packingRows = [
   { key: "ROW1", shipmentNumber: "50000001", purchaseOrderNumber: "PO1", skuId: item.productCode, barcode: item.barcode, quantity: 1 },
   { key: "ROW2", shipmentNumber: "50000002", purchaseOrderNumber: "PO2", skuId: item.productCode, barcode: item.barcode, quantity: 1 },
 ];
 const packing = { ...full, packingProgress: { [wave.id]: { generationKey: "GEN", manifestKey: "MANIFEST", rows: packingRows, checkedKeys: ["ROW1"], updatedAt: stamp } } };
-assert.match(buildWorkCenterOverview(packing).works[0].nextLabel, /동탄1 · Shipment 2\/2 · 상품 확인·바코드 부착 \(1\/2\)/);
+assert.equal(buildWorkCenterOverview(packing).works[0].nextLabel, "상품 확인·출고상태 관리");
 const splitGenerations = { ...full, waves: [{ ...fullWave, outputGenerations: [
   { ...generation, generationId: "DONGTAN-1", purchaseOrderNumbers: ["PO1"], expectedShippingGroupCount: 1 },
   { ...generation, generationId: "DONGTAN-2", purchaseOrderNumbers: ["PO2"], expectedShippingGroupCount: 1 },

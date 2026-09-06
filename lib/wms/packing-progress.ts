@@ -47,7 +47,6 @@ export function nextPackingProgress(wave: PickingWave, items: PickingWaveItem[],
     ? shipmentNumbers
     : input.dispatchedShipmentNumbers || prior?.dispatchedShipmentNumbers || [];
   if (new Set(dispatchedShipmentNumbers).size !== dispatchedShipmentNumbers.length || dispatchedShipmentNumbers.some(shipmentNumber => !shipmentNumbers.includes(shipmentNumber))) throw new Error("Shipment 출고상태를 확인해 주세요.");
-  if (dispatchedShipmentNumbers.some(shipmentNumber => input.rows.some(row => row.shipmentNumber === shipmentNumber && !input.checkedKeys.includes(row.key)))) throw new Error("해당 Shipment의 모든 상품을 확인한 뒤 출고완료로 표시해 주세요.");
   if (prior && (prior.manifestKey !== manifestKey || prior.generationKey !== input.generationKey) && input.checkedKeys.length) throw new Error("출력 내용이 바뀌었습니다. 변경된 목록의 검수를 처음부터 확인해 주세요.");
   if (input.dispatched && input.checkedKeys.length !== input.rows.length) throw new Error("모든 상품의 바코드 부착·박스 포장을 확인한 뒤 출고완료해 주세요.");
   return { generationKey: input.generationKey, manifestKey, rows: input.rows, checkedKeys: input.checkedKeys, dispatchedShipmentNumbers, updatedAt: now, ...(input.dispatched ? { dispatchedAt: now } : {}) };

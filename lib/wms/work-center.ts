@@ -98,8 +98,8 @@ export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[
   let nextHref = `${base}/complete#po-confirm`;
   const packingIsActive = Boolean(packingGeneration && (packingGeneration.outputSetGeneratedAt || packingRows.length) && !packingProgress?.dispatchedAt);
   if (packingIsActive && packingHref && packingLabel) {
-    nextLabel = packingLabel;
-    nextHref = packingHref;
+    nextLabel = "상품 확인·출고상태 관리";
+    nextHref = `${base}/packing`;
   } else if (pendingGeneration) {
     nextLabel = `Shipment 묶음 ${generations.indexOf(pendingGeneration) + 1} 계속하기`;
     nextHref = `${base}/complete?generation=${encodeURIComponent(pendingGeneration.generationId)}#hanjin-step-3`;
