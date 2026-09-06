@@ -20,6 +20,9 @@
 .primary, .secondary, .actions > a, .actions > button, .smallButton { display: flex; align-items: center; justify-content: center; text-align: center; box-sizing: border-box; text-decoration: none; min-height: 48px; border: 1px solid #cfc0b0; border-radius: 10px; padding: 10px 12px; font-size: 14px; line-height: 1.4; font-weight: 700; cursor: pointer; color: #302d29; background: #f4f1ec; }
 .primary { color: white; background: #60766a; border-color: #60766a; }
 .work > .primary { width: 100%; margin-top: 12px; }
+.packingShortcut { margin-top: 10px; padding: 12px; border: 1px solid #b7c8bb; border-radius: 10px; background: #f3f7f4; }
+.packingShortcut p { margin: 0 0 8px; font-size: 12px; line-height: 1.5; font-weight: 700; }
+.packingShortcut a { display: flex; align-items: center; justify-content: center; min-height: 44px; border-radius: 8px; color: #fff; background: #60766a; text-decoration: none; font-size: 13px; font-weight: 700; text-align: center; }
 .smallButton { min-height: 40px; font-size: 12px; flex-shrink: 0; }
 .details { margin-top: 12px; border-top: 1px solid #e5dace; }
 .details summary { padding-top: 12px; font-size: 12px; font-weight: 700; cursor: pointer; }

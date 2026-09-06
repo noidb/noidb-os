@@ -3,6 +3,7 @@ import type { PickingWave, PickingWaveItem, OutboundWorkState } from "./picking-
 import { summarizeShippingByDate } from "./picking-wave/wave-card-summary";
 import { isSupersededOutputGeneration } from "./output-generation-progress";
 import { deriveVendorOrderDrafts } from "./vendor-order/derive-drafts";
+import type { PackingProgress } from "./packing-progress";
 
 export function kstWorkDate(now = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
@@ -26,6 +27,8 @@ export interface OutboundWorkSummary {
   remainingOutputPoCount: number;
   nextLabel: string;
   nextHref: string;
+  packingLabel: string | null;
+  packingHref: string | null;
   documentHref: string;
   pickingHref: string;
   vendorHref: string;
@@ -33,7 +36,7 @@ export interface OutboundWorkSummary {
 }
 
 /** Display projection only. It never changes picking, PO confirmation, or shipment state. */
-export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[], state: OutboundWorkState | undefined, today: string): OutboundWorkSummary {
+export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[], state: OutboundWorkState | undefined, today: string, packingProgress?: PackingProgress): OutboundWorkSummary {
   const base = `/wms/picking/waves/${encodeURIComponent(wave.id)}`;
   const generations = (wave.outputGenerations || []).filter(generation => !generation.supersededByGenerationId);
   const purchaseOrders = new Set(wave.sourcePurchaseOrderNumbers);
@@ -44,6 +47,25 @@ export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[
   const pendingGeneration = generations.find(g => !isSupersededOutputGeneration(g, generations) && g.status !== "shipment_generated"
     && g.purchaseOrderNumbers.length > 0 && g.purchaseOrderNumbers.every(po => purchaseOrders.has(po) && !shipmentPos.has(po)));
   const pendingOutput = generations.find(g => g.status === "shipment_generated" && g.purchaseOrderNumbers.some(po => purchaseOrders.has(po) && !outputPos.has(po)));
+  const packingGeneration = generations.find(generation => generation.generationId === wave.selectedOutputGenerationId && generation.status === "shipment_generated")
+    || [...generations].reverse().find(generation => generation.status === "shipment_generated")
+    || null;
+  const packingHref = packingGeneration ? `${base}/packing?generation=${encodeURIComponent(packingGeneration.generationId)}` : null;
+  const packingPoSet = new Set(packingGeneration?.purchaseOrderNumbers || []);
+  const packingRows = (packingProgress?.rows || []).filter(row => packingPoSet.has(row.purchaseOrderNumber));
+  const checkedPackingKeys = new Set(packingProgress?.checkedKeys || []);
+  const shipmentNumbers = [...new Set(packingRows.map(row => row.shipmentNumber))];
+  const currentShipmentNumber = shipmentNumbers.find(shipmentNumber => packingRows.some(row => row.shipmentNumber === shipmentNumber && !checkedPackingKeys.has(row.key))) || shipmentNumbers.at(-1);
+  const currentShipmentIndex = currentShipmentNumber ? shipmentNumbers.indexOf(currentShipmentNumber) + 1 : 0;
+  const currentPo = packingRows.find(row => row.shipmentNumber === currentShipmentNumber)?.purchaseOrderNumber || packingGeneration?.purchaseOrderNumbers[0];
+  const currentCenter = wave.shippingGroups?.find(group => currentPo && group.purchaseOrderNumbers.includes(currentPo))?.fulfillmentCenter;
+  const checkedPackingCount = packingRows.filter(row => checkedPackingKeys.has(row.key)).length;
+  const expectedShipmentCount = shipmentNumbers.length || packingGeneration?.expectedShippingGroupCount || 0;
+  const packingLabel = packingGeneration
+    ? packingRows.length
+      ? `${currentCenter ? `${currentCenter} · ` : ""}Shipment ${currentShipmentIndex}/${expectedShipmentCount} · 상품 확인·바코드 부착 (${checkedPackingCount}/${packingRows.length})`
+      : `Shipment ${expectedShipmentCount}개 · 상품 확인·바코드 부착`
+    : null;
   const shipping = summarizeShippingByDate(wave, items);
   const expectedDates = shipping.map(group => group.expectedDate).filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)).sort();
   const earliest = expectedDates[0];
@@ -51,7 +73,11 @@ export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[
   const pickedSkuCount = items.filter(item => item.status !== "pending").length;
   let nextLabel = "1단계 · 발주확정 통합파일";
   let nextHref = `${base}/complete#po-confirm`;
-  if (pendingGeneration) {
+  const packingIsActive = Boolean(packingGeneration && (packingGeneration.outputSetGeneratedAt || packingRows.length) && !packingProgress?.dispatchedAt);
+  if (packingIsActive && packingHref && packingLabel) {
+    nextLabel = packingLabel;
+    nextHref = packingHref;
+  } else if (pendingGeneration) {
     nextLabel = `Shipment 묶음 ${generations.indexOf(pendingGeneration) + 1} 계속하기`;
     nextHref = `${base}/complete?generation=${encodeURIComponent(pendingGeneration.generationId)}#hanjin-step-3`;
   } else if (generations.length && remainingShipmentPoCount > 0) {
@@ -82,7 +108,7 @@ export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[
     pickedSkuCount,
     remainingShipmentPoCount,
     remainingOutputPoCount,
-    nextLabel, nextHref,
+    nextLabel, nextHref, packingLabel, packingHref,
     documentHref: `${base}/complete`, pickingHref: base, vendorHref: `${base}/vendor-orders`,
     canComplete: purchaseOrders.size > 0 && remainingShipmentPoCount === 0 && remainingOutputPoCount === 0 && items.length > 0 && pickedSkuCount === items.length,
   };
@@ -95,7 +121,7 @@ export function buildWorkCenterOverview(snapshot: PickingWaveStoreSnapshot, now 
     list.push(item); itemsByWave.set(item.waveId, list);
   }
   const today = kstWorkDate(now);
-  const works = snapshot.waves.map(wave => summarizeOutboundWork(wave, itemsByWave.get(wave.id) || [], snapshot.outboundWorkStates?.[wave.id], today))
+  const works = snapshot.waves.map(wave => summarizeOutboundWork(wave, itemsByWave.get(wave.id) || [], snapshot.outboundWorkStates?.[wave.id], today, snapshot.packingProgress?.[wave.id]))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const draftsById = new Map(deriveVendorOrderDrafts(snapshot.vendorOrderDrafts, snapshot.vendorOrderLines).map(draft => [draft.id, draft]));
   const pending = snapshot.vendorOrderLines.filter(line => draftsById.has(line.draftId) && draftsById.get(line.draftId)?.status !== "sent" && line.shortageQuantity > 0);

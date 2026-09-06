@@ -64,7 +64,11 @@ export default function OutboundWorkCenter() {
     {work.expectedDates.length > 0 && <p className={styles.muted}>입고예정일 {work.expectedDates.join(" / ")}</p>}
     {work.delay && <p className={styles.warning}>{work.delay}</p>}
     <p className={styles.nextLabel}>다음 할 일: {work.nextLabel}</p>
-    <a className={styles.primary} href={work.nextHref}>{work.id === next?.id ? "계속하기 →" : `${work.nextLabel} →`}</a>
+    <a className={styles.primary} href={work.nextHref}>{work.nextHref.includes("/packing") ? "상품 확인·바코드 부착 계속하기 →" : work.id === next?.id ? "계속하기 →" : `${work.nextLabel} →`}</a>
+    {work.packingHref && work.packingHref !== work.nextHref && <div className={styles.packingShortcut}>
+      <p>{work.packingLabel}</p>
+      <a href={work.packingHref}>상품 확인·바코드 부착 바로가기 →</a>
+    </div>}
     <details className={styles.details}>
       <summary>서류·피킹·발주·작업 관리</summary>
       <p className={styles.muted}>같은 출고작업을 이어갑니다. 남은 발주 때문에 새 작업을 만들 필요가 없습니다.</p>
@@ -74,7 +78,7 @@ export default function OutboundWorkCenter() {
       <p className={styles.muted}>피킹 {work.pickedSkuCount}/{work.skuCount} · Shipment 미처리 발주 {work.remainingShipmentPoCount}건 · 출력세트 미기록 발주 {work.remainingOutputPoCount}건</p>
       <div className={styles.actions}>
         {work.state && work.state.status !== "active" ? <button type="button" onClick={() => setChange({ work, status: "active" })}>작업 중으로 복원</button> : <>
-          <a href={`${work.pickingHref}/packing`}>검수·포장 후 출고완료</a>
+          <a href={work.packingHref || `${work.pickingHref}/packing`}>상품 확인·바코드 부착·출고완료</a>
           <button type="button" onClick={() => setChange({ work, status: "archived" })}>보관하기</button>
         </>}
       </div>
