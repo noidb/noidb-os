@@ -61,7 +61,7 @@ for(const width of [360,390,412,430,1920]){
  await page.waitForFunction(()=>[...document.querySelectorAll('#hanjin-step-3 button')].some(b=>b.textContent==='Shipment 파일 생성'&&!b.disabled));
  assert(tracking.some(t=>t.purchaseOrderNumbers.length===6&&JSON.stringify(t.invoiceGroups)===JSON.stringify(saved.invoiceGroups)));
  assert.equal(new URL(page.url()).searchParams.get('generation'),saved.generationId);
- if(width===390){await page.reload();await page.waitForFunction(()=>document.querySelector('#hanjin-step-3')?.textContent.includes('발주 6건'));assert.equal(writes.length,1);await page.screenshot({path:'tmp/invoice-250-browser/390-after-generate.png',fullPage:true});}
+ if(width===390){await page.reload();await page.waitForFunction(()=>document.querySelector('#hanjin-step-3')?.textContent.includes('발주 6건'));assert.equal(writes.length,1);await page.getByText('자동 송장 묶음 3개 · 발주서 단위 최대 250개 · 직접 변경 가능',{exact:true}).click();assert.equal(await page.getByLabel(label,{exact:true}).inputValue(),'1');await page.screenshot({path:'tmp/invoice-250-browser/390-after-generate.png',fullPage:true});}
  results.push({width,invoiceGroups:saved.invoiceGroups.length,savedOnce:writes.length===1,oldRecordsPreserved:true});await ctx.close();
 }
 }finally{await browser.close();}assert.deepEqual(errors,[]);await fs.writeFile('tmp/invoice-250-browser/results.json',JSON.stringify({base,results},null,2));console.log(JSON.stringify({pass:true,results}));})().catch(e=>{console.error(e);process.exitCode=1});

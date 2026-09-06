@@ -52,7 +52,7 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
   const [groupsOpen, setGroupsOpen] = useState(false);
   const previousGroups = useRef<string[][] | null>(null);
   const [invoiceGroups, setInvoiceGroups] = useState<string[][] | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selected, setSelectedState] = useState<Set<string>>(new Set());
   const [openCenters, setOpenCenters] = useState<Set<string>>(new Set());
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,12 +66,14 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
   useEffect(() => {
     if (!persistenceKey) return;
     try {
-      const stored = JSON.parse(sessionStorage.getItem(persistenceKey) || "null") as { selected?: string[]; openCenters?: string[] } | null;
+      const stored = JSON.parse(sessionStorage.getItem(persistenceKey) || "null") as { selected?: string[]; openCenters?: string[]; invoiceGroups?: string[][] } | null;
       const validPoNumbers = new Set(allPoNumbers);
       const restoredSelection = Array.isArray(stored?.selected)
         ? stored.selected.filter(po => validPoNumbers.has(po))
         : allPoNumbers;
-      setSelected(new Set(restoredSelection));
+      setSelectedState(new Set(restoredSelection));
+      const restoredGroups = stored?.invoiceGroups;
+      setInvoiceGroups(Array.isArray(restoredGroups) && restoredGroups.every(group => Array.isArray(group) && group.length > 0) && samePoSet(restoredGroups.flat(), restoredSelection) ? restoredGroups : null);
       setOpenCenters(new Set(stored?.openCenters || []));
     } catch {
       setSelected(new Set(allPoNumbers));
@@ -81,12 +83,15 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
   }, [allPoNumbers, persistenceKey]);
   useEffect(() => {
     if (!persistenceKey || !stateHydrated) return;
-    sessionStorage.setItem(persistenceKey, JSON.stringify({ selected: [...selected], openCenters: [...openCenters] }));
-  }, [openCenters, persistenceKey, selected, stateHydrated]);
+    sessionStorage.setItem(persistenceKey, JSON.stringify({ selected: [...selected], openCenters: [...openCenters], invoiceGroups }));
+  }, [openCenters, persistenceKey, selected, stateHydrated, invoiceGroups]);
   const selectedPoNumbers = useMemo(() => allPoNumbers.filter(po => selected.has(po)), [allPoNumbers, selected]);
   const selectedKey = [...selectedPoNumbers].sort().join("|");
-  useEffect(() => { setInvoiceGroups(null); }, [selectedKey]);
   const selectionFingerprint = JSON.stringify(["250-balanced-v1", selectedKey, invoiceGroups]);
+  function setSelected(value: Set<string> | ((current: Set<string>) => Set<string>)) {
+    setInvoiceGroups(null);
+    setSelectedState(value);
+  }
 
   const centerGroups = useMemo(() => {
     const groups = new Map<string, string[]>();
