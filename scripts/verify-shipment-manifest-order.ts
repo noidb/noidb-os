@@ -84,6 +84,11 @@ async function main() {
     "바코드 그룹은 발주서 행번호가 아니라 동봉내역서 상품 순서를 따라야 합니다.",
   );
 
+  const missingCatalog = catalog.map(row => ({ ...row, modelName: "", modelSku: "", countryOfOrigin: "" }));
+  assert.throws(() => matchShipmentPrintGroups([pdfFile("label")], [pdfFile("manifest")], sourceRows, missingCatalog), /제조국/);
+  const viewOnly = matchShipmentPrintGroups([pdfFile("label")], [pdfFile("manifest")], sourceRows, missingCatalog, [], { requireBarcodeMetadata: false });
+  assert.deepEqual(viewOnly[0].barcodeRows.map(row => row.skuId), manifestOrder);
+  await assert.rejects(buildBarTenderWorkbook(viewOnly), /제조국/);
   const workbookBytes = await buildBarTenderWorkbook(groups);
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(workbookBytes as unknown as ExcelJS.Buffer);

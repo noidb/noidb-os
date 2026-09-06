@@ -20,6 +20,7 @@ export async function POST(request: NextRequest) {
     || !["active", "completed", "archived"].includes(input.status) || !(input.expectedUpdatedAt === null || typeof input.expectedUpdatedAt === "string")) {
     return NextResponse.json({ error: "변경할 출고작업과 상태를 확인해 주세요." }, { status: 400, headers });
   }
+  if (input.status === "completed") return NextResponse.json({ error: "Shipment별 검수·포장에서 실제 택배 인계 후 출고완료해 주세요." }, { status: 409, headers });
   try {
     const snapshot = await mutatePickingWaveStore({ action: "setOutboundWorkState", waveId: input.waveId, status: input.status, expectedUpdatedAt: input.expectedUpdatedAt, now: new Date().toISOString() });
     return NextResponse.json({ overview: buildWorkCenterOverview(snapshot) }, { headers });

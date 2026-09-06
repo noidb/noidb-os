@@ -64,8 +64,8 @@ export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[
     nextLabel = `실제 피킹 · 미처리 SKU ${items.length - pickedSkuCount}개`;
     nextHref = base;
   } else if (generations.length) {
-    nextLabel = "출고 마무리 확인·재출력";
-    nextHref = `${base}/complete`;
+    nextLabel = "Shipment별 검수·포장·출고완료";
+    nextHref = `${base}/packing`;
   }
   const displayName = wave.displayName?.trim();
   return {

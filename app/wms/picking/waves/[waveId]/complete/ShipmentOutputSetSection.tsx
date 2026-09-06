@@ -2,32 +2,18 @@
 
 import { useMemo, useState } from "react";
 import type { PickingWaveItem, ShipmentOutputGeneration } from "@/lib/wms/picking-wave/types";
-import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
+import { loadShipmentPrintGroups } from "@/lib/wms/load-shipment-print-groups";
 import {
   buildBarTenderWorkbook,
   buildFourUpLabelPdf,
   buildMergedManifestPdf,
   buildShipmentPrintZip,
   buildTransactionStatementPdf,
-  inspectShipmentPdf,
-  matchShipmentPrintGroups,
-  parseBarcodeWorkbook,
 } from "@/lib/wms/shipment-print-client";
 import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
 
-interface EncodedSource { name: string; base64: string }
 interface Props { waveId: string; items: PickingWaveItem[]; generation?: ShipmentOutputGeneration; generationLabel?: string; onGenerated?: (generationId: string, fileName: string) => Promise<void> | void }
-
-function decodeFile(source: EncodedSource, type: string): File {
-  const binary = atob(source.base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return new File([bytes], source.name, { type });
-}
-function sameSet(left: Set<string>, right: Set<string>): boolean {
-  return left.size === right.size && [...left].every(value => right.has(value));
-}
 
 export default function ShipmentOutputSetSection({ waveId, items, generation, generationLabel, onGenerated }: Props) {
   const [generating, setGenerating] = useState<"all" | "barcode" | "label" | null>(null);
@@ -40,66 +26,7 @@ export default function ShipmentOutputSetSection({ waveId, items, generation, ge
   }
   const activeGeneration = generation;
 
-  async function loadPrintGroups() {
-    const expected = new Set(activeGeneration.purchaseOrderNumbers.map(String));
-    const expectedDateTokens = [...new Set(items.flatMap(item => item.sources)
-      .filter(source => expected.has(source.purchaseOrderNumber))
-      .map(source => String(source.shippingGroupKey || "").split("\u0000")[0].replace(/\D/g, ""))
-      .filter(value => /^20\d{6}$/.test(value)))];
-    if (expectedDateTokens.length === 0) throw new Error("현재 묶음의 입고예정일을 확인할 수 없습니다.");
-    const sourceResponse = await fetch("/api/wms/shipment-print/auto-source", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        waveId,
-        dateTokens: expectedDateTokens,
-        expectedPurchaseOrderNumbers: [...expected],
-        expectedWorkbookName: activeGeneration.shipmentFileName,
-      }),
-    });
-    const source = await sourceResponse.json();
-    if (!sourceResponse.ok || source.error) throw new Error(source.error || "출력세트 원본을 불러오지 못했습니다.");
-
-    const labelFiles = (source.labels as EncodedSource[]).map(value => decodeFile(value, "application/pdf"));
-    const manifestFiles = (source.manifests as EncodedSource[]).map(value => decodeFile(value, "application/pdf"));
-    const workbook = decodeFile(source.workbook as EncodedSource, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    const [labels, manifests, barcodeRows] = await Promise.all([
-      Promise.all(labelFiles.map(file => inspectShipmentPdf(file, "label"))),
-      Promise.all(manifestFiles.map(file => inspectShipmentPdf(file, "manifest"))),
-      parseBarcodeWorkbook(workbook),
-    ]);
-    let catalog: ProductCatalogItem[];
-    try {
-      catalog = await fetch("/api/wms/product-catalog", { cache: "no-store" }).then(async response => {
-        const data = await response.json();
-        if (!response.ok || data.error || !data.configured) throw new Error(data.error || "제품DB를 불러오지 못했습니다.");
-        return data.items as ProductCatalogItem[];
-      });
-    } catch (catalogError) {
-      if (window.location.hostname !== "localhost") throw catalogError;
-      catalog = barcodeRows.map(row => ({
-        skuId: row.skuId, modelSku: "", modelName: row.embeddedModelName, category: "", gender: "",
-        productName: "", optionLabel: "", imageUrl: "", warehouseNumber: "", boxNumber: "",
-        currentStock: "", currentStatus: "", costVatIncluded: "", vendorName: "", barcode: "",
-        countryOfOrigin: row.embeddedCountryOfOrigin, productLink: "",
-      }));
-    }
-
-    const generationRows = barcodeRows.filter(row => expected.has(row.purchaseOrderNumber));
-    const workbookPoSet = new Set(generationRows.map(row => row.purchaseOrderNumber));
-    if (!sameSet(expected, workbookPoSet)) throw new Error(`현재 묶음 발주 ${expected.size}건과 출력 원본 발주 ${workbookPoSet.size}건이 정확히 일치하지 않습니다.`);
-    const relevantLabels = labels.filter(label => label.purchaseOrderNumbers.some(po => expected.has(po)));
-    const shipmentNumbers = new Set(relevantLabels.map(label => label.shipmentNumber));
-    const relevantManifests = manifests.filter(manifest => shipmentNumbers.has(manifest.shipmentNumber));
-    const groups = matchShipmentPrintGroups(relevantLabels, relevantManifests, generationRows, catalog, items);
-    const matchedPos = groups.flatMap(group => group.purchaseOrderNumbers);
-    const matchedSet = new Set(matchedPos);
-    if (!sameSet(expected, matchedSet) || matchedPos.length !== matchedSet.size) {
-      const missing = [...expected].filter(po => !matchedSet.has(po));
-      const extra = [...matchedSet].filter(po => !expected.has(po));
-      throw new Error(`출력세트 발주 완전성 검증 실패 (누락 ${missing.length} · 예상 외 ${extra.length} · 중복 ${matchedPos.length - matchedSet.size})`);
-    }
-    return { groups, workbookName: workbook.name };
-  }
+  const loadPrintGroups = () => loadShipmentPrintGroups(waveId, items, activeGeneration);
 
   async function generateFullSet(downloadTarget: ReturnType<typeof reserveDownloadTarget>) {
     const { groups } = await loadPrintGroups();

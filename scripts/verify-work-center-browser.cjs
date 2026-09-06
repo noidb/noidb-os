@@ -60,7 +60,7 @@ async function main() {
     await page.setViewportSize({ width: 1920, height: 1080 });
     const card = page.getByTestId("outbound-work");
     await card.locator("summary").click();
-    assert.equal(await card.getByRole("button", { name: "작업완료", exact: true }).isDisabled(), true);
+    assert.equal(await card.getByRole("link", { name: "검수·포장 후 출고완료", exact: true }).getAttribute("href"), `${work.pickingHref}/packing`);
     await card.getByRole("button", { name: "보관하기", exact: true }).click();
     await page.getByRole("dialog").getByRole("button", { name: "취소", exact: true }).click();
     assert.equal(changes.length, 0);

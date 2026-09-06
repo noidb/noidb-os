@@ -309,7 +309,9 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       const center = actualFulfillmentCenter(source.basketNumber, source.purchaseOrderNumber);
       const expectedDate = expectedDatesByPo[source.purchaseOrderNumber];
       const label = expectedDate ? `${center} ${expectedDate}` : center;
-      totals.set(label, (totals.get(label) || 0) + source.requestedQuantity);
+      const allocation = item.allocations.find(row => row.purchaseOrderNumber === source.purchaseOrderNumber && row.basketNumber === source.basketNumber);
+      const quantity = item.status === "pending" ? source.requestedQuantity : allocation?.fulfilledQuantity ?? source.requestedQuantity;
+      totals.set(label, (totals.get(label) || 0) + quantity);
     }
     return Array.from(totals.entries()).map(([label, quantity]) => `${label} ${quantity}개`);
   }
@@ -790,6 +792,8 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       <main style={pageStyle}>
         <WmsExitNav />
         <h1 style={{ fontSize: "18px", margin: "0 0 6px" }}>통합 피킹</h1>
+        <p style={{ fontSize: "12px", lineHeight: 1.6 }}>창고번호 → 모델 → 옵션 → SKU 순서입니다. 오른쪽은 찾은 수량 / 발주 총수량이며, 아래 센터별 수량만큼 분배해 주세요. 같은 SKU의 모든 센터를 표시합니다.</p>
+        <a href={`/wms/picking/waves/${encodeURIComponent(wave.id)}/packing`} style={{ ...wmsPrimaryButton, display: "flex", alignItems: "center", justifyContent: "center", minHeight: "56px", textDecoration: "none", margin: "14px 0" }}>찾기·센터 분배 후 → Shipment별 검수·포장</a>
         <WaveIdentityEditor wave={wave} onSave={async updated => { await waveRepository.saveWave(updated); setWave(updated); }} />
         <p style={{ color: wmsColors.muted, fontSize: "13px", margin: "4px 0" }}>발주서 {wave.sourcePurchaseOrderNumbers.length}건</p>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 0 10px" }}>
@@ -832,6 +836,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
           />
         )}
 
+        <a href={`/wms/picking/waves/${encodeURIComponent(wave.id)}/packing`} style={{ ...wmsPrimaryButton, display: "flex", alignItems: "center", justifyContent: "center", minHeight: "56px", textDecoration: "none", margin: "14px 0" }}>찾기·센터 분배 후 → Shipment별 검수·포장</a>
         <PickingListBottomBar wave={wave} items={items} />
         {vendorActionMessage && <button type="button" onClick={() => router.push(`/wms/picking/waves/${encodeURIComponent(wave.id)}/vendor-orders`)} style={{ ...wmsPrimaryButton, width: "100%", marginTop: "12px", minHeight: "46px" }}>거래처 발주서 확인하기</button>}
         {vendorTransferItems && <VendorTransferDialog items={vendorTransferItems} catalog={liveCatalogByProductCode} busy={bulkProcessing} error={vendorTransferError} onCancel={() => setVendorTransferItems(null)} onConfirm={confirmVendorTransfer} />}
@@ -1326,7 +1331,7 @@ function ChecklistView({
                 <div style={{ fontSize: "10px", color: wmsColors.muted }}>SKU {item.productCode}</div>
                 {delay?.active && <div style={{ marginTop: "4px", fontSize: "11px", color: "#a33b2e", fontWeight: 800, lineHeight: 1.4 }}>입고지연 · {receivingDelayDate(delay.recentDelayedAt)}{delay.memo ? ` · ${delay.memo}` : ""}</div>}
                 <div style={{ marginTop: "3px", fontSize: "10px", fontWeight: 800, color: wmsColors.slateDark, whiteSpace: "normal", lineHeight: 1.35 }}>
-                  {logisticsLabelsForItem(item).join(" / ")}
+                  {logisticsLabelsForItem(item).map(label => <div key={label} style={{ marginTop: "4px", padding: "5px 6px", background: "#fff", borderRadius: "6px", fontSize: "12px" }}>{label}</div>)}
                 </div>
               </button>
               <ProductLinkIconButton productLink={live.productLink} />

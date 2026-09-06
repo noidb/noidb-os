@@ -1,3 +1,4 @@
+import { nextPackingProgress } from "../packing-progress";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { BlobPreconditionFailedError, get, put } from "@vercel/blob";
@@ -84,6 +85,7 @@ function normalizeSnapshot(value: unknown): PickingWaveStoreSnapshot {
     deletedShipmentIds: raw.deletedShipmentIds && typeof raw.deletedShipmentIds === "object" ? raw.deletedShipmentIds : {},
     completedCreateOperations: raw.completedCreateOperations && typeof raw.completedCreateOperations === "object" ? raw.completedCreateOperations : {},
     completedShipmentCreateOperations: raw.completedShipmentCreateOperations && typeof raw.completedShipmentCreateOperations === "object" ? raw.completedShipmentCreateOperations : {},
+    ...(raw.packingProgress ? { packingProgress: raw.packingProgress } : {}),
     ...(raw.outboundWorkStates ? { outboundWorkStates: raw.outboundWorkStates } : {}),
   };
 }
@@ -197,7 +199,18 @@ async function writeLocalSnapshot(snapshot: PickingWaveStoreSnapshot): Promise<v
 
 export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot, mutation: PickingWaveStoreMutation): PickingWaveStoreSnapshot {
   const next = normalizeSnapshot(structuredClone(current));
-  if (mutation.action === "saveSimpleReceiving") {
+  if (mutation.action === "savePackingProgress") {
+    const wave = next.waves.find(w => w.id === mutation.waveId);
+    if (!wave) throw new Error("저장된 출고작업을 찾을 수 없습니다.");
+    const items = next.items.filter(i => i.waveId === wave.id);
+    if (mutation.dispatched && !summarizeOutboundWork(wave, items, next.outboundWorkStates?.[wave.id], kstWorkDate()).canComplete) throw new Error("Shipment·출력세트 또는 피킹이 완료되지 않았습니다.");
+    const progress = nextPackingProgress(wave, items, next.packingProgress?.[wave.id], mutation, mutation.now);
+    next.packingProgress = { ...next.packingProgress, [wave.id]: progress };
+    if (mutation.dispatched) {
+      const prior = next.outboundWorkStates?.[wave.id];
+      next.outboundWorkStates = { ...next.outboundWorkStates, [wave.id]: { status: "completed", updatedAt: mutation.now, history: [...(prior?.history || []), { status: "completed", changedAt: mutation.now }] } };
+    }
+  } else if (mutation.action === "saveSimpleReceiving") {
     const matches = next.vendorOrderLines.filter(line => line.id === mutation.before.id);
     if (matches.length !== 1 || !next.vendorOrderDrafts.some(draft => draft.id === matches[0].draftId)) throw new Error("입고할 발주 품목을 다시 확인해 주세요.");
     const saved = saveSimpleReceivingLine(matches[0], mutation.before, mutation.input, mutation.now);

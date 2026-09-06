@@ -74,7 +74,7 @@ export default function OutboundWorkCenter() {
       <p className={styles.muted}>피킹 {work.pickedSkuCount}/{work.skuCount} · Shipment 미처리 발주 {work.remainingShipmentPoCount}건 · 출력세트 미기록 발주 {work.remainingOutputPoCount}건</p>
       <div className={styles.actions}>
         {work.state && work.state.status !== "active" ? <button type="button" onClick={() => setChange({ work, status: "active" })}>작업 중으로 복원</button> : <>
-          <button type="button" disabled={!work.canComplete} onClick={() => setChange({ work, status: "completed" })}>작업완료</button>
+          <a href={`${work.pickingHref}/packing`}>검수·포장 후 출고완료</a>
           <button type="button" onClick={() => setChange({ work, status: "archived" })}>보관하기</button>
         </>}
       </div>

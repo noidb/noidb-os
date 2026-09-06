@@ -1,3 +1,4 @@
+import type { PackingProgress, PackingRow } from "../packing-progress";
 import type { BasketAssignment, PickingWave, PickingWaveItem, OutboundWorkState } from "./types";
 import type { PoConfirmationRecord } from "../po-confirm-state";
 import type { VendorOrderDraft, VendorOrderDraftLine } from "../vendor-order/types";
@@ -34,9 +35,11 @@ export interface PickingWaveStoreSnapshot {
   completedShipmentCreateOperations: Record<string, { shipmentIds: string[]; completedAt: string }>;
   /** Optional for existing snapshots. No migration or Wave rewrite is required. */
   outboundWorkStates?: Record<string, OutboundWorkState>;
+  packingProgress?: Record<string, PackingProgress>;
 }
 
 export type PickingWaveStoreMutation =
+  | { action: "savePackingProgress"; waveId: string; generationKey: string; rows: PackingRow[]; checkedKeys: string[]; expectedUpdatedAt: string | null; dispatched: boolean; now: string }
   | { action: "repairConfirmedFileLinks"; before: PoConfirmationRecord[]; fileName: string; contentHash: string; now: string }
   | { action: "setOutboundWorkState"; waveId: string; status: OutboundWorkState["status"]; expectedUpdatedAt: string | null; now: string }
   | { action: "migrate"; snapshot: Partial<Pick<PickingWaveStoreSnapshot, "waves" | "items" | "baskets" | "poConfirmationRecords" | "vendorOrderDrafts" | "vendorOrderLines" | "warehouseZones" | "warehouseShelves" | "warehouseBoxes" | "warehouseModelLocations" | "warehouseSkuExceptions" | "warehouseMigrationMappings">> }

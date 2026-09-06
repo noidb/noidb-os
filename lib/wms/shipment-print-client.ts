@@ -75,6 +75,7 @@ async function pdfTextPages(file: File): Promise<{ width: number; height: number
   }
   const document = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
   const pages: { width: number; height: number; items: PdfTextItem[] }[] = [];
+  try {
   for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
     const page = await document.getPage(pageNumber);
     const viewport = page.getViewport({ scale: 1 });
@@ -89,6 +90,7 @@ async function pdfTextPages(file: File): Promise<{ width: number; height: number
     });
   }
   return pages;
+  } finally { await document.destroy(); }
 }
 
 function findFirst(items: PdfTextItem[], pattern: RegExp): string {
@@ -237,7 +239,8 @@ export function matchShipmentPrintGroups(
   manifests: ShipmentPdfFile[],
   barcodeRows: BarcodeSourceRow[],
   catalogItems: ProductCatalogItem[],
-  _waveItems: PickingWaveItem[] = []
+  _waveItems: PickingWaveItem[] = [],
+  options: { requireBarcodeMetadata?: boolean } = {}
 ): ShipmentPrintGroup[] {
   const errors: string[] = [];
   const duplicateNumbers = (files: ShipmentPdfFile[]) => unique(files.map(file => file.shipmentNumber).filter((number, index, all) => all.indexOf(number) !== index));
@@ -280,14 +283,14 @@ export function matchShipmentPrintGroups(
       if (source.quantity !== item.quantity) errors.push(`${shipmentNumber} SKU ${item.skuId}: 최종 납품수량 불일치 (${source.quantity}/${item.quantity})`);
       if (source.expectedDate !== manifest.expectedDate || source.fulfillmentCenter !== manifest.fulfillmentCenter) errors.push(`${shipmentNumber} SKU ${item.skuId}: 입고예정일 또는 물류센터 불일치`);
       const catalog = catalogBySku.get(item.skuId) ?? [];
-      if (catalog.length !== 1) {
+      if (catalog.length > 1 || (catalog.length !== 1 && options.requireBarcodeMetadata !== false)) {
         errors.push(`${shipmentNumber} SKU ${item.skuId}: 제품DB ${catalog.length}건 (정확히 1건 필요)`);
         continue;
       }
       // SKU/바코드/상품명/옵션/수량은 발주서 기반 source를 유일한 기준으로 사용한다.
       // 제조국과 모델명만 SKU ID로 조회한 제품DB(구글시트) 값을 보강한다.
-      const resolvedModelName = resolveBarcodeModelIdentifier(catalog[0]);
-      if (!catalog[0].countryOfOrigin || !resolvedModelName) errors.push(`${shipmentNumber} SKU ${item.skuId}: 제품DB 제조국 또는 영문·숫자 모델SKU/모델명 누락`);
+      const resolvedModelName = resolveBarcodeModelIdentifier(catalog[0] || { modelName: "", modelSku: "" });
+      if (options.requireBarcodeMetadata !== false && (!catalog[0]?.countryOfOrigin || !resolvedModelName)) errors.push(`${shipmentNumber} SKU ${item.skuId}: 제품DB 제조국 또는 영문·숫자 모델SKU/모델명 누락`);
       const display = resolveDisplayNameAndOption(
         source.productName,
         source.optionLabel
@@ -297,7 +300,7 @@ export function matchShipmentPrintGroups(
         productName: display.name,
         optionLabel: display.option,
         modelName: resolvedModelName,
-        countryOfOrigin: catalog[0].countryOfOrigin,
+        countryOfOrigin: catalog[0]?.countryOfOrigin || "",
       });
     }
     const purchaseOrderNumbers = unique(matchedRows.map(row => row.purchaseOrderNumber));
@@ -360,6 +363,9 @@ export async function buildFourUpLabelPdf(groups: ShipmentPrintGroup[]): Promise
 export type BarTenderPrintGroup = Pick<ShipmentPrintGroup, "shipmentNumber" | "purchaseOrderNumbers" | "fulfillmentCenter" | "expectedDate" | "barcodeRows">;
 
 export async function buildBarTenderWorkbook(groups: readonly BarTenderPrintGroup[]): Promise<Uint8Array> {
+  for (const group of groups) for (const row of group.barcodeRows) {
+    if (!row.countryOfOrigin || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(row.modelName)) throw new Error(`${row.skuId}: 바코드 재발행에 필요한 제조국 또는 영문·숫자 모델 정보가 없습니다. 상품정보를 확인해 주세요.`);
+  }
   const ExcelJS = (await import("exceljs")).default;
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("템플릿1");
