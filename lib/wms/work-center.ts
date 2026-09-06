@@ -29,6 +29,7 @@ export interface OutboundWorkSummary {
   nextHref: string;
   packingLabel: string | null;
   packingHref: string | null;
+  packingTargets: Array<{ key: string; label: string; href: string }>;
   documentHref: string;
   pickingHref: string;
   vendorHref: string;
@@ -66,6 +67,28 @@ export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[
       ? `${currentCenter ? `${currentCenter} · ` : ""}Shipment ${currentShipmentIndex}/${expectedShipmentCount} · 상품 확인·바코드 부착 (${checkedPackingCount}/${packingRows.length})`
       : `Shipment ${expectedShipmentCount}개 · 상품 확인·바코드 부착`
     : null;
+  const packingTargetMap = new Map<string, { center: string; expectedDate: string; generationIds: string[]; shipmentCount: number; quantity: number }>();
+  for (const generation of generations.filter(candidate => candidate.status === "shipment_generated" && candidate.shipmentFileName)) {
+    const generationPoSet = new Set(generation.purchaseOrderNumbers);
+    const matchingGroups = (wave.shippingGroups || []).filter(group => group.purchaseOrderNumbers.some(po => generationPoSet.has(po)));
+    const centers = [...new Set(matchingGroups.map(group => group.fulfillmentCenter))];
+    const dates = [...new Set(matchingGroups.map(group => group.expectedDate))];
+    const isSingleDestination = centers.length === 1 && dates.length === 1;
+    const key = isSingleDestination ? `${dates[0]}\u0000${centers[0]}` : generation.generationId;
+    const target = packingTargetMap.get(key) || { center: isSingleDestination ? centers[0] : "복수 물류센터", expectedDate: isSingleDestination ? dates[0] : "", generationIds: [], shipmentCount: 0, quantity: 0 };
+    target.generationIds.push(generation.generationId);
+    target.shipmentCount += generation.expectedShippingGroupCount;
+    target.quantity += items.reduce((sum, item) => sum + item.sources.filter(source => generationPoSet.has(source.purchaseOrderNumber)).reduce((sourceSum, source) => {
+      const allocation = item.allocations.find(candidate => candidate.purchaseOrderNumber === source.purchaseOrderNumber && candidate.basketNumber === source.basketNumber);
+      return sourceSum + (allocation?.fulfilledQuantity ?? (item.status === "full" ? source.requestedQuantity : 0));
+    }, 0), 0);
+    packingTargetMap.set(key, target);
+  }
+  const packingTargets = [...packingTargetMap.entries()].map(([key, target]) => ({
+    key,
+    label: `${target.center}${target.expectedDate ? ` · ${target.expectedDate}` : ""} · Shipment ${target.shipmentCount}개 · 총 ${target.quantity}개`,
+    href: `${base}/packing?generations=${encodeURIComponent(target.generationIds.join(","))}`,
+  })).sort((a, b) => b.label.localeCompare(a.label, "ko-KR", { numeric: true }));
   const shipping = summarizeShippingByDate(wave, items);
   const expectedDates = shipping.map(group => group.expectedDate).filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)).sort();
   const earliest = expectedDates[0];
@@ -108,7 +131,7 @@ export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[
     pickedSkuCount,
     remainingShipmentPoCount,
     remainingOutputPoCount,
-    nextLabel, nextHref, packingLabel, packingHref,
+    nextLabel, nextHref, packingLabel, packingHref, packingTargets,
     documentHref: `${base}/complete`, pickingHref: base, vendorHref: `${base}/vendor-orders`,
     canComplete: purchaseOrders.size > 0 && remainingShipmentPoCount === 0 && remainingOutputPoCount === 0 && items.length > 0 && pickedSkuCount === items.length,
   };

@@ -39,7 +39,7 @@ export interface PickingWaveStoreSnapshot {
 }
 
 export type PickingWaveStoreMutation =
-  | { action: "savePackingProgress"; waveId: string; generationKey: string; rows: PackingRow[]; checkedKeys: string[]; expectedUpdatedAt: string | null; dispatched: boolean; now: string }
+  | { action: "savePackingProgress"; waveId: string; generationKey: string; rows: PackingRow[]; checkedKeys: string[]; dispatchedShipmentNumbers?: string[]; expectedUpdatedAt: string | null; dispatched: boolean; now: string }
   | { action: "repairConfirmedFileLinks"; before: PoConfirmationRecord[]; fileName: string; contentHash: string; now: string }
   | { action: "setOutboundWorkState"; waveId: string; status: OutboundWorkState["status"]; expectedUpdatedAt: string | null; now: string }
   | { action: "migrate"; snapshot: Partial<Pick<PickingWaveStoreSnapshot, "waves" | "items" | "baskets" | "poConfirmationRecords" | "vendorOrderDrafts" | "vendorOrderLines" | "warehouseZones" | "warehouseShelves" | "warehouseBoxes" | "warehouseModelLocations" | "warehouseSkuExceptions" | "warehouseMigrationMappings">> }

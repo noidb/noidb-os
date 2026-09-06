@@ -69,6 +69,10 @@ export default function OutboundWorkCenter() {
       <p>{work.packingLabel}</p>
       <a href={work.packingHref}>상품 확인·바코드 부착 바로가기 →</a>
     </div>}
+    {work.packingTargets.length > 0 && <details className={styles.packingTargets}>
+      <summary>Shipment별 상품 확인·바코드 부착</summary>
+      <div>{work.packingTargets.map(target => <a key={target.key} href={target.href}>{target.label} →</a>)}</div>
+    </details>}
     <details className={styles.details}>
       <summary>서류·피킹·발주·작업 관리</summary>
       <p className={styles.muted}>같은 출고작업을 이어갑니다. 남은 발주 때문에 새 작업을 만들 필요가 없습니다.</p>

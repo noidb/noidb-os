@@ -15,6 +15,8 @@ import { wmsColors, wmsPrimaryButton, wmsSecondaryButton } from "@/lib/wms/ui-to
 export default function PackingPage({ params }: { params: { waveId: string } }) {
   const searchParams = useSearchParams();
   const requestedGenerationId = searchParams.get("generation")?.trim() || "";
+  const requestedGenerationIds = (searchParams.get("generations") || requestedGenerationId).split(",").map(value => value.trim()).filter(Boolean);
+  const requestedGenerationKey = requestedGenerationIds.join(",");
   const [snapshot,setSnapshot] = useState<PickingWaveStoreSnapshot>();
   const [groups,setGroups] = useState<ShipmentPrintGroup[]>([]);
   const [catalog,setCatalog] = useState<ProductCatalogItem[]>([]);
@@ -30,6 +32,7 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
   const stale = Boolean(progress && (progress.generationKey !== currentKey || progress.manifestKey !== packingManifestKey(rows)));
   const checked = new Set(stale ? [] : progress?.checkedKeys || []);
   const dispatched = Boolean(progress?.dispatchedAt);
+  const dispatchedShipments = new Set(progress?.dispatchedShipmentNumbers || (dispatched ? groups.map(group => group.shipmentNumber) : []));
 
   async function load() {
     setLoading(true);setError("");setGroups([]);
@@ -40,10 +43,10 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
       if (!target) throw new Error("출고작업을 찾을 수 없습니다.");
       setSnapshot(saved);setProgress(saved.packingProgress?.[params.waveId]);
       const availableGenerations = (target.outputGenerations || []).filter(g => !g.supersededByGenerationId && g.status === "shipment_generated" && g.shipmentFileName);
-      const generations = requestedGenerationId
-        ? availableGenerations.filter(generation => generation.generationId === requestedGenerationId)
+      const generations = requestedGenerationIds.length
+        ? availableGenerations.filter(generation => requestedGenerationIds.includes(generation.generationId))
         : availableGenerations;
-      if (requestedGenerationId && generations.length === 0) throw new Error("선택한 송장 묶음의 Shipment 파일을 찾을 수 없습니다. 서류 화면에서 현재 묶음을 다시 확인해 주세요.");
+      if (requestedGenerationIds.length && generations.length !== requestedGenerationIds.length) throw new Error("선택한 송장 묶음의 Shipment 파일을 모두 찾을 수 없습니다. 서류 화면에서 현재 묶음을 다시 확인해 주세요.");
       if (!generations.length) throw new Error("Shipment 파일을 생성한 뒤 동봉내역서를 불러올 수 있습니다. 서류 화면에서 먼저 완료해 주세요.");
       const targetItems = saved.items.filter(i => i.waveId === params.waveId);
       const loaded: ShipmentPrintGroup[] = []; const products = new Map<string,ProductCatalogItem>();
@@ -57,7 +60,7 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
         }
         source.catalog.forEach(item=>products.set(item.skuId,item));
       }
-      const requiredPurchaseOrders = requestedGenerationId ? generations.flatMap(generation => generation.purchaseOrderNumbers) : target.sourcePurchaseOrderNumbers;
+      const requiredPurchaseOrders = requestedGenerationIds.length ? generations.flatMap(generation => generation.purchaseOrderNumbers) : target.sourcePurchaseOrderNumbers;
       if (requiredPurchaseOrders.some(po=>!seenPos.has(po))) throw new Error("현재 송장 묶음에 아직 Shipment가 생성되지 않은 발주서가 있습니다. 서류 화면에서 다시 확인해 주세요.");
       setGroups(loaded);setCatalog([...products.values()]);
       const lastShipment = sessionStorage.getItem(`noidb:packing-shipment:${params.waveId}`);
@@ -65,14 +68,14 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
     } catch(e) {setError(e instanceof Error ? e.message : "동봉내역서를 불러오지 못했습니다.");}
     finally {setLoading(false);}
   }
-  useEffect(()=>{void load();},[params.waveId, requestedGenerationId]); // Explicit reload retrieves current files and shared checks.
+  useEffect(()=>{void load();},[params.waveId, requestedGenerationKey]); // Explicit reload retrieves current files and shared checks.
 
-  async function save(keys: string[], dispatch = false) {
+  async function save(keys: string[], dispatch = false, shipmentStatuses = [...dispatchedShipments]) {
     if (!wave || busy) return;
     if (dispatch && !window.confirm("모든 상품의 바코드 부착·포장을 확인했고, 실제로 택배사에 인계했습니까? 확인하면 출고완료로 마무리합니다.")) return;
     setBusy(true);setError("");setMessage("");
     try {
-      const response = await fetch("/api/wms/packing-progress",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({waveId:wave.id,generationKey:currentKey,rows,checkedKeys:keys,expectedUpdatedAt:progress?.updatedAt || null,dispatched:dispatch,confirmed:dispatch})});
+      const response = await fetch("/api/wms/packing-progress",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({waveId:wave.id,generationKey:currentKey,rows,checkedKeys:keys,dispatchedShipmentNumbers:dispatch?groups.map(group=>group.shipmentNumber):shipmentStatuses,expectedUpdatedAt:progress?.updatedAt || null,dispatched:dispatch,confirmed:dispatch})});
       const data = await response.json(); if (!response.ok) throw new Error(data.error || "검수 기록 저장 실패");
       setProgress(data.progress);setMessage(dispatch ? "택배 출고완료로 저장했습니다." : "검수 기록 저장 완료");
     } catch(e) {setError(e instanceof Error ? e.message : "저장 실패");} finally {setBusy(false);}
@@ -108,7 +111,7 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
       <label>포장할 Shipment <select aria-label="포장할 Shipment" value={selected} onChange={e=>{setSelected(e.target.value);sessionStorage.setItem(`noidb:packing-shipment:${params.waveId}`,e.target.value);setSearch("");}} style={{width:"100%",minHeight:48,margin:"8px 0",fontSize:15}}>{groups.map(g=><option key={g.shipmentNumber} value={g.shipmentNumber}>{g.fulfillmentCenter} · {g.shipmentNumber} · {g.barcodeRows.reduce((n,r)=>n+r.quantity,0)}개</option>)}</select></label>
       <input aria-label="상품 검색" placeholder="상품명·SKU·바코드 검색 (내역서 순서 유지)" value={search} onChange={e=>setSearch(e.target.value)} style={{boxSizing:"border-box",width:"100%",minHeight:44,marginBottom:12}} />
       {groups.filter(g=>g.shipmentNumber===selected).map(group=><section key={group.shipmentNumber}>
-        <h2 style={{fontSize:18}}>{group.fulfillmentCenter} · Shipment {group.shipmentNumber}</h2><p style={{fontSize:12}}>입고예정일 {group.expectedDate} · 발주 {group.purchaseOrderNumbers.join(", ")}</p>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}><h2 style={{fontSize:18,marginBottom:4}}>{group.fulfillmentCenter} · Shipment {group.shipmentNumber}</h2><strong style={{padding:"5px 9px",borderRadius:999,background:dispatchedShipments.has(group.shipmentNumber)?wmsColors.greenSoft:"#f3ece4",color:dispatchedShipments.has(group.shipmentNumber)?"#365f4e":wmsColors.warn}}>{dispatchedShipments.has(group.shipmentNumber)?"출고완료":"미출고"}</strong></div><p style={{fontSize:12}}>입고예정일 {group.expectedDate} · 발주 {group.purchaseOrderNumbers.join(", ")}</p>
         <p style={{fontSize:12}}>아래 번호는 이 Shipment 동봉내역서의 상품 순서입니다.</p>
         {group.barcodeRows.map((row,index)=>{
           if (search && !`${row.productName} ${row.optionLabel} ${row.skuId} ${row.barcode}`.toLowerCase().includes(search.toLowerCase())) return null;
@@ -126,6 +129,7 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
             <details><summary>바코드 분실·손상 → 재발행</summary>{(!row.modelName || !row.countryOfOrigin) && <p style={{color:wmsColors.warn,fontSize:12}}>재발행에 필요한 제조국·영문 모델 정보가 없습니다. 상품정보를 확인한 뒤 목록을 새로고침해 주세요.</p>}<div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:8}}><label>장수 <input aria-label={`${row.skuId} 재발행 장수`} type="number" min={1} max={row.quantity} value={reprintQty[quantityKey] || "1"} onChange={e=>setReprintQty({...reprintQty,[quantityKey]:e.target.value})} style={{width:65,minHeight:40}} /></label><button disabled={busy || stale || !row.modelName || !row.countryOfOrigin} style={wmsSecondaryButton} onClick={()=>void reprint(group,index)}>이 상품 바코드 재발행</button></div></details>
           </article>;
         })}
+        {(()=>{const groupKeys=rows.filter(row=>row.shipmentNumber===group.shipmentNumber).map(row=>row.key);const ready=groupKeys.length>0&&groupKeys.every(key=>checked.has(key));const shipped=dispatchedShipments.has(group.shipmentNumber);return <button type="button" disabled={busy||stale||dispatched||(!shipped&&!ready)} style={{...wmsPrimaryButton,width:"100%",margin:"4px 0 16px",opacity:(busy||stale||dispatched||(!shipped&&!ready))?.5:1}} onClick={()=>{if(!window.confirm(shipped?`${group.fulfillmentCenter} Shipment ${group.shipmentNumber}을 미출고로 되돌릴까요?`:`${group.fulfillmentCenter} Shipment ${group.shipmentNumber}의 실제 출고가 완료됐습니까?`))return;const next=shipped?[...dispatchedShipments].filter(value=>value!==group.shipmentNumber):[...dispatchedShipments,group.shipmentNumber];void save([...checked],false,next);}}>{shipped?"미출고로 변경":"이 Shipment 출고완료"}</button>;})()}
       </section>)}
       <div style={{position:"sticky",bottom:0,padding:"12px 0",background:"#fff",borderTop:`1px solid ${wmsColors.border}`}}><button style={{...wmsPrimaryButton,width:"100%",opacity:(!rows.length || checked.size!==rows.length || busy || stale || dispatched)?0.5:1}} disabled={!rows.length || checked.size!==rows.length || busy || stale || dispatched} onClick={()=>void save([...checked],true)}>{dispatched ? "택배 출고완료" : "택배 인계 후 · 출고완료"}</button><p style={{fontSize:12,margin:"6px 0"}}>{dispatched ? `완료 시각: ${new Date(progress!.dispatchedAt!).toLocaleString("ko-KR")}` : `남은 검수 ${rows.length-checked.size}행 · 실제 택배 인계 후 눌러 주세요.`}</p></div>
     </>}

@@ -58,6 +58,14 @@ const packingRows = [
 ];
 const packing = { ...full, packingProgress: { [wave.id]: { generationKey: "GEN", manifestKey: "MANIFEST", rows: packingRows, checkedKeys: ["ROW1"], updatedAt: stamp } } };
 assert.match(buildWorkCenterOverview(packing).works[0].nextLabel, /동탄1 · Shipment 2\/2 · 상품 확인·바코드 부착 \(1\/2\)/);
+const splitGenerations = { ...full, waves: [{ ...fullWave, outputGenerations: [
+  { ...generation, generationId: "DONGTAN-1", purchaseOrderNumbers: ["PO1"], expectedShippingGroupCount: 1 },
+  { ...generation, generationId: "DONGTAN-2", purchaseOrderNumbers: ["PO2"], expectedShippingGroupCount: 1 },
+  { ...generation, generationId: "DONGTAN-3", purchaseOrderNumbers: ["PO3"], expectedShippingGroupCount: 1 },
+] }] };
+const dongtanTarget = buildWorkCenterOverview(splitGenerations).works[0].packingTargets.find(target => target.label.includes("동탄1"));
+assert.match(dongtanTarget?.label || "", /Shipment 3개 · 총 3개/);
+assert.match(dongtanTarget?.href || "", /generations=DONGTAN-1%2CDONGTAN-2%2CDONGTAN-3/);
 assert.equal(applyPickingWaveStoreMutation(full, { ...archive, status: "completed" }).outboundWorkStates?.[wave.id].status, "completed");
 assert.equal(buildWorkCenterOverview({ ...full, items: [{ ...item, status: "pending" }] }).works[0].canComplete, false);
 const pending = { ...snapshot, waves: [{ ...wave, outputGenerations: [{ ...generation, status: "invoice_generated" as const }] }] };
