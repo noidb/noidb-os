@@ -177,6 +177,16 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
     }
   }
 
+  async function setShipmentWorkflowStage(stage: "documents-complete" | "edit-documents") {
+    if (!wave) return;
+    const now = new Date().toISOString();
+    const updatedWave: PickingWave = stage === "documents-complete"
+      ? { ...wave, shipmentDocumentsCompletedAt: now, integratedPickingCompletedAt: undefined, updatedAt: now }
+      : { ...wave, shipmentDocumentsCompletedAt: undefined, integratedPickingCompletedAt: undefined, updatedAt: now };
+    await waveRepository.saveWave(updatedWave);
+    setWave(updatedWave);
+  }
+
   if (loading) {
     return (
       <main style={pageStyle}>
@@ -223,6 +233,21 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   const canEdit = wave.status === "completed" || wave.status === "result_confirmed";
   const reachedResultConfirm = wave.status === "result_confirmed" || wave.status === "order_confirmed";
 
+  if (wave.shipmentDocumentsCompletedAt) {
+    const integratedDone = Boolean(wave.integratedPickingCompletedAt);
+    return <main style={pageStyle}>
+      <WmsExitNav />
+      <h1 style={{ fontSize: "22px" }}>출고작업</h1>
+      <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "16px", background: wmsColors.greenSoft }}>
+        <strong>{integratedDone ? "통합피킹 완료" : "Shipment 서류작업 완료"}</strong>
+        <p style={{ fontSize: "13px", lineHeight: 1.6 }}>{integratedDone ? "물류센터와 Shipment 번호를 선택해 출고상태를 관리합니다." : "완료한 서류 화면은 숨겼습니다. 다음 단계인 통합피킹을 진행해 주세요."}</p>
+        <a href={integratedDone ? `/wms/picking/waves/${encodeURIComponent(wave.id)}/packing` : `/wms/picking/waves/${encodeURIComponent(wave.id)}`} style={{ textDecoration: "none" }}><button style={{ ...wmsPrimaryButton, width: "100%" }}>{integratedDone ? "Shipment별 출고작업" : "통합피킹 시작·계속하기"}</button></a>
+      </div>
+      <button type="button" onClick={() => void setShipmentWorkflowStage("edit-documents")} style={{ ...wmsGhostButton, width: "100%", marginTop: "14px" }}>Shipment 서류 수정</button>
+      <a href="/wms/work-center" style={{ display: "block", textDecoration: "none", marginTop: "10px" }}><button style={{ ...wmsGhostButton, width: "100%" }}>작업센터로</button></a>
+    </main>;
+  }
+
   if (wave.status === "order_confirmed") {
     return (
       <main style={pageStyle}>
@@ -250,6 +275,7 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
         </ShipmentWorkflowStepCard>
 
         <HanjinStepSequence waveId={wave.id} baskets={baskets} items={items} />
+        <button type="button" onClick={() => { if (window.confirm("Shipment 관련 서류와 출력세트 작업을 모두 마쳤습니까? 완료하면 서류 단계는 수정할 때까지 숨겨집니다.")) void setShipmentWorkflowStage("documents-complete"); }} style={{ ...wmsPrimaryButton, width: "100%", marginTop: "16px" }}>Shipment 서류작업 완료</button>
 
         <details style={{ marginTop: "16px", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: wmsColors.surfaceBeige }}>
           <summary style={{ cursor: "pointer", padding: "13px", fontSize: "13px", fontWeight: 800 }}>피킹 결과 보기</summary>

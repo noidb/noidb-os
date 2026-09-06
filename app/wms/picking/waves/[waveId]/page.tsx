@@ -837,7 +837,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
         )}
 
         <a href={`/wms/picking/waves/${encodeURIComponent(wave.id)}/packing`} style={{ ...wmsPrimaryButton, display: "flex", alignItems: "center", justifyContent: "center", minHeight: "56px", textDecoration: "none", margin: "14px 0" }}>찾기·센터 분배 후 → Shipment별 검수·포장</a>
-        <PickingListBottomBar wave={wave} items={items} />
+        <PickingListBottomBar wave={wave} items={items} onWaveChange={async updatedWave => { await waveRepository.saveWave(updatedWave); setWave(updatedWave); }} />
         {vendorActionMessage && <button type="button" onClick={() => router.push(`/wms/picking/waves/${encodeURIComponent(wave.id)}/vendor-orders`)} style={{ ...wmsPrimaryButton, width: "100%", marginTop: "12px", minHeight: "46px" }}>거래처 발주서 확인하기</button>}
         {vendorTransferItems && <VendorTransferDialog items={vendorTransferItems} catalog={liveCatalogByProductCode} busy={bulkProcessing} error={vendorTransferError} onCancel={() => setVendorTransferItems(null)} onConfirm={confirmVendorTransfer} />}
       </main>
@@ -1376,7 +1376,7 @@ function ChecklistView({
  * 문제를 해결한다. 발주확정/피킹결과확인의 실제 상태변경 로직은 완료 웨이브 화면(complete/page.tsx)에
  * 이미 있으므로 여기서 다시 만들지 않고, 그 화면으로 이동하는 실제 버튼만 둔다(재사용 우선).
  */
-function PickingListBottomBar({ wave, items }: { wave: PickingWave; items: PickingWaveItem[] }) {
+function PickingListBottomBar({ wave, items, onWaveChange }: { wave: PickingWave; items: PickingWaveItem[]; onWaveChange: (wave: PickingWave) => Promise<void> }) {
   const remainingCount = items.filter(item => item.status === "pending").length;
   const shortageItems = items.filter(item => item.shortageQuantity > 0);
   const shortageQuantity = shortageItems.reduce((sum, item) => sum + item.shortageQuantity, 0);
@@ -1391,6 +1391,15 @@ function PickingListBottomBar({ wave, items }: { wave: PickingWave; items: Picki
     padding: "14px",
     background: wmsColors.surfaceBeige,
   };
+
+  if (wave.shipmentDocumentsCompletedAt) {
+    const completed = remainingCount === 0;
+    if (wave.integratedPickingCompletedAt) return <div style={barStyle}><p style={{ margin: "0 0 8px", fontWeight: 800, color: wmsColors.greenDark }}>통합피킹 완료</p><a href={`/wms/picking/waves/${encodeURIComponent(wave.id)}/packing`} style={{ textDecoration: "none" }}><button style={{ ...wmsPrimaryButton, width: "100%" }}>Shipment별 출고작업</button></a></div>;
+    return <div style={barStyle}>
+      <p style={{ margin: "0 0 8px", fontWeight: 800 }}>{completed ? "통합피킹을 모두 처리했습니다." : `통합피킹 진행 중 · 미처리 SKU ${remainingCount}개`}</p>
+      <button type="button" disabled={!completed} onClick={() => { if (!window.confirm("통합피킹을 완료하고 Shipment별 출고작업으로 이동할까요?")) return; const now = new Date().toISOString(); void onWaveChange({ ...wave, integratedPickingCompletedAt: now, updatedAt: now }).then(() => { window.location.href = `/wms/picking/waves/${encodeURIComponent(wave.id)}/packing`; }); }} style={{ ...wmsPrimaryButton, width: "100%", opacity: completed ? 1 : .45 }}>통합피킹 완료</button>
+    </div>;
+  }
 
   if (wave.status === "in_progress" && remainingCount > 0) {
     return (

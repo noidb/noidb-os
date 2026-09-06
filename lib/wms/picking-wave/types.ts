@@ -131,6 +131,10 @@ export interface PickingWave {
   outputGenerations?: ShipmentOutputGeneration[];
   /** PC·모바일에서 같은 송장/Shipment 묶음을 계속 처리하기 위한 공용 선택값. */
   selectedOutputGenerationId?: string;
+  /** Shipment 서류와 출력세트를 확인하고 통합피킹 단계로 넘긴 시각. */
+  shipmentDocumentsCompletedAt?: string;
+  /** 통합피킹을 마치고 Shipment별 출고작업으로 넘긴 시각. */
+  integratedPickingCompletedAt?: string;
 }
 
 export interface ShipmentOutputGeneration {

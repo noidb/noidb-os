@@ -50,14 +50,20 @@ assert.deepEqual(oldSave.outboundWorkStates, archived.outboundWorkStates, "legac
 const fullWave = { ...wave, selectedOutputGenerationId: "GEN-1", outputGenerations: [{ ...generation, purchaseOrderNumbers: wave.sourcePurchaseOrderNumbers, expectedShippingGroupCount: 3, outputSetFileName: "set.zip", outputSetGeneratedAt: stamp }] };
 const full = { ...snapshot, waves: [fullWave] };
 assert.equal(buildWorkCenterOverview(full).works[0].canComplete, true);
-assert.equal(buildWorkCenterOverview(full).works[0].nextHref, `/wms/picking/waves/${wave.id}/packing`);
-assert.equal(buildWorkCenterOverview(full).works[0].nextLabel, "상품 확인·출고상태 관리");
+assert.equal(buildWorkCenterOverview(full).works[0].nextHref, `/wms/picking/waves/${wave.id}/complete`);
+assert.equal(buildWorkCenterOverview(full).works[0].nextLabel, "Shipment 서류작업 확인");
 const packingRows = [
   { key: "ROW1", shipmentNumber: "50000001", purchaseOrderNumber: "PO1", skuId: item.productCode, barcode: item.barcode, quantity: 1 },
   { key: "ROW2", shipmentNumber: "50000002", purchaseOrderNumber: "PO2", skuId: item.productCode, barcode: item.barcode, quantity: 1 },
 ];
 const packing = { ...full, packingProgress: { [wave.id]: { generationKey: "GEN", manifestKey: "MANIFEST", rows: packingRows, checkedKeys: ["ROW1"], updatedAt: stamp } } };
-assert.equal(buildWorkCenterOverview(packing).works[0].nextLabel, "상품 확인·출고상태 관리");
+assert.equal(buildWorkCenterOverview(packing).works[0].nextLabel, "Shipment 서류작업 확인");
+const documentsDone = { ...full, waves: [{ ...fullWave, shipmentDocumentsCompletedAt: stamp }] };
+assert.equal(buildWorkCenterOverview(documentsDone).works[0].nextLabel, "통합피킹");
+assert.equal(buildWorkCenterOverview(documentsDone).works[0].nextHref, `/wms/picking/waves/${wave.id}`);
+const integratedDone = { ...full, waves: [{ ...fullWave, shipmentDocumentsCompletedAt: stamp, integratedPickingCompletedAt: stamp }] };
+assert.equal(buildWorkCenterOverview(integratedDone).works[0].nextLabel, "Shipment별 출고작업");
+assert.equal(buildWorkCenterOverview(integratedDone).works[0].nextHref, `/wms/picking/waves/${wave.id}/packing`);
 const splitGenerations = { ...full, waves: [{ ...fullWave, outputGenerations: [
   { ...generation, generationId: "DONGTAN-1", purchaseOrderNumbers: ["PO1"], expectedShippingGroupCount: 1 },
   { ...generation, generationId: "DONGTAN-2", purchaseOrderNumbers: ["PO2"], expectedShippingGroupCount: 1 },
