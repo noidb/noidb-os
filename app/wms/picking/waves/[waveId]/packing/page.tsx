@@ -12,6 +12,7 @@ import { openProductLinkPreview } from "@/lib/wms/product-link-preview";
 import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 import { wmsColors, wmsPrimaryButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
+import { buildPackingCenterTargets } from "@/lib/wms/packing-center-targets";
 
 export default function PackingPage({ params }: { params: { waveId: string } }) {
   const repository = usePickingWaveRepository();
@@ -27,6 +28,8 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
   const [error,setError] = useState(""); const [message,setMessage] = useState("");
   const [selected,setSelected] = useState(""); const [search,setSearch] = useState("");
   const [selectedForDispatch,setSelectedForDispatch] = useState<string[]>([]);
+  const [shipmentNumbersByGeneration,setShipmentNumbersByGeneration] = useState<Record<string,string[]>>({});
+  const [resolvingTargets,setResolvingTargets] = useState(false);
   const [reprintQty,setReprintQty] = useState<Record<string,string>>({});
   const wave = snapshot?.waves.find(w => w.id === params.waveId);
   const base = `/wms/picking/waves/${encodeURIComponent(params.waveId)}`;
@@ -38,17 +41,9 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
   const dispatchedShipments = new Set(progress?.dispatchedShipmentNumbers || (dispatched ? groups.map(group => group.shipmentNumber) : []));
   const pendingGroups = groups.filter(group=>!dispatchedShipments.has(group.shipmentNumber));
   const completedGroups = groups.filter(group=>dispatchedShipments.has(group.shipmentNumber));
-  const centerTargets: Array<{ key: string; generationIds: string[]; label: string; href: string }> = (() => {
-    if (!wave) return [];
-    const map = new Map<string,{centers:string[];dates:string[];ids:string[];purchaseOrders:string[];shipments:number}>();
-    for (const generation of (wave.outputGenerations || []).filter(candidate=>!candidate.supersededByGenerationId&&candidate.status==="shipment_generated"&&candidate.shipmentFileName)) {
-      const poSet=new Set(generation.purchaseOrderNumbers);const matched=(wave.shippingGroups||[]).filter(group=>group.purchaseOrderNumbers.some(po=>poSet.has(po)));
-      const centers=[...new Set(matched.map(group=>group.fulfillmentCenter))];const dates=[...new Set(matched.map(group=>group.expectedDate))];
-      const single=centers.length===1&&dates.length===1;const key=single?`${dates[0]}\u0000${centers[0]}`:generation.generationId;
-      const target=map.get(key)||{centers:[],dates:[],ids:[],purchaseOrders:[],shipments:0};centers.forEach(center=>{if(!target.centers.includes(center))target.centers.push(center);});dates.forEach(date=>{if(!target.dates.includes(date))target.dates.push(date);});generation.purchaseOrderNumbers.forEach(po=>{if(!target.purchaseOrders.includes(po))target.purchaseOrders.push(po);});target.ids.push(generation.generationId);target.shipments+=generation.expectedShippingGroupCount;map.set(key,target);
-    }
-    return [...map.entries()].map(([key,target])=>{const shipmentNumbers=[...new Set((snapshot?.baskets||[]).filter(basket=>target.purchaseOrders.includes(basket.purchaseOrderNumber)).map(basket=>basket.shipmentNumber).filter((value):value is string=>Boolean(value)))];return {key,generationIds:target.ids,complete:shipmentNumbers.length>0&&shipmentNumbers.every(shipmentNumber=>dispatchedShipments.has(shipmentNumber)),label:`${target.centers.join(" / ") || "물류센터 미확인"}${target.dates.length?` · ${target.dates.join(" / ")}`:""} · Shipment ${target.shipments}개`,href:`${base}/packing?generations=${encodeURIComponent(target.ids.join(","))}`};}).filter(target=>!target.complete).sort((a,b)=>a.label.localeCompare(b.label,"ko-KR",{numeric:true}));
-  })();
+  const centerTargets = wave ? buildPackingCenterTargets(wave.outputGenerations || [], wave.shippingGroups || [], shipmentNumbersByGeneration, dispatchedShipments)
+    .filter(target => !target.complete)
+    .map(target => ({ ...target, href: `${base}/packing?generations=${encodeURIComponent(target.generationIds.join(","))}` })) : [];
   const currentCenterTarget=centerTargets.find(target=>target.generationIds.join(",")===requestedGenerationKey);
   const currentCenterTargetKey=currentCenterTarget?.key||"";
 
@@ -61,18 +56,20 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
       if (!target) throw new Error("출고작업을 찾을 수 없습니다.");
       const savedProgress=saved.packingProgress?.[params.waveId];setSnapshot(saved);setProgress(savedProgress);
       const availableGenerations = (target.outputGenerations || []).filter(g => !g.supersededByGenerationId && g.status === "shipment_generated" && g.shipmentFileName);
-      if (!requestedGenerationIds.length) { setGroups([]);setCatalog([]);setSelected("");return; }
+      const targetItems = saved.items.filter(i => i.waveId === params.waveId);
+      if (!requestedGenerationIds.length) { setGroups([]);setCatalog([]);setSelected("");setResolvingTargets(true);void resolveGenerationShipmentNumbers(availableGenerations,targetItems);return; }
       const generations = requestedGenerationIds.length
         ? availableGenerations.filter(generation => requestedGenerationIds.includes(generation.generationId))
         : availableGenerations;
       if (requestedGenerationIds.length && generations.length !== requestedGenerationIds.length) throw new Error("선택한 송장 묶음의 Shipment 파일을 모두 찾을 수 없습니다. 서류 화면에서 현재 묶음을 다시 확인해 주세요.");
       if (!generations.length) throw new Error("Shipment 파일을 생성한 뒤 동봉내역서를 불러올 수 있습니다. 서류 화면에서 먼저 완료해 주세요.");
-      const targetItems = saved.items.filter(i => i.waveId === params.waveId);
       const loaded: ShipmentPrintGroup[] = []; const products = new Map<string,ProductCatalogItem>();
+      const loadedShipmentNumbers: Record<string,string[]> = {};
       const seenPos = new Set<string>(); const seenShipments = new Set<string>();
       const printCache = createShipmentPrintLoadCache();
       for (const generation of generations) {
         const source = await loadShipmentPrintGroups(params.waveId,targetItems,generation,{forPacking:true,cache:printCache});
+        loadedShipmentNumbers[generation.generationId]=[...new Set(source.groups.map(group=>group.shipmentNumber))];
         for (const group of source.groups) {
           if (seenShipments.has(group.shipmentNumber) || group.purchaseOrderNumbers.some(po => seenPos.has(po))) throw new Error("중복 Shipment 또는 발주서가 있습니다. 서류 화면의 출력 대상을 확인해 주세요.");
           seenShipments.add(group.shipmentNumber);group.purchaseOrderNumbers.forEach(po=>seenPos.add(po));loaded.push(group);
@@ -82,6 +79,7 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
       const requiredPurchaseOrders = requestedGenerationIds.length ? generations.flatMap(generation => generation.purchaseOrderNumbers) : target.sourcePurchaseOrderNumbers;
       if (requiredPurchaseOrders.some(po=>!seenPos.has(po))) throw new Error("현재 송장 묶음에 아직 Shipment가 생성되지 않은 발주서가 있습니다. 서류 화면에서 다시 확인해 주세요.");
       setGroups(loaded);setCatalog([...products.values()]);
+      setShipmentNumbersByGeneration(current=>({...current,...loadedShipmentNumbers}));
       setSelectedForDispatch([]);
       const lastShipment = sessionStorage.getItem(`noidb:packing-shipment:${params.waveId}`);
       const completedShipmentNumbers=new Set(savedProgress?.dispatchedShipmentNumbers||[]);const pendingLoaded=loaded.filter(group=>!completedShipmentNumbers.has(group.shipmentNumber));
@@ -103,6 +101,15 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
       if (groups.length>0&&groups.every(group=>savedShipments.has(group.shipmentNumber))) {window.location.href=`${base}/packing`;return;}
       if (savedShipments.has(selected)) {const nextGroup=groups.find(group=>!savedShipments.has(group.shipmentNumber));setSelected(nextGroup?.shipmentNumber||"");}
     } catch(e) {setError(e instanceof Error ? e.message : "저장 실패");} finally {setBusy(false);}
+  }
+  async function resolveGenerationShipmentNumbers(generations: NonNullable<typeof wave>["outputGenerations"], targetItems: PickingWaveStoreSnapshot["items"]) {
+    if (!generations?.length) {setResolvingTargets(false);return;}
+    const resolved: Record<string,string[]> = {};const printCache=createShipmentPrintLoadCache();
+    for (const generation of generations) {
+      try {const source=await loadShipmentPrintGroups(params.waveId,targetItems,generation,{forPacking:true,cache:printCache});resolved[generation.generationId]=[...new Set(source.groups.map(group=>group.shipmentNumber))];}
+      catch { /* Keep unresolved groups visible instead of hiding them incorrectly. */ }
+    }
+    setShipmentNumbersByGeneration(current=>({...current,...resolved}));setResolvingTargets(false);
   }
   async function removeCurrentGeneration() {
     if (!wave || !currentCenterTarget || busy) return;
@@ -136,7 +143,8 @@ export default function PackingPage({ params }: { params: { waveId: string } }) 
     <h1 style={{fontSize:22}}>Shipment별 검수·포장</h1><p>{wave?.displayName || params.waveId}</p>
     <p style={{fontSize:13,lineHeight:1.7}}>① 작업할 물류센터 선택 → ② 이미지·상품·수량 확인 → ③ 바코드 부착·포장 → ④ Shipment 단위 출고완료</p>
     <p style={{fontSize:12}}>상품 목록은 확인용입니다. 개별 상품을 화면에서 체크할 필요 없이 Shipment 작업이 끝나면 출고완료만 눌러 주세요.</p>
-    {centerTargets.length>0&&<label style={{display:"block",fontWeight:800,margin:"12px 0"}}>작업할 물류센터
+    {resolvingTargets&&<p role="status" style={{padding:14,border:`1px solid ${wmsColors.border}`,borderRadius:10}}>출고완료된 물류센터를 목록에서 정리하고 있습니다…</p>}
+    {!resolvingTargets&&centerTargets.length>0&&<label style={{display:"block",fontWeight:800,margin:"12px 0"}}>작업할 물류센터
       <select aria-label="작업할 물류센터" value={currentCenterTargetKey} onChange={event=>{const target=centerTargets.find(candidate=>candidate.key===event.target.value);if(target)window.location.href=target.href;}} style={{width:"100%",minHeight:52,marginTop:8,fontSize:15,fontWeight:700}}><option value="" disabled>물류센터를 선택하세요</option>{centerTargets.map(target=><option key={target.key} value={target.key}>{target.label}</option>)}</select>
     </label>}
     {currentCenterTarget&&<button type="button" disabled={busy||loading} onClick={()=>void removeCurrentGeneration()} style={{...wmsSecondaryButton,width:"100%",color:wmsColors.warn}}>잘못 생성한 이 출력 묶음 삭제</button>}
