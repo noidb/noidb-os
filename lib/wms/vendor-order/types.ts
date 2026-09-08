@@ -44,6 +44,8 @@ export interface VendorOrderDraft {
 }
 
 export interface VendorOrderDraftLine {
+  /** Completed work is excluded from new orders while preserving the original record. */
+  orderExclusion?: import("./completion").VendorOrderExclusion;
   /** 자동 생성 라인: `${draftId}::${skuId}`, 수동 추가 라인: `${draftId}::manual-${timestamp}` */
   id: string;
   draftId: string;

@@ -309,6 +309,7 @@ export default function Home() {
   const [draftStatus, setDraftStatus] = useState("");
   const [modelDuplicate, setModelDuplicate] = useState(false);
   const [modelCheckMessage, setModelCheckMessage] = useState("");
+  const [modelReregisterable, setModelReregisterable] = useState(false);
   const [pendingReplacementCleanup, setPendingReplacementCleanup] = useState<PendingReplacementCleanup | null>(null);
 
   const [dbSupported, setDbSupported] = useState(false);
@@ -412,6 +413,9 @@ export default function Home() {
   }, [model, product.category]);
 
   useEffect(() => {
+    let active = true;
+    setModelReregisterable(false);
+    setModelCheckMessage("");
     if (!model) {
       setModelDuplicate(false);
       setModelCheckMessage("");
@@ -421,16 +425,21 @@ export default function Home() {
       try {
         const res = await fetch(`/api/google-sheet?model=${encodeURIComponent(model)}`, { cache: "no-store" });
         const data = await res.json();
+        if (!active) return;
+        if (!res.ok || data.error) throw new Error(data.error || "중복확인 실패");
         setModelDuplicate(Boolean(data.duplicate));
+        setModelReregisterable(Boolean(data.reregisterable));
         setModelCheckMessage(
-          data.duplicate ? "중복번호" : data.configured === false ? "Google DB 연결 후 중복확인" : "사용 가능한 모델명"
+          data.reregisterable ? "기존 행 재등록 가능" : data.duplicate ? (data.reason || "중복번호") : data.configured === false ? "Google DB 연결 후 중복확인" : "사용 가능한 모델명"
         );
       } catch {
+        if (!active) return;
         setModelDuplicate(false);
+        setModelReregisterable(false);
         setModelCheckMessage("중복확인 실패");
       }
     }, 450);
-    return () => window.clearTimeout(timer);
+    return () => { active = false; window.clearTimeout(timer); };
   }, [model]);
 
   const cleanedKeyword = useMemo(() => normalizeKeyword(product.keyword, product), [product]);
@@ -1623,11 +1632,11 @@ export default function Home() {
       return;
     }
 
-    if (isActual && modelDuplicate) {
+    if (isActual && modelDuplicate && !modelReregisterable) {
       setBatchStatus("기존 모델의 일괄 저장은 안전을 위해 차단했습니다. 필요한 파일만 개별 다운로드하세요.");
       return;
     }
-    if (isActual && modelCheckMessage !== "사용 가능한 모델명") {
+    if (isActual && modelCheckMessage !== "사용 가능한 모델명" && !modelReregisterable) {
       setBatchStatus("실제 등록은 Google DB에서 사용 가능한 모델명 확인이 끝난 뒤에만 저장할 수 있습니다.");
       return;
     }
@@ -1671,10 +1680,10 @@ export default function Home() {
         setBatchStatus("테스트·교육용 ZIP 생성 완료 · 실제 상품 폴더와 Google 제품DB는 변경하지 않았습니다.");
       } else if (dbHandle) {
         // 파일 충돌 여부를 Google 시트 변경보다 먼저 확인하여 기존 상품과 시트가 모두 보존되게 한다.
-        await assertProductDbFilesWritable(dbHandle, product.category, model, files);
+        if (!modelReregisterable) await assertProductDbFilesWritable(dbHandle, product.category, model, files);
         const sync = await syncProductDbToGoogleSheet((await buildCollectInput(preview)));
         if (!sync.ok) throw new Error(`${sync.message} · 상품 폴더는 변경하지 않았습니다.`);
-        const saved = await writeProductDbFiles(dbHandle, product.category, model, files, { overwriteExisting: false });
+        const saved = await writeProductDbFiles(dbHandle, product.category, model, files, { overwriteExisting: modelReregisterable });
         const fileSkips = skipped.filter(item => !item.startsWith("Google 시트"));
         setDbSavedFiles(saved);
         setBatchStatus(
@@ -2016,7 +2025,7 @@ export default function Home() {
           </Field>
           <Field label="모델명">
             <input value={model} onChange={e => updateModel(e.target.value)} />
-            {modelCheckMessage && <small className={modelDuplicate ? "duplicateModel" : "modelAvailable"}>{modelCheckMessage}</small>}
+            {modelCheckMessage && <small className={modelDuplicate && !modelReregisterable ? "duplicateModel" : "modelAvailable"}>{modelCheckMessage}</small>}
           </Field>
           <Field label="창고번호">
             <input value={product.warehouse || ""} onChange={e => update("warehouse", e.target.value)}
@@ -2471,10 +2480,11 @@ export default function Home() {
             <strong>테스트·교육용</strong><span>ZIP만 생성 · 폴더와 제품DB 변경 없음</span>
           </button>
           <button type="button" className={batchMode === "actual" ? "selected" : ""} onClick={() => setBatchMode("actual")}>
-            <strong>실제 등록용</strong><span>1회만 실행 · 새 모델만 저장 · 기존 파일 덮어쓰기 차단</span>
+            <strong>실제 등록용</strong><span>새 모델 등록 · 판매중지 모델은 기존 행 재사용</span>
           </button>
         </div>
-        {batchMode === "actual" && modelDuplicate && <p className="dangerAlert">기존 모델입니다. 일괄 저장은 차단되며 필요한 파일만 위의 개별 다운로드를 사용하세요.</p>}
+        {batchMode === "actual" && modelDuplicate && !modelReregisterable && <p className="dangerAlert">기존 모델입니다. 판매중지 상태가 아닌 모델의 일괄 등록은 차단됩니다.</p>}
+        {batchMode === "actual" && modelReregisterable && <p className="saveExplain">판매중지 제품의 기존 행을 맨 위로 옮기고 새 입력값만 갱신합니다. 누적입고·창고번호 등 미입력 정보는 보존하며, SKU ID·바코드·발주가능상태·제품링크·노출상품ID·옵션ID는 새 승인 전까지 비웁니다. 선택한 상품 폴더의 같은 이름 파일은 새 파일로 갱신합니다.</p>}
         <button className="batchSaveButton" type="button" disabled={batchBusy} onClick={batchSave}>
           {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP 생성" : "실제 등록파일 일괄 생성 및 저장"}
         </button>

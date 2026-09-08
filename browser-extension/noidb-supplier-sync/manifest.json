@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "NOID-B 서플라이허브 연결",
-  "version": "1.2.0",
-  "description": "쿠팡 Supplier Hub의 WIMS와 상품공급상태 전체 결과를 검증해 NOID-B AI 상품등록으로 전달합니다.",
+  "version": "1.3.0",
+  "description": "쿠팡 Supplier Hub의 주간 입고, WIMS와 상품공급상태 전체 결과를 검증해 NOID-B로 전달합니다.",
   "permissions": ["storage"],
+  "background": { "service_worker": "weekly-background.js" },
   "content_scripts": [
     {
       "matches": ["https://supplier.coupang.com/qvt/wims*"],
@@ -12,7 +13,7 @@
     },
     {
       "matches": ["https://supplier.coupang.com/*"],
-      "js": ["supply-status-core.js", "supplier-supply-status.js"],
+      "js": ["supply-status-core.js", "supplier-supply-status.js", "weekly-core.js", "supplier-weekly-receipts.js"],
       "run_at": "document_idle"
     },
     {
@@ -20,7 +21,7 @@
         "https://noidb-os.vercel.app/*",
         "http://localhost:3000/*"
       ],
-      "js": ["noidb-bridge.js"],
+      "js": ["noidb-bridge.js", "weekly-core.js", "noidb-weekly-bridge.js"],
       "run_at": "document_idle"
     }
   ]

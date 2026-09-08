@@ -7,12 +7,12 @@ import type { VendorOrderDraft, VendorOrderDraftLine } from "./types";
  */
 export interface VendorOrderRepository {
   listDrafts(waveId: string): Promise<VendorOrderDraft[]>;
-  saveDraft(draft: VendorOrderDraft): Promise<void>;
+  saveDraft(draft: VendorOrderDraft, expected?: { updatedAt?: string | null; lineIds?: string[] }): Promise<void>;
   /** 발주서와 그 발주서에 속한 모든 품목 라인을 함께 삭제한다. */
   deleteDraft(draftId: string): Promise<void>;
 
   listLines(waveId: string): Promise<VendorOrderDraftLine[]>;
-  saveLine(line: VendorOrderDraftLine): Promise<void>;
+  saveLine(line: VendorOrderDraftLine, expectedUpdatedAt?: string | null): Promise<void>;
   deleteLine(lineId: string): Promise<void>;
 
   /** 웨이브 구분 없이 전체 거래처 발주서 초안을 돌려준다 — 거래처 발주관리/입고처리 화면처럼

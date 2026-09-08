@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
-import type { PickingWave, PickingWaveItem } from "@/lib/wms/picking-wave/types";
+import type { PickingWave } from "@/lib/wms/picking-wave/types";
 import { summarizeShippingByDate, type ShippingDateSummary } from "@/lib/wms/picking-wave/wave-card-summary";
 import { wmsColors } from "@/lib/wms/ui-tokens";
 import { summarizeOutputGenerations } from "@/lib/wms/output-generation-progress";
+import type { OutboundWorkSummary, WorkCenterOverview } from "@/lib/wms/work-center";
 
 export interface WaveSummary {
   wave: PickingWave;
@@ -13,6 +14,7 @@ export interface WaveSummary {
   totalQuantity: number;
   completedSkuCount: number;
   shippingByDate: ShippingDateSummary[];
+  outbound?: OutboundWorkSummary;
 }
 
 function formatKstDateTime(value: string): string {
@@ -46,21 +48,20 @@ function formatKstFullDateTime(value: string): string {
   return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}`;
 }
 
-function summarizeWave(wave: PickingWave, items: PickingWaveItem[]): WaveSummary {
-  return {
-    wave,
-    skuCount: items.length,
-    totalQuantity: items.reduce((sum, item) => sum + item.totalQuantity, 0),
-    completedSkuCount: items.filter(item => item.status !== "pending").length,
-    shippingByDate: summarizeShippingByDate(wave, items),
-  };
-}
 
 export async function loadWaveSummaries(
   repository: ReturnType<typeof usePickingWaveRepository>,
   waves: PickingWave[]
 ): Promise<WaveSummary[]> {
-  return Promise.all(waves.map(async wave => summarizeWave(wave, await repository.listItems(wave.id))));
+  const response = await fetch("/api/wms/work-center", { cache: "no-store" });
+  const result = await response.json();
+  if (!response.ok || !result.overview) throw new Error("출고완료 상태를 불러오지 못했습니다. 다시 확인해 주세요.");
+  const byId = new Map<string, OutboundWorkSummary>((result.overview as WorkCenterOverview).works.map(work => [work.id, work]));
+  return Promise.all(waves.filter(wave => byId.has(wave.id)).map(async wave => {
+    const outbound = byId.get(wave.id)!;
+    const shippingByDate = outbound.shippingByDate || summarizeShippingByDate(wave, await repository.listItems(wave.id));
+    return { wave, skuCount: outbound.skuCount, totalQuantity: outbound.totalQuantity, completedSkuCount: outbound.pickedSkuCount, shippingByDate, outbound };
+  }));
 }
 
 function waveTitle(wave: PickingWave): string {
@@ -116,13 +117,14 @@ export function WaveSummaryCard({
   summary: WaveSummary;
   actions?: ReactNode;
 }) {
-  const { wave, skuCount, totalQuantity, completedSkuCount, shippingByDate } = summary;
+  const { wave, skuCount, totalQuantity, completedSkuCount, shippingByDate, outbound } = summary;
+  const destination = outbound?.nextHref || workCenterDestination(wave);
   const progress = skuCount > 0 ? Math.round((completedSkuCount / skuCount) * 100) : 0;
-  const generationProgress = summarizeOutputGenerations(wave.outputGenerations || [], wave.sourcePurchaseOrderNumbers);
+  const generationProgress = outbound ? { total: wave.outputGenerations?.length || 0, completedPurchaseOrders: outbound.purchaseOrderCount - outbound.remainingShipmentPoCount, purchaseOrderTotal: outbound.purchaseOrderCount, pendingPurchaseOrders: outbound.remainingShipmentPoCount } : summarizeOutputGenerations(wave.outputGenerations || [], wave.sourcePurchaseOrderNumbers);
 
   return (
     <article className="wms-active-wave-card">
-      <a className="wms-active-wave-main" href={workCenterDestination(wave)}>
+      <a className="wms-active-wave-main" href={destination}>
         <div className="wms-active-wave-heading">
           <div className="wms-active-wave-title">
             <strong>{waveTitle(wave)}</strong>
@@ -131,7 +133,7 @@ export function WaveSummaryCard({
               <span>· 생성 {formatKstFullDateTime(wave.createdAt)}</span>
             </div>
           </div>
-          <span className="wms-active-wave-status">{businessStatus(wave)}</span>
+          <span className="wms-active-wave-status">{outbound?.fullyCompletedElsewhere ? "다른 작업에서 출고완료" : outbound?.completedAt ? "출고완료" : outbound?.state?.status === "archived" ? "보관" : outbound && generationProgress.total > 0 ? "Shipment 발주 " + generationProgress.completedPurchaseOrders + "/" + generationProgress.purchaseOrderTotal : businessStatus(wave)}</span>
         </div>
         {shippingByDate.length > 0 && <div className="wms-active-wave-shipping">
           {shippingByDate.map(group => <div className="wms-active-wave-shipping-group" key={group.expectedDate}>
@@ -142,14 +144,14 @@ export function WaveSummaryCard({
           </div>)}
         </div>}
         <div className="wms-active-wave-metrics">
-          <span>발주 {wave.sourcePurchaseOrderNumbers.length}건</span>
+          <span>발주 {outbound?.purchaseOrderCount ?? wave.sourcePurchaseOrderNumbers.length}건</span>
           <span>SKU {skuCount}개</span>
           <span>총 수량 {totalQuantity}개</span>
           <span>진행 {completedSkuCount}/{skuCount} · {progress}%</span>
         </div>
         <div style={{ marginTop: "8px", display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "12px", fontWeight: 800 }}>
-          <span>다음 할 일: {nextAction(wave)}</span>
-          {delayLabel(shippingByDate) && <span style={{ color: wmsColors.warn }}>{delayLabel(shippingByDate)}</span>}
+          <span>다음 할 일: {outbound?.nextLabel || nextAction(wave)}</span>
+          {(outbound ? outbound.delay : delayLabel(shippingByDate)) && <span style={{ color: wmsColors.warn }}>{outbound ? outbound.delay : delayLabel(shippingByDate)}</span>}
         </div>
         {generationProgress.total > 0 && <div style={{ marginTop: "4px", fontSize: "11px", color: wmsColors.muted }}>
           Shipment 발주 완료 {generationProgress.completedPurchaseOrders}/{generationProgress.purchaseOrderTotal}건 · 미처리 {generationProgress.pendingPurchaseOrders}건
@@ -158,7 +160,7 @@ export function WaveSummaryCard({
           <span style={{ width: `${progress}%` }} />
         </div>
       </a>
-      {actions && <div className="wms-active-wave-actions">{actions}</div>}
+      {actions && !outbound?.fullyCompletedElsewhere && <div className="wms-active-wave-actions">{actions}</div>}
     </article>
   );
 }
@@ -172,14 +174,20 @@ export default function ActiveWaveList({ className }: { className?: string }) {
     const waves = (await repository.listWaves())
       .sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
     const next = await loadWaveSummaries(repository, waves);
-    setSummaries(next);
+    setSummaries(next.filter(summary => !summary.outbound?.completedAt && summary.outbound?.state?.status !== "archived" && !summary.outbound?.fullyCompletedElsewhere));
+    setError(null);
   }, [repository]);
 
   useEffect(() => {
-    refresh().catch(loadError => {
+    const load = () => { void refresh().catch(loadError => {
       setError(loadError instanceof Error ? loadError.message : "웨이브 목록을 불러오지 못했습니다.");
       setSummaries([]);
-    });
+    }); };
+    const onVisible = () => { if (document.visibilityState === "visible") load(); };
+    load();
+    window.addEventListener("focus", load);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { window.removeEventListener("focus", load); document.removeEventListener("visibilitychange", onVisible); };
   }, [refresh]);
 
   if (summaries === null) return <section className={className}><p style={{ color: wmsColors.muted, fontSize: "13px" }}>웨이브 목록을 불러오는 중...</p></section>;
@@ -189,12 +197,12 @@ export default function ActiveWaveList({ className }: { className?: string }) {
       <div className="wms-active-wave-section-heading">
         <div>
           <h2 id="active-wave-heading">진행 중 출고작업</h2>
-          <p>입고예정일과 관계없이 저장된 작업 {summaries.length}개</p>
+          <p>출고완료한 발주를 제외한 작업 {summaries.length}개</p>
         </div>
       </div>
       {error && <p role="alert" className="wms-active-wave-error">{error}</p>}
       {summaries.length === 0 ? (
-        <div className="wms-active-wave-empty">저장된 웨이브가 없습니다.</div>
+        <div className="wms-active-wave-empty">진행 중인 출고작업이 없습니다.</div>
       ) : (
         <div className="wms-active-wave-list">
           {summaries.map(summary => (
@@ -203,7 +211,7 @@ export default function ActiveWaveList({ className }: { className?: string }) {
               summary={summary}
               actions={(
                 <>
-                  <a href={workCenterDestination(summary.wave)}>{summary.wave.status === "in_progress" ? "피킹 계속" : "계속하기"}</a>
+                  <a href={summary.outbound?.nextHref || workCenterDestination(summary.wave)}>{summary.wave.status === "in_progress" ? "피킹 계속" : "계속하기"}</a>
                   {summary.wave.status === "in_progress" && <a href={`/wms/picking/waves/${encodeURIComponent(summary.wave.id)}/complete`} style={{ background: wmsColors.surfaceBeige, color: wmsColors.ink, border: `1px solid ${wmsColors.border}` }}>서류 작업</a>}
                 </>
               )}

@@ -221,7 +221,7 @@ export async function syncProductDbToGoogleSheet(input: CollectInput): Promise<G
       ])
     ));
     const operationId = globalThis.crypto?.randomUUID?.() || `registration-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const requestBody = JSON.stringify({ ...buildGoogleSheetPayload(input, sheetOptionImages), syncMode: "skipDuplicate", operationId });
+    const requestBody = JSON.stringify({ ...buildGoogleSheetPayload(input, sheetOptionImages), syncMode: "reregisterStopped", operationId });
     let syncRes: Response | null = null;
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -244,6 +244,7 @@ export async function syncProductDbToGoogleSheet(input: CollectInput): Promise<G
     if (sync?.duplicate) return { ok: false, message: "Google 시트 (중복 모델명이라 건너뜀)" };
     if (!sync?.synced) return { ok: false, message: "Google 시트 (저장 결과를 확인하지 못함)" };
     const staged = Number(sync?.registrationStage?.updatedRows || 0);
+    if (sync?.reregistered) return { ok: true, message: `Google 시트 기존 ${staged}행 재등록 완료 · 누적정보 보존 · SKU/바코드/발주가능상태/제품링크/노출상품ID/옵션ID 초기화` };
     return { ok: true, message: staged > 0 ? `Google 시트 상품DB 누적 완료 · 등록파일생성 ${staged}행` : "Google 시트 상품DB 누적 완료" };
   } catch (error) {
     return { ok: false, message: `Google 시트 (${error instanceof Error ? error.message : "누적 실패"})` };

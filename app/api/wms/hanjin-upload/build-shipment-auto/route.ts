@@ -25,6 +25,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "대상 발주서/물류센터가 없습니다." }, { status: 400 });
     }
 
+    if (body.waveId) {
+      try { const { verifyActivePurchaseOrderSelection } = await import("@/lib/wms/active-purchase-order-selection"); await verifyActivePurchaseOrderSelection(String(body.waveId), purchaseOrderNumbers); }
+      catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "출고완료 상태를 확인하지 못했습니다." }, { status: 409 }); }
+    }
+
     const storedGeneration = resolveStoredAutoShipmentGeneration(
       await readPickingWaveStore(),
       ownerId,

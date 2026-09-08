@@ -22,12 +22,19 @@
 export type PickingWaveStatus = "in_progress" | "completed" | "result_confirmed" | "order_confirmed";
 export type PickingWaveItemStatus = "pending" | "full" | "partial" | "notfound";
 
-/** Explicit work-center filing only; never inferred from PickingWave.status or a date. */
+/** Explicit work-center filing or verified packing completion; never inferred from a date. */
 export interface OutboundWorkState {
   status: "active" | "completed" | "archived";
   updatedAt: string;
-  history: { status: "active" | "completed" | "archived"; changedAt: string }[];
+  /** Manual completion survives file changes; automatic completion belongs to one output generation. */
+  source?: "manual" | "packing";
+  purchaseOrderNumbers?: string[];
+  generationKey?: string;
+  history: { status: "active" | "completed" | "archived"; changedAt: string; source?: "manual" | "packing"; purchaseOrderNumbers?: string[]; generationKey?: string }[];
 }
+
+/** Transient active-work projection marker; stripped before shared storage writes. */
+export interface PickingWorkScope { excludedPurchaseOrderNumbers: string[]; sourceRevision: number; }
 
 /** 아이템 합산 전, 발주서별 원본 요청 수량 */
 export interface PickingWaveSourceRef {
@@ -49,6 +56,7 @@ export interface PickingAllocationResult {
 }
 
 export interface PickingWaveItem {
+  workScope?: PickingWorkScope;
   /** `${waveId}-${productCode}` */
   id: string;
   waveId: string;
@@ -106,6 +114,7 @@ export interface PickingWaveItem {
 }
 
 export interface PickingWave {
+  workScope?: PickingWorkScope;
   /** "WAVE-20260818-1" 형태 */
   id: string;
   /** 사용자가 직접 붙이는 표시용 이름 (선택, 없으면 화면에서 id를 그대로 보여준다) */

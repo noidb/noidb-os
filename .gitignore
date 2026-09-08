@@ -47,3 +47,6 @@ automation/coupang-po/config.json
 automation/coupang-po/*.log
 public/barcode-reader/zxing_reader.wasm
 public/barcode-reader/ocr/
+
+# Local conversation originals stay out of Git.
+/docs/chat-history/*.json

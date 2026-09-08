@@ -141,8 +141,11 @@ export async function queueStatusCandidate(input: {
   const skuId = requiredText(input.skuId, "SKU ID");
   const operator = requiredText(input.operator, "처리자");
   const [requests, product] = await Promise.all([listStatusRequests(), readProductSnapshot(skuId)]);
-  if (requests.some(request => normalizeSkuId(request.skuId) === normalizeSkuId(skuId) && request.supplyHubStatus === "처리대기")) {
-    throw new Error(`SKU ${skuId}에 이미 처리대기 요청이 있습니다.`);
+  const pending = requests.filter(request => normalizeSkuId(request.skuId) === normalizeSkuId(skuId) && request.supplyHubStatus === "처리대기");
+  if (pending.length) {
+    if (pending.some(request => request.requestType !== input.requestType)) throw new Error(`SKU ${skuId}에 다른 종류의 처리대기 요청이 있습니다.`);
+    // The same selection and a retry reuse the existing request; history never grows twice for one pending SKU.
+    return pending[0];
   }
   const headerIndex = (header: string) => {
     const index = product.headers.indexOf(header);

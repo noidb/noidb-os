@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import { backupSheetWithinSpreadsheet, fetchSheetRows, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
 import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
+import { collectRetiredSkuIds, fetchSkuReplacementHistory, skuRetirementKey } from "./sku-retirement";
 import { coupangSupplyMatchPriority } from "../coupang-option-name";
 import {
   downloadDriveFile,
@@ -496,11 +497,13 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
   const parsed = await parseSupplyStatusFile(fileInfo);
 
   const sheetRows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" });
+  const retiredSkuIds = collectRetiredSkuIds(await fetchSkuReplacementHistory(sheetRows));
   const headers = sheetRows[0].map(h => String(h ?? "").trim());
   const idx = resolveProductDbHeaderIndex(headers);
   const dataRows = sheetRows.slice(1);
 
   const approvedStatusValue = verifyApprovedStatusValue(dataRows, idx);
+  const activeDownloadRows = parsed.rows.filter(row => !retiredSkuIds.has(skuRetirementKey(row.skuId)));
 
   const pendingRows = dataRows
     .map((row, i) => ({ row, sheetRowNumber: i + 2 }))
@@ -526,7 +529,7 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
       reasons.push("제품DB 모델SKU가 비어 있습니다.");
     } else {
       const matchResult = findSupplyStatusCandidates(
-        parsed.rows,
+        activeDownloadRows,
         modelSku,
         String(row[idx.skuId] ?? "").trim(),
         String(row[idx.productName] ?? "").trim(),
@@ -665,12 +668,18 @@ async function computeSupplyStatusAudit(capture?: SupplyStatusTableCapture): Pro
 
   const parsed = capture ? parseSupplyStatusCapture(capture) : await parseSupplyStatusFile(fileInfo);
   const sheetRows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" });
+  const retiredSkuIds = collectRetiredSkuIds(await fetchSkuReplacementHistory(sheetRows));
   const headers = sheetRows[0].map(value => String(value ?? "").trim());
   const idx = resolveProductDbHeaderIndex(headers);
   const dataRows = sheetRows.slice(1);
-  const rocketRows = parsed.rows.filter(row => /^R/i.test(row.barcode));
+  const allRocketRows = parsed.rows.filter(row => /^R/i.test(row.barcode));
+  const retiredRows = allRocketRows.filter(row => retiredSkuIds.has(skuRetirementKey(row.skuId)));
+  const rocketRows = allRocketRows.filter(row => !retiredSkuIds.has(skuRetirementKey(row.skuId)));
   const excludedSBarcodeCount = parsed.rows.filter(row => /^S/i.test(row.barcode)).length;
-  const issues: SupplyStatusAuditIssue[] = [];
+  const issues: SupplyStatusAuditIssue[] = retiredRows.map(row => ({
+    type: "unmatched", skuId: row.skuId, productName: row.productName,
+    message: "재등록 이력에서 교체된 이전 SKU라 연결 대상에서 제외했습니다. 이번 승인 결과를 확인해주세요.",
+  }));
 
   const productRowsBySku = new Map<string, { row: string[]; sheetRowNumber: number }[]>();
   dataRows.forEach((row, index) => {
@@ -758,7 +767,7 @@ async function computeSupplyStatusAudit(capture?: SupplyStatusTableCapture): Pro
 
   const pendingCandidates: { sheetRowNumber: number; modelSku: string; skuId: string }[] = [];
   let awaitingApprovalCount = 0;
-  let unmatchedCount = 0;
+  let unmatchedCount = retiredRows.length;
   for (const { row, sheetRowNumber } of pendingRows) {
     const modelSku = String(row[idx.modelSku] ?? "").trim();
     const match = findSupplyStatusCandidates(
@@ -825,9 +834,9 @@ async function computeSupplyStatusAudit(capture?: SupplyStatusTableCapture): Pro
     fileName: fileInfo.fileName,
     fileMtime: fileInfo.mtime,
     downloadedCount: parsed.rows.length,
-    rocketBarcodeCount: rocketRows.length,
+    rocketBarcodeCount: allRocketRows.length,
     excludedSBarcodeCount,
-    excludedOtherBarcodeCount: parsed.rows.length - rocketRows.length - excludedSBarcodeCount,
+    excludedOtherBarcodeCount: parsed.rows.length - allRocketRows.length - excludedSBarcodeCount,
     pendingProductCount: pendingRows.length,
     newApprovalCandidateCount: pendingCandidates.filter(candidate => !duplicatedCandidateKeys.has(norm(candidate.skuId))).length,
     registrationStatusCheckRequiredCount: awaitingApprovalCount,

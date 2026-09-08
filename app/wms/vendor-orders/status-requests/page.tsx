@@ -17,7 +17,7 @@ export default function StatusRequestsPage() {
   const [generations, setGenerations] = useState<StatusFileGenerationRecord[]>([]);
   const [catalog, setCatalog] = useState<Map<string, ProductCatalogItem>>(new Map());
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<Filter>("전체");
+  const [filter, setFilter] = useState<Filter>("처리대기");
   const [operator, setOperator] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -147,7 +147,8 @@ export default function StatusRequestsPage() {
     <main style={{ maxWidth: WMS_MOBILE_WIDTH, minHeight: "100vh", margin: "0 auto", padding: "12px 12px calc(20px + env(safe-area-inset-bottom))", background: wmsColors.background, color: wmsColors.ink, fontFamily: "sans-serif" }}>
       <a href="/wms/vendor-orders" style={{ color: wmsColors.slateDark, fontSize: "13px" }}>← 거래처 발주관리</a>
       <h1 style={{ margin: "12px 0 4px", fontSize: "20px" }}>단종·해제 관리</h1>
-      <p style={{ margin: "0 0 10px", fontSize: "11px", color: wmsColors.muted }}>완료한 요청도 선택해서 파일을 다시 만들 수 있습니다. 재출력은 기존 처리상태나 제품DB를 바꾸지 않습니다.</p>
+      <p style={{ margin: "0 0 10px", fontSize: "12px", color: wmsColors.muted }}>피킹에서 모은 단종대기는 주간업무의 단종 목록에 함께 불러와 처리할 수 있습니다. 완료한 요청은 ‘외부 처리완료’에서 확인하거나 재출력할 수 있습니다.</p>
+      <a href="/wms/inbound" style={{ ...wmsPrimaryButton, display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none", marginBottom: "12px", minHeight: "46px" }}>주간업무에서 단종 목록 함께 처리 →</a>
       <label style={{ display: "block", marginBottom: "10px" }}>
         <span style={{ display: "block", fontSize: "11px", color: wmsColors.muted, marginBottom: "3px" }}>처리자</span>
         <input value={operator} onChange={event => { setOperator(event.target.value); window.localStorage.setItem("noidb_wms_operator", event.target.value); }} placeholder="처리자 이름" style={{ width: "100%", minHeight: "40px", boxSizing: "border-box", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "9px", padding: "8px 10px" }} />

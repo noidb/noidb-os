@@ -25,8 +25,8 @@ function ShortageVendorOrdersBanner() {
     (async () => {
       const [drafts, lines] = await Promise.all([vendorOrderRepository.listAllDrafts(), vendorOrderRepository.listAllLines()]);
       const statusByDraft = new Map(drafts.map(draft => [draft.id, draft.status]));
-      const pendingLines = lines.filter(line => statusByDraft.get(line.draftId) !== "sent");
-      const sentLines = lines.filter(line => statusByDraft.get(line.draftId) === "sent");
+      const pendingLines = lines.filter(line => !line.orderExclusion && statusByDraft.get(line.draftId) !== "sent");
+      const sentLines = lines.filter(line => !line.orderExclusion && statusByDraft.get(line.draftId) === "sent");
       setSummary({
         pendingVendors: new Set(pendingLines.map(line => line.vendorName || UNASSIGNED_VENDOR_NAME)).size,
         pendingSku: pendingLines.length,
@@ -121,8 +121,8 @@ export default function ClassicWorkCenter() {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: "10px", marginTop: "18px" }}>
         <a href="/wms/inbound" style={{ padding: "14px", border: `1px solid ${wmsColors.green}`, borderRadius: "14px", background: wmsColors.greenSoft, color: wmsColors.greenDark, textDecoration: "none" }}>
-          <strong style={{ display: "block", fontSize: "15px" }}>입고결과·쿠폰</strong>
-          <span style={{ display: "block", marginTop: "4px", fontSize: "12px" }}>실제 입고일 기준 쿠폰·미입고 파일</span>
+          <strong style={{ display: "block", fontSize: "15px" }}>주간 업무</strong>
+          <span style={{ display: "block", marginTop: "4px", fontSize: "12px" }}>쿠폰·거래처 발주·단종 신청 한 번에</span>
         </a>
         <a href="/wms/vendor-orders/status-requests" style={{ padding: "14px", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "14px", background: wmsColors.surfaceBeige, color: wmsColors.ink, textDecoration: "none" }}>
           <strong style={{ display: "block", fontSize: "15px" }}>단종·해제 관리</strong>

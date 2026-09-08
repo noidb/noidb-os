@@ -224,7 +224,7 @@ async function main() {
     assert.equal(mutations.length, beforeVendorVisit, "Opening vendor drafts must not save/recalculate-delete operating rows.");
     assert.equal(await page.getByPlaceholder("메모", { exact: true }).isEditable(), true, "In-progress picking must allow shortage ordering.");
     assert.equal(await page.getByRole("button", { name: "승인", exact: true }).isEnabled(), true);
-    assert.equal(await page.getByRole("spinbutton").inputValue(), "12");
+    assert.equal(await page.getByRole("spinbutton").inputValue(), "10", "반지의 초안 기본수량은 10개여야 합니다.");
     await page.getByRole("spinbutton").fill("17");
     await page.getByPlaceholder("메모", { exact: true }).fill("목걸이만 보내주세요");
     await page.getByRole("button", { name: "승인", exact: true }).click();
@@ -232,10 +232,9 @@ async function main() {
     assert.equal(snapshot.vendorOrderLines.length, 1);
     assert.equal(snapshot.vendorOrderLines[0].shortageQuantity, 17);
     assert.equal(snapshot.vendorOrderLines[0].memo, "목걸이만 보내주세요");
-    await page.getByRole("button", { name: "메시지 미리보기", exact: true }).click();
-    const sharedText = await page.locator("pre").innerText();
-    assert.match(sharedText, /실버, 20호/);
-    assert.doesNotMatch(sharedText, /https?:\/\/|fixture-products/);
+    assert.equal(await page.getByRole("button", { name: "메시지 미리보기", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "메시지 복사", exact: true }).count(), 0);
+    await page.getByRole("button", { name: "카카오톡으로 공유", exact: true }).waitFor();
     await page.getByRole("button", { name: "전송완료", exact: true }).click();
     await page.getByRole("button", { name: "전송완료 해제", exact: true }).waitFor();
     assert.equal(snapshot.vendorOrderDrafts[0].status, "sent");

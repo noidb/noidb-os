@@ -606,7 +606,7 @@ export interface BuildSelectedPoConfirmResult {
 }
 
 export class PoConfirmSourceNotFoundError extends Error {
-  constructor(public readonly targetPoNumbers: string[], detail?: string) {
+  constructor(public readonly targetPoNumbers: string[], public readonly detail?: string) {
     super(
       targetPoNumbers.length > 0
         ? `선택한 발주번호가 들어 있는 PO_FOR_CONFIRM 원본을 찾지 못했습니다: ${targetPoNumbers.join(", ")}${detail ? ` (${detail})` : ""}`

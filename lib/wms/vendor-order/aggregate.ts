@@ -5,11 +5,13 @@ import { sortWarehouseProducts } from "../category-order";
 
 /** 거래처 자동 발주의 SKU별 최소 주문 단위(한 타스). */
 export const MIN_AUTO_VENDOR_ORDER_QUANTITY = 12;
+export const RING_AUTO_VENDOR_ORDER_QUANTITY = 10;
 
-export function toVendorOrderQuantity(shortageQuantity: number): number {
+export function toVendorOrderQuantity(shortageQuantity: number, productContext = ""): number {
   const safeShortage = Math.max(0, Math.ceil(shortageQuantity));
   if (safeShortage === 0) return 0;
-  return Math.ceil(safeShortage / MIN_AUTO_VENDOR_ORDER_QUANTITY) * MIN_AUTO_VENDOR_ORDER_QUANTITY;
+  const unit = /반지|ring/i.test(productContext) ? RING_AUTO_VENDOR_ORDER_QUANTITY : MIN_AUTO_VENDOR_ORDER_QUANTITY;
+  return Math.ceil(safeShortage / unit) * unit;
 }
 
 /**
@@ -55,7 +57,7 @@ export function buildVendorOrderDraftsFromWaveItems(
       imageUrl: item.imageUrl || "",
       barcode: item.catalogBarcode || "",
       actualShortageQuantity: item.shortageQuantity,
-      shortageQuantity: toVendorOrderQuantity(item.shortageQuantity),
+      shortageQuantity: toVendorOrderQuantity(item.shortageQuantity, [item.category, item.modelName, item.productName].join(" ")),
       currentStock: item.catalogCurrentStock || "",
       relatedPurchaseOrderNumbers: Array.from(new Set(item.sources.map(source => source.purchaseOrderNumber))),
       memo: "",

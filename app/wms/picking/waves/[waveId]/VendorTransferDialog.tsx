@@ -37,8 +37,8 @@ export default function VendorTransferDialog({ items, catalog, busy, error, onCa
         </label>;
       })}
     </div>
-    <p style={{ fontSize: "12px", fontWeight: 700 }}>{valid ? `부족 ${selected.length}종 · ${total}개 / 초안 기본 발주 ${selected.reduce((sum, item) => sum + toVendorOrderQuantity(Number(quantities[item.productCode])), 0)}개` : "부족수량을 요청수량 이하의 정수로 확인해 주세요."}</p>
-    <p style={{ fontSize: "11px", color: wmsColors.muted }}>새 초안은 기존 12개 주문단위로 제안합니다. 이미 수정한 초안의 수량과 메모는 보존하며, 실제 전송은 하지 않습니다.</p>
+    <p style={{ fontSize: "12px", fontWeight: 700 }}>{valid ? `부족 ${selected.length}종 · ${total}개 / 초안 기본 발주 ${selected.reduce((sum, item) => { const live = resolveLiveFields(item, catalog); return sum + toVendorOrderQuantity(Number(quantities[item.productCode]), [live.category, live.catalogModelName, live.name].join(" ")); }, 0)}개` : "부족수량을 요청수량 이하의 정수로 확인해 주세요."}</p>
+    <p style={{ fontSize: "11px", color: wmsColors.muted }}>새 초안은 반지 10개, 그 외 상품 12개 주문단위로 제안합니다. 이미 수정한 초안의 수량과 메모는 보존하며, 실제 전송은 하지 않습니다.</p>
     {error && <p role="alert" style={{ fontSize: "12px", color: "#b42318" }}>{error}</p>}
     <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "8px", position: "sticky", bottom: "-16px", padding: "10px 0", background: wmsColors.surfaceBeige }}>
       <button type="button" disabled={busy} onClick={onCancel} style={{ ...wmsSecondaryButton, minHeight: "46px" }}>취소</button>

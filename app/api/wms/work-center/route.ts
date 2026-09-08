@@ -17,12 +17,12 @@ export async function POST(request: NextRequest) {
   if (!isSameOriginActionRequest(request)) return NextResponse.json({ error: "작업센터 화면에서 다시 선택해 주세요." }, { status: 403, headers });
   const input = await request.json().catch(() => null);
   if (!input || input.confirmed !== true || typeof input.waveId !== "string" || !input.waveId.trim()
-    || !["active", "completed", "archived"].includes(input.status) || !(input.expectedUpdatedAt === null || typeof input.expectedUpdatedAt === "string")) {
+    || !["active", "completed", "archived"].includes(input.status) || !(input.expectedUpdatedAt === null || typeof input.expectedUpdatedAt === "string")
+    || !(input.expectedWorkUpdatedAt === undefined || typeof input.expectedWorkUpdatedAt === "string")) {
     return NextResponse.json({ error: "변경할 출고작업과 상태를 확인해 주세요." }, { status: 400, headers });
   }
-  if (input.status === "completed") return NextResponse.json({ error: "Shipment별 검수·포장에서 실제 택배 인계 후 출고완료해 주세요." }, { status: 409, headers });
   try {
-    const snapshot = await mutatePickingWaveStore({ action: "setOutboundWorkState", waveId: input.waveId, status: input.status, expectedUpdatedAt: input.expectedUpdatedAt, now: new Date().toISOString() });
+    const snapshot = await mutatePickingWaveStore({ action: "setOutboundWorkState", waveId: input.waveId, status: input.status, expectedUpdatedAt: input.expectedUpdatedAt, expectedWorkUpdatedAt: input.expectedWorkUpdatedAt, confirmedDispatched: input.status === "completed", now: new Date().toISOString() });
     return NextResponse.json({ overview: buildWorkCenterOverview(snapshot) }, { headers });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";

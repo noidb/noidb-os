@@ -1,3 +1,4 @@
+import { projectActivePickingWork } from "../active-picking-work";
 import type { BasketAssignment, PickingWave, PickingWaveItem } from "./types";
 import type { PickingWaveRepository } from "./repository";
 import { LocalPickingWaveRepository, readLocalPickingWaveSnapshot, replaceLocalPickingWaveSnapshot } from "./local-repository";
@@ -57,6 +58,14 @@ function markDirty(): void {
 }
 
 export class SharedPickingWaveRepository implements PickingWaveRepository {
+  constructor(private readonly activeWork = false) {}
+  private activeSnapshotPromise: Promise<PickingWaveStoreSnapshot> | null = null;
+  private readActiveSnapshot(): Promise<PickingWaveStoreSnapshot> {
+    if (!this.activeSnapshotPromise) {
+      this.activeSnapshotPromise = this.refresh().finally(() => { this.activeSnapshotPromise = null; });
+    }
+    return this.activeSnapshotPromise;
+  }
   private readonly local = new LocalPickingWaveRepository();
   private migrationPromise: Promise<void> | null = null;
 
@@ -89,6 +98,12 @@ export class SharedPickingWaveRepository implements PickingWaveRepository {
   }
 
   private async saveLocalThenServer(localSave: () => Promise<void>, mutation: PickingWaveStoreMutation): Promise<void> {
+    if (this.activeWork) {
+      // A projected row must never replace the raw recovery cache or enter a migration.
+      await this.ensureMigrated();
+      mirrorServerSnapshot(await requestSnapshot(mutation));
+      return;
+    }
     let migrationError: unknown;
     try {
       await this.ensureMigrated();
@@ -105,11 +120,13 @@ export class SharedPickingWaveRepository implements PickingWaveRepository {
   }
 
   async listWaves(): Promise<PickingWave[]> {
+    if (this.activeWork) { const snapshot = await this.readActiveSnapshot(); return snapshot.waves.map(wave => projectActivePickingWork(snapshot, wave.id).wave!).sort((a,b) => b.createdAt.localeCompare(a.createdAt)); }
     try { return (await this.refresh()).waves.sort((a, b) => b.createdAt.localeCompare(a.createdAt)); }
     catch { return this.local.listWaves(); }
   }
 
   async getWave(waveId: string): Promise<PickingWave | null> {
+    if (this.activeWork) return projectActivePickingWork(await this.readActiveSnapshot(), waveId).wave;
     try { return (await this.refresh()).waves.find(wave => wave.id === waveId) || null; }
     catch { return this.local.getWave(waveId); }
   }
@@ -141,6 +158,7 @@ export class SharedPickingWaveRepository implements PickingWaveRepository {
   }
 
   async listItems(waveId: string): Promise<PickingWaveItem[]> {
+    if (this.activeWork) return projectActivePickingWork(await this.readActiveSnapshot(), waveId).items;
     try { return (await this.refresh()).items.filter(item => item.waveId === waveId); }
     catch { return this.local.listItems(waveId); }
   }
@@ -163,6 +181,7 @@ export class SharedPickingWaveRepository implements PickingWaveRepository {
   }
 
   async listBaskets(waveId: string): Promise<BasketAssignment[]> {
+    if (this.activeWork) return projectActivePickingWork(await this.readActiveSnapshot(), waveId).baskets;
     try { return (await this.refresh()).baskets.filter(basket => basket.waveId === waveId); }
     catch { return this.local.listBaskets(waveId); }
   }

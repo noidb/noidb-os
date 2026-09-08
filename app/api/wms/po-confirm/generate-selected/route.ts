@@ -14,6 +14,7 @@ import {
 export const runtime = "nodejs";
 
 interface RequestBody {
+  waveId?: string;
   selectedPoNumbers?: unknown[];
   confirmedQuantitiesByPo?: unknown;
   expectedSourceHash?: unknown;
@@ -34,6 +35,11 @@ export async function POST(request: NextRequest) {
     const selectedPoNumbers = Array.isArray(body.selectedPoNumbers)
       ? body.selectedPoNumbers.map(value => String(value || "").trim()).filter(Boolean)
       : [];
+    if (body.waveId) {
+      try { const { verifyActivePurchaseOrderSelection } = await import("@/lib/wms/active-purchase-order-selection"); await verifyActivePurchaseOrderSelection(String(body.waveId), selectedPoNumbers); }
+      catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "출고완료 상태를 확인하지 못했습니다." }, { status: 409 }); }
+    }
+
     const confirmedQuantitiesByPo = Array.isArray(body.confirmedQuantitiesByPo)
       ? (body.confirmedQuantitiesByPo as ConfirmedQuantitiesByPoInput[])
       : [];

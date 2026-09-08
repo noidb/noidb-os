@@ -37,7 +37,7 @@ const PREVIEW_SESSION_TTL_MS = 5 * 60 * 1000;
 function readSessionPreview(key: string): ShipmentOutputPreview | null {
   try {
     const cached = JSON.parse(sessionStorage.getItem(key) || "null") as { savedAt?: number; preview?: ShipmentOutputPreview } | null;
-    return cached?.preview && Date.now() - Number(cached.savedAt || 0) < PREVIEW_SESSION_TTL_MS ? cached.preview : null;
+    return cached?.preview?.canGenerate && Date.now() - Number(cached.savedAt || 0) < PREVIEW_SESSION_TTL_MS ? cached.preview : null;
   } catch { return null; }
 }
 
@@ -59,6 +59,8 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
   const [resultMessage, setResultMessage] = useState<string | null>(null);
   const [preview, setPreview] = useState<ShipmentOutputPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewRefresh, setPreviewRefresh] = useState(0);
+  const lastPreviewAttempt = useRef(0);
   const previewCacheRef = useRef(new Map<string, ShipmentOutputPreview>());
   const [stateHydrated, setStateHydrated] = useState(false);
   const persistenceKey = baskets[0]?.waveId ? `noidb:wms:hanjin-selection:${baskets[0].waveId}` : "";
@@ -107,9 +109,9 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
     if (!selectedPoNumbers.length) { setPreview(null); setPreviewLoading(false); return; }
     const sessionKey = `noidb:wms:hanjin-preview:${selectionFingerprint}`;
     const cached = previewCacheRef.current.get(selectionFingerprint);
-    if (cached) { setPreview(cached); setPreviewLoading(false); return; }
+    if (cached?.canGenerate && previewRefresh === 0) { setPreview(cached); setPreviewLoading(false); return; }
     const sessionCached = readSessionPreview(sessionKey);
-    if (sessionCached) {
+    if (sessionCached && previewRefresh === 0) {
       previewCacheRef.current.set(selectionFingerprint, sessionCached);
       setPreview(sessionCached);
       setPreviewLoading(false);
@@ -119,17 +121,44 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
     let active = true;
     setPreview(null);
     setPreviewLoading(true);
+    lastPreviewAttempt.current = Date.now();
     setError(null);
     // 여러 체크박스를 연속 조작할 때 중간 선택마다 무거운 원본 인덱스를 다시 만들지 않는다.
     const timer = window.setTimeout(() => {
-      fetch("/api/wms/hanjin-upload/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purchaseOrderNumbers: selectedPoNumbers, invoiceGroups: invoiceGroups ?? undefined }), signal: controller.signal })
+      fetch("/api/wms/hanjin-upload/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ waveId: baskets[0]?.waveId || items[0]?.waveId, purchaseOrderNumbers: selectedPoNumbers, invoiceGroups: invoiceGroups ?? undefined }), signal: controller.signal })
         .then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.error || "완전성 검사 실패"); return data.preview as ShipmentOutputPreview; })
-        .then(nextPreview => { previewCacheRef.current.set(selectionFingerprint, nextPreview); writeSessionPreview(sessionKey, nextPreview); if (active) setPreview(nextPreview); })
+        .then(nextPreview => {
+          if (!active) return;
+          // Unresolved addresses must be checked again after recovery, never reused as a cached failure.
+          if (nextPreview.canGenerate) {
+            previewCacheRef.current.set(selectionFingerprint, nextPreview);
+            writeSessionPreview(sessionKey, nextPreview);
+          } else {
+            previewCacheRef.current.delete(selectionFingerprint);
+            try { sessionStorage.removeItem(sessionKey); } catch { /* Storage may be unavailable. */ }
+          }
+          setPreview(nextPreview);
+        })
         .catch(cause => { if (active && !(cause instanceof DOMException && cause.name === "AbortError")) setError(cause instanceof Error ? cause.message : "송장 완전성 검사에 실패했습니다."); })
         .finally(() => { if (active) setPreviewLoading(false); });
     }, 120);
     return () => { active = false; window.clearTimeout(timer); controller.abort(); };
-  }, [selectedPoNumbers, selectionFingerprint, invoiceGroups]);
+  }, [selectedPoNumbers, selectionFingerprint, invoiceGroups, previewRefresh]);
+
+  useEffect(() => {
+    const retryWhenBack = () => {
+      if (document.visibilityState === "visible" && !previewLoading &&
+          (error || preview?.missingPostalCodeCenters?.length) && Date.now() - lastPreviewAttempt.current > 30_000) {
+        setPreviewRefresh(value => value + 1);
+      }
+    };
+    window.addEventListener("focus", retryWhenBack);
+    document.addEventListener("visibilitychange", retryWhenBack);
+    return () => {
+      window.removeEventListener("focus", retryWhenBack);
+      document.removeEventListener("visibilitychange", retryWhenBack);
+    };
+  }, [error, preview, previewLoading]);
 
   const selectedMetrics = useMemo(() => {
     const skuIds = new Set<string>(); let quantity = 0;
@@ -159,7 +188,7 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
     const downloadTarget = reserveDownloadTarget();
     setGenerating(true); setError(null); setResultMessage(null);
     try {
-      const response = await fetch("/api/wms/hanjin-upload/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purchaseOrderNumbers: selectedPoNumbers, invoiceGroups: preview.shippingGroups.map(group => group.purchaseOrderNumbers) }) });
+      const response = await fetch("/api/wms/hanjin-upload/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ waveId: baskets[0]?.waveId || items[0]?.waveId, purchaseOrderNumbers: selectedPoNumbers, invoiceGroups: preview.shippingGroups.map(group => group.purchaseOrderNumbers) }) });
       if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error || "한진택배 업로드파일 생성에 실패했습니다."); }
       const addedSet = new Set(decodeURIComponent(response.headers.get("X-Added-Po-Numbers") || "").split(",").filter(Boolean));
       if (addedSet.size !== selectedPoNumbers.length || selectedPoNumbers.some(po => !addedSet.has(po))) throw new Error("생성 결과의 발주번호 집합이 요청과 일치하지 않아 다운로드를 차단했습니다.");
@@ -183,8 +212,15 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
     <div style={{ padding: "10px", marginBottom: "9px", borderRadius: "8px", background: preview?.canGenerate ? "#f0f7f3" : "#fff4f1", fontSize: "11px", lineHeight: 1.65 }}>
       <strong>선택 {selectedPoNumbers.length}/{allPoNumbers.length}</strong>
       {preview ? ` · 센터 ${preview.fulfillmentCenterCount} · 예상 송장 ${preview.shippingGroupCount} · SKU ${selectedMetrics.skuCount} · 수량 ${selectedMetrics.quantity}` : ` · 센터 ${new Set(selectedPoNumbers.map(po => basketByPo.get(po)?.fulfillmentCenter || "센터 미확인")).size} · SKU ${selectedMetrics.skuCount} · 수량 ${selectedMetrics.quantity}`}<br />
-      <span style={{ color: preview?.canGenerate ? wmsColors.greenDark : wmsColors.warnText }}>{preview?.canGenerate ? "Source-of-Truth 검증 완료" : preview ? "생성 차단" : "선택 발주 원본 검증 중"}</span>
+      <span style={{ color: preview?.canGenerate ? wmsColors.greenDark : wmsColors.warnText }}>{preview?.canGenerate ? "송장 생성 준비 완료" : preview ? "송장 생성 전 확인이 필요합니다" : "발주서·센터 주소·우편번호 자동 확인 중…"}</span>
       {preview?.blockingReasons.length ? <div style={{ color: "#b33f35" }}>{preview.blockingReasons.join(" · ")}</div> : null}
+      {preview?.destinationResolutions?.filter(result => result.status !== "approved").map(result => (
+        <div key={result.fulfillmentCenterName + result.sourceAddress} style={{ marginTop: "6px" }}>
+          <strong>{result.fulfillmentCenterName} · 우편번호 자동 확인 필요</strong><br />
+          {result.sourceAddress}<br />{result.reason}
+        </div>
+      ))}
+      {(error || preview && !preview.canGenerate) && <button type="button" disabled={previewLoading} onClick={() => setPreviewRefresh(value => value + 1)} style={{ ...wmsGhostButton, marginTop: "8px" }}>주소·우편번호 다시 자동 확인</button>}
     </div>
     {preview?.shippingGroups?.length ? <details open={groupsOpen} onToggle={event => setGroupsOpen(event.currentTarget.open)} style={{ marginBottom: "9px", border: `1px solid ${wmsColors.border}`, borderRadius: "9px", background: "#fff" }}>
       <summary style={{ padding: "10px", cursor: "pointer", fontSize: "12px", fontWeight: 800 }}>

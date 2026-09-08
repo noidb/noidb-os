@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
+import { useActivePickingWaveRepository, usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import { recalculateAutoVendorOrderLines } from "@/lib/wms/vendor-order/recalculate";
 import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraft, type VendorOrderDraftLine } from "@/lib/wms/vendor-order/types";
@@ -19,7 +19,8 @@ import RefreshCatalogButton from "../../RefreshCatalogButton";
 import WaveIdentityEditor from "../../WaveIdentityEditor";
 
 export default function WmsPickingWaveCompletePage({ params }: { params: { waveId: string } }) {
-  const waveRepository = usePickingWaveRepository();
+  const waveRepository = useActivePickingWaveRepository();
+  const rawWaveRepository = usePickingWaveRepository();
   const vendorOrderRepository = useVendorOrderRepository();
 
   const [wave, setWave] = useState<PickingWave | null>(null);
@@ -150,7 +151,8 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   /** 부족수량 기준 자동 부족분 라인만 다시 계산해 저장한다 — 수동 추가 라인은 그대로 둔다. */
   async function recalcVendorLines(currentItems: PickingWaveItem[]) {
     const now = new Date().toISOString();
-    const recalculated = recalculateAutoVendorOrderLines(params.waveId, currentItems, vendorLines, now);
+    const sourceItems = wave?.workScope?.excludedPurchaseOrderNumbers.length ? await rawWaveRepository.listItems(params.waveId) : currentItems;
+    const recalculated = recalculateAutoVendorOrderLines(params.waveId, sourceItems, vendorLines, now);
     await Promise.all(recalculated.removedLineIds.map(id => vendorOrderRepository.deleteLine(id)));
     await Promise.all(recalculated.lines.map(line => vendorOrderRepository.saveLine(line)));
     setVendorLines(recalculated.lines);
@@ -205,6 +207,8 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
     );
   }
 
+  if (wave.workScope?.excludedPurchaseOrderNumbers.length && !wave.sourcePurchaseOrderNumbers.length) return <main style={pageStyle}><WmsExitNav /><h1>출고 작업이 모두 완료됐습니다.</h1><p>이 웨이브의 발주서는 다른 작업에서 출고완료되어 남은 작업이 없습니다.</p><a href="/wms/work-center">작업센터로 돌아가기</a></main>;
+
   const totalQuantity = items.reduce((sum, item) => sum + item.totalQuantity, 0);
   const pickedQuantity = items.reduce((sum, item) => sum + item.pickedQuantity, 0);
   const shortageQuantity = items.reduce((sum, item) => sum + item.shortageQuantity, 0);
@@ -233,7 +237,8 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   const canEdit = wave.status === "completed" || wave.status === "result_confirmed";
   const reachedResultConfirm = wave.status === "result_confirmed" || wave.status === "order_confirmed";
 
-  if (wave.shipmentDocumentsCompletedAt) {
+  const mixedOutputNeedsReplacement = Boolean(wave.workScope?.excludedPurchaseOrderNumbers.length && wave.outputGenerations?.some(g => !g.supersededByGenerationId && g.purchaseOrderNumbers.some(po => wave.workScope!.excludedPurchaseOrderNumbers.includes(po)) && g.purchaseOrderNumbers.some(po => wave.sourcePurchaseOrderNumbers.includes(po))));
+  if (wave.shipmentDocumentsCompletedAt && !mixedOutputNeedsReplacement) {
     const integratedDone = Boolean(wave.integratedPickingCompletedAt);
     return <main style={pageStyle}>
       <WmsExitNav />

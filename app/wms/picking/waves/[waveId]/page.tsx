@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { useRouter } from "next/navigation";
-import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
+import { useActivePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import { indexVendorOrderLinesBySku } from "@/lib/wms/vendor-order/derive-drafts";
 import { toVendorOrderQuantity } from "@/lib/wms/vendor-order/aggregate";
@@ -81,7 +81,7 @@ function buildSections(items: PickingWaveItem[], liveCatalogByProductCode?: Live
  */
 export default function WmsPickingWaveDetailPage({ params }: { params: { waveId: string } }) {
   const router = useRouter();
-  const waveRepository = usePickingWaveRepository();
+  const waveRepository = useActivePickingWaveRepository();
   const vendorOrderRepository = useVendorOrderRepository();
 
   const [wave, setWave] = useState<PickingWave | null>(null);
@@ -332,7 +332,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       throw lastError;
     };
     saveQueueRef.current = saveQueueRef.current.then(saveWithRetry, saveWithRetry)
-      .catch(error => setDecisionError(`공용 저장 실패 — 이 브라우저 복구본은 유지됩니다. ${error instanceof Error ? error.message : "다시 시도해주세요."}`))
+      .catch(error => setDecisionError(`공용 저장 실패 — 아직 저장되지 않았습니다. 다시 처리하기 전에 최신 상태를 확인해 주세요. ${error instanceof Error ? error.message : "다시 시도해주세요."}`))
       .finally(() => {
         for (const item of changedItems) decisionInFlightRef.current.delete(item.id);
         setPendingSyncCount(count => Math.max(0, count - 1));
@@ -342,11 +342,16 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   async function addItemsToVendorDraft(selectedItems: PickingWaveItem[]) {
     if (!wave || selectedItems.length === 0) return;
     setVendorActionMessage(null);
+    setStatusActionMessage(null);
     const now = new Date().toISOString();
-    const [existingDrafts, existingLines] = await Promise.all([
+    const [existingDrafts, existingLines, queueResponse] = await Promise.all([
       vendorOrderRepository.listDrafts(wave.id),
       vendorOrderRepository.listLines(wave.id),
+      fetch("/api/wms/vendor-orders/queue", { cache: "no-store" }),
     ]);
+    const queue = await queueResponse.json();
+    if (!queueResponse.ok || !queue.success) throw new Error(queue.error || "기존 발주대기 연결 상태를 확인하지 못했습니다.");
+    const alreadyMoved = new Set(Object.keys(queue.consumedLineIds || {}).filter(id => id.startsWith(`${wave.id}::`)).map(id => normalizeSkuId(id.split("::").at(-1) || "")));
     // 같은 SKU를 다시 이동해도 거래처명이 달라졌다는 이유로 두 발주서에 중복 생성하지 않는다.
     // 사용자가 거래처 발주 화면에서 고친 거래처를 우선 보존하고 수량/발주번호만 갱신한다.
     const existingBySku = indexVendorOrderLinesBySku(existingLines);
@@ -358,7 +363,8 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       if (item.shortageQuantity <= 0) continue;
       const live = resolveLiveFields(item, liveCatalogByProductCode);
       const vendorName = live.vendorName || item.vendorName || UNASSIGNED_VENDOR_NAME;
-      const skuId = live.liveSkuId || item.productCode;
+      const skuId = normalizeSkuId(live.liveSkuId || item.productCode);
+      if (alreadyMoved.has(skuId)) continue;
       const actualQuantity = item.shortageQuantity;
       const relatedPurchaseOrderNumbers = Array.from(new Set(item.sources.map(source => source.purchaseOrderNumber)));
       const existing = existingBySku.get(skuId);
@@ -366,8 +372,9 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
         const combinedActual = Math.max(existing.actualShortageQuantity || 0, actualQuantity);
         const combinedPos = Array.from(new Set([...(existing.relatedPurchaseOrderNumbers || []), ...relatedPurchaseOrderNumbers]));
         if (combinedActual === (existing.actualShortageQuantity || 0) && combinedPos.length === existing.relatedPurchaseOrderNumbers.length) continue;
-        const previousAutoQuantity = toVendorOrderQuantity(existing.actualShortageQuantity || 0);
-        const updated = { ...existing, actualShortageQuantity: combinedActual, shortageQuantity: existing.shortageQuantity === previousAutoQuantity ? toVendorOrderQuantity(combinedActual) : existing.shortageQuantity, relatedPurchaseOrderNumbers: combinedPos, updatedAt: now };
+        const productContext = [existing.category, existing.modelName, existing.productName].join(" ");
+        const previousAutoQuantity = toVendorOrderQuantity(existing.actualShortageQuantity || 0, productContext);
+        const updated = { ...existing, actualShortageQuantity: combinedActual, shortageQuantity: existing.shortageQuantity === previousAutoQuantity ? toVendorOrderQuantity(combinedActual, productContext) : existing.shortageQuantity, relatedPurchaseOrderNumbers: combinedPos, updatedAt: now };
         existingBySku.set(skuId, updated);
         linesToSave.push(updated);
         updatedCount += 1;
@@ -388,7 +395,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
         imageUrl: live.imageUrl || "",
         barcode: live.catalogBarcode || item.catalogBarcode || "",
         actualShortageQuantity: actualQuantity,
-        shortageQuantity: toVendorOrderQuantity(actualQuantity),
+        shortageQuantity: toVendorOrderQuantity(actualQuantity, [live.category || item.category, live.catalogModelName || item.modelName, live.name || item.productName].join(" ")),
         currentStock: live.catalogCurrentStock || item.catalogCurrentStock || "",
         relatedPurchaseOrderNumbers,
         memo: "피킹 목록에서 추가",
@@ -404,11 +411,15 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
     // 공용 Blob 저장은 revision 기반이므로 여러 쓰기를 동시에 보내지 않고 순서대로 확정한다.
     for (const draft of newDrafts) await vendorOrderRepository.saveDraft(draft);
     for (const line of linesToSave) await vendorOrderRepository.saveLine(line);
-    setVendorActionMessage(
-      addedCount || updatedCount
-        ? `거래처 발주 초안 반영 완료 · 신규 ${addedCount}개 · 수량 갱신 ${updatedCount}개`
-        : "이미 같은 발주번호와 수량으로 거래처 발주 초안에 반영된 SKU입니다."
-    );
+    const response = await fetch("/api/wms/vendor-orders/queue", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      setVendorActionMessage("초안은 저장됐습니다. 거래처 발주대기에서 기존 대기를 취합해 연결을 마무리해 주세요.");
+      throw new Error(result.error || "초안은 저장됐지만 공통 발주대기 취합이 완료되지 않았습니다. 같은 선택으로 다시 시도해 주세요.");
+    }
+    setVendorActionMessage(`거래처 발주대기에 취합했습니다 · 신규 ${addedCount}개 · 수량 갱신 ${updatedCount}개`);
   }
 
   function openVendorTransfer() {
@@ -459,21 +470,32 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
   }
 
   async function moveItemsToDiscontinueList(selectedItems: PickingWaveItem[]) {
-    if (!wave || selectedItems.length === 0) return;
-    if (!window.confirm(`선택한 ${selectedItems.length}개 SKU를 기존 단종 처리대기 목록으로 이동할까요? 제품 행은 삭제되지 않습니다.`)) return;
+    if (!wave || selectedItems.length === 0 || bulkProcessing) return;
+    if (!window.confirm(`선택한 ${selectedItems.length}개 SKU를 단종대기에 추가할까요? 누적한 목록은 주간업무에서 함께 처리할 수 있습니다.`)) return;
+    setBulkProcessing(true);
     setStatusActionMessage(null);
-    const results = await Promise.all(selectedItems.map(async item => {
-      const live = resolveLiveFields(item, liveCatalogByProductCode);
-      const response = await fetch("/api/wms/vendor-order-actions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "queue-discontinue", skuId: live.liveSkuId || item.productCode, operator: wave.workerName || "WMS 피킹" }),
-      });
-      const data = await response.json().catch(() => ({}));
-      return { ok: response.ok && data.success, error: data.error as string | undefined };
-    }));
-    const failed = results.filter(result => !result.ok);
-    setStatusActionMessage(failed.length ? `${results.length - failed.length}개 이동, ${failed.length}개 제외: ${failed[0]?.error || "처리 실패"}` : `${results.length}개 SKU를 단종 처리대기 목록으로 이동했습니다.`);
+    setVendorActionMessage(null);
+    const results: Array<{ ok: boolean; error?: string }> = [];
+    try {
+      // Sheet-backed request IDs must be acknowledged before processing the next SKU.
+      for (const item of selectedItems) {
+        try {
+          const live = resolveLiveFields(item, liveCatalogByProductCode);
+          const response = await fetch("/api/wms/vendor-order-actions", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "queue-discontinue", skuId: live.liveSkuId || item.productCode,
+              purchaseOrderNumber: item.sources.map(source => source.purchaseOrderNumber).filter(Boolean).join(","),
+              operator: wave.workerName || "WMS 피킹" }),
+          });
+          const data = await response.json();
+          results.push({ ok: Boolean(response.ok && data.success), error: data.error });
+        } catch (error) { results.push({ ok: false, error: error instanceof Error ? error.message : "연결 실패" }); }
+      }
+      const failed = results.filter(result => !result.ok);
+      setStatusActionMessage(failed.length
+        ? `${results.length - failed.length}개 이동, ${failed.length}개 제외: ${failed[0]?.error || "처리 실패"}`
+        : `${results.length}개 SKU를 단종대기에 모았습니다. 주간업무에서 함께 처리할 수 있습니다.`);
+    } finally { setBulkProcessing(false); }
   }
 
   async function saveCatalogQuickPatch(skuId: string, patch: { currentStock?: string; currentStatus?: "단종" | "과재고" | "" }, successMessage: string) {
@@ -786,6 +808,8 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
     );
   }
 
+  if (wave.workScope?.excludedPurchaseOrderNumbers.length && !wave.sourcePurchaseOrderNumbers.length) return <main style={pageStyle}><WmsExitNav /><h1>출고 작업이 모두 완료됐습니다.</h1><p>이 웨이브의 발주서는 다른 작업에서 출고완료되어 남은 작업이 없습니다.</p><a href="/wms/work-center">작업센터로 돌아가기</a></main>;
+
   // 화면: 섹션 → 그룹 목록
   if (!selectedBucket) {
     return (
@@ -831,14 +855,15 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
             bulkAreaRef={bulkAreaRef}
             onOpenDetail={openProductDetail}
             logisticsLabelsForItem={logisticsLabelsForItem}
-            actionMessage={vendorActionMessage || statusActionMessage}
+            actionMessage={statusActionMessage || vendorActionMessage}
+            showDiscontinueShortcut={Boolean(statusActionMessage)}
             poConfirmAction={<PoConfirmEntryButton waveId={wave.id} itemCount={items.length} />}
           />
         )}
 
         <a href={`/wms/picking/waves/${encodeURIComponent(wave.id)}/packing`} style={{ ...wmsPrimaryButton, display: "flex", alignItems: "center", justifyContent: "center", minHeight: "56px", textDecoration: "none", margin: "14px 0" }}>찾기·센터 분배 후 → Shipment별 검수·포장</a>
         <PickingListBottomBar wave={wave} items={items} onWaveChange={async updatedWave => { await waveRepository.saveWave(updatedWave); setWave(updatedWave); }} />
-        {vendorActionMessage && <button type="button" onClick={() => router.push(`/wms/picking/waves/${encodeURIComponent(wave.id)}/vendor-orders`)} style={{ ...wmsPrimaryButton, width: "100%", marginTop: "12px", minHeight: "46px" }}>거래처 발주서 확인하기</button>}
+        <a href="/wms/vendor-orders/manage" style={{ ...wmsPrimaryButton, display: "flex", justifyContent: "center", alignItems: "center", textDecoration: "none", width: "100%", boxSizing: "border-box", marginTop: "12px", minHeight: "46px" }}>거래처 발주대기 바로가기 →</a>
         {vendorTransferItems && <VendorTransferDialog items={vendorTransferItems} catalog={liveCatalogByProductCode} busy={bulkProcessing} error={vendorTransferError} onCancel={() => setVendorTransferItems(null)} onConfirm={confirmVendorTransfer} />}
       </main>
     );
@@ -1220,6 +1245,7 @@ function ChecklistView({
   onOpenDetail,
   logisticsLabelsForItem,
   actionMessage,
+  showDiscontinueShortcut,
   poConfirmAction,
 }: {
   allItems: PickingWaveItem[];
@@ -1237,6 +1263,7 @@ function ChecklistView({
   onOpenDetail: (item: PickingWaveItem) => void;
   logisticsLabelsForItem: (item: PickingWaveItem) => string[];
   actionMessage: string | null;
+  showDiscontinueShortcut: boolean;
   poConfirmAction: React.ReactNode;
 }) {
   const sortedItems = useMemo(() => sortPickingWaveItems(allItems, liveCatalogByProductCode), [allItems, liveCatalogByProductCode]);
@@ -1365,6 +1392,7 @@ function ChecklistView({
           선택 이미지 연결 삭제 ({checkedProductCodes.size}개)
         </button>
         {actionMessage && <p role="status" style={{ margin: "6px 0 0", fontSize: "11px", fontWeight: 700, color: actionMessage.includes("실패") || actionMessage.includes("제외") ? "#b42318" : wmsColors.greenDark }}>{actionMessage}</p>}
+        {showDiscontinueShortcut && <a href="/wms/vendor-orders/status-requests" style={{ ...wmsGhostButton, display: "flex", justifyContent: "center", alignItems: "center", textDecoration: "none", marginTop: "8px", minHeight: "44px" }}>단종대기 목록 바로가기 →</a>}
       </div>
     </div>
   );
@@ -1382,7 +1410,6 @@ function PickingListBottomBar({ wave, items, onWaveChange }: { wave: PickingWave
   const shortageQuantity = shortageItems.reduce((sum, item) => sum + item.shortageQuantity, 0);
   const shortageVendorCount = new Set(shortageItems.map(item => item.vendorName || UNASSIGNED_VENDOR_NAME)).size;
   const completeHref = `/wms/picking/waves/${wave.id}/complete`;
-  const vendorOrdersHref = `/wms/picking/waves/${wave.id}/vendor-orders`;
 
   const barStyle: CSSProperties = {
     marginTop: "20px",
@@ -1416,13 +1443,6 @@ function PickingListBottomBar({ wave, items, onWaveChange }: { wave: PickingWave
         <p style={{ margin: "8px 0 0", fontSize: "11px", color: wmsColors.muted }}>
           모든 SKU를 처리한 후 발주확정할 수 있습니다.
         </p>
-        {shortageQuantity > 0 && (
-          <a href={vendorOrdersHref} style={{ display: "block", textDecoration: "none", marginTop: "10px" }}>
-            <button style={{ ...wmsSecondaryButton, width: "100%" }}>
-              부족분 거래처 발주서 확인 (지금까지 {shortageVendorCount}건 · {shortageQuantity}개, 미리보기)
-            </button>
-          </a>
-        )}
       </div>
     );
   }
@@ -1448,9 +1468,6 @@ function PickingListBottomBar({ wave, items, onWaveChange }: { wave: PickingWave
           <p style={{ margin: "0 0 8px", fontSize: "12px", color: wmsColors.ink }}>
             부족 거래처 {shortageVendorCount}건 · 부족 SKU {shortageItems.length}개 · 총 부족수량 {shortageQuantity}개
           </p>
-          <a href={vendorOrdersHref} style={{ textDecoration: "none" }}>
-            <button style={{ ...wmsPrimaryButton, width: "100%", marginBottom: "8px" }}>부족분 거래처 발주서 생성/확인</button>
-          </a>
         </>
       ) : (
         <p style={{ margin: "0 0 8px", fontSize: "13px", fontWeight: 700, color: wmsColors.greenDark }}>현재 부족분이 없습니다.</p>

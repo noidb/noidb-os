@@ -1,4 +1,13 @@
-import { nextPackingProgress } from "../packing-progress";
+import { VendorOrderWriteConflictError, assertVendorQueueMutation, assertVendorDraftMembership, isServerVendorQueueRecord } from "../vendor-order/queue-write-guard";
+import { resolveVendorOrderCatalog } from "../vendor-order/resolve-catalog";
+import { normalizeSkuId } from "../sku-normalize";
+import { archiveCompletedVendorOrderLines, type VendorOrderCompletionScope } from "../vendor-order/completion";
+import { mergeActivePickingWorkMutation, projectActivePickingWork } from "../active-picking-work";
+import { isPackingFullyDispatched, nextPackingProgress, packingDispatchedShipmentNumbers } from "../packing-progress";
+import { consolidateVendorOrders } from "../vendor-order/consolidate";
+import { patchVendorLineImage } from "../vendor-order/image-edit";
+import { deriveVendorOrderDrafts } from "../vendor-order/derive-drafts";
+import { getVendorLineDeletionBlockReason, VendorLineBatchDeleteConflictError } from "../vendor-order/delete-lines";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { BlobPreconditionFailedError, get, put } from "@vercel/blob";
@@ -87,6 +96,10 @@ function normalizeSnapshot(value: unknown): PickingWaveStoreSnapshot {
     completedShipmentCreateOperations: raw.completedShipmentCreateOperations && typeof raw.completedShipmentCreateOperations === "object" ? raw.completedShipmentCreateOperations : {},
     ...(raw.packingProgress ? { packingProgress: raw.packingProgress } : {}),
     ...(raw.outboundWorkStates ? { outboundWorkStates: raw.outboundWorkStates } : {}),
+    ...(raw.activeVendorQueueId ? { activeVendorQueueId: raw.activeVendorQueueId } : {}),
+    ...(raw.vendorQueueConsumedLineIds ? { vendorQueueConsumedLineIds: raw.vendorQueueConsumedLineIds } : {}),
+    ...(raw.vendorQueueReceipts ? { vendorQueueReceipts: raw.vendorQueueReceipts } : {}),
+    ...(raw.suppressedVendorSkuIds ? { suppressedVendorSkuIds: raw.suppressedVendorSkuIds } : {}),
   };
 }
 
@@ -197,18 +210,41 @@ async function writeLocalSnapshot(snapshot: PickingWaveStoreSnapshot): Promise<v
   await fs.rename(temporaryPath, LOCAL_STORE_PATH);
 }
 
-export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot, mutation: PickingWaveStoreMutation): PickingWaveStoreSnapshot {
+export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot, mutation: PickingWaveStoreMutation, completionScope?: VendorOrderCompletionScope, catalogItems?: Parameters<typeof resolveVendorOrderCatalog>[0]["catalogItems"]): PickingWaveStoreSnapshot {
+  assertVendorQueueMutation(current, mutation);
+  mutation = mergeActivePickingWorkMutation(current, mutation);
   const next = normalizeSnapshot(structuredClone(current));
-  if (mutation.action === "savePackingProgress") {
+  if (mutation.action === "consolidateVendorOrders") {
+    if (next.vendorQueueReceipts?.[mutation.operationId]) return current;
+    const receipt = consolidateVendorOrders(next, mutation.operationId, mutation.lines, mutation.now, completionScope);
+    if (catalogItems) {
+      const queueLines = next.vendorOrderLines.filter(line => line.waveId === receipt.queueId);
+      const resolved = resolveVendorOrderCatalog({ lines: queueLines, drafts: next.vendorOrderDrafts, catalogItems, now: mutation.now, deletedDraftIds: next.deletedVendorDraftIds });
+      const resolvedById = new Map(resolved.lines.map(line => [line.id, line]));
+      next.vendorOrderLines = next.vendorOrderLines.map(line => resolvedById.get(line.id) || line);
+      next.vendorOrderDrafts = resolved.drafts;
+    }
+  } else if (mutation.action === "savePackingProgress") {
     const wave = next.waves.find(w => w.id === mutation.waveId);
     if (!wave) throw new Error("저장된 출고작업을 찾을 수 없습니다.");
-    const items = next.items.filter(i => i.waveId === wave.id);
-    if (mutation.dispatched && !summarizeOutboundWork(wave, items, next.outboundWorkStates?.[wave.id], kstWorkDate()).canComplete) throw new Error("Shipment·출력세트 또는 피킹이 완료되지 않았습니다.");
-    const progress = nextPackingProgress(wave, items, next.packingProgress?.[wave.id], mutation, mutation.now);
+    const active = projectActivePickingWork(next, wave.id);
+    const activeWave = active.wave!;
+    const items = active.items;
+    if (mutation.rows.some(row => active.excludedPurchaseOrderNumbers.includes(row.purchaseOrderNumber))) throw new Error("다른 작업에서 출고완료한 발주서가 포함되어 있습니다. 현재 작업을 새로고침해 주세요.");
+    if (mutation.dispatched && !summarizeOutboundWork(activeWave, items, next.outboundWorkStates?.[wave.id], kstWorkDate()).canComplete) throw new Error("Shipment·출력세트 또는 피킹이 완료되지 않았습니다.");
+    const previousProgress = next.packingProgress?.[wave.id];
+    const progress = nextPackingProgress(activeWave, items, previousProgress, mutation, mutation.now);
     next.packingProgress = { ...next.packingProgress, [wave.id]: progress };
-    if (mutation.dispatched) {
-      const prior = next.outboundWorkStates?.[wave.id];
-      next.outboundWorkStates = { ...next.outboundWorkStates, [wave.id]: { status: "completed", updatedAt: mutation.now, history: [...(prior?.history || []), { status: "completed", changedAt: mutation.now }] } };
+    const prior = next.outboundWorkStates?.[wave.id];
+    const sameGeneration = previousProgress?.generationKey === progress.generationKey;
+    const reopenedShipment = sameGeneration && packingDispatchedShipmentNumbers(wave, previousProgress).some(number => !progress.dispatchedShipmentNumbers?.includes(number));
+    const staleAutomaticCompletion = prior?.status === "completed" && prior.source === "packing" && prior.generationKey !== progress.generationKey;
+    const status = isPackingFullyDispatched(activeWave, progress) ? "completed" : (reopenedShipment || staleAutomaticCompletion) && prior?.status === "completed" ? "active" : null;
+    if (status && prior?.status !== "archived" && (prior?.status !== status || prior.source === "packing" && (prior.generationKey !== progress.generationKey || progress.dispatchedAt !== previousProgress?.dispatchedAt))) {
+      const source = "packing" as const;
+      const generationKey = progress.generationKey;
+      next.outboundWorkStates = { ...next.outboundWorkStates, [wave.id]: { status, source, generationKey, purchaseOrderNumbers: status === "completed" ? [...activeWave.sourcePurchaseOrderNumbers] : undefined, updatedAt: mutation.now,
+        history: [...(prior?.history || []), { status, source, generationKey, purchaseOrderNumbers: status === "completed" ? [...activeWave.sourcePurchaseOrderNumbers] : undefined, changedAt: mutation.now }] } };
     }
   } else if (mutation.action === "saveSimpleReceiving") {
     const matches = next.vendorOrderLines.filter(line => line.id === mutation.before.id);
@@ -220,10 +256,13 @@ export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot,
     if (!wave) throw new Error("저장된 출고작업을 찾을 수 없습니다.");
     const prior = next.outboundWorkStates?.[wave.id];
     if ((prior?.updatedAt || null) !== mutation.expectedUpdatedAt) throw new Error("다른 기기에서 작업 상태가 변경되었습니다. 새로 확인한 뒤 다시 선택해 주세요.");
-    if (mutation.status === "completed" && !summarizeOutboundWork(wave, next.items.filter(item => item.waveId === wave.id), prior, kstWorkDate()).canComplete) {
+    if (mutation.expectedWorkUpdatedAt !== undefined && mutation.expectedWorkUpdatedAt !== wave.updatedAt) throw new Error("다른 기기에서 출고작업 내용이 변경되었습니다. 새로 확인한 뒤 다시 선택해 주세요.");
+    if (mutation.status === "completed" && mutation.confirmedDispatched !== true && !summarizeOutboundWork(wave, next.items.filter(item => item.waveId === wave.id), prior, kstWorkDate()).canComplete) {
       throw new Error("미처리 피킹 또는 Shipment·출력세트가 남아 있습니다. 작업을 계속하거나 보관을 선택해 주세요.");
     }
-    next.outboundWorkStates = { ...next.outboundWorkStates, [wave.id]: { status: mutation.status, updatedAt: mutation.now, history: [...(prior?.history || []), { status: mutation.status, changedAt: mutation.now }] } };
+    const activePurchaseOrders = mutation.status === "completed" ? projectActivePickingWork(next, wave.id).wave!.sourcePurchaseOrderNumbers : undefined;
+    next.outboundWorkStates = { ...next.outboundWorkStates, [wave.id]: { status: mutation.status, source: "manual", purchaseOrderNumbers: activePurchaseOrders, updatedAt: mutation.now,
+      history: [...(prior?.history || []), { status: mutation.status, source: "manual", purchaseOrderNumbers: activePurchaseOrders, changedAt: mutation.now }] } };
   } else if (mutation.action === "migrate") {
     next.waves = mergeByKey(next.waves, mutation.snapshot.waves || [], value => value.id, next.deletedWaveIds, false);
     next.items = mergeByKey(next.items, mutation.snapshot.items || [], value => value.id, next.deletedItemIds, false)
@@ -232,9 +271,10 @@ export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot,
       .filter(basket => !next.deletedWaveIds[basket.waveId]);
     const incomingPoRecords = (mutation.snapshot.poConfirmationRecords || []).filter(record => !next.deletedPoConfirmationNumbers[record.poNumber]);
     next.poConfirmationRecords = mergePoConfirmationRecords(next.poConfirmationRecords, incomingPoRecords);
-    next.vendorOrderDrafts = mergeByKey(next.vendorOrderDrafts, mutation.snapshot.vendorOrderDrafts || [], value => value.id, next.deletedVendorDraftIds, false);
-    next.vendorOrderLines = mergeByKey(next.vendorOrderLines, mutation.snapshot.vendorOrderLines || [], value => value.id, next.deletedVendorLineIds, false)
-      .filter(line => !next.deletedVendorDraftIds[line.draftId]);
+    next.vendorOrderDrafts = mergeByKey(next.vendorOrderDrafts, (mutation.snapshot.vendorOrderDrafts || []).filter(draft => !isServerVendorQueueRecord(draft)), value => value.id, next.deletedVendorDraftIds, false);
+    next.vendorOrderLines = mergeByKey(next.vendorOrderLines, (mutation.snapshot.vendorOrderLines || []).filter(line => !isServerVendorQueueRecord(line)), value => value.id, next.deletedVendorLineIds, false)
+      .map(line => current.vendorOrderLines.find(saved => saved.id === line.id && saved.orderExclusion) || line)
+      .filter(line => !next.deletedVendorDraftIds[line.draftId] && !next.vendorQueueConsumedLineIds?.[line.id]);
     next.warehouseZones = mergeByKey(next.warehouseZones, mutation.snapshot.warehouseZones || [], value => value.id, {}, false);
     next.warehouseShelves = mergeByKey(next.warehouseShelves, mutation.snapshot.warehouseShelves || [], value => value.id, {}, false);
     next.warehouseBoxes = mergeByKey(next.warehouseBoxes, mutation.snapshot.warehouseBoxes || [], value => value.id, {}, false);
@@ -300,18 +340,115 @@ export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot,
       if (remove) next.deletedPoConfirmationNumbers[record.poNumber] = mutation.deletedAt;
       return !remove;
     });
+  } else if (mutation.action === "saveVendorWorkspace") {
+    if (mutation.lines.some(line => mutation.removedLineIds.includes(line.id))) throw new VendorOrderWriteConflictError("저장과 삭제가 겹친 상품이 있습니다. 최신 거래처 발주대기를 열어 다시 확인해 주세요.");
+    let staged = next;
+    if (mutation.removedLineIds.length) {
+      staged = applyPickingWaveStoreMutation(staged, {
+        action: "deleteVendorLines",
+        waveId: mutation.waveId,
+        lineIds: mutation.removedLineIds,
+        expectedUpdatedAtByLineId: Object.fromEntries(mutation.removedLineIds.map(id => [id, mutation.expectedUpdatedAtByLineId[id] as string])),
+        deletedAt: mutation.now,
+      }, completionScope, catalogItems);
+    }
+    staged.suppressedVendorSkuIds = { ...staged.suppressedVendorSkuIds };
+    for (const line of mutation.lines) {
+      if (line.isManuallyAdded) delete staged.suppressedVendorSkuIds[normalizeSkuId(line.skuId)];
+      const lineMutation: PickingWaveStoreMutation = { action: "saveVendorLine", line, expectedUpdatedAt: mutation.expectedUpdatedAtByLineId[line.id] };
+      assertVendorQueueMutation(staged, lineMutation);
+      if (staged.vendorOrderLines.some(saved => saved.id === line.id && saved.orderExclusion)) throw new Error("이미 완료 처리되어 발주에서 제외한 상품입니다. 발주대기를 새로 확인해 주세요.");
+      if (staged.vendorQueueConsumedLineIds?.[line.id]) throw new Error("발주대기로 취합한 상품입니다. 메인의 거래처 발주대기에서 수정해 주세요.");
+      assertReceivingRecordPreserved(staged.vendorOrderLines.find(saved => saved.id === line.id), line);
+      if (staged.deletedVendorDraftIds[line.draftId]) throw new Error("삭제된 거래처 발주서에는 라인을 저장할 수 없습니다.");
+      staged.vendorOrderLines = mergeByKey(staged.vendorOrderLines, [line], value => value.id, staged.deletedVendorLineIds, true);
+    }
+    for (const draft of mutation.drafts) {
+      const draftMutation: PickingWaveStoreMutation = {
+        action: "saveVendorDraft",
+        draft,
+        expectedUpdatedAt: mutation.expectedUpdatedAtByDraftId[draft.id],
+        expectedLineIds: mutation.expectedLineIdsByDraftId[draft.id],
+      };
+      assertVendorQueueMutation(staged, draftMutation);
+      if (draft.status === "sent" && completionScope) {
+        archiveCompletedVendorOrderLines(staged, completionScope);
+        if (!staged.vendorOrderLines.some(line => line.draftId === draft.id && !line.orderExclusion && line.shortageQuantity > 0)) throw new Error("모든 상품이 이미 처리완료되어 새로 전송할 발주가 없습니다. 발주대기를 새로 확인해 주세요.");
+      }
+      if (draft.status === "sent") assertVendorDraftMembership(staged, draft.id, mutation.expectedLineIdsByDraftId[draft.id]);
+      staged.vendorOrderDrafts = mergeByKey(staged.vendorOrderDrafts, [draft], value => value.id, staged.deletedVendorDraftIds, true);
+    }
+    Object.assign(next, staged);
   } else if (mutation.action === "saveVendorDraft") {
+    if (mutation.draft.status === "sent" && completionScope) {
+      archiveCompletedVendorOrderLines(next, completionScope);
+      if (!next.vendorOrderLines.some(line => line.draftId === mutation.draft.id && !line.orderExclusion && line.shortageQuantity > 0)) throw new Error("모든 상품이 이미 처리완료되어 새로 전송할 발주가 없습니다. 발주대기를 새로 확인해 주세요.");
+    }
+    if (mutation.draft.status === "sent" && mutation.expectedLineIds !== undefined) assertVendorDraftMembership(next, mutation.draft.id, mutation.expectedLineIds);
     next.vendorOrderDrafts = mergeByKey(next.vendorOrderDrafts, [mutation.draft], value => value.id, next.deletedVendorDraftIds, true);
   } else if (mutation.action === "deleteVendorDraft") {
     next.deletedVendorDraftIds[mutation.draftId] = mutation.deletedAt;
     for (const line of next.vendorOrderLines.filter(value => value.draftId === mutation.draftId)) next.deletedVendorLineIds[line.id] = mutation.deletedAt;
     next.vendorOrderDrafts = next.vendorOrderDrafts.filter(value => value.id !== mutation.draftId);
     next.vendorOrderLines = next.vendorOrderLines.filter(value => value.draftId !== mutation.draftId);
+  } else if (mutation.action === "restoreVendorDraft") {
+    const fail = (message: string): never => { throw new VendorOrderWriteConflictError(message); };
+    const { draft, lines: restoredLines } = mutation;
+    if (!draft?.id || !draft.waveId || !draft.updatedAt || !Array.isArray(restoredLines) || restoredLines.length > 10000
+      || restoredLines.some(line => !line?.id || !line.updatedAt || line.draftId !== draft.id || line.waveId !== draft.waveId)
+      || new Set(restoredLines.map(line => line.id)).size !== restoredLines.length) fail("복원할 발주서와 품목을 다시 확인해 주세요.");
+    const deletedAt = next.deletedVendorDraftIds[draft.id];
+    if (!deletedAt || next.vendorOrderDrafts.some(current => current.id === draft.id)
+      || next.vendorOrderLines.some(line => line.draftId === draft.id)) fail("이 발주서가 이미 복원되었거나 변경되었습니다. 최신 이력을 확인해 주세요.");
+    for (const line of restoredLines) {
+      if (next.vendorOrderLines.some(current => current.id === line.id) || next.deletedVendorLineIds[line.id] !== deletedAt
+        || next.vendorQueueConsumedLineIds?.[line.id]) fail("복원할 품목이 이미 변경되거나 다른 발주대기로 이동했습니다. 기존 이력은 유지했습니다.");
+    }
+    // Only an explicit undo restores a deleted draft. Validate the whole bundle
+    // before clearing any tombstones; ordinary saves and migration cannot revive it.
+    delete next.deletedVendorDraftIds[draft.id];
+    for (const line of restoredLines) delete next.deletedVendorLineIds[line.id];
+    next.vendorOrderDrafts.push(draft);
+    next.vendorOrderLines.push(...restoredLines);
+  } else if (mutation.action === "saveVendorLineImage") {
+    if (!patchVendorLineImage(next, mutation)) return current;
   } else if (mutation.action === "saveVendorLine") {
+    if (next.vendorOrderLines.some(line => line.id === mutation.line.id && line.orderExclusion)) throw new Error("이미 완료 처리되어 발주에서 제외한 상품입니다. 발주대기를 새로 확인해 주세요.");
+    if (next.vendorQueueConsumedLineIds?.[mutation.line.id]) throw new Error("발주대기로 취합한 상품입니다. 메인의 거래처 발주대기에서 수정해 주세요.");
     assertReceivingRecordPreserved(next.vendorOrderLines.find(line => line.id === mutation.line.id), mutation.line);
     if (next.deletedVendorDraftIds[mutation.line.draftId]) throw new Error("삭제된 거래처 발주서에는 라인을 저장할 수 없습니다.");
     next.vendorOrderLines = mergeByKey(next.vendorOrderLines, [mutation.line], value => value.id, next.deletedVendorLineIds, true);
+  } else if (mutation.action === "deleteVendorLines") {
+    const fail = (message: string): never => { throw new VendorLineBatchDeleteConflictError(message); };
+    if (!mutation.waveId?.trim() || !Array.isArray(mutation.lineIds) || mutation.lineIds.length === 0 || mutation.lineIds.length > 5000
+      || mutation.lineIds.some(id => typeof id !== "string" || !id.trim()) || new Set(mutation.lineIds).size !== mutation.lineIds.length
+      || !mutation.expectedUpdatedAtByLineId || !Number.isFinite(Date.parse(mutation.deletedAt))) fail("삭제할 품목을 다시 선택해 주세요.");
+    const ids = new Set(mutation.lineIds);
+    const selected = next.vendorOrderLines.filter(line => ids.has(line.id));
+    // Retrying the exact request after a lost response is harmless; a new request
+    // or a partially changed selection must be checked again against current data.
+    if (selected.length === 0 && mutation.lineIds.every(id => next.deletedVendorLineIds[id] === mutation.deletedAt && !next.vendorQueueConsumedLineIds?.[id])) return current;
+    if (selected.length !== ids.size) fail("선택한 품목이 삭제되거나 다른 발주대기로 이동했습니다. 새로고침 후 다시 선택해 주세요.");
+    const drafts = new Map(deriveVendorOrderDrafts(next.vendorOrderDrafts, next.vendorOrderLines).map(draft => [draft.id, draft]));
+    for (const line of selected) {
+      if (line.waveId !== mutation.waveId || next.deletedVendorLineIds[line.id] || next.deletedVendorDraftIds[line.draftId] || next.vendorQueueConsumedLineIds?.[line.id]) fail("선택한 품목의 발주 경로가 변경되었습니다. 새로고침 후 다시 선택해 주세요.");
+      const draft = drafts.get(line.draftId);
+      if (!draft || draft.waveId !== mutation.waveId) fail("선택한 품목의 거래처 발주서를 다시 확인해 주세요.");
+      const reason = getVendorLineDeletionBlockReason(line, draft);
+      if (reason) fail(reason);
+      if (!Object.hasOwn(mutation.expectedUpdatedAtByLineId, line.id) || mutation.expectedUpdatedAtByLineId[line.id] !== line.updatedAt) fail("다른 화면에서 선택한 품목이 변경되었습니다. 새로고침 후 다시 선택해 주세요.");
+    }
+    // Validate the whole selection before changing any row, preserving all other
+    // quantities, memos, photos, receipts, drafts, and original queue provenance.
+    next.suppressedVendorSkuIds = { ...next.suppressedVendorSkuIds };
+    for (const line of selected) {
+      next.deletedVendorLineIds[line.id] = mutation.deletedAt;
+      const skuId = normalizeSkuId(line.skuId);
+      if (skuId) next.suppressedVendorSkuIds[skuId] = mutation.deletedAt;
+    }
+    next.vendorOrderLines = next.vendorOrderLines.filter(line => !ids.has(line.id));
   } else if (mutation.action === "deleteVendorLine") {
+    if (next.vendorOrderLines.some(line => line.id === mutation.lineId && line.orderExclusion)) throw new Error("완료 처리로 제외된 원본 발주 이력은 자동 삭제할 수 없습니다.");
     next.deletedVendorLineIds[mutation.lineId] = mutation.deletedAt;
     next.vendorOrderLines = next.vendorOrderLines.filter(value => value.id !== mutation.lineId);
   } else if (mutation.action === "saveWarehouseZone") {
@@ -356,10 +493,15 @@ export async function readPickingWaveStore(): Promise<PickingWaveStoreSnapshot> 
 }
 
 export async function mutatePickingWaveStore(mutation: PickingWaveStoreMutation): Promise<PickingWaveStoreSnapshot> {
+  const requiresCompletion = mutation.action === "consolidateVendorOrders" || mutation.action === "saveVendorDraft" && mutation.draft.status === "sent"
+    || mutation.action === "saveVendorWorkspace" && mutation.drafts.some(draft => draft.status === "sent");
+  const completionContext = requiresCompletion ? await (await import("../vendor-order-completion")).loadVendorOrderCompletionContext() : undefined;
+  const completionScope = completionContext?.scope;
+  const catalogItems = mutation.action === "consolidateVendorOrders" ? completionContext?.catalogItems : undefined;
   if (!useBlobStore()) {
     const task = localMutationQueue.then(async () => {
       const { snapshot } = await readLocalSnapshot();
-      const next = applyPickingWaveStoreMutation(snapshot, mutation);
+      const next = applyPickingWaveStoreMutation(snapshot, mutation, completionScope, catalogItems);
       await writeLocalSnapshot(next);
       return next;
     });
@@ -371,7 +513,7 @@ export async function mutatePickingWaveStore(mutation: PickingWaveStoreMutation)
       try {
         const { snapshot, etag } = await readBlobSnapshot();
         if (mutation.action === "createWaveBatch" && snapshot.completedCreateOperations[mutation.operationId]) return snapshot;
-        const next = applyPickingWaveStoreMutation(snapshot, mutation);
+        const next = applyPickingWaveStoreMutation(snapshot, mutation, completionScope, catalogItems);
         await writeBlobSnapshot(next, etag);
         return next;
       } catch (error) {

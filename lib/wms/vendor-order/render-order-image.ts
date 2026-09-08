@@ -89,7 +89,9 @@ function loadImageSafe(url: string, skuId: string): Promise<HTMLImageElement | n
       resolve(null);
       return;
     }
-    const proxiedUrl = `/api/wms/image-proxy?url=${encodeURIComponent(url)}`;
+    const proxiedUrl = url.startsWith("/") && !url.startsWith("//")
+      ? url
+      : `/api/wms/image-proxy?url=${encodeURIComponent(url)}`;
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
@@ -173,9 +175,14 @@ function fitSkuFontSize(ctx: CanvasRenderingContext2D, text: string, maxWidth: n
 export async function renderVendorOrderImage(
   vendorName: string,
   lines: VendorOrderDraftLine[],
-  _waveId: string
+  _waveId: string,
+  options: { strictImages?: boolean } = {}
 ): Promise<Blob | null> {
   const images = await Promise.all(lines.map(line => loadImageSafe(line.imageUrl, line.skuId)));
+  if (options.strictImages) {
+    const missing = lines.filter((_, index) => !images[index]);
+    if (missing.length) throw Object.assign(new Error(`사진을 불러오지 못했습니다. ${vendorName} · SKU ${missing.map(line => line.skuId).join(", ")}의 사진을 다시 추가해 주세요.`), { skuIds: missing.map(line => line.skuId) });
+  }
 
   // 실제 캔버스를 만들기 전에, 임시 컨텍스트로 상품명 줄바꿈을 먼저 측정해 카드별 높이를 정확히 계산한다.
   const measureCanvas = document.createElement("canvas");

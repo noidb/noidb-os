@@ -163,7 +163,7 @@ export async function buildQuoteWorkbook(input: ExportPayload | ExportPayload[])
     setByHeader(row, headers, "주문제작 여부", defaults.custom);
     setByHeader(row, headers, "사이즈 조절여부", defaults.sizeAdjust);
     setByHeader(row, headers, "주얼리 스톤", defaults.stone);
-    setByHeader(row, headers, "모델명/품번", sku.sku);
+    setByHeader(row, headers, "모델명/품번", payload.model);
     setByHeader(row, headers, "사용대상 구분", defaults.target);
     setByHeader(row, headers, "패션잡화 사용대상", defaults.target);
     setByHeader(row, headers, "각인 포함 유무", defaults.engraving);

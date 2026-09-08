@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
+import { useActivePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import type { BasketAssignment, PickingWaveItem, ShipmentOutputGeneration } from "@/lib/wms/picking-wave/types";
 import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import HanjinUploadSection from "./HanjinUploadSection";
@@ -34,7 +34,7 @@ interface Props {
  * 없고, 이 화면에 다시 연결해야 할 경우를 대비한 것뿐이다.
  */
 export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
-  const repository = usePickingWaveRepository();
+  const repository = useActivePickingWaveRepository();
   const searchParams = useSearchParams();
   const requestedGenerationId = searchParams.get("generation")?.trim() || null;
   const requestedGenerationKey = requestedGenerationId ? `${waveId}::${requestedGenerationId}` : null;
@@ -49,7 +49,8 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
   useEffect(() => {
     setGenerationsLoaded(false);
     repository.getWave(waveId).then(wave => {
-      const stored = wave?.outputGenerations || [];
+      const allowed = new Set(wave?.sourcePurchaseOrderNumbers || []);
+      const stored = (wave?.outputGenerations || []).filter(g => g.purchaseOrderNumbers.every(po => allowed.has(po)));
       setGenerations(stored);
       setActiveGenerationId(current => {
         if (queryControlsSelection && requestedGenerationId) {
@@ -73,13 +74,19 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
     const wave = await repository.getWave(waveId);
     if (!wave) throw new Error("웨이브를 찾을 수 없어 출력 묶음을 저장하지 못했습니다.");
     const now = new Date().toISOString();
-    const { generation, outputGenerations } = connectInvoiceGeneration(wave.outputGenerations || [], {
+    const allowed = new Set(wave.sourcePurchaseOrderNumbers);
+    const originalGenerations = wave.outputGenerations || [];
+    const usableGenerations = originalGenerations.filter(g => g.purchaseOrderNumbers.every(po => allowed.has(po)));
+    const { generation, outputGenerations: connectedGenerations } = connectInvoiceGeneration(usableGenerations, {
       generationId: crypto.randomUUID(), waveId, purchaseOrderNumbers: [...result.purchaseOrderNumbers], createdAt: now, updatedAt: now,
       expectedShippingGroupCount: result.preview.shippingGroupCount, invoiceFileName: result.fileName,
       invoiceGroups: result.preview.shippingGroups.map(group => [...group.purchaseOrderNumbers]), status: "invoice_generated",
     });
+    const selected = new Set(result.purchaseOrderNumbers);
+    const retainedGenerations = originalGenerations.filter(g => !g.purchaseOrderNumbers.every(po => allowed.has(po))).map(g => !g.supersededByGenerationId && g.purchaseOrderNumbers.some(po => selected.has(po)) ? { ...g, supersededByGenerationId: generation.generationId, updatedAt: now } : g);
+    const outputGenerations = [...retainedGenerations, ...connectedGenerations];
     await repository.saveWave({ ...wave, outputGenerations, selectedOutputGenerationId: generation.generationId, updatedAt: now });
-    setGenerations(outputGenerations);
+    setGenerations(outputGenerations.filter(g => g.purchaseOrderNumbers.every(po => wave.sourcePurchaseOrderNumbers.includes(po))));
     if (requestedGenerationKey) setReleasedGenerationKey(requestedGenerationKey);
     setActiveGenerationId(generation.generationId);
     const nextUrl = new URL(window.location.href); nextUrl.searchParams.set("generation", generation.generationId);
@@ -93,7 +100,7 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
     const now = new Date().toISOString();
     const outputGenerations = (wave.outputGenerations || []).map(generation => generation.generationId === generationId ? { ...generation, shipmentFileName: fileName, status: "shipment_generated" as const, updatedAt: now } : generation);
     await repository.saveWave({ ...wave, outputGenerations, selectedOutputGenerationId: generationId, updatedAt: now });
-    setGenerations(outputGenerations);
+    setGenerations(outputGenerations.filter(g => g.purchaseOrderNumbers.every(po => wave.sourcePurchaseOrderNumbers.includes(po))));
   }
 
   async function markOutputSetGenerated(generationId: string, fileName: string) {
@@ -105,7 +112,7 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
       : generation);
     const selectedOutputGenerationId = generationId;
     await repository.saveWave({ ...wave, outputGenerations, selectedOutputGenerationId, updatedAt: now });
-    setGenerations(outputGenerations);
+    setGenerations(outputGenerations.filter(g => g.purchaseOrderNumbers.every(po => wave.sourcePurchaseOrderNumbers.includes(po))));
     if (requestedGenerationKey) setReleasedGenerationKey(requestedGenerationKey);
     setActiveGenerationId(selectedOutputGenerationId);
   }

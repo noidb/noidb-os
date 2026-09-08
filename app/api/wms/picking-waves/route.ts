@@ -1,3 +1,5 @@
+import { VendorOrderWriteConflictError } from "@/lib/wms/vendor-order/queue-write-guard";
+import { VendorLineBatchDeleteConflictError } from "@/lib/wms/vendor-order/delete-lines";
 import { NextRequest, NextResponse } from "next/server";
 import { mutatePickingWaveStore, PickingWaveStoreBusyError, readPickingWaveStore } from "@/lib/wms/picking-wave/server-store";
 import type { PickingWaveStoreMutation } from "@/lib/wms/picking-wave/shared-store-types";
@@ -31,6 +33,7 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json({ ok: true, snapshot: await mutatePickingWaveStore(mutation as PickingWaveStoreMutation) }, { headers: noStoreHeaders });
   } catch (error) {
+    if (error instanceof VendorLineBatchDeleteConflictError || error instanceof VendorOrderWriteConflictError) return NextResponse.json({ ok: false, error: error.message }, { status: 409, headers: noStoreHeaders });
     if (error instanceof PickingWaveStoreBusyError) {
       return NextResponse.json({ ok: false, error: "저장 서버가 잠시 혼잡합니다. 자동으로 다시 시도하고 있습니다." }, { status: 503, headers: { ...noStoreHeaders, "Retry-After": String(error.retryAfterSeconds) } });
     }

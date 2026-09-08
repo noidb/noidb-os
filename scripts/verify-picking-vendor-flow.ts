@@ -58,8 +58,8 @@ assert.deepEqual(recalculated.addedProductCodes, []);
 assert.deepEqual(recalculated.removedLineIds, []);
 const autoLine = { ...manualLine, isManuallyAdded: false };
 assert.equal(recalculateAutoVendorOrderLines(item.waveId, [{ ...prepared.transferItems[0], shortageQuantity: 4 }], [autoLine], now).lines[0].shortageQuantity, 17, "An explicitly edited auto-draft order quantity must survive recalculation.");
-const normalAuto = { ...autoLine, shortageQuantity: 12 };
-assert.equal(recalculateAutoVendorOrderLines(item.waveId, [{ ...prepared.transferItems[0], shortageQuantity: 25 }], [normalAuto], now).lines[0].shortageQuantity, 36);
+const normalAuto = { ...autoLine, shortageQuantity: 10 };
+assert.equal(recalculateAutoVendorOrderLines(item.waveId, [{ ...prepared.transferItems[0], shortageQuantity: 25 }], [normalAuto], now).lines[0].shortageQuantity, 30, "반지는 10개 단위로 자동 재계산해야 합니다.");
 const legacyDuplicate = { ...autoLine, id: "old-auto-100" };
 assert.deepEqual(recalculateAutoVendorOrderLines(item.waveId, prepared.transferItems, [manualLine, legacyDuplicate], now).removedLineIds, [], "Legacy ambiguous rows must not be silently deleted.");
 

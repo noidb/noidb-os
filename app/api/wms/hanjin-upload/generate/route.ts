@@ -11,6 +11,7 @@ import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
 export const runtime = "nodejs";
 
 interface RequestBody {
+  waveId?: string;
   invoiceGroups?: unknown;
   requests?: HanjinShipmentRequest[];
   purchaseOrderNumbers?: string[];
@@ -24,6 +25,11 @@ export async function POST(request: NextRequest) {
       : Array.isArray(body.requests) ? body.requests.map(item => item.purchaseOrderNumber) : [];
     if (purchaseOrderNumbers.length === 0) {
       return NextResponse.json({ error: "생성할 발주서/물류센터 목록이 없습니다." }, { status: 400 });
+    }
+
+    if (body.waveId) {
+      try { const { verifyActivePurchaseOrderSelection } = await import("@/lib/wms/active-purchase-order-selection"); await verifyActivePurchaseOrderSelection(String(body.waveId), purchaseOrderNumbers); }
+      catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "출고완료 상태를 확인하지 못했습니다." }, { status: 409 }); }
     }
 
     const result = await buildHanjinUploadFile(purchaseOrderNumbers, body.invoiceGroups);

@@ -40,10 +40,11 @@ export function recalculateAutoVendorOrderLines(
     // A SKU explicitly transferred from picking already has a persisted line. Do not create
     // another auto line beside it (or overwrite its memo/vendor/edited quantity by the same ID).
     if (manualSkuIds.has(item.productCode)) continue;
-    const orderQuantity = toVendorOrderQuantity(item.shortageQuantity);
+    const productContext = [item.category, item.modelName, item.productName].join(" ");
+    const orderQuantity = toVendorOrderQuantity(item.shortageQuantity, productContext);
     const existing = autoLinesByCode.get(item.productCode);
     if (existing) {
-      const previousAutoQuantity = toVendorOrderQuantity(existing.actualShortageQuantity ?? item.shortageQuantity);
+      const previousAutoQuantity = toVendorOrderQuantity(existing.actualShortageQuantity ?? item.shortageQuantity, productContext);
       const userEditedQuantity = existing.shortageQuantity !== previousAutoQuantity;
       const nextQuantity = userEditedQuantity ? existing.shortageQuantity : orderQuantity;
       const changed = existing.shortageQuantity !== nextQuantity || existing.actualShortageQuantity !== item.shortageQuantity;

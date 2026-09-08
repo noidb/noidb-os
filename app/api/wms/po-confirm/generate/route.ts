@@ -26,6 +26,7 @@ import {
 export const runtime = "nodejs";
 
 interface RequestBody {
+  waveId?: string;
   poNumber: string;
   confirmedQuantities: { skuId: string; confirmedQuantity: number }[];
   /** data:...;base64,... 또는 순수 base64 문자열. 있으면 자동 검색 대신 이 파일을 원본으로 쓴다. */
@@ -45,6 +46,11 @@ export async function POST(request: NextRequest) {
     if (!poNumber) {
       return NextResponse.json({ error: "발주번호가 없습니다." }, { status: 400 });
     }
+    if (body.waveId) {
+      try { const { verifyActivePurchaseOrderSelection } = await import("@/lib/wms/active-purchase-order-selection"); await verifyActivePurchaseOrderSelection(String(body.waveId), [poNumber]); }
+      catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "출고완료 상태를 확인하지 못했습니다." }, { status: 409 }); }
+    }
+
     const confirmedQuantities = Array.isArray(body.confirmedQuantities) ? body.confirmedQuantities : [];
 
     const result = body.uploadedFileBase64

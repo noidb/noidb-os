@@ -142,20 +142,20 @@ export default function WimsRegistrationImportPanel() {
   }
 
   async function applyApprovedCandidates() {
-    if (!snapshot || !audit || applying || audit.approvedCandidateCount === 0) return;
-    if (!window.confirm(`검수완료·정확일치 ${audit.approvedCandidateCount}건을 기존 제품DB 행에 연결합니다.\n\n전체 시트를 먼저 백업하고 상품명·SKU ID·R바코드·현재상태만 반영합니다. 신규행은 만들지 않습니다.`)) return;
+    if (!snapshot || !audit || applying || (audit.approvedCandidateCount + audit.reviewingCandidateCount) === 0) return;
+    if (!window.confirm("검수완료 " + audit.approvedCandidateCount + "건 연결 · 검수중 " + audit.reviewingCandidateCount + "건 승인대기 상태 반영\n\n전체 시트를 먼저 백업합니다. 검수중은 현재상태만 변경하고, 검수완료는 상품명·SKU ID·R바코드·현재상태를 반영합니다. 누적입고·창고번호·발주가능상태 등 다른 정보는 유지합니다.")) return;
     setApplying(true);
     setError("");
     setMessage("");
     try {
       if (!await ensureNoidbActionSession()) return;
-      const response = await fetch("/api/wms/wims-registration/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows: snapshot.rows, dryRunToken: audit.dryRunToken, confirmation: "WIMS 검수완료 상품 연결" }) });
+      const response = await fetch("/api/wms/wims-registration/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows: snapshot.rows, dryRunToken: audit.dryRunToken, confirmation: "WIMS 검수상태 반영", includeReviewing: true }) });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "검수완료 상품 연결에 실패했습니다.");
-      setMessage(data.applied ? `${data.writtenRowCount}건 연결 완료 · 백업 ${data.backupSheetName}` : "연결할 상품이 없습니다.");
+      if (!response.ok) throw new Error(data.error || "WIMS 검수상태 반영에 실패했습니다.");
+      setMessage(data.applied ? `${data.writtenRowCount}건 검수상태 반영·재확인 완료 · 백업 ${data.backupSheetName}` : "반영할 상품이 없습니다.");
       await compareProductDb();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "검수완료 상품 연결에 실패했습니다.");
+      setError(caught instanceof Error ? caught.message : "WIMS 검수상태 반영에 실패했습니다.");
     } finally {
       setApplying(false);
     }
@@ -205,21 +205,22 @@ export default function WimsRegistrationImportPanel() {
   }
 
   const actionRows = useMemo(() => audit?.rows.filter(row =>
-    (row.wims.status === "rejected" && !["등록불가", "재등록시도"].includes(row.productDbStatus || "")) || row.type === "conflict" || (row.type === "unmatched" && row.wims.status !== "rejected") || row.type === "approved_candidate"
+    (row.wims.status === "rejected" && !["등록불가", "재등록시도"].includes(row.productDbStatus || "")) || row.type === "conflict" || (row.type === "unmatched" && row.wims.status !== "rejected") || row.type === "approved_candidate" || (row.type === "reviewing" && Boolean(row.proposedStatus))
   ) || [], [audit]);
 
   function actionLabel(row: WimsRegistrationAudit["rows"][number]) {
-    if (row.wims.status === "rejected") return { title: "반려 · 자동 연결 제외", color: "#c0392b", guide: "반려된 등록 건이라 SKU·바코드를 제품DB에 자동 반영하지 않습니다." };
-    if (row.type === "conflict") return { title: "충돌 · 자동반영 금지", color: "#c0392b", guide: "SKU 또는 불변 바코드가 다릅니다. 기존 제품DB 행을 직접 확인하세요." };
-    if (row.type === "unmatched") return { title: "미연결 · 모델SKU 확인", color: "#a06118", guide: "상품명 끝의 모델SKU와 제품DB 모델SKU가 같은지 확인하세요." };
-    return { title: "승인 · 안전 연결 가능", color: wmsColors.greenDark, guide: "위의 안전 연결 버튼으로 SKU와 바코드를 기존 행에 채울 수 있습니다." };
+    if (row.type === "rejected") return { title: "반려 · 자동 연결 제외", color: "#c0392b", guide: "반려된 등록 건이라 SKU·바코드를 제품DB에 자동 반영하지 않습니다." };
+    if (row.type === "conflict") return { title: "충돌 · 자동반영 금지", color: "#c0392b", guide: row.message };
+    if (row.type === "unmatched") return { title: "미연결 · 모델SKU 확인", color: "#a06118", guide: row.message };
+    if (row.type === "reviewing") return { title: "검수중 · " + row.proposedStatus + " 반영 가능", color: wmsColors.greenDark, guide: row.message };
+    return { title: "승인 · 안전 연결 가능", color: wmsColors.greenDark, guide: "위의 검수상태 반영 버튼으로 SKU와 바코드를 기존 행에 채울 수 있습니다." };
   }
 
   return (
     <section id="wims-registration" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", background: "#fff" }}>
       <strong style={{ display: "block", fontSize: "14px" }}>상품 등록 상태 확인 · WIMS</strong>
       <p style={{ color: wmsColors.muted, fontSize: "11px", margin: "4px 0 10px" }}>
-        브라우저 확장 기능의 `WIMS 전체를 NOID-B로 전송`을 한 번 누르면 검색 결과의 모든 페이지를 검증해 가져옵니다. 직접 붙여넣기는 비상용입니다.
+        브라우저 확장 기능의 `WIMS 전체를 NOID-B로 전송`을 한 번 누르면 검색 결과의 모든 페이지를 검증해 가져옵니다. 가져온 뒤 아래 검수상태 반영 버튼을 누르면 제품DB에 반영됩니다. 검수중은 승인대기, 검수완료는 완료로 바뀝니다. 직접 붙여넣기는 비상용입니다.
       </p>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "7px", marginBottom: "10px" }}>
         <a href="/downloads/noidb-supplier-sync.zip" download style={{ ...wmsGhostButton, minHeight: "34px", padding: "0 11px", display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
@@ -257,8 +258,8 @@ export default function WimsRegistrationImportPanel() {
             <Summary label="상태 확인 필요" value={snapshot.unknownCount} warning />
           </div>
           <button type="button" onClick={compareProductDb} disabled={auditing} style={{ ...wmsGhostButton, minHeight: "34px", marginTop: "9px", padding: "0 11px" }}>{auditing ? "제품DB 대조 중..." : "제품DB와 읽기 전용 대조"}</button>
-          {audit && <p style={{ fontSize: "11px", margin: "8px 0 0", color: wmsColors.ink }}>연결 가능 {audit.approvedCandidateCount}건 · 검수중 {audit.reviewingCount}건 · 반려 {audit.rejectedCount}건 · 이미 연결 {audit.alreadyLinkedCount}건 · 충돌 {audit.conflictCount}건 · 미연결 {audit.unmatchedCount}건 · 붙여넣은 범위에서 확인 안 된 승인대기 {audit.pendingNotInWimsCount}건</p>}
-          {audit && audit.approvedCandidateCount > 0 && <button type="button" onClick={applyApprovedCandidates} disabled={applying} style={{ ...wmsGhostButton, minHeight: "34px", marginTop: "8px", padding: "0 11px", color: wmsColors.greenDark }}>{applying ? "백업 후 연결 중..." : `검수완료 ${audit.approvedCandidateCount}건 안전 연결`}</button>}
+          {audit && <p style={{ fontSize: "11px", margin: "8px 0 0", color: wmsColors.ink }}>승인 연결 가능 {audit.approvedCandidateCount}건 · 검수중 상태 반영 가능 {audit.reviewingCandidateCount}건 · 검수중 전체 {audit.reviewingCount}건 · 반려 {audit.rejectedCount}건 · 이미 연결 {audit.alreadyLinkedCount}건 · 충돌 {audit.conflictCount}건 · 미연결 {audit.unmatchedCount}건 · 붙여넣은 범위에서 확인 안 된 승인대기 {audit.pendingNotInWimsCount}건</p>}
+          {audit && (audit.approvedCandidateCount + audit.reviewingCandidateCount) > 0 && <button type="button" onClick={applyApprovedCandidates} disabled={applying} style={{ ...wmsGhostButton, minHeight: "34px", marginTop: "8px", padding: "0 11px", color: wmsColors.greenDark }}>{applying ? "백업 후 반영·검증 중..." : `검수상태 ${audit.approvedCandidateCount + audit.reviewingCandidateCount}건 반영`}</button>}
           {audit && (
             <div style={{ marginTop: "13px" }}>
               <strong style={{ display: "block", fontSize: "13px" }}>지금 조치할 상품 {actionRows.length + audit.pendingNotInWimsCount}건</strong>
@@ -274,7 +275,7 @@ export default function WimsRegistrationImportPanel() {
                         <div style={{ marginTop: "2px" }}>{row.wims.productName}</div>
                         <div style={{ color: wmsColors.muted, marginTop: "2px" }}>{action.guide}</div>
                         <div style={{ color: wmsColors.muted }}>{[row.wims.skuId && `SKU ${row.wims.skuId}`, row.wims.barcode, row.wims.estimateId && `견적서 ${row.wims.estimateId}`].filter(Boolean).join(" · ") || "SKU·바코드 없음"}</div>
-                        {row.wims.status === "rejected" && row.sheetRowNumber && (
+                        {row.type === "rejected" && row.sheetRowNumber && (
                           <div className="wimsRejectionDecisionButtons">
                             <button type="button" disabled={decidingRow !== null} onClick={() => void setRejectionDecision(row.sheetRowNumber!, "등록불가")}>등록불가</button>
                             <button type="button" disabled={decidingRow !== null} onClick={() => void setRejectionDecision(row.sheetRowNumber!, "재등록시도")}>재등록시도</button>

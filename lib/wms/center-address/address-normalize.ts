@@ -1,11 +1,14 @@
 import type { AddressSearchCandidate, AddressVerificationResult } from "./types";
 
+// The 2026-07-01 name change retains local districts and street/parcel identity.
+// https://www.law.go.kr/LSW/ordinInfoP.do?ordinSeq=2148493
 const SIDO_ALIASES: Array<[RegExp, string]> = [
+  [/^(전남광주통합특별시)/, "전남광주"],
   [/^(서울특별시|서울시|서울)/, "서울"],
   [/^(부산광역시|부산시|부산)/, "부산"],
   [/^(대구광역시|대구시|대구)/, "대구"],
   [/^(인천광역시|인천시|인천)/, "인천"],
-  [/^(광주광역시|광주시|광주)/, "광주"],
+  [/^(광주광역시|광주시|광주)/, "전남광주"],
   [/^(대전광역시|대전시|대전)/, "대전"],
   [/^(울산광역시|울산시|울산)/, "울산"],
   [/^(세종특별자치시|세종시|세종)/, "세종"],
@@ -14,7 +17,7 @@ const SIDO_ALIASES: Array<[RegExp, string]> = [
   [/^(충청북도|충북)/, "충북"],
   [/^(충청남도|충남)/, "충남"],
   [/^(전북특별자치도|전라북도|전북)/, "전북"],
-  [/^(전라남도|전남)/, "전남"],
+  [/^(전라남도|전남)/, "전남광주"],
   [/^(경상북도|경북)/, "경북"],
   [/^(경상남도|경남)/, "경남"],
   [/^(제주특별자치도|제주도|제주)/, "제주"],
@@ -42,7 +45,9 @@ function sido(value: string): string {
 }
 
 function administrativeNames(value: string): Set<string> {
-  const clean = stripDeliveryDetails(value).replace(/[(),]/g, " ");
+  const full = stripDeliveryDetails(value);
+  const province = SIDO_ALIASES.find(([pattern]) => pattern.test(full));
+  const clean = (province ? full.replace(province[0], "") : full).replace(/[(),]/g, " ");
   return new Set([...clean.matchAll(/([가-힣]+(?:시|군|구))(?=\s|$)/g)].map(match => match[1]));
 }
 
@@ -64,10 +69,17 @@ function intersects(left: Set<string>, right: Set<string>): boolean {
 }
 
 export function safelyMatchesAddress(sourceAddress: string, candidateAddress: string): boolean {
-  if (!sourceAddress || !candidateAddress || sido(sourceAddress) !== sido(candidateAddress)) return false;
+  const sourceProvince = sido(sourceAddress);
+  if (!sourceAddress || !candidateAddress || !sourceProvince || sourceProvince !== sido(candidateAddress)) return false;
   const sourceAdmins = administrativeNames(sourceAddress);
   const candidateAdmins = administrativeNames(candidateAddress);
   if (!sourceAdmins.size || !candidateAdmins.size || !intersects(sourceAdmins, candidateAdmins)) return false;
+  // A renamed province alone is never an address match. Compare every shared administrative level.
+  for (const level of [/(?:시|군)$/, /구$/]) {
+    const sourceNames = new Set([...sourceAdmins].filter(name => level.test(name)));
+    const candidateNames = new Set([...candidateAdmins].filter(name => level.test(name)));
+    if (sourceNames.size && candidateNames.size && !intersects(sourceNames, candidateNames)) return false;
+  }
   const roadsMatch = intersects(roadKeys(sourceAddress), roadKeys(candidateAddress));
   const parcelsMatch = intersects(parcelKeys(sourceAddress), parcelKeys(candidateAddress));
   return roadsMatch || parcelsMatch;

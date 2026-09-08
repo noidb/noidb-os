@@ -1,7 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { VendorQueueEditingContext } from "@/lib/wms/vendor-order/queue-editing-context";
+const QueueEditor = dynamic(() => import("../../picking/waves/[waveId]/vendor-orders/page"), { loading: () => <p>취합한 상품을 불러오는 중…</p> });
+import { deriveVendorOrderDrafts } from "@/lib/wms/vendor-order/derive-drafts";
+import type { PickingWaveStoreSnapshot } from "@/lib/wms/picking-wave/shared-store-types";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import {
   MANUAL_VENDOR_WORKSPACE_ID,
@@ -16,18 +20,22 @@ import { PICKING_WAVE_STATUS_LABEL } from "@/lib/wms/picking-wave/status-label";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
 import { useWmsUndo } from "@/lib/wms/undo-context";
 
-/**
- * 전체 웨이브를 가로지르는 거래처 발주서 관리 목록 (2026-08-19 4차 실사용 테스트 신규).
- * 기존 웨이브별 거래처 발주서 화면(app/wms/picking/waves/[waveId]/vendor-orders)을 다시 만들지
- * 않고, 그 화면들의 목록만 여기서 한눈에 보여준다 — 발주서를 누르면 기존 화면으로 그대로 이동.
- * 저장소는 lib/wms/vendor-order의 listAllDrafts/listAllLines(이번에 추가한 조회 전용 메서드)만
- * 쓰고, 새로운 저장 로직은 전혀 추가하지 않았다.
- */
+/** Current vendor orders share one editor; previous sent orders remain available as history. */
 export default function VendorOrderManageListPage() {
-  const waveRepository = usePickingWaveRepository();
   const vendorOrderRepository = useVendorOrderRepository();
   const { pushUndo } = useWmsUndo();
 
+  const [queueId, setQueueId] = useState<string | null>(null);
+  const [consolidating, setConsolidating] = useState(false);
+  const [queueEditing, setQueueEditing] = useState(false);
+  const editingRef = useRef(false);
+  const queueFingerprint = useRef<string | null>(null);
+  const refreshRequest = useRef(0);
+  const initialPreparationAttempted = useRef(false);
+  const [refreshPending, setRefreshPending] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const reportQueueEditing = useCallback((editing: boolean) => { editingRef.current = editing; setQueueEditing(editing); }, []);
+  const [queueVersion, setQueueVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [waves, setWaves] = useState<PickingWave[]>([]);
   const [drafts, setDrafts] = useState<VendorOrderDraft[]>([]);
@@ -36,27 +44,93 @@ export default function VendorOrderManageListPage() {
   const [deleting, setDeleting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  async function reload() {
-    const [loadedWaves, loadedDrafts, loadedLines] = await Promise.all([
-      waveRepository.listWaves(), vendorOrderRepository.listAllDrafts(), vendorOrderRepository.listAllLines(),
-    ]);
-    setWaves(loadedWaves); setDrafts(loadedDrafts); setLines(loadedLines);
+  async function consolidate() {
+    if (consolidating || queueEditing) return;
+    setConsolidating(true); setMessage(null);
+    try {
+      const response = await fetch("/api/wms/vendor-orders/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || "발주대기를 취합하지 못했습니다.");
+      setMessage("발주대기를 취합했습니다. 중복 " + data.receipt.duplicates + "건은 기존 수량을 유지했습니다.");
+      await reload(false, true);
+    } catch (e) { setMessage(e instanceof Error ? e.message : "취합 실패"); }
+    finally { setConsolidating(false); }
   }
+  const reload = useCallback(async (prepareMissingQueue = false, forceReplaceEditor = false) => {
+    const request = ++refreshRequest.current;
+    // One authoritative snapshot keeps queue identity and rows consistent. This read does
+    // not mirror localStorage, so two open editors cannot trigger storage refresh loops.
+    const response = await fetch("/api/wms/picking-waves", { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok || !data.ok || !data.snapshot) throw new Error(data.error || "최신 발주 목록을 읽지 못했습니다. 다시 확인해 주세요.");
+    if (request !== refreshRequest.current) return;
+    let snapshot = data.snapshot as PickingWaveStoreSnapshot;
+    if (prepareMissingQueue && !snapshot.activeVendorQueueId && !initialPreparationAttempted.current) {
+      const pendingDrafts = new Set(deriveVendorOrderDrafts(snapshot.vendorOrderDrafts, snapshot.vendorOrderLines).filter(draft => draft.status !== "sent").map(draft => draft.id));
+      const hasPending = snapshot.vendorOrderLines.some(line => pendingDrafts.has(line.draftId) && !line.orderExclusion && line.shortageQuantity > 0);
+      if (hasPending) {
+        initialPreparationAttempted.current = true;
+        const preparedResponse = await fetch("/api/wms/vendor-orders/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        const prepared = await preparedResponse.json();
+        if (!preparedResponse.ok || !prepared.success) throw new Error(prepared.error || "기존 발주대기를 준비하지 못했습니다. 아래 취합 버튼으로 다시 시도해 주세요.");
+        const latestResponse = await fetch("/api/wms/picking-waves", { cache: "no-store" });
+        const latest = await latestResponse.json();
+        if (!latestResponse.ok || !latest.ok || !latest.snapshot) throw new Error(latest.error || "준비된 발주대기를 읽지 못했습니다. 최신 목록을 다시 확인해 주세요.");
+        if (request !== refreshRequest.current) return;
+        snapshot = latest.snapshot as PickingWaveStoreSnapshot;
+      }
+    }
+    const nextQueueId = snapshot.activeVendorQueueId || null;
+    const loadedDrafts = deriveVendorOrderDrafts(snapshot.vendorOrderDrafts, snapshot.vendorOrderLines);
+    const fingerprint = JSON.stringify({ queueId: nextQueueId,
+      drafts: loadedDrafts.filter(draft => draft.waveId === nextQueueId).sort((a, b) => a.id.localeCompare(b.id)),
+      lines: snapshot.vendorOrderLines.filter(line => line.waveId === nextQueueId).sort((a, b) => a.id.localeCompare(b.id)),
+    });
+    setWaves(snapshot.waves); setDrafts(loadedDrafts); setLines(snapshot.vendorOrderLines);
+    if (nextQueueId || !initialPreparationAttempted.current) setRefreshError(null);
+    if (queueFingerprint.current !== null && queueFingerprint.current !== fingerprint && !forceReplaceEditor) {
+      setRefreshPending(true);
+      return;
+    }
+    if (queueFingerprint.current !== fingerprint) {
+      queueFingerprint.current = fingerprint;
+      setQueueId(nextQueueId);
+      setQueueVersion(version => version + 1);
+    }
+    setRefreshPending(false);
+  }, []);
 
   useEffect(() => {
-    (async () => {
-      try {
-        await reload();
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [waveRepository, vendorOrderRepository]);
+    let disposed = false;
+    void reload(true).catch(error => { if (!disposed) setRefreshError(error instanceof Error ? error.message : "발주 목록을 읽지 못했습니다."); })
+      .finally(() => { if (!disposed) setLoading(false); });
+    return () => { disposed = true; refreshRequest.current++; };
+  }, [reload]);
+
+  useEffect(() => {
+    if (loading) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => { void reload().catch(error => setRefreshError(error instanceof Error ? error.message : "최신 발주 목록을 읽지 못했습니다.")); }, 150);
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (!event.key || event.key.startsWith("noidb_vendor_order") || event.key.startsWith("noidb_picking")) refresh();
+    };
+    const poll = window.setInterval(refresh, 30000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("storage", onStorage);
+    return () => { if (timer) clearTimeout(timer); window.clearInterval(poll); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); window.removeEventListener("storage", onStorage); };
+  }, [loading, reload]);
+
 
   const waveById = useMemo(() => new Map(waves.map(wave => [wave.id, wave])), [waves]);
 
   const rows = useMemo(() => {
     return drafts
+      .filter(draft => draft.waveId !== queueId)
       .map(draft => {
         const draftLines = lines.filter(line => line.draftId === draft.id);
         const totalQuantity = draftLines.reduce((sum, line) => sum + line.shortageQuantity, 0);
@@ -65,10 +139,19 @@ export default function VendorOrderManageListPage() {
       })
       .filter(row => row.lineCount > 0) // 라인이 하나도 없는(부족분이 0으로 회귀한) 자동 초안은 숨긴다
       .sort((a, b) => b.draft.updatedAt.localeCompare(a.draft.updatedAt));
-  }, [drafts, lines, waveById]);
+  }, [drafts, lines, waveById, queueId]);
+
+  useEffect(() => {
+    const visibleIds = new Set(rows.map(row => row.draft.id));
+    setSelectedDraftIds(previous => {
+      const retained = [...previous].filter(id => visibleIds.has(id));
+      return retained.length === previous.size ? previous : new Set(retained);
+    });
+  }, [rows]);
 
   async function deleteDrafts(draftIds: string[]) {
     if (draftIds.length === 0 || deleting) return;
+    if (draftIds.some(id => !rows.some(row => row.draft.id === id))) { setMessage("이전 발주 목록이 변경되었습니다. 삭제할 발주서를 다시 선택해 주세요."); return; }
     if (!window.confirm(`${draftIds.length}개 발주서를 삭제할까요? 삭제 후 상단 되돌리기로 복원할 수 있습니다.`)) return;
     const deletedDrafts = drafts.filter(draft => draftIds.includes(draft.id));
     const deletedLines = lines.filter(line => draftIds.includes(line.draftId));
@@ -76,13 +159,17 @@ export default function VendorOrderManageListPage() {
     try {
       await Promise.all(draftIds.map(id => vendorOrderRepository.deleteDraft(id)));
       pushUndo("발주서 삭제", async () => {
-        await Promise.all(deletedDrafts.map(draft => vendorOrderRepository.saveDraft(draft)));
-        await Promise.all(deletedLines.map(line => vendorOrderRepository.saveLine(line)));
-        await reload();
+        for (const draft of deletedDrafts) {
+          const response = await fetch("/api/wms/picking-waves", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "restoreVendorDraft", draft, lines: deletedLines.filter(line => line.draftId === draft.id) }) });
+          const data = await response.json();
+          if (!response.ok || !data.ok) throw new Error(data.error || "삭제한 발주서를 복원하지 못했습니다. 기존 이력은 유지했습니다.");
+        }
+        window.localStorage.setItem("noidb_vendor_order_queue_changed", new Date().toISOString());
+        await reload(false, true);
       });
       setSelectedDraftIds(new Set());
       setMessage(`${draftIds.length}개 발주서를 삭제했습니다.`);
-      await reload();
+      await reload(false, true);
     } finally { setDeleting(false); }
   }
 
@@ -96,10 +183,18 @@ export default function VendorOrderManageListPage() {
 
   return (
     <main style={pageStyle}>
-      <h1 style={{ fontSize: "20px", margin: "0 0 4px" }}>거래처 발주서 생성</h1>
+      <h1 style={{ fontSize: "20px", margin: "0 0 4px" }}>거래처 발주대기</h1>
+      <p>주간업무와 기존 대기건을 SKU당 한 번만 모아 거래처별로 수정하고 보냅니다.</p>
+      <button type="button" disabled={consolidating || queueEditing} style={{ ...wmsPrimaryButton, width: "100%" }} onClick={() => void consolidate()}>{consolidating ? "취합 중…" : "기존 발주대기 함께 취합"}</button>
+      {message && <p role="status">{message}</p>}
+      {queueEditing && <p role="status">편집한 내용을 아래에서 저장하면 다시 취합할 수 있습니다.</p>}
+      {refreshPending && <p role="alert" style={{ color: "#934633", fontSize: "13px", lineHeight: 1.6 }}>다른 화면에서 발주 목록이 변경되었습니다. 입력한 내용은 유지했습니다. 저장을 마친 뒤 최신 목록을 확인해 주세요.</p>}
+      {refreshError && <p role="alert" style={{ color: "#934633", fontSize: "13px" }}>{refreshError}</p>}
+      {(refreshPending || refreshError) && <button type="button" disabled={queueEditing || consolidating} onClick={() => void reload(false, true).catch(error => setRefreshError(error instanceof Error ? error.message : "최신 목록 확인 실패"))} style={{ ...wmsGhostButton, minHeight: "44px" }}>최신 목록 다시 확인</button>}
+      <VendorQueueEditingContext.Provider value={reportQueueEditing}>{queueId && <QueueEditor key={queueId + queueVersion} params={{ waveId: queueId }} />}</VendorQueueEditingContext.Provider>
+      <details><summary style={{ padding: "16px 0", cursor: "pointer" }}>이전 발주서 · 승인/전송 이력</summary>
       <p style={{ fontSize: "12px", color: wmsColors.muted, margin: "0 0 16px" }}>
-        전체 웨이브의 거래처 발주서를 한눈에 확인합니다. 각 발주서를 누르면 기존에 테스트한 초안·상세
-        화면으로 바로 이동합니다.
+        현재 발주대기는 위 통합 목록에서 수정합니다. 이전 미전송 발주도 같은 통합 목록으로 연결되며, 전송을 마친 발주서는 당시 이력을 확인합니다.
       </p>
 
       <a href={`/wms/picking/waves/${MANUAL_VENDOR_WORKSPACE_ID}/vendor-orders`} style={{ display: "block", textDecoration: "none", marginBottom: "16px" }}>
@@ -120,7 +215,7 @@ export default function VendorOrderManageListPage() {
               <div key={row.draft.id} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "16px", padding: "12px", background: index % 2 === 0 ? "#f7f4ef" : "#f1f5f2" }}>
                 <div style={{ display: "flex", gap: "10px", alignItems: "flex-start" }}>
                   <input type="checkbox" checked={selectedDraftIds.has(row.draft.id)} onChange={event => setSelectedDraftIds(previous => { const next = new Set(previous); if (event.target.checked) next.add(row.draft.id); else next.delete(row.draft.id); return next; })} style={{ width: "23px", height: "23px", flexShrink: 0 }} />
-                  <a href={`/wms/picking/waves/${row.draft.waveId}/vendor-orders`} style={{ flex: 1, minWidth: 0, textDecoration: "none", color: "inherit" }}>
+                  <a href={row.draft.status === "sent" ? `/wms/picking/waves/${row.draft.waveId}/vendor-orders` : "/wms/vendor-orders/manage"} style={{ flex: 1, minWidth: 0, textDecoration: "none", color: "inherit" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
                   <strong style={{ fontSize: "14px" }}>{row.draft.vendorName}</strong>
                   <StatusBadge status={row.draft.status} />
@@ -147,6 +242,7 @@ export default function VendorOrderManageListPage() {
           </div>
         </>
       )}
+      </details>
     </main>
   );
 }

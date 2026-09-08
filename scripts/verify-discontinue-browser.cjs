@@ -36,6 +36,10 @@ async function main() {
   const page=await context.newPage(); page.on("pageerror",error=>errors.push(error.message));
   try {
     await page.goto(base+"/wms/vendor-orders/status-requests");
+    await page.getByRole("checkbox",{name:"70000002 요청 선택",exact:true}).waitFor();
+    assert.equal(await page.getByRole("checkbox").count(),2,"The initial list contains pending requests only");
+    assert.equal(await page.getByRole("checkbox",{name:"70000000 요청 선택",exact:true}).count(),0,"Completed requests stay out of the initial list");
+    await page.getByRole("button",{name:"전체",exact:true}).click();
     await page.getByRole("checkbox",{name:"70000000 요청 선택",exact:true}).waitFor();
     assert.equal(actions.length,0);
     for(const width of [360,390,412,430,1920]) {
