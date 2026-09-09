@@ -34,6 +34,9 @@ const manualOne={...line(active+'::manual-first'),skuId:'OPTION-1',isManuallyAdd
 const manualTwo={...manualOne,id:active+'::manual-second'};
 const withManual=apply(snapshot,{action:'saveVendorLine',line:manualOne,expectedUpdatedAt:null});
 assert.throws(()=>apply(withManual,{action:'saveVendorLine',line:manualTwo,expectedUpdatedAt:null}),error=>error instanceof VendorOrderWriteConflictError && /이미 추가된 SKU/.test(error.message),'Concurrent different manual UUIDs cannot add the same exact SKU twice');
+const manualOtherVendor={...manualTwo,id:active+'::manual-other-vendor',draftId:active+'::다른거래처',vendorName:'다른거래처'};
+const withTwoVendors=apply(withManual,{action:'saveVendorLine',line:manualOtherVendor,expectedUpdatedAt:null});
+assert.equal(withTwoVendors.vendorOrderLines.filter(item=>item.skuId==='OPTION-1').length,2,'The same SKU may be saved once in each vendor order');
 assert.doesNotThrow(()=>apply(withManual,{action:'saveVendorLine',line:{...manualOne,shortageQuantity:24,updatedAt:now},expectedUpdatedAt:before}),'The existing option can still be edited');
 assert.doesNotThrow(()=>apply(withManual,{action:'saveVendorLine',line:{...manualTwo,skuId:'OPTION-11'},expectedUpdatedAt:null}),'A similar SKU is a different option');
 const fresh=line(active+'::NEW');assert.ok(apply(saved,{action:'saveVendorLine',line:fresh,expectedUpdatedAt:null}).vendorOrderLines.some(l=>l.id===fresh.id));

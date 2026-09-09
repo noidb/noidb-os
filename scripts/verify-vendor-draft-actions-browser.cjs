@@ -32,6 +32,7 @@ function fixture() {
   return snapshot;
 }
 const catalog = [
+  { skuId: "90000003", vendorName: "보호거래처", productName: "보호거래처 기존 상품", optionLabel: "실버", imageUrl: "", modelName: "보호모델" },
   { skuId: "91000011", vendorName: "창성", productName: "상품 91000011", optionLabel: "로즈골드, 14호", imageUrl: "/fixture-catalog.png" },
   { skuId: "99000001", vendorName: "검색거래처", productName: "검색 추가 상품", optionLabel: "실버", imageUrl: "", modelName: "별도검색모델" },
   { skuId: "99000002", vendorName: "창성", productName: "추가 옵션 로즈골드", optionLabel: "로즈골드, 15호", imageUrl: "" },
@@ -240,9 +241,13 @@ async function run(browser, width) {
     await search.waitFor();
     await page.waitForFunction(() => document.activeElement?.getAttribute("placeholder") === "SKU ID, 상품명, 모델명, 옵션명, 거래처로 검색");
     assert.equal(await search.evaluate(element => document.activeElement === element), true, "product search opens with the typing cursor in the search field");
+    await search.fill("90000003");
+    const currentVendorResult = page.getByRole("button", { name: /보호거래처 기존 상품.*이미 추가됨/ });
+    assert.equal(await currentVendorResult.isDisabled(), true, "the same SKU is blocked inside the current vendor order");
     await search.fill("91000011");
     const alreadyAddedResult = page.getByRole("button", { name: /상품 91000011.*이미 추가됨/ });
-    assert.equal(await alreadyAddedResult.isDisabled(), true, "existing draft SKU is visibly marked and cannot be added again from product search");
+    assert.equal(await alreadyAddedResult.count(), 0, "a SKU in another vendor order is not marked as already added");
+    assert.equal(await page.getByRole("button", { name: /상품 91000011.*SKU 91000011/ }).isEnabled(), true, "the same SKU can be offered to a second vendor");
     assert.equal(await search.getAttribute("lang"), "ko", "product search explicitly requests the Korean IME");
     await search.fill("검색");
     assert.equal(await search.inputValue(), "검색", "Hangul input survives filtering rerenders");

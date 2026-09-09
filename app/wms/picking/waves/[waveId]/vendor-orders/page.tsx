@@ -453,7 +453,10 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
     manualListGroup?: string
   ) {
     const now = new Date().toISOString();
-    const activeSkus = new Set(linesRef.current.filter(line => !excludedLineIds.has(line.id) && !line.orderExclusion).map(line => normalizeSkuId(line.skuId)));
+    const targetDraftId = draftIdFor(vendorName);
+    const activeSkus = new Set(linesRef.current
+      .filter(line => line.draftId === targetDraftId && !excludedLineIds.has(line.id) && !line.orderExclusion)
+      .map(line => normalizeSkuId(line.skuId)));
     const added: VendorOrderDraftLine[] = [];
     for (const product of products) {
       const skuId = normalizeSkuId(product.skuId);
@@ -921,12 +924,12 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
 
       {searchAddVendor && (
         <ProductSearchAddSheet
-          existingSkuIds={groups.flatMap(group => group.lines.map(line => line.skuId))}
+          existingSkuIds={groups.find(group => group.vendorName === searchAddVendor)?.lines.map(line => line.skuId) || []}
           onClose={() => setSearchAddVendor(null)}
           onSelect={product => addProductsFromSearch(searchAddVendor, [product], new Date().toISOString() + "::" + crypto.randomUUID())}
         />
       )}
-      {variantTarget && <ProductVariantAddSheet anchorSkuId={variantTarget.skuId} catalogItems={Array.from(liveCatalogByProductCode.values())} existingSkuIds={groups.flatMap(group => group.lines.map(line => line.skuId))} onClose={() => setVariantTarget(null)} onSelect={(products: ProductCatalogItem[]) => addProductsFromSearch(variantTarget.vendorName, products, linesRef.current.find(line => normalizeSkuId(line.skuId) === normalizeSkuId(variantTarget.skuId))?.manualListGroup)} />}
+      {variantTarget && <ProductVariantAddSheet anchorSkuId={variantTarget.skuId} catalogItems={Array.from(liveCatalogByProductCode.values())} existingSkuIds={groups.find(group => group.vendorName === variantTarget.vendorName)?.lines.map(line => line.skuId) || []} onClose={() => setVariantTarget(null)} onSelect={(products: ProductCatalogItem[]) => addProductsFromSearch(variantTarget.vendorName, products, linesRef.current.find(line => normalizeSkuId(line.skuId) === normalizeSkuId(variantTarget.skuId) && line.vendorName === variantTarget.vendorName)?.manualListGroup)} />}
       {delayTarget && <ReceivingDelayDialog line={delayTarget.line} previous={delayTarget.previous} busy={receivingDelays.saving} error={delayError} onClose={() => setDelayTarget(null)} onSave={memo => void saveReceivingDelay(memo)} />}
     </main>
   );

@@ -33,9 +33,10 @@ export function assertVendorQueueMutation(store: PickingWaveStoreSnapshot, mutat
       && mutation.line.shortageQuantity > 0 && !mutation.line.orderExclusion && !sent(store, mutation.line)) {
       const sku = normalizeSkuId(mutation.line.skuId);
       if (sku && store.vendorOrderLines.some(line => line.id !== mutation.line.id && line.waveId === mutation.line.waveId
+        && line.draftId === mutation.line.draftId
         && !line.orderExclusion && line.shortageQuantity > 0 && !sent(store, line)
         && !store.deletedVendorLineIds[line.id] && !store.vendorQueueConsumedLineIds?.[line.id] && !store.deletedVendorDraftIds[line.draftId]
-        && normalizeSkuId(line.skuId) === sku)) throw new VendorOrderWriteConflictError("이미 추가된 SKU입니다. 최신 거래처 발주대기를 열어 기존 상품의 수량을 확인해 주세요.");
+        && normalizeSkuId(line.skuId) === sku)) throw new VendorOrderWriteConflictError("같은 거래처 발주서에 이미 추가된 SKU입니다. 기존 상품의 수량을 확인해 주세요.");
     }
   } else if (mutation.action === "saveSimpleReceiving") {
     const current = store.vendorOrderLines.find(line => line.id === mutation.before.id);
