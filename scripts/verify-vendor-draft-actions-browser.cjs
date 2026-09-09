@@ -279,6 +279,14 @@ async function run(browser, width) {
     }, queueId + "::90000003");
     assert.equal(imageSave.status, 200, imageSave.data.error || "image save must succeed after revision unlock");
     assert.equal(snapshot.vendorOrderLines.find(line => line.skuId === "90000003").imageUrl, "https://example.test/revised-photo.jpg", "photo save reaches the same server draft immediately after revision");
+    await page.getByRole("button", { name: "+ 발주서 수동 추가", exact: true }).click();
+    const manualVendorInput = page.getByPlaceholder("거래처명 입력 (기존 거래처명도 가능)");
+    await manualVendorInput.fill("신규수동거래처");
+    await manualVendorInput.press("Enter");
+    await page.getByPlaceholder("SKU ID, 상품명, 모델명, 옵션명, 거래처로 검색").waitFor();
+    await page.getByText("신규수동거래처 발주서에 넣을 상품을 검색해 선택해 주세요.", { exact: true }).waitFor({ state: "attached" });
+    await page.getByRole("button", { name: "닫기", exact: true }).click();
+    await page.locator('[data-vendor-group="신규수동거래처"]').waitFor();
     assert.equal(errors.length, 0, errors.join("\n"));
     const result = { width, passed: true, checks: ["catalog vendor/photo/size option completion without writes", "registered vendor list and search selection", "same model option search, disabled existing/discontinued options, multi-add and save/reopen", "approved product add after edit transition and save/reopen", "targeted server revision unlock before image editing", "fixed selection toolbar at deep scroll", "cancel is read-only", "atomic exact selection deletion", "unselected dirty quantity and memo preserved", "deletion persists on reopen", "receiving and approved locks", "409 retains selection and state", "focus completion hides selected row without history loss", "failed export check blocks preview/copy/share/download"], mutationCount: mutations.length, completionCheckCount: completionCalls.length, errors, unexpected };
     fs.writeFileSync(`${out}/results-${width}.json`, JSON.stringify(result, null, 2));

@@ -520,10 +520,16 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
 
   function createManualVendorOrder() {
     const name = newVendorNameInput.trim();
-    if (!name) return;
+    if (!name) {
+      setSaveError("수동 발주서를 만들 거래처명을 입력해 주세요.");
+      return;
+    }
     setManualVendorNames(prev => (prev.includes(name) ? prev : [...prev, name]));
     setNewVendorNameInput("");
     setAddingManualVendor(false);
+    setSaveError(null);
+    setCompletionMessage(`${name} 발주서에 넣을 상품을 검색해 선택해 주세요.`);
+    setSearchAddVendor(name);
   }
 
   function stepQuantity(line: VendorOrderDraftLine, delta: number) {
@@ -724,7 +730,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
           + 발주서 수동 추가
         </button>
       ) : (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "14px", width: "100%" }}>
+        <form onSubmit={event => { event.preventDefault(); createManualVendorOrder(); }} style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "14px", width: "100%" }}>
           <input
             autoFocus
             className="wms-input"
@@ -734,14 +740,14 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
             style={{ ...inputStyle, flex: "1 1 140px", minWidth: 0, boxSizing: "border-box", fontSize: "16px", padding: "8px 10px" }}
           />
           <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
-            <button onClick={createManualVendorOrder} style={{ ...wmsPrimaryButton, minHeight: "36px", fontSize: "12px", flexShrink: 0 }}>
+            <button type="submit" style={{ ...wmsPrimaryButton, minHeight: "36px", fontSize: "12px", flexShrink: 0 }}>
               만들기
             </button>
-            <button onClick={() => setAddingManualVendor(false)} style={{ ...wmsGhostButton, minHeight: "36px", fontSize: "12px", flexShrink: 0 }}>
+            <button type="button" onClick={() => setAddingManualVendor(false)} style={{ ...wmsGhostButton, minHeight: "36px", fontSize: "12px", flexShrink: 0 }}>
               취소
             </button>
           </div>
-        </div>
+        </form>
       ))}
 
       {groups.length === 0 ? (
