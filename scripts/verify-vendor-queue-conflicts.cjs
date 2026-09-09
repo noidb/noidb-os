@@ -10,6 +10,9 @@ function line(id,waveId=active,vendorName='거래처'){return {id,waveId,draftId
 function fixture(){const s=emptyPickingWaveStoreSnapshot();s.activeVendorQueueId=active;s.vendorOrderLines=[line(active+'::1'),line(old+'::2',old),line(old+'::3',old,'전송거래처')];s.vendorOrderDrafts=s.vendorOrderLines.map(l=>({id:l.draftId,waveId:l.waveId,vendorName:l.vendorName,status:l.skuId==='3'?'sent':'review',statusBeforeSent:l.skuId==='3'?'review':undefined,sentAt:l.skuId==='3'?before:undefined,createdAt:before,updatedAt:before}));return s;}
 const snapshot=fixture(),raw=JSON.stringify(snapshot),a=snapshot.vendorOrderLines[0],o=snapshot.vendorOrderLines[1],h=snapshot.vendorOrderLines[2],oldDraft=snapshot.vendorOrderDrafts[1],historyDraft=snapshot.vendorOrderDrafts[2];
 const conflict=mutation=>assert.throws(()=>apply(snapshot,mutation),VendorOrderWriteConflictError);
+const activeSent={...snapshot, vendorOrderDrafts:snapshot.vendorOrderDrafts.map(draft=>draft.id===a.draftId?{...draft,status:'sent',statusBeforeSent:'approved',sentAt:before}:draft)};
+const activeRevision=apply(activeSent,{action:'saveVendorDraft',draft:{...activeSent.vendorOrderDrafts[0],status:'resend_needed',statusBeforeSent:undefined,sentAt:undefined,updatedAt:now},expectedUpdatedAt:before});
+assert.equal(activeRevision.vendorOrderDrafts[0].status,'resend_needed','The current queue can explicitly unlock a sent order for editing');
 conflict({action:'saveVendorLine',line:{...o,shortageQuantity:99,updatedAt:now}});
 conflict({action:'saveVendorLine',line:{...o,waveId:active,updatedAt:now}});
 conflict({action:'saveVendorDraft',draft:{...oldDraft,status:'sent',updatedAt:now}});

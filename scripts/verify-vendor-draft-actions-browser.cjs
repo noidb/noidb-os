@@ -37,6 +37,7 @@ const catalog = [
 ].map(item => ({ ...item, modelName: item.modelName || "테스트 모델", currentStatus: item.currentStatus || "판매중", modelSku: "", category: "반지", gender: "공용", warehouseNumber: "", boxNumber: "", currentStock: "0", barcode: "R" + item.skuId, productLink: "" }));
 async function run(browser, width) {
   let snapshot = fixture(), completionExcluded = [], completionFailure = null;
+  const runCatalog = catalog.map(item => ({ ...item }));
   const mutations = [], completionCalls = [], unexpected = [], errors = [], downloads = [];
   let acceptDialog = true;
   const context = await browser.newContext({ viewport: { width, height: 844 }, acceptDownloads: true });
@@ -69,13 +70,16 @@ async function run(browser, width) {
         if (completionFailure) { status = 503; result = { success: false, error: completionFailure }; }
         else result = { success: true, excludedLineIds: completionExcluded };
       } else if (url.pathname === "/api/wms/vendor-orders/queue") {
-        assert.equal(method, "GET", "the fixture only authorizes queue reads");
-        result = { success: true, queueId, consumedLineIds: [] };
+        if (method === "POST") {
+          assert.equal(body.action, "saveLineImage", "the fixture only authorizes targeted image saves");
+          snapshot = applyPickingWaveStoreMutation(snapshot, { action: "saveVendorLineImage", lineId: body.lineId, imageUrl: body.imageUrl, expectedImageUrl: body.expectedImageUrl, now: new Date().toISOString() });
+          result = { success: true, line: snapshot.vendorOrderLines.find(line => line.id === body.lineId) };
+        } else result = { success: true, queueId, consumedLineIds: [] };
       } else if (url.pathname === "/api/wms/product-catalog/update") {
-        const item = catalog.find(item => item.skuId === body.skuId);
+        const item = runCatalog.find(item => item.skuId === body.skuId);
         if (item) item.currentStatus = body.currentStatus;
         result = { success: true };
-      } else if (url.pathname === "/api/wms/product-catalog") result = { success: true, configured: true, items: catalog };
+      } else if (url.pathname === "/api/wms/product-catalog") result = { success: true, configured: true, items: runCatalog };
       else if (url.pathname === "/api/wms/vendor-order-actions") result = { success: true, delaySummaries: [] };
       else {
         unexpected.push(method + " " + url.pathname);
@@ -147,7 +151,7 @@ async function run(browser, width) {
     assert.equal(await card("99000002").count(), 1, "added options survive reopening");
     await card("99000004").getByRole("button", { name: "단종", exact: true }).click();
     await card("99000004").waitFor({ state: "detached" });
-    assert.equal(catalog.find(item => item.skuId === "99000004").currentStatus, "단종", "catalog status is saved before the card disappears");
+    assert.equal(runCatalog.find(item => item.skuId === "99000004").currentStatus, "단종", "catalog status is saved before the card disappears");
     assert(snapshot.vendorOrderLines.some(line => line.skuId === "99000004"), "status completion hides the draft card while preserving source history");
     assert.equal(await check("90000002").isDisabled(), true, "received row cannot be selected");
     assert.match(await check("90000002").getAttribute("title"), /입고·원가 이력/);
@@ -254,9 +258,19 @@ async function run(browser, width) {
     const mutationsBeforeRevision = mutations.length;
     await page.getByRole("button", { name: "발주내용 수정", exact: true }).click();
     await page.getByRole("button", { name: "+ 상품 검색 추가", exact: true }).last().waitFor();
-    assert.equal(mutations.length, mutationsBeforeRevision, "editing an approved order opens immediately without a preliminary server save");
+    assert.equal(mutations.length, mutationsBeforeRevision + 1, "editing an approved order persists one targeted status transition");
+    assert.equal(mutations.at(-1).action, "saveVendorDraft", "revision does not rewrite the whole workspace");
+    assert.equal(mutations.at(-1).draft.vendorName, "보호거래처", "revision only updates the selected vendor");
+    assert.equal(mutations.at(-1).draft.status, "resend_needed", "the server unlocks image and order editing before controls open");
+    assert.equal(snapshot.vendorOrderDrafts.find(draft => draft.vendorName === "보호거래처").status, "resend_needed", "approved revision is authoritative on the server");
+    const imageSave = await page.evaluate(async lineId => {
+      const response = await fetch("/api/wms/vendor-orders/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "saveLineImage", lineId, imageUrl: "https://example.test/revised-photo.jpg", expectedImageUrl: "" }) });
+      return { status: response.status, data: await response.json() };
+    }, queueId + "::90000003");
+    assert.equal(imageSave.status, 200, imageSave.data.error || "image save must succeed after revision unlock");
+    assert.equal(snapshot.vendorOrderLines.find(line => line.skuId === "90000003").imageUrl, "https://example.test/revised-photo.jpg", "photo save reaches the same server draft immediately after revision");
     assert.equal(errors.length, 0, errors.join("\n"));
-    const result = { width, passed: true, checks: ["catalog vendor/photo/size option completion without writes", "registered vendor list and search selection", "same model option search, disabled existing/discontinued options, multi-add and save/reopen", "approved product add after edit transition and save/reopen", "fixed selection toolbar at deep scroll", "cancel is read-only", "atomic exact selection deletion", "unselected dirty quantity and memo preserved", "deletion persists on reopen", "receiving and approved locks", "409 retains selection and state", "focus completion hides selected row without history loss", "failed export check blocks preview/copy/share/download"], mutationCount: mutations.length, completionCheckCount: completionCalls.length, errors, unexpected };
+    const result = { width, passed: true, checks: ["catalog vendor/photo/size option completion without writes", "registered vendor list and search selection", "same model option search, disabled existing/discontinued options, multi-add and save/reopen", "approved product add after edit transition and save/reopen", "targeted server revision unlock before image editing", "fixed selection toolbar at deep scroll", "cancel is read-only", "atomic exact selection deletion", "unselected dirty quantity and memo preserved", "deletion persists on reopen", "receiving and approved locks", "409 retains selection and state", "focus completion hides selected row without history loss", "failed export check blocks preview/copy/share/download"], mutationCount: mutations.length, completionCheckCount: completionCalls.length, errors, unexpected };
     fs.writeFileSync(`${out}/results-${width}.json`, JSON.stringify(result, null, 2));
     console.log("PASS vendor draft browser", JSON.stringify(result));
   } catch (error) {

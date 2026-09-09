@@ -402,14 +402,48 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
     void deleteLines(selectedLines, `선택한 ${selectedLines.length}개 품목을 발주 초안에서 삭제할까요? 삭제는 즉시 저장됩니다.`);
   }
 
-  function beginVendorRevision(vendorName: string) {
+  function markVendorRevisionLocal(vendorName: string) {
     const now = new Date().toISOString();
     setDraftsByVendor(previous => {
       const current = previous[vendorName];
       if (!current || current.status === "resend_needed") return previous;
-      return { ...previous, [vendorName]: { ...current, status: "resend_needed", updatedAt: now } };
+      return { ...previous, [vendorName]: { ...current, status: "resend_needed", sentAt: undefined, statusBeforeSent: undefined, updatedAt: now } };
     });
     setDirty(true);
+  }
+
+  async function beginVendorRevision(vendorName: string) {
+    if (saving || statusSavingVendor || workspaceMoved) return;
+    const current = draftsRef.current[vendorName];
+    if (!current || ["draft", "review", "resend_needed"].includes(current.status)) return;
+    const expectedUpdatedAt = draftBaselines.current.get(current.id) ?? null;
+    const revised: VendorOrderDraft = {
+      ...current,
+      status: "resend_needed",
+      sentAt: undefined,
+      statusBeforeSent: undefined,
+      updatedAt: new Date().toISOString(),
+    };
+    setStatusSavingVendor(vendorName);
+    setSaveError(null);
+    try {
+      await assertCurrentWorkspace();
+      const response = await fetch("/api/wms/picking-waves", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "saveVendorDraft", draft: revised, expectedUpdatedAt }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "발주서를 수정 상태로 전환하지 못했습니다.");
+      draftBaselines.current.set(revised.id, revised.updatedAt);
+      setDraftsByVendor(previous => ({ ...previous, [vendorName]: revised }));
+      setCompletionMessage(`${vendorName} 발주서를 수정 상태로 전환했습니다. 사진과 발주내용을 바로 변경할 수 있습니다.`);
+      notifyQueueChange();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "발주서를 수정 상태로 전환하지 못했습니다.");
+    } finally {
+      setStatusSavingVendor(null);
+    }
   }
 
   function addProductsFromSearch(
@@ -437,7 +471,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
     }
     if (added.length) {
       setLines(previous => [...previous, ...added]);
-      beginVendorRevision(vendorName);
+      markVendorRevisionLocal(vendorName);
     } else setCompletionMessage("선택한 상품은 이미 발주 초안에 있습니다.");
     setSearchAddVendor(null); setVariantTarget(null);
   }
