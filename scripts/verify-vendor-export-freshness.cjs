@@ -19,7 +19,7 @@ function harness(options = {}) {
   };
   const nav = {
     canShare: () => !options.noShare,
-    share: async data => { shared.push(data); if (options.shareCancels) throw Object.assign(new Error("cancel"), { name: "AbortError" }); },
+    share: async data => { shared.push(data); if (options.shareCancels) throw Object.assign(new Error("cancel"), { name: "AbortError" }); if (options.shareFails && shared.length === 1) throw new Error("share failed"); },
   };
   const deps = {
     react,
@@ -48,6 +48,9 @@ function harness(options = {}) {
   h.click("카카오톡으로 공유"); await h.settle();
   assert.equal(h.calls(), 1, "share always checks current lines");
   assert.deepEqual(h.rendered, [latest]);
+  assert(h.button("공유창 열기"), "prepared files expose an immediate user-gesture share button");
+  assert.equal(h.shared.length, 0, "rendering never consumes the click permission by opening share late");
+  h.click("공유창 열기"); await h.settle();
   assert.equal(h.shared.length, 1);
   assert.equal(h.shared[0].files.length, 1);
   assert.equal(h.shared[0].title, undefined);
@@ -57,7 +60,15 @@ function harness(options = {}) {
   const paged = harness({ getLatest: async () => manyLines });
   paged.click("카카오톡으로 공유"); await paged.settle();
   assert.equal(paged.rendered.length, 3, "large vendor orders are split before exceeding mobile canvas limits");
+  paged.click("공유창 열기"); await paged.settle();
   assert.equal(paged.shared[0].files.length, 3, "all PNG pages are shared in one action");
+
+  const mobileFallback = harness({ mobile: true, getLatest: async () => manyLines, shareFails: true });
+  mobileFallback.click("카카오톡으로 공유"); await mobileFallback.settle();
+  mobileFallback.click("공유창 열기"); await mobileFallback.settle();
+  assert(mobileFallback.button("1/3 페이지 공유"), "mobile multi-file failure switches to one-page sharing");
+  mobileFallback.click("1/3 페이지 공유"); await mobileFallback.settle();
+  assert(mobileFallback.button("2/3 페이지 공유"), "successful single-page sharing advances to the next page");
 
   for (const options of [{ empty: true }, { failure: new Error("최신 상태 서버 연결 실패") }, { noGuard: true }, { failure: Object.assign(new Error("원본 확인 시간 초과"), { name: "AbortError" }) }]) {
     const failed = harness(options); failed.click("카카오톡으로 공유"); await failed.settle();
@@ -71,14 +82,16 @@ function harness(options = {}) {
   assert(pending.elements().filter(node => node.type === "button").every(node => node.props.disabled), "every action locks during the check");
   pending.click("전송완료"); pending.click("발주내용 수정");
   assert.equal(pending.calls(), 1); assert.equal(pending.marked(), 0); assert.equal(pending.revised(), 0);
-  release(latest); await pending.settle(); assert.equal(pending.shared.length, 1);
+  release(latest); await pending.settle();
+  assert.equal(pending.shared.length, 0);
+  pending.click("공유창 열기"); await pending.settle(); assert.equal(pending.shared.length, 1);
 
   const busy = harness({ busy: true }); busy.click("카카오톡으로 공유"); assert.equal(busy.calls(), 0);
   const fallback = harness({ noShare: true }); fallback.click("카카오톡으로 공유"); await fallback.settle();
   assert.deepEqual(fallback.rendered, [latest]); assert.equal(fallback.downloads.length, 1); assert.equal(fallback.shared.length, 0);
-  const cancelled = harness({ shareCancels: true }); cancelled.click("카카오톡으로 공유"); await cancelled.settle();
+  const cancelled = harness({ shareCancels: true }); cancelled.click("카카오톡으로 공유"); await cancelled.settle(); cancelled.click("공유창 열기"); await cancelled.settle();
   assert.equal(cancelled.shared.length, 1); assert.equal(cancelled.elements().filter(node => node.props.role === "alert").length, 0);
   const imageFailed = harness({ imageFails: true }); imageFailed.click("카카오톡으로 공유"); await imageFailed.settle();
   assert.equal(imageFailed.shared.length, 0); assert(imageFailed.elements().some(node => node.props.role === "alert"));
-  console.log("PASS export freshness: one current PNG is shared without extra message data; removed menus stay absent; failures, locking, fallback download, and cancellation are verified.");
+  console.log("PASS export freshness: current PNGs prepare before immediate share; mobile multi-file fallback, removed menus, failures, locking, download, and cancellation are verified.");
 })().catch(error => { console.error(error); process.exitCode = 1; });

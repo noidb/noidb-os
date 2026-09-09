@@ -47,6 +47,12 @@ const resolved = resolveLiveFields(item, new Map([["100", blankImageCatalog]]));
 assert.equal(resolved.imageUrl, "", "An explicitly unlinked productDB image must never fall back to the old wave image.");
 assert.equal(resolved.optionLabel, "실버, 20호", "The entire option and ring size must remain visible.");
 assert.equal(resolveLiveFields(item, new Map()).imageUrl, item.imageUrl, "A missing catalog row still preserves the existing wave image.");
+const draftSavedImage = "https://example.com/saved-from-vendor-draft.jpg";
+assert.equal(
+  resolveLiveFields(item, new Map([["100", { ...blankImageCatalog, imageUrl: draftSavedImage }]])).imageUrl,
+  draftSavedImage,
+  "An image saved to productDB from a vendor draft must replace the wave snapshot image in picking."
+);
 
 const manualLine: VendorOrderDraftLine = {
   id: "WAVE-1::거래처A::100", draftId: "WAVE-1::거래처A", waveId: "WAVE-1", vendorName: "거래처A", skuId: "100", modelName: "MODEL1", category: "반지", optionLabel: "실버, 20호", productName: item.productName,
@@ -67,4 +73,8 @@ const vendorPage = readFileSync("app/wms/picking/waves/[waveId]/vendor-orders/pa
 const loadEffect = vendorPage.slice(vendorPage.indexOf("  useEffect(() => {"), vendorPage.indexOf("  const groups = useMemo"));
 assert.doesNotMatch(loadEffect, /vendorOrderRepository\.(?:saveLine|saveDraft|deleteLine|deleteDraft)\(/, "Opening the vendor page must not mutate or delete drafts.");
 assert.doesNotMatch(loadEffect, /setIsPreview\(true\)/, "Ongoing picking must not block vendor ordering.");
-console.log("피킹·거래처 회귀검증 통과: 부족수량 사전확인/선택 SKU만 변경/재시도 멱등성/체크·위치 복원/이미지 해제/20호 옵션/초안 중복·수동값 보존/화면진입 쓰기 없음");
+assert.match(vendorPage, /await persistImageUrl\(data\.imageUrl\)/, "A pasted vendor-draft image must be persisted to productDB before picking reuses it.");
+const unsavedImageBranch = vendorPage.slice(vendorPage.indexOf("    if (!baseline) {"), vendorPage.indexOf("    const response = await fetch(\"/api/wms/vendor-orders/queue\""));
+assert.doesNotMatch(unsavedImageBranch, /persistAll\(/, "A new product's image must not trigger a conflicting whole-workspace autosave.");
+assert.match(vendorPage, /controller\.abort\(\), 15_000/, "Completion refresh must release the screen after a bounded wait.");
+console.log("피킹·거래처 회귀검증 통과: 부족수량 사전확인/선택 SKU만 변경/재시도 멱등성/체크·위치 복원/초안 이미지의 피킹 재사용·신규상품 충돌방지/완료조회 시간제한/이미지 해제/20호 옵션/초안 중복·수동값 보존/화면진입 쓰기 없음");

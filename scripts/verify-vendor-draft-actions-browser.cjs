@@ -93,6 +93,19 @@ async function run(browser, width) {
     await page.goto(`${baseUrl}/wms/picking/waves/${queueId}/vendor-orders`, { waitUntil: "domcontentloaded", timeout: 90000 });
     await card("78483551").waitFor({ timeout: 90000 });
     console.log(width + ": editor loaded");
+    if (width >= 1000) {
+      const rowHeights = await page.locator('[data-vendor-group="창성"] [data-vendor-sku]').evaluateAll(nodes => {
+        const rows = new Map();
+        for (const node of nodes) {
+          const rect = node.getBoundingClientRect();
+          const key = Math.round(rect.top);
+          rows.set(key, [...(rows.get(key) || []), rect.height]);
+        }
+        return [...rows.values()].filter(heights => heights.length > 1);
+      });
+      assert(rowHeights.length > 0, "desktop fixture has at least one two-card row");
+      for (const heights of rowHeights) assert(Math.max(...heights) - Math.min(...heights) <= 1, "cards in the same row keep equal heights with or without the option button");
+    }
     await card("91000011").getByText("거래처: 창성", { exact: true }).waitFor();
     assert(await card("91000011").locator("input").evaluateAll(inputs => inputs.some(input => input.value === "로즈골드, 14호")), "size-only saved option is filled from exact SKU catalog");
     assert((await card("91000011").locator("img").first().getAttribute("src")).includes("fixture-catalog.png"), "missing photo is filled from catalog");
@@ -211,6 +224,11 @@ async function run(browser, width) {
     await page.getByRole("button", { name: "+ 상품 추가", exact: true }).click();
     const search = page.getByPlaceholder("SKU ID, 상품명, 모델명, 옵션명, 거래처로 검색", { exact: true });
     await search.waitFor();
+    await page.waitForFunction(() => document.activeElement?.getAttribute("placeholder") === "SKU ID, 상품명, 모델명, 옵션명, 거래처로 검색");
+    assert.equal(await search.evaluate(element => document.activeElement === element), true, "product search opens with the typing cursor in the search field");
+    await search.fill("91000011");
+    const alreadyAddedResult = page.getByRole("button", { name: /상품 91000011.*이미 추가됨/ });
+    assert.equal(await alreadyAddedResult.isDisabled(), true, "existing draft SKU is visibly marked and cannot be added again from product search");
     assert.equal(await search.getAttribute("lang"), "ko", "product search explicitly requests the Korean IME");
     await search.fill("검색");
     assert.equal(await search.inputValue(), "검색", "Hangul input survives filtering rerenders");
@@ -220,11 +238,14 @@ async function run(browser, width) {
     await page.getByRole("button", { name: /검색 추가 상품.*SKU 99000001/ }).click();
     await card("99000001").waitFor();
     assert.equal(await card("99000001").getByRole("spinbutton").inputValue(), "10", "approved order exposes product add with the ring default quantity");
+    const protectedOrder = page.locator('[data-vendor-group="보호거래처"] [data-vendor-sku]');
+    assert.equal(await protectedOrder.last().getAttribute("data-vendor-sku"), "99000001", "product search additions appear at the end of their vendor list");
     assert.equal(snapshot.vendorOrderDrafts.find(draft => draft.vendorName === "보호거래처").status, "approved", "opening search and selecting a product does not block on a preliminary server save");
     await page.getByRole("button", { name: "변경내용 저장", exact: true }).click();
     await page.getByRole("region", { name: "선택 상품 작업", exact: true }).waitFor({ state: "detached" });
     await page.reload({ waitUntil: "domcontentloaded" }); await card("99000001").waitFor();
     assert.equal(snapshot.vendorOrderLines.filter(line => line.skuId === "99000001").length, 1, "approved order's added product survives saving and reopen");
+    assert.equal(await protectedOrder.last().getAttribute("data-vendor-sku"), "99000001", "end placement survives saving and reopening");
     assert.equal(snapshot.vendorOrderDrafts.find(draft => draft.vendorName === "보호거래처").status, "resend_needed", "the actual save records that an approved order needs review");
     const protectedDraft = snapshot.vendorOrderDrafts.find(draft => draft.vendorName === "보호거래처");
     protectedDraft.status = "approved";

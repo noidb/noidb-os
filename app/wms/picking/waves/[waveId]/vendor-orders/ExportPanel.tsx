@@ -23,6 +23,7 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
   const [exportProgress, setExportProgress] = useState("");
   const exporting = useRef(false);
   const [notice, setNotice] = useState<{ message: string; error?: boolean } | null>(null);
+  const [preparedShare, setPreparedShare] = useState<{ files: File[]; blobs: Blob[]; nextIndex?: number } | null>(null);
   const locked = busy || exportBusy;
 
   function downloadBlob(blob: Blob, fileName: string) {
@@ -40,9 +41,42 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
     if (busy || exporting.current) return;
     exporting.current = true;
     setExportBusy(true);
-    setExportProgress("최신 발주서를 확인하고 있습니다…");
     setNotice(null);
     try {
+      const desktop = typeof window !== "undefined" && window.innerWidth >= 768 && !window.matchMedia("(pointer: coarse)").matches;
+      // Web Share API는 클릭 순간의 사용자 동작 권한이 있어야 열린다. 이미지 생성·서버 확인을
+      // 기다린 뒤 share()를 호출하면 PC뿐 아니라 품목이 많은 모바일에서도 권한이 사라질 수 있다.
+      // 첫 클릭으로 최신 파일을 준비하고 다음 클릭에서는 기다림 없이 공유창부터 연다.
+      if (preparedShare) {
+        const sharingIndex = preparedShare.nextIndex;
+        const filesToShare = sharingIndex === undefined ? preparedShare.files : [preparedShare.files[sharingIndex]];
+        setExportProgress("공유창을 열고 있습니다…");
+        const nav = navigator as Navigator & { share?: (data: ShareData) => Promise<void> };
+        try {
+          await nav.share!({ files: filesToShare });
+          if (sharingIndex !== undefined && sharingIndex + 1 < preparedShare.files.length) {
+            const nextIndex = sharingIndex + 1;
+            setPreparedShare({ ...preparedShare, nextIndex });
+            setNotice({ message: `${sharingIndex + 1}/${preparedShare.files.length}페이지를 공유했습니다. 다음 페이지를 이어서 공유해 주세요.` });
+          } else {
+            setPreparedShare(null);
+            setNotice({ message: "발주서 공유가 완료됐습니다. 카카오톡 전송 여부를 확인한 뒤 전송완료를 눌러 주세요." });
+          }
+        } catch (error) {
+          if (error instanceof Error && error.name === "AbortError") return;
+          if (!desktop && sharingIndex === undefined && preparedShare.files.length > 1) {
+            setPreparedShare({ ...preparedShare, nextIndex: 0 });
+            setNotice({ message: `휴대폰 공유창이 여러 파일을 한 번에 받지 못했습니다. 1/${preparedShare.files.length}페이지부터 한 장씩 공유해 주세요.` });
+            return;
+          }
+          preparedShare.files.forEach((file, index) => downloadBlob(preparedShare.blobs[index], file.name));
+          setPreparedShare(null);
+          setNotice({ message: `컴퓨터 공유창을 열 수 없어 발주서 이미지 ${preparedShare.files.length}장을 다운로드 폴더에 저장했습니다. 카카오톡 채팅창에 파일을 끌어 넣어 주세요.` });
+        }
+        return;
+      }
+
+      setExportProgress("단종·재발주 완료 상품을 제외하고 있습니다…");
       const latestLines = await onBeforeExport();
       if (!Array.isArray(latestLines) || latestLines.length === 0) throw new Error("모든 품목이 처리되어 보낼 발주가 없습니다.");
       // Mobile Safari cannot export an extremely tall canvas. Split large vendors
@@ -59,7 +93,6 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
         setExportProgress(`발주서 이미지 ${completedPages}/${pages.length}장 생성 완료`);
         return blob;
       };
-      const desktop = typeof window !== "undefined" && window.innerWidth >= 768 && !window.matchMedia("(pointer: coarse)").matches;
       const blobs: Blob[] = desktop ? await Promise.all(pages.map(renderPage)) : [];
       if (!desktop) {
         for (let index = 0; index < pages.length; index += 1) blobs.push(await renderPage(pages[index], index));
@@ -75,13 +108,8 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
         setNotice({ message: `컴퓨터 공유창을 사용할 수 없어 발주서 이미지 ${files.length}장을 다운로드 폴더에 저장했습니다. 카카오톡 채팅창에 파일을 끌어 넣어 주세요.` });
         return;
       }
-      try {
-        setExportProgress("컴퓨터 공유창을 열고 있습니다…");
-        await nav.share!({ files });
-      } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") return;
-        throw new Error("카카오톡 공유창을 열지 못했습니다. 휴대폰의 Chrome 또는 Safari에서 다시 눌러 주세요.");
-      }
+      setPreparedShare({ files, blobs });
+      setNotice({ message: `최신 발주서 이미지 ${files.length}장이 준비됐습니다. '공유창 열기'를 눌러 카카오톡을 선택해 주세요.` });
     } catch (error) {
       setNotice({ message: error instanceof Error ? error.message : "발주서 공유 준비에 실패했습니다. 다시 시도해 주세요.", error: true });
     } finally {
@@ -97,7 +125,7 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
       {exportBusy && <p role="status" style={{ fontSize: "12px", marginBottom: "8px" }}>{exportProgress || "발주서를 준비하고 있습니다…"}</p>}
       {notice && <p role={notice.error ? "alert" : "status"} style={{ fontSize: "12px", color: notice.error ? wmsColors.warn : wmsColors.greenDark, marginBottom: "8px", overflowWrap: "anywhere" }}>{notice.message}</p>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "8px" }}>
-        <button type="button" onClick={() => void handleShare()} disabled={locked} style={{ ...wmsPrimaryButton, minHeight: "52px", fontSize: "13px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25, opacity: locked ? 0.6 : 1 }}>{exportBusy ? "준비 중…" : "카카오톡으로 공유"}</button>
+        <button type="button" onClick={() => void handleShare()} disabled={locked} style={{ ...wmsPrimaryButton, minHeight: "52px", fontSize: "13px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25, opacity: locked ? 0.6 : 1 }}>{exportBusy ? "준비 중…" : preparedShare?.nextIndex !== undefined ? `${preparedShare.nextIndex + 1}/${preparedShare.files.length} 페이지 공유` : preparedShare ? "공유창 열기" : "카카오톡으로 공유"}</button>
         <button type="button" onClick={() => { if (!exporting.current) void onMarkSent(); }} disabled={locked} style={{ ...wmsGreenDarkButton, minHeight: "52px", fontSize: "13px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25 }}>{busy ? "저장 중..." : status === "sent" ? "전송완료 해제" : "전송완료"}</button>
         <button type="button" onClick={() => { if (!exporting.current) void onReviseAgain(); }} disabled={locked} style={{ ...wmsSecondaryButton, gridColumn: "1 / -1", minHeight: "42px", fontSize: "12px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25 }}>{status === "sent" ? "다시 수정" : "발주내용 수정"}</button>
       </div>

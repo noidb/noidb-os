@@ -133,9 +133,11 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
 
   async function checkCompletion(candidates: VendorOrderDraftLine[] = linesRef.current, requireCurrent = false): Promise<VendorOrderDraftLine[]> {
     const request = ++completionRequest.current;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15_000);
     try {
       await assertCurrentWorkspace();
-      const response = await fetch("/api/wms/vendor-orders/completion", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ waveId: params.waveId, lines: candidates, expectedDraftUpdatedAtById: Object.fromEntries(draftBaselines.current), expectedUpdatedAtByLineId: Object.fromEntries(candidates.filter(line => lineBaselines.current.has(line.id)).map(line => [line.id, lineBaselines.current.get(line.id)!.updatedAt])) }), cache: "no-store" });
+      const response = await fetch("/api/wms/vendor-orders/completion", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ waveId: params.waveId, lines: candidates, expectedDraftUpdatedAtById: Object.fromEntries(draftBaselines.current), expectedUpdatedAtByLineId: Object.fromEntries(candidates.filter(line => lineBaselines.current.has(line.id)).map(line => [line.id, lineBaselines.current.get(line.id)!.updatedAt])) }), cache: "no-store", signal: controller.signal });
       const data = await response.json();
       if (!response.ok || !data.success || !Array.isArray(data.excludedLineIds)) throw new Error(data.error || "단종·재발주 처리 상태를 확인하지 못했습니다. 다시 확인해 주세요.");
       const excluded = new Set<string>(data.excludedLineIds);
@@ -151,9 +153,13 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
       if (requireCurrent && request !== completionRequest.current) throw new Error("처리 상태가 갱신되었습니다. 다시 눌러 최신 발주를 확인해 주세요.");
       return active;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "처리 상태를 확인하지 못했습니다.";
+      const message = error instanceof DOMException && error.name === "AbortError"
+        ? "단종·재발주 완료 여부 확인이 15초 이상 지연됐습니다. 잠시 후 다시 눌러 주세요."
+        : error instanceof Error ? error.message : "처리 상태를 확인하지 못했습니다.";
       if (request === completionRequest.current) setCompletionError(message);
       throw new Error(message);
+    } finally {
+      window.clearTimeout(timeout);
     }
   }
 
@@ -255,10 +261,15 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
       if (!map.has(vendorName)) map.set(vendorName, []);
     }
     return Array.from(map.entries())
-      .map(([vendorName, groupLines]) => ({ vendorName, lines: [...groupLines].sort((a, b) =>
-        (a.modelName || a.productName).localeCompare(b.modelName || b.productName, "ko", { numeric: true }) ||
+      .map(([vendorName, groupLines]) => ({ vendorName, lines: [...groupLines].sort((a, b) => {
+        const aManualGroup = a.manualListGroup || "";
+        const bManualGroup = b.manualListGroup || "";
+        if (Boolean(aManualGroup) !== Boolean(bManualGroup)) return aManualGroup ? 1 : -1;
+        if (aManualGroup && bManualGroup && aManualGroup !== bManualGroup) return aManualGroup.localeCompare(bManualGroup);
+        return (a.modelName || a.productName).localeCompare(b.modelName || b.productName, "ko", { numeric: true }) ||
         a.optionLabel.localeCompare(b.optionLabel, "ko", { numeric: true }) ||
-        a.skuId.localeCompare(b.skuId, "ko", { numeric: true })) }))
+        a.skuId.localeCompare(b.skuId, "ko", { numeric: true });
+      }) }))
       .sort((a, b) => (a.vendorName === UNASSIGNED_VENDOR_NAME ? 1 : b.vendorName === UNASSIGNED_VENDOR_NAME ? -1 : a.vendorName.localeCompare(b.vendorName)));
   }, [lines, manualVendorNames, pendingReorderLines, excludedLineIds]);
 
@@ -301,8 +312,9 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
       linesRef.current = nextLines;
       setLines(nextLines);
       setDirty(true);
-      const saved = await persistAll(undefined, nextLines);
-      if (!saved) throw new Error("사진은 화면에 유지했습니다. 표시된 저장 오류를 확인한 뒤 다시 저장해 주세요.");
+      // 아직 서버에 한 번도 저장되지 않은 새 상품은 전체 발주서 버전과 묶어 자동저장하지 않는다.
+      // 이미지는 제품DB에 저장됐고 화면에도 유지되며, 사용자가 '변경내용 저장'을 누를 때 새 상품의
+      // 수량·메모와 함께 한 번에 저장된다. 다른 상품/탭의 변경 때문에 사진 등록이 막히지 않는다.
       return;
     }
     const response = await fetch("/api/wms/vendor-orders/queue", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -401,7 +413,8 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
 
   function addProductsFromSearch(
     vendorName: string,
-    products: { skuId: string; modelName: string; category: string; productName: string; optionLabel: string; imageUrl: string; barcode: string; currentStock: string }[]
+    products: { skuId: string; modelName: string; category: string; productName: string; optionLabel: string; imageUrl: string; barcode: string; currentStock: string }[],
+    manualListGroup?: string
   ) {
     const now = new Date().toISOString();
     const activeSkus = new Set(linesRef.current.filter(line => !excludedLineIds.has(line.id) && !line.orderExclusion).map(line => normalizeSkuId(line.skuId)));
@@ -418,7 +431,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
         optionLabel: resolveDisplayNameAndOption(product.productName, "", product.optionLabel).option,
         productName: product.productName, imageUrl: product.imageUrl, barcode: product.barcode,
         actualShortageQuantity: 0, shortageQuantity: toVendorOrderQuantity(1, [product.category, product.modelName, product.productName].join(" ")), currentStock: product.currentStock,
-        relatedPurchaseOrderNumbers: [], memo: "", isManuallyAdded: true, createdAt: now, updatedAt: now,
+        relatedPurchaseOrderNumbers: [], memo: "", isManuallyAdded: true, manualListGroup, createdAt: now, updatedAt: now,
       });
     }
     if (added.length) {
@@ -704,7 +717,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
             const pendingReorders = pendingReorderLines.filter(line => (line.vendorName || UNASSIGNED_VENDOR_NAME) === group.vendorName);
 
             return (
-              <div key={group.vendorName} style={cardStyle}>
+              <div key={group.vendorName} data-vendor-group={group.vendorName} style={cardStyle}>
                 <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
                   <h2 style={{ margin: 0, fontSize: "17px", minWidth: 0, overflowWrap: "anywhere" }}>
                     {group.vendorName}
@@ -834,11 +847,12 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
 
       {searchAddVendor && (
         <ProductSearchAddSheet
+          existingSkuIds={groups.flatMap(group => group.lines.map(line => line.skuId))}
           onClose={() => setSearchAddVendor(null)}
-          onSelect={product => addProductsFromSearch(searchAddVendor, [product])}
+          onSelect={product => addProductsFromSearch(searchAddVendor, [product], new Date().toISOString() + "::" + crypto.randomUUID())}
         />
       )}
-      {variantTarget && <ProductVariantAddSheet anchorSkuId={variantTarget.skuId} catalogItems={Array.from(liveCatalogByProductCode.values())} existingSkuIds={groups.flatMap(group => group.lines.map(line => line.skuId))} onClose={() => setVariantTarget(null)} onSelect={(products: ProductCatalogItem[]) => addProductsFromSearch(variantTarget.vendorName, products)} />}
+      {variantTarget && <ProductVariantAddSheet anchorSkuId={variantTarget.skuId} catalogItems={Array.from(liveCatalogByProductCode.values())} existingSkuIds={groups.flatMap(group => group.lines.map(line => line.skuId))} onClose={() => setVariantTarget(null)} onSelect={(products: ProductCatalogItem[]) => addProductsFromSearch(variantTarget.vendorName, products, linesRef.current.find(line => normalizeSkuId(line.skuId) === normalizeSkuId(variantTarget.skuId))?.manualListGroup)} />}
       {delayTarget && <ReceivingDelayDialog line={delayTarget.line} previous={delayTarget.previous} busy={receivingDelays.saving} error={delayError} onClose={() => setDelayTarget(null)} onSave={memo => void saveReceivingDelay(memo)} />}
     </main>
   );
@@ -943,7 +957,10 @@ function VendorOrderLineCard({
       const response = await fetch("/api/wms/weekly-work/image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dataUrl }) });
       const data = await response.json();
       if (!response.ok || !data.success || !data.imageUrl) throw new Error(data.error || "사진 저장 실패");
-      await onSavePhoto(data.imageUrl);
+      // 붙여넣은 사진도 이미지 편집 화면에서 고른 사진과 동일하게 제품DB와 현재 발주 초안에
+      // 함께 저장한다. 피킹 화면은 최신 제품DB를 SKU로 다시 읽으므로 이후 웨이브에서도 같은
+      // 사진이 자동으로 표시된다.
+      await persistImageUrl(data.imageUrl);
     } catch (e) { setImageSaveError(e instanceof Error ? e.message : "사진을 붙여넣지 못했습니다."); }
     finally { pasteUploading.current = false; setImageSaving(false); onPhotoWork(false); }
   }
@@ -1021,7 +1038,7 @@ function VendorOrderLineCard({
     <div data-vendor-sku={line.skuId} tabIndex={editable ? 0 : -1} aria-label={line.skuId + " 상품 사진 붙여넣기"} onPaste={event => {
       const file = Array.from(event.clipboardData.files).find(file => file.type.startsWith("image/"));
       if (file && editable) { event.preventDefault(); void pastePhoto(file); }
-    }} style={{ ...wmsOuterCard, padding: "12px", marginBottom: "10px" }}>
+    }} style={{ ...wmsOuterCard, padding: "12px", marginBottom: "10px", height: compact ? "100%" : undefined, boxSizing: "border-box", display: compact ? "flex" : undefined, flexDirection: compact ? "column" : undefined }}>
       {editable && <button type="button" style={{ ...wmsGhostButton, width: "100%", marginBottom: 8 }} onClick={event => event.currentTarget.focus()}>여기를 누르고 사진 붙여넣기 · Ctrl+V · 자동 저장</button>}
       <button
         type="button"
