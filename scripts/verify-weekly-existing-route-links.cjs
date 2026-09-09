@@ -1,0 +1,27 @@
+const fs=require('node:fs'),assert=require('node:assert/strict'),ts=require('typescript');require.extensions['.ts']=(m,f)=>m._compile(ts.transpileModule(fs.readFileSync(f,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,f);
+const {planExistingWeeklyRoutes:plan,applyExistingWeeklyRoutes:apply}=require('../lib/wms/weekly-existing-route-links.ts');
+const {weeklyReviewIsActive,weeklyFreshVendorItem}=require('../lib/wms/weekly-work-progress.ts');
+const item={skuId:'123',shortageQuantity:1,relatedPurchaseOrderNumbers:['PO1'],shortageDetails:[{purchaseOrderNumber:'PO1',shortageQuantity:1}]};
+const run={id:'r',revision:1,snapshot:{vendorItems:[item]},reviews:{'123':{skuId:'123',decision:'order',vendorName:'A'}},sentVendors:{}};
+const s={vendorOrderDrafts:[{id:'d',status:'sent',vendorName:'B'}],vendorOrderLines:[{id:'l',draftId:'d',skuId:'123',shortageQuantity:12,relatedPurchaseOrderNumbers:['PO2']}],deletedVendorLineIds:{}};
+const before=JSON.stringify(s);assert.equal(plan(run,s,[]).length,0);
+const links=plan(run,s,[],true);assert.equal(links.length,1);assert.equal(links[0].match,'existing-sku');
+const next=structuredClone(run);apply(next,links,'now');assert.equal(JSON.stringify(s),before);assert(!weeklyReviewIsActive(next,next.reviews['123']));assert.deepEqual(next.reviews,run.reviews);assert.equal(next.revision,2);apply(next,links,'later');assert.equal(next.revision,2);
+assert.equal(weeklyFreshVendorItem(item,[next],'new'),undefined);assert(weeklyFreshVendorItem({...item,shortageDetails:[{purchaseOrderNumber:'PO3',shortageQuantity:1}]},[next],'new'));
+assert.equal(plan(run,{...s,vendorOrderLines:[{...s.vendorOrderLines[0],receivedQuantity:12}]},[],true).length,0);
+assert.equal(plan(run,{...s,vendorOrderDrafts:[{...s.vendorOrderDrafts[0],archivedAt:'old'}]},[],true).length,1);
+assert.equal(plan(run,{...s,vendorOrderDrafts:[{...s.vendorOrderDrafts[0],status:'draft',archivedAt:'old'}]},[],true).length,0);
+assert.equal(plan(run,s,[{id:'status',skuId:'123',requestType:'단종',supplyHubStatus:'처리대기'}],true)[0].destination,'discontinue');
+console.log('PASS explicit SKU matching, exact default, immutable destination, completed/archived exclusion, idempotent linkage, new PO remains visible');
+const vm=require('node:vm'),rules=require('../lib/wms/weekly-work-state.ts');
+const workspace=rules.emptyWeeklyWorkspace(),now='2026-09-09T00:00:00Z';
+const snapshot={rulesVersion:require('../lib/wms/weekly-work-types.ts').WEEKLY_RULES_VERSION,id:'test-selected',sourceToken:'s',createdAt:now,period:{startDate:'2026-09-09',endDate:'2026-09-09'},source:{files:[],mode:'upload'},couponItems:[],warnings:[],blockers:[],vendorItems:['901','902'].map(skuId=>({skuId,productName:'test',productLink:'',vendorName:'A',imageUrl:'',modelName:'M',optionLabel:'',barcode:'',shortageQuantity:1,openOrderQuantity:0,suggestedQuantity:12,relatedPurchaseOrderNumbers:['PO1'],issues:[],discontinued:false}))};
+const selectedRun=rules.addWeeklyRun(workspace,snapshot),mutations=[];
+const mod={exports:{}},deps={'node:crypto':require('node:crypto'),'./weekly-work-state':rules,'./vendor-order/aggregate':require('../lib/wms/vendor-order/aggregate.ts'),'./weekly-work-store':{mutateWeeklyWorkspace:async fn=>structuredClone(fn(workspace))},'./picking-wave/server-store':{mutatePickingWaveStore:async mutation=>{mutations.push(mutation);return{vendorQueueReceipts:{[mutation.operationId]:{queueId:'q',added:mutation.lines.length,duplicates:0}}};}}};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('lib/wms/weekly-vendor-queue.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module:mod,exports:mod.exports,require:n=>{assert(deps[n]);return deps[n]},Date,Error,Set});
+(async()=>{
+ await mod.exports.transferWeeklyVendorQueue(selectedRun.id,selectedRun.revision,['901']);
+ assert.equal(mutations.length,1);assert.deepEqual(mutations[0].lines.map(x=>x.skuId),['901']);assert.equal(selectedRun.vendorQueueTransfers[0].lines.length,1);assert(rules.weeklySelectedOrders(selectedRun).some(x=>x.skuId==='902'));
+ await assert.rejects(()=>mod.exports.transferWeeklyVendorQueue(selectedRun.id,selectedRun.revision,['901']),/상태/);assert.equal(mutations.length,1);
+ console.log('PASS selected-only transfer and no unselected vendor lines; stale repeat rejected');
+})().catch(e=>{console.error(e);process.exitCode=1});

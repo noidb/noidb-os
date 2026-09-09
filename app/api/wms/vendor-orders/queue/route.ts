@@ -24,7 +24,8 @@ export async function POST(request: NextRequest) {
     if (body.action !== undefined) throw new Error("지원하지 않는 발주대기 요청입니다.");
     if (body.runId) {
       if (typeof body.runId !== "string" || !Number.isSafeInteger(body.expectedRevision)) throw new Error("주간 업무를 다시 확인해 주세요.");
-      return NextResponse.json({ success: true, ...await transferWeeklyVendorQueue(body.runId, body.expectedRevision) }, { headers });
+      if (body.skuIds !== undefined && (!Array.isArray(body.skuIds) || body.skuIds.some((id: unknown) => typeof id !== "string"))) throw new Error("이동할 SKU 목록을 확인해 주세요.");
+      return NextResponse.json({ success: true, ...await transferWeeklyVendorQueue(body.runId, body.expectedRevision, body.skuIds) }, { headers });
     }
     const operationId = randomUUID();
     const store = await mutatePickingWaveStore({ action: "consolidateVendorOrders", operationId, lines: [], now: new Date().toISOString() });

@@ -31,6 +31,8 @@ export interface WeeklyReview {
   decision: "order" | "hold" | "discontinue" | "reorder"; quantityConfirmed: boolean;
 }
 export interface WeeklyRun {
+  routedElsewhereSkuIds?: string[];
+  previouslyDiscontinuedSkuIds?: string[];
   discontinueQueueRequestIds?: Record<string, string[]>;
   pendingDiscontinueSubmission?: { id: string; at: string; skuIds: string[]; requestIds: string[]; reviewToken: string };
 
