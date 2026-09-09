@@ -216,7 +216,7 @@ export default function WeeklyWork({ processingOnly = false }: { processingOnly?
         const data = await response.json() as WeeklyWorkspace & ApiResult;
         if (!response.ok || !data.success) throw new Error(data.error || "주간 업무를 불러오지 못했습니다.");
         if (cancelled) return;
-        const saved = (data.runs || []).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        const saved = (data.runs || []).sort((a, b) => b.snapshot.createdAt.localeCompare(a.snapshot.createdAt) || b.updatedAt.localeCompare(a.updatedAt));
         setRuns(saved);
         setKnownVendors(Array.from(new Set(Object.values(data.productOverrides || {}).map(item => item.vendorName).filter(Boolean))).sort());
         const initial = processingOnly ? weeklyReorderQueueRuns(saved)[0] : saved[0];
