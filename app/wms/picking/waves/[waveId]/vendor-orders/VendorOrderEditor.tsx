@@ -8,6 +8,7 @@ import { deriveVendorOrderDrafts } from "@/lib/wms/vendor-order/derive-drafts";
 import { mergeVendorRecords, vendorRecordChanged, type VendorEditConflict } from "@/lib/wms/vendor-order/merge-workspace";
 import { requestVendorJson } from "@/lib/wms/vendor-order/request-json";
 import { planNewVendorDraft } from "@/lib/wms/vendor-order/new-draft";
+import { orderVendorDrafts } from "@/lib/wms/vendor-order/order-list";
 import { mergeVendorImageResult } from "@/lib/wms/vendor-order/image-edit";
 import { getVendorLineDeletionBlockReason } from "@/lib/wms/vendor-order/delete-lines";
 import VendorNameSelect from "./VendorNameSelect";
@@ -342,6 +343,20 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
         return a.vendorName === UNASSIGNED_VENDOR_NAME ? 1 : b.vendorName === UNASSIGNED_VENDOR_NAME ? -1 : a.vendorName.localeCompare(b.vendorName);
       });
   }, [lines, draftsByVendor, manualVendorNames, pendingReorderLines, excludedLineIds]);
+
+  const orderEntries = useMemo(() => {
+    type Entry = { id: string; vendorName: string; draft?: VendorOrderDraft; group?: typeof groups[number]; historyLines?: VendorOrderDraftLine[] };
+    const entries: Entry[] = groups.map(group => ({ id: draftsByVendor[group.vendorName]?.id || `local:${group.vendorName}`, vendorName: group.vendorName, draft: draftsByVendor[group.vendorName], group }));
+    if (!historyView && sharedSnapshot) {
+      const activeIds = new Set(entries.map(entry => entry.id));
+      for (const draft of deriveVendorOrderDrafts(sharedSnapshot.vendorOrderDrafts, sharedSnapshot.vendorOrderLines)) {
+        if (activeIds.has(draft.id) || draft.status !== "sent") continue;
+        const historyLines = sharedSnapshot.vendorOrderLines.filter(line => line.draftId === draft.id && !sharedSnapshot.deletedVendorLineIds[line.id]);
+        if (historyLines.length) entries.push({ id: draft.id, vendorName: draft.vendorName, draft, historyLines });
+      }
+    }
+    return orderVendorDrafts(entries);
+  }, [groups, draftsByVendor, historyView, sharedSnapshot]);
 
   const variantSkuIds = useMemo(() => {
     const models = new Map<string, Set<string>>();
@@ -949,7 +964,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
         </form>
       ))}
 
-      {groups.length === 0 ? (
+      {orderEntries.length === 0 ? (
         <p style={{ fontSize: "13px", color: wmsColors.muted, whiteSpace: "pre-line" }}>
           {"현재 자동 생성된 부족분이 없습니다.\n위 [발주서 수동 추가]로 새 거래처 발주서를 만들 수 있습니다."}
         </p>
@@ -961,7 +976,17 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
           <button type="button" disabled={saving || !selectedLines.length} onClick={removeSelectedLines} style={{ ...wmsWarnButton, flex: 1, minHeight: "40px", opacity: selectedLines.length ? 1 : .5 }}>선택삭제 {selectedLines.length}</button>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "16px", marginBottom: "20px" }}>
-          {groups.map(group => {
+          {orderEntries.map(entry => {
+            const group = entry.group;
+            if (!group && entry.draft) return <div key={entry.id} data-vendor-group={entry.vendorName} data-vendor-order-id={entry.id} style={cardStyle}>
+              <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
+                <h2 style={{ margin: 0, fontSize: "17px", overflowWrap: "anywhere" }}>{entry.label}</h2>
+                <StatusBadge status={entry.draft.status} />
+              </div>
+              <p style={{ color: wmsColors.muted, fontSize: "12px" }}>전송 {new Date(entry.draft.sentAt || entry.draft.createdAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} · {entry.historyLines?.length || 0}종 · 발주 {entry.historyLines?.reduce((sum, line) => sum + line.shortageQuantity, 0) || 0}개</p>
+              <a href={`/wms/picking/waves/${encodeURIComponent(entry.draft.waveId)}/vendor-orders?history=1&draftId=${encodeURIComponent(entry.id)}`} style={{ ...wmsSecondaryButton, display: "inline-flex", alignItems: "center", textDecoration: "none" }}>발주서 보기</a>
+            </div>;
+            if (!group) return null;
             const status = statusOf(group.vendorName);
             const editable = !isPreview && !workspaceMoved && !saving && statusSavingVendor !== group.vendorName && (status === "draft" || status === "review" || status === "resend_needed");
             const totalOrderQuantity = group.lines.reduce((sum, l) => sum + l.shortageQuantity, 0);
@@ -973,11 +998,12 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
               <div key={group.vendorName} data-vendor-group={group.vendorName} style={cardStyle}>
                 <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
                   <h2 style={{ margin: 0, fontSize: "17px", minWidth: 0, overflowWrap: "anywhere" }}>
-                    {group.vendorName}
+                    {entry.label}
                     <span style={{ marginLeft: "8px", fontSize: "12px", color: wmsColors.muted, fontWeight: 400 }}>
                       실제부족 {totalActualShortage}개 · 발주 {totalOrderQuantity}개 · {group.lines.length}종
                     </span>
                   </h2>
+                  {entry.draft?.sentAt && <span style={{ color: wmsColors.muted, fontSize: "12px" }}>전송 {new Date(entry.draft.sentAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}</span>}
                   <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
                     <StatusBadge status={status} />
                     {status === "sent" && !isPreview && <button type="button" disabled={saving || Boolean(statusSavingVendor)} onClick={() => void createManualVendorOrder(group.vendorName)} style={{ ...wmsSecondaryButton, minHeight: "36px", fontSize: "12px" }}>+ 새 발주서</button>}

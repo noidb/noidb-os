@@ -1,0 +1,16 @@
+const fs=require('node:fs'),assert=require('node:assert/strict'),ts=require('typescript');
+require.extensions['.ts']=(m,f)=>m._compile(ts.transpileModule(fs.readFileSync(f,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,f);
+const {orderVendorDrafts}=require('../lib/wms/vendor-order/order-list.ts');
+const entry=(id,vendorName,sentAt,createdAt=sentAt)=>({id,vendorName,draft:{id,vendorName,sentAt,createdAt,updatedAt:'2026-10-01'}});
+const input=[entry('c2','창성','2026-09-09T03:00:00Z'),entry('b','비에이블리','2026-09-09T01:00:00Z'),entry('c3','창성',undefined,'2026-09-09T00:00:00Z'),entry('c1','창성','2026-09-09T02:00:00Z')];
+const before=JSON.stringify(input),result=orderVendorDrafts(input);
+assert.deepEqual(result.map(x=>x.id),['b','c1','c2','c3']);
+assert.deepEqual(result.map(x=>x.label),['비에이블리','창성-1','창성-2','창성-3']);
+assert.equal(JSON.stringify(input),before);
+assert.equal(result[1].draft,input[3].draft);
+assert.deepEqual(orderVendorDrafts([...input].reverse()).map(x=>x.label),result.map(x=>x.label));
+assert.deepEqual(orderVendorDrafts([]),[]);
+assert.equal(orderVendorDrafts([{id:'local',vendorName:'신규'}])[0].label,'신규');
+const page=fs.readFileSync('app/wms/vendor-orders/status-requests/page.tsx','utf8');
+assert(!page.includes('처리자 이름'));assert(!page.includes('주간업무에서 단종 목록 함께 처리'));assert(page.includes('operator: "자동"'));
+console.log('PASS vendor chronology, stable labels, immutable sent drafts, status page simplification');

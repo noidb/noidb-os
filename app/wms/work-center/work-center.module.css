@@ -52,3 +52,9 @@
 
 .completeButton { display: flex; width: 100%; justify-content: center; align-items: center; min-height: 48px; margin-top: 10px; border: 1px solid #60766a; border-radius: 10px; background: #fff; color: #365f4e; font-size: 14px; font-weight: 800; cursor: pointer; }
 .completeButton:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Common brand palette for the four management shortcuts. */
+.task > a[href="/wms/vendor-orders/manage"],
+.task > a[href="/wms/vendor-orders/status-requests"],
+.task > a[href="/wms/inbound"] { background: #e5dace; border-color: #cfc0b0; color: #302d29; }
+.task > a[href="/wms/reprint"] { background: #60766a; border-color: #60766a; color: #fff; }

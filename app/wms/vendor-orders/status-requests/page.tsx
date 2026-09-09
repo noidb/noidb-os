@@ -7,7 +7,7 @@ import type { StatusFileGenerationRecord, StatusRequestRecord } from "@/lib/wms/
 import { downloadBlobPreservingPage } from "@/lib/wms/download-client";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { normalizeSkuId } from "@/lib/wms/sku-normalize";
-import { WMS_MOBILE_WIDTH, wmsColors, wmsGhostButton, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
+import { WMS_MOBILE_WIDTH, wmsColors, wmsGhostButton, wmsSecondaryButton, wmsSageButton } from "@/lib/wms/ui-tokens";
 
 type Filter = "전체" | "처리대기" | "단종" | "단종해제" | "외부 처리완료";
 const FILTERS: Filter[] = ["전체", "처리대기", "단종", "단종해제", "외부 처리완료"];
@@ -19,7 +19,6 @@ export default function StatusRequestsPage() {
   const [catalog, setCatalog] = useState<Map<string, ProductCatalogItem>>(new Map());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<Filter>("처리대기");
-  const [operator, setOperator] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -40,7 +39,6 @@ export default function StatusRequestsPage() {
   }
 
   useEffect(() => {
-    setOperator(window.localStorage.getItem("noidb_wms_operator") || "");
     reload();
     void requestVendorJson<{ items?: ProductCatalogItem[] }>("/api/wms/product-catalog", { cache: "no-store" }).then(({data}) => setCatalog(new Map((data.items || []).map(item => [normalizeSkuId(item.skuId), item])))).catch(() => {});
   }, []);
@@ -60,11 +58,10 @@ export default function StatusRequestsPage() {
     return request.requestType === filter;
   }), [filter, requests]);
 
-  async function post(body: Record<string, unknown>, operatorRequired = true) {
-    if (operatorRequired && !operator.trim()) throw new Error("처리자 이름을 먼저 입력해주세요.");
+  async function post(body: Record<string, unknown>) {
     const response = await fetch("/api/wms/vendor-order-actions", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, operator: operator.trim() || "자동" }),
+      body: JSON.stringify({ ...body, operator: "자동" }),
     });
     const data = await response.json();
     if (!response.ok || !data.success) throw new Error(data.error || "처리에 실패했습니다.");
@@ -115,7 +112,7 @@ export default function StatusRequestsPage() {
       await post({
         action: "record-status-files", kind: "단종", skuIds: workbook.unique.map(item => item.skuId),
         requestIds: workbook.unique.map(item => item.id), xlsxFileName: workbook.xlsxFileName, pdfFileName: workbook.pdfFileName,
-      }, false);
+      });
       downloadBlobPreservingPage(workbook.blob, workbook.fileName);
       setMessage(`생성완료 · 단종 SKU ${workbook.unique.length}개 · XLSX와 PDF의 SKU가 동일합니다.${workbook.driveSaved ? " XLSX·PDF Drive 자동저장 완료." : workbook.driveWarning ? ` ${workbook.driveWarning}` : ""} 기존 처리상태와 제품DB는 변경하지 않았습니다.`);
       await reload();
@@ -130,7 +127,7 @@ export default function StatusRequestsPage() {
       await post({
         action: "record-status-files", kind: "단종해제", skuIds: workbook.unique.map(item => item.skuId),
         requestIds: workbook.unique.map(item => item.id), xlsxFileName: workbook.fileName,
-      }, false);
+      });
       downloadBlobPreservingPage(workbook.blob, workbook.fileName);
       setMessage(`생성완료 · 단종해제 SKU ${workbook.unique.length}개 · 원본의 기존 데이터행은 제거했습니다.${workbook.driveSaved ? " Drive 자동저장 완료." : workbook.driveWarning ? ` ${workbook.driveWarning}` : ""} 기존 처리상태와 제품DB는 변경하지 않았습니다. 이메일 발송 후 아래 완료 버튼을 눌러 주세요.`);
       await reload();
@@ -153,26 +150,22 @@ export default function StatusRequestsPage() {
 
   return (
     <main style={{ maxWidth: WMS_MOBILE_WIDTH, minHeight: "100vh", margin: "0 auto", padding: "12px 12px calc(20px + env(safe-area-inset-bottom))", background: wmsColors.background, color: wmsColors.ink, fontFamily: "sans-serif" }}>
-      <a href="/wms/vendor-orders" style={{ color: wmsColors.slateDark, fontSize: "13px" }}>← 거래처 발주관리</a>
+      <a href="/wms/vendor-orders/manage" style={{ color: wmsColors.slateDark, fontSize: "13px" }}>← 거래처 발주관리</a>
       <h1 style={{ margin: "12px 0 4px", fontSize: "20px" }}>단종·해제 관리</h1>
-      <p style={{ margin: "0 0 10px", fontSize: "12px", color: wmsColors.muted }}>피킹에서 모은 단종대기는 주간업무의 단종 목록에 함께 불러와 처리할 수 있습니다. 완료한 요청은 ‘외부 처리완료’에서 확인하거나 재출력할 수 있습니다.</p>
-      <a href="/wms/inbound" style={{ ...wmsPrimaryButton, display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none", marginBottom: "12px", minHeight: "46px" }}>주간업무에서 단종 목록 함께 처리 →</a>
-      <label style={{ display: "block", marginBottom: "10px" }}>
-        <span style={{ display: "block", fontSize: "11px", color: wmsColors.muted, marginBottom: "3px" }}>처리자</span>
-        <input value={operator} onChange={event => { setOperator(event.target.value); window.localStorage.setItem("noidb_wms_operator", event.target.value); }} placeholder="처리자 이름" style={{ width: "100%", minHeight: "40px", boxSizing: "border-box", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "9px", padding: "8px 10px" }} />
-      </label>
+      <p style={{ margin: "0 0 10px", fontSize: "12px", color: wmsColors.muted }}>주간업무와 거래처 발주에서 보낸 단종·해제 요청을 여기서 함께 처리합니다. 완료한 요청은 ‘외부 처리완료’에서 확인하거나 재출력할 수 있습니다.</p>
+
       <div style={{ display: "flex", gap: "6px", overflowX: "auto", paddingBottom: "5px", marginBottom: "8px" }}>
         {FILTERS.map(value => <button key={value} type="button" onClick={() => setFilter(value)} style={{ ...wmsGhostButton, whiteSpace: "nowrap", minHeight: "36px", background: filter === value ? wmsColors.greenSoft : "#fff", color: filter === value ? wmsColors.greenDark : wmsColors.ink, fontSize: "11px" }}>{value}</button>)}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginBottom: "8px" }}>
         <button type="button" onClick={() => setSelected(new Set(filtered.map(request => request.id)))} style={{ ...wmsGhostButton, ...actionButtonSize }}>전체선택</button>
         <button type="button" onClick={() => setSelected(new Set())} style={{ ...wmsGhostButton, ...actionButtonSize }}>선택해제</button>
-        <button type="button" disabled={saving || !selectedDiscontinue.length} onClick={generateDiscontinueFiles} style={{ ...wmsGhostButton, ...actionButtonSize, color: "#934633", opacity: selectedDiscontinue.length ? 1 : .45 }}>선택 단종파일 생성</button>
-        <button type="button" disabled={saving || !selectedRelease.length} onClick={generateReleaseFile} style={{ ...wmsGhostButton, ...actionButtonSize, color: wmsColors.greenDark, opacity: selectedRelease.length ? 1 : .45 }}>선택 단종해제 파일 생성</button>
-        <button type="button" disabled={saving || !pendingDiscontinue.length} onClick={() => completeSelected("단종")} style={{ ...wmsPrimaryButton, ...actionButtonSize, opacity: pendingDiscontinue.length ? 1 : .45 }}>단종 업로드 완료</button>
-        <button type="button" disabled={saving || !pendingRelease.length} onClick={() => completeSelected("단종해제")} style={{ ...wmsPrimaryButton, ...actionButtonSize, opacity: pendingRelease.length ? 1 : .45 }}>해제 이메일 발송 완료</button>
+        <button type="button" disabled={saving || !selectedDiscontinue.length} onClick={generateDiscontinueFiles} style={{ ...wmsSecondaryButton, ...actionButtonSize, opacity: selectedDiscontinue.length ? 1 : .45 }}>선택 단종파일 생성</button>
+        <button type="button" disabled={saving || !selectedRelease.length} onClick={generateReleaseFile} style={{ ...wmsSecondaryButton, ...actionButtonSize, opacity: selectedRelease.length ? 1 : .45 }}>선택 단종해제 파일 생성</button>
+        <button type="button" disabled={saving || !pendingDiscontinue.length} onClick={() => completeSelected("단종")} style={{ ...wmsSageButton, ...actionButtonSize, opacity: pendingDiscontinue.length ? 1 : .45 }}>단종 업로드 완료</button>
+        <button type="button" disabled={saving || !pendingRelease.length} onClick={() => completeSelected("단종해제")} style={{ ...wmsSageButton, ...actionButtonSize, opacity: pendingRelease.length ? 1 : .45 }}>해제 이메일 발송 완료</button>
       </div>
-      {message && <p style={{ fontSize: "12px", overflowWrap: "anywhere", color: message.includes("생성완료") || message.includes("표시했습니다") ? wmsColors.greenDark : "#a33b2e" }}>{message}</p>}
+      {message && <p style={{ fontSize: "12px", overflowWrap: "anywhere", color: message.includes("생성완료") || message.includes("표시했습니다") ? wmsColors.greenDark : wmsColors.warn }}>{message}</p>}
       {generations.length > 0 ? (
         <details style={{ margin: "8px 0 12px", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: "#fff", padding: "9px 10px" }}>
           <summary style={{ cursor: "pointer", fontSize: "12px", fontWeight: 800 }}>최근 생성 이력 ({generations.length}건)</summary>
@@ -199,8 +192,8 @@ export default function StatusRequestsPage() {
                 <div style={{ fontSize: "11px", fontWeight: 700, color: wmsColors.muted }}>{request.optionLabel || "옵션 없음"}</div>
                 <div style={{ marginTop: "3px", fontSize: "10px", color: wmsColors.muted }}>SKU {request.skuId} · 모델SKU {request.modelSku || "미등록"}</div>
                 <div style={{ marginTop: "5px", fontSize: "11px" }}>현재상태 <strong>{live?.currentStatus || request.currentStatus || "빈값"}</strong> · 요청 <strong>{request.requestType}</strong></div>
-                <div style={{ fontSize: "11px", color: request.supplyHubStatus === "처리대기" ? "#934633" : wmsColors.greenDark }}>{request.supplyHubStatus === "처리완료" ? request.requestType === "단종해제" ? "이메일 발송 완료" : "서플라이허브 업로드 완료" : `${request.requestType} 대기`} · {new Date(request.requestedAt).toLocaleString("ko-KR")}</div>
-                {request.completedAt ? <div style={{ fontSize: "10px", color: wmsColors.muted }}>완료 {new Date(request.completedAt).toLocaleString("ko-KR")} · {request.processor}</div> : null}
+                <div style={{ fontSize: "11px", color: request.supplyHubStatus === "처리대기" ? wmsColors.warnText : wmsColors.greenDark }}>{request.supplyHubStatus === "처리완료" ? request.requestType === "단종해제" ? "이메일 발송 완료" : "서플라이허브 업로드 완료" : `${request.requestType} 대기`} · {new Date(request.requestedAt).toLocaleString("ko-KR")}</div>
+                {request.completedAt ? <div style={{ fontSize: "10px", color: wmsColors.muted }}>완료 {new Date(request.completedAt).toLocaleString("ko-KR")}</div> : null}
                 {request.productLink ? <a href={request.productLink} target="_blank" rel="noopener noreferrer" style={{ fontSize: "11px", color: wmsColors.slateDark }}>제품링크 ↗</a> : <span style={{ fontSize: "10px", color: wmsColors.muted }}>제품링크 없음</span>}
               </div>
             </div>;
