@@ -31,7 +31,7 @@ import {
 } from "@/lib/wms/vendor-order/types";
 import type { PickingWave } from "@/lib/wms/picking-wave/types";
 import { fetchLiveCatalogLookup, type LiveCatalogLookup } from "@/lib/wms/picking-wave/live-catalog";
-import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsSecondaryButton, wmsGhostButton, wmsSlateDarkButton, wmsWarnButton, wmsOuterCard } from "@/lib/wms/ui-tokens";
+import { WMS_MOBILE_WIDTH, wmsColors, wmsSageButton as wmsPrimaryButton, wmsSecondaryButton, wmsGhostButton, wmsSageButton as wmsSlateDarkButton, wmsWarnButton, wmsOuterCard } from "@/lib/wms/ui-tokens";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { deriveArchivedVendorOrderWorkspace } from "@/lib/wms/vendor-order/derive-drafts";
@@ -857,8 +857,8 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     try {
       const saved = await persistAll({ vendorName, status: nextStatus });
       if (saved && nextStatus === "sent") setExpandedSentVendors(previous => {
-        if (!previous.has(vendorName)) return previous;
-        const next = new Set(previous); next.delete(vendorName); return next;
+        if (!draft || !previous.has(draft.id)) return previous;
+        const next = new Set(previous); next.delete(draft.id); return next;
       });
     }
     finally { setStatusSavingVendor(null); }
@@ -977,25 +977,17 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "16px", marginBottom: "20px" }}>
           {orderEntries.map(entry => {
-            const group = entry.group;
-            if (!group && entry.draft) return <div key={entry.id} data-vendor-group={entry.vendorName} data-vendor-order-id={entry.id} style={cardStyle}>
-              <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
-                <h2 style={{ margin: 0, fontSize: "17px", overflowWrap: "anywhere" }}>{entry.label}</h2>
-                <StatusBadge status={entry.draft.status} />
-              </div>
-              <p style={{ color: wmsColors.muted, fontSize: "12px" }}>전송 {new Date(entry.draft.sentAt || entry.draft.createdAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} · {entry.historyLines?.length || 0}종 · 발주 {entry.historyLines?.reduce((sum, line) => sum + line.shortageQuantity, 0) || 0}개</p>
-              <a href={`/wms/picking/waves/${encodeURIComponent(entry.draft.waveId)}/vendor-orders?history=1&draftId=${encodeURIComponent(entry.id)}`} style={{ ...wmsSecondaryButton, display: "inline-flex", alignItems: "center", textDecoration: "none" }}>발주서 보기</a>
-            </div>;
-            if (!group) return null;
-            const status = statusOf(group.vendorName);
-            const editable = !isPreview && !workspaceMoved && !saving && statusSavingVendor !== group.vendorName && (status === "draft" || status === "review" || status === "resend_needed");
+            const historical = !entry.group;
+            const group = entry.group || { vendorName: entry.vendorName, lines: entry.historyLines || [] };
+            const status = entry.draft?.status || statusOf(group.vendorName);
+            const editable = !historical && !isPreview && !workspaceMoved && !saving && statusSavingVendor !== group.vendorName && (status === "draft" || status === "review" || status === "resend_needed");
             const totalOrderQuantity = group.lines.reduce((sum, l) => sum + l.shortageQuantity, 0);
             const totalActualShortage = group.lines.reduce((sum, l) => sum + (l.actualShortageQuantity ?? l.shortageQuantity), 0);
             const pendingReorders = pendingReorderLines.filter(line => (line.vendorName || UNASSIGNED_VENDOR_NAME) === group.vendorName);
-            const sentCollapsed = !historyView && status === "sent" && !expandedSentVendors.has(group.vendorName);
+            const sentCollapsed = !historyView && status === "sent" && !expandedSentVendors.has(entry.id);
 
             return (
-              <div key={group.vendorName} data-vendor-group={group.vendorName} style={cardStyle}>
+              <div key={entry.id} data-vendor-group={group.vendorName} data-vendor-order-id={entry.id} style={cardStyle}>
                 <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
                   <h2 style={{ margin: 0, fontSize: "17px", minWidth: 0, overflowWrap: "anywhere" }}>
                     {entry.label}
@@ -1011,10 +1003,10 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                       <button
                         type="button"
                         aria-expanded={!sentCollapsed}
-                        aria-controls={`vendor-order-${group.vendorName}`}
+                        aria-controls={`vendor-order-${entry.id}`}
                         onClick={() => setExpandedSentVendors(previous => {
                           const next = new Set(previous);
-                          if (next.has(group.vendorName)) next.delete(group.vendorName); else next.add(group.vendorName);
+                          if (next.has(entry.id)) next.delete(entry.id); else next.add(entry.id);
                           return next;
                         })}
                         style={{ ...wmsGhostButton, minHeight: "32px", padding: "0 10px", fontSize: "11px" }}
@@ -1024,20 +1016,20 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                     )}
                   </div>
                 </div>
-                <div id={`vendor-order-${group.vendorName}`} hidden={sentCollapsed}>
-                {editConflicts.filter(conflict => conflict.vendorName === group.vendorName).map(conflict => <div key={conflict.key} role="alert" style={{ padding: 12, background: "#fff3e0", marginBottom: 10 }}>
+                <div id={`vendor-order-${entry.id}`} hidden={sentCollapsed}>
+                {!historical && editConflicts.filter(conflict => conflict.vendorName === group.vendorName).map(conflict => <div key={conflict.key} role="alert" style={{ padding: 12, background: wmsColors.warnSoft, marginBottom: 10 }}>
                   <p>다른 기기에서도 같은 {conflict.field === "__deleted" ? "상품 또는 발주서가 삭제·변경되었습니다" : `항목(${conflict.field})을 변경했습니다`}.</p>
                   {conflict.field !== "__deleted" && <button type="button" onClick={() => resolveEditConflict(conflict, true)} style={wmsSecondaryButton}>내 입력 유지: {String(conflict.local ?? "")}</button>}
                   <button type="button" onClick={() => resolveEditConflict(conflict, false)} style={wmsSecondaryButton}>다른 기기 변경 적용{conflict.field === "__deleted" ? "" : `: ${String(conflict.remote ?? "")}`}</button>
                 </div>)}
                 <div style={{ fontSize: "11px", color: wmsColors.muted, marginBottom: "8px" }}>
-                  발주일 {new Date().toLocaleDateString("ko-KR")}
+                  발주일 {new Date(entry.draft?.createdAt || Date.now()).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul" })}
                 </div>
 
                 <div style={params.waveId.startsWith(VENDOR_QUEUE_PREFIX) ? { marginBottom: "10px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: 10 } : { marginBottom: "10px" }}>
                   {group.lines.map(line => (
                     <div key={line.id} style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "6px", alignItems: "start" }}>
-                    <input type="checkbox" aria-label={`${line.productName} 선택`} checked={selectedLineIds.has(line.id)} disabled={saving || isPreview || Boolean(getVendorLineDeletionBlockReason(line, draftsByVendor[group.vendorName]))} title={getVendorLineDeletionBlockReason(line, draftsByVendor[group.vendorName]) || "삭제할 상품 선택"} onChange={() => setSelectedLineIds(prev => { const next = new Set(prev); if (next.has(line.id)) next.delete(line.id); else next.add(line.id); return next; })} style={{ width: "24px", height: "24px", marginTop: "12px" }} />
+                    <input type="checkbox" aria-label={`${line.productName} 선택`} checked={selectedLineIds.has(line.id)} disabled={historical || saving || isPreview || Boolean(getVendorLineDeletionBlockReason(line, entry.draft))} title={getVendorLineDeletionBlockReason(line, entry.draft) || "삭제할 상품 선택"} onChange={() => setSelectedLineIds(prev => { const next = new Set(prev); if (next.has(line.id)) next.delete(line.id); else next.add(line.id); return next; })} style={{ width: "24px", height: "24px", marginTop: "12px" }} />
                     <VendorOrderLineCard
                       line={line}
                       compact={params.waveId.startsWith(VENDOR_QUEUE_PREFIX)}
@@ -1048,10 +1040,11 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                         if(baseline) lineBaselines.current.set(saved.id,{...baseline,...receipt});
                       }}
                       editable={editable}
+                      receivingReadOnly={historical || historyView}
                       knownVendorNames={knownVendorNames}
                       productLink={liveCatalogByProductCode.get(normalizeSkuId(line.skuId))?.productLink || ""}
                       delaySummary={receivingDelays.summaries.get(normalizeSkuId(line.skuId))}
-                      delayDisabled={receivingDelays.loading || receivingDelays.saving || Boolean(receivingDelays.error) || saving}
+                      delayDisabled={historical || historyView || receivingDelays.loading || receivingDelays.saving || Boolean(receivingDelays.error) || saving}
                       onDelay={() => { setDelayError(null); setDelayTarget({ line, previous: receivingDelays.summaries.get(normalizeSkuId(line.skuId)) }); }}
                       onChange={patch => updateLine(line.id, patch)}
                       onPhotoWork={active => setPhotoWorkCount(count => Math.max(0, count + (active ? 1 : -1)))}
@@ -1110,14 +1103,14 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
 
                 {(status === "approved" || status === "sent") && (
                   <VendorOrderExportPanel
-                    wave={wave}
+                    wave={historical && entry.draft ? deriveArchivedVendorOrderWorkspace(entry.draft.waveId, [entry.draft], group.lines) || wave : wave}
                     vendorName={group.vendorName}
                     lines={group.lines}
                     status={status}
-                    readOnly={historyView}
+                    readOnly={historical || historyView}
                     busy={saving || workspaceMoved || editConflicts.some(conflict => conflict.vendorName === group.vendorName)}
                     statusSaving={statusSavingVendor === group.vendorName}
-                    onBeforeExport={async () => historyView ? group.lines : await checkCompletion(linesRef.current.filter(line => (line.vendorName || UNASSIGNED_VENDOR_NAME) === group.vendorName), true)}
+                    onBeforeExport={async () => historical || historyView ? group.lines : await checkCompletion(linesRef.current.filter(line => (line.vendorName || UNASSIGNED_VENDOR_NAME) === group.vendorName), true)}
                     onMarkSent={() => toggleSent(group.vendorName)}
                     onReviseAgain={async () => { await beginVendorRevision(group.vendorName); }}
                   />
@@ -1181,6 +1174,7 @@ function VendorOrderLineCard({
   compact = false,
   onReceivingSaved,
   editable,
+  receivingReadOnly = false,
   knownVendorNames,
   productLink,
   delaySummary,
@@ -1203,6 +1197,7 @@ function VendorOrderLineCard({
   line: VendorOrderDraftLine;
   onReceivingSaved: (line: VendorOrderDraftLine) => void;
   editable: boolean;
+  receivingReadOnly?: boolean;
   knownVendorNames: string[];
   /** 제품DB "제품링크" 실시간 조회값 — 없으면 "" (임의 URL 생성 금지, 2026-08-19 5차 실사용 테스트 신규) */
   productLink: string;
@@ -1586,7 +1581,7 @@ function VendorOrderLineCard({
       {delaySummary?.active && delaySummary.memo && <p style={{ margin: "6px 0 0", fontSize: "12px", color: wmsColors.muted, overflowWrap: "anywhere" }}>{delaySummary.memo}</p>}
 
       {partialCompletion && <p style={{ color: wmsColors.warn, fontSize: "12px" }}>일부 미납분은 재발주요청이 완료됐습니다. 남은 발주가 있어 상품을 유지했으니 실제 부족수량을 확인해 주세요.</p>}
-      <SimpleReceiving lineId={line.id} onSaved={onReceivingSaved} />
+      {!receivingReadOnly && <SimpleReceiving lineId={line.id} onSaved={onReceivingSaved} />}
       <div data-vendor-option-slot style={{ height: "44px", marginTop: "10px" }}>
         {onAddOptions && <button type="button" disabled={optionsBusy} onClick={onAddOptions} style={{ ...wmsSecondaryButton, width: "100%", height: "44px", fontSize: "13px" }}>+ 옵션 추가</button>}
       </div>

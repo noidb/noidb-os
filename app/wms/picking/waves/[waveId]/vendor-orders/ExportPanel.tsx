@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { renderVendorOrderImage } from "@/lib/wms/vendor-order/render-order-image";
 import type { VendorOrderDraftLine, VendorOrderDraftStatus } from "@/lib/wms/vendor-order/types";
 import type { PickingWave } from "@/lib/wms/picking-wave/types";
-import { wmsColors, wmsGreenDarkButton, wmsPrimaryButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
+import { wmsColors, wmsSageButton as wmsGreenDarkButton, wmsSecondaryButton as wmsPrimaryButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
 
 interface Props {
   wave: PickingWave;

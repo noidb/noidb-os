@@ -14,3 +14,9 @@ assert.equal(orderVendorDrafts([{id:'local',vendorName:'신규'}])[0].label,'신
 const page=fs.readFileSync('app/wms/vendor-orders/status-requests/page.tsx','utf8');
 assert(!page.includes('처리자 이름'));assert(!page.includes('주간업무에서 단종 목록 함께 처리'));assert(page.includes('operator: "자동"'));
 console.log('PASS vendor chronology, stable labels, immutable sent drafts, status page simplification');
+const editor=fs.readFileSync('app/wms/picking/waves/[waveId]/vendor-orders/VendorOrderEditor.tsx','utf8');
+assert(!editor.includes('>발주서 보기</a>'));
+assert(editor.includes('expandedSentVendors.has(entry.id)'));
+assert(editor.includes('readOnly={historical || historyView}'));
+assert(editor.includes('receivingReadOnly={historical || historyView}'));
+console.log('PASS shared inline card renderer and independent draft expansion; archived history remains protected');

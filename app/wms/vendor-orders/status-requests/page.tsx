@@ -7,7 +7,7 @@ import type { StatusFileGenerationRecord, StatusRequestRecord } from "@/lib/wms/
 import { downloadBlobPreservingPage } from "@/lib/wms/download-client";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { normalizeSkuId } from "@/lib/wms/sku-normalize";
-import { WMS_MOBILE_WIDTH, wmsColors, wmsGhostButton, wmsSecondaryButton, wmsSageButton } from "@/lib/wms/ui-tokens";
+import { WMS_MOBILE_WIDTH, wmsColors, wmsGhostButton, wmsSecondaryButton, wmsSageButton, wmsWarnButton } from "@/lib/wms/ui-tokens";
 
 type Filter = "전체" | "처리대기" | "단종" | "단종해제" | "외부 처리완료";
 const FILTERS: Filter[] = ["전체", "처리대기", "단종", "단종해제", "외부 처리완료"];
@@ -160,7 +160,7 @@ export default function StatusRequestsPage() {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginBottom: "8px" }}>
         <button type="button" onClick={() => setSelected(new Set(filtered.map(request => request.id)))} style={{ ...wmsGhostButton, ...actionButtonSize }}>전체선택</button>
         <button type="button" onClick={() => setSelected(new Set())} style={{ ...wmsGhostButton, ...actionButtonSize }}>선택해제</button>
-        <button type="button" disabled={saving || !selectedDiscontinue.length} onClick={generateDiscontinueFiles} style={{ ...wmsSecondaryButton, ...actionButtonSize, opacity: selectedDiscontinue.length ? 1 : .45 }}>선택 단종파일 생성</button>
+        <button type="button" disabled={saving || !selectedDiscontinue.length} onClick={generateDiscontinueFiles} style={{ ...wmsWarnButton, ...actionButtonSize, opacity: selectedDiscontinue.length ? 1 : .45 }}>선택 단종파일 생성</button>
         <button type="button" disabled={saving || !selectedRelease.length} onClick={generateReleaseFile} style={{ ...wmsSecondaryButton, ...actionButtonSize, opacity: selectedRelease.length ? 1 : .45 }}>선택 단종해제 파일 생성</button>
         <button type="button" disabled={saving || !pendingDiscontinue.length} onClick={() => completeSelected("단종")} style={{ ...wmsSageButton, ...actionButtonSize, opacity: pendingDiscontinue.length ? 1 : .45 }}>단종 업로드 완료</button>
         <button type="button" disabled={saving || !pendingRelease.length} onClick={() => completeSelected("단종해제")} style={{ ...wmsSageButton, ...actionButtonSize, opacity: pendingRelease.length ? 1 : .45 }}>해제 이메일 발송 완료</button>

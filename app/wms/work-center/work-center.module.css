@@ -58,3 +58,5 @@
 .task > a[href="/wms/vendor-orders/status-requests"],
 .task > a[href="/wms/inbound"] { background: #e5dace; border-color: #cfc0b0; color: #302d29; }
 .task > a[href="/wms/reprint"] { background: #60766a; border-color: #60766a; color: #fff; }
+.task > a[href="/wms/vendor-orders/status-requests"] { background: #f2dfd8; border-color: #dfbdb2; color: #7f4032; }
+.task > a[href="/wms/inbound"] { background: #60766a; border-color: #60766a; color: #fff; }
