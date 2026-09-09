@@ -392,9 +392,9 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 }
 .draftLoadButton{background:var(--brand-sage)!important;color:#fff!important;border-color:var(--brand-sage)!important;box-shadow:0 4px 12px rgba(96,118,106,.18)}
 .resetAllButton,.resetImagesButton{background:var(--brand-clay-soft)!important;color:#7f4032!important;border-color:#dfbdb2!important}
-.heroUtilityActions{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
+.heroUtilityActions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;gap:10px;margin-top:10px;width:100%}
 .imageGeneratorLink{display:inline-flex;align-items:center;justify-content:center;min-height:46px;padding:11px 16px;border-radius:10px;background:#7f5a44;color:#fff;text-decoration:none;font-weight:800}
-.heroUtilityActions .draftLoadButton,.heroUtilityActions .resetAllButton{margin:0;min-height:46px;padding:11px 16px}
+.heroUtilityActions .imageGeneratorLink,.heroUtilityActions .draftLoadButton,.heroUtilityActions .resetAllButton{display:flex;align-items:center;justify-content:center;box-sizing:border-box;margin:0;width:100%;min-width:0;min-height:52px;padding:10px 12px;font-size:14px;line-height:1.3;text-align:center;white-space:normal}
 .detailItemButtons .removeButton,.slotActions .removeButton,.sourcingImageCard button,.uploadPoolItem button,.draftItem .removeButton,.quoteGroupActions .dangerTextButton{
   background:var(--brand-clay-soft)!important;color:#7f4032!important;border-color:#dfbdb2!important
 }
@@ -433,8 +433,8 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
   .hero{margin-bottom:18px}
   .brandLockup{margin-bottom:12px}
   .hero h1{font-size:27px;margin-bottom:8px}
-  .heroUtilityActions{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,.9fr);width:100%;gap:8px;margin-top:8px}
-  .heroUtilityActions .draftLoadButton,.heroUtilityActions .resetAllButton{width:100%;min-width:0;min-height:44px;padding:9px 7px;font-size:13px;line-height:1.2;white-space:nowrap}
+  .heroUtilityActions{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}
+  .heroUtilityActions .imageGeneratorLink,.heroUtilityActions .draftLoadButton,.heroUtilityActions .resetAllButton{min-height:52px;padding:9px 6px;font-size:13px;line-height:1.3;word-break:keep-all}
   .slotAddButtons{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
   .slotAddButtons{width:100%;margin-inline:0}
   .slotAddButtons button{width:100%;min-width:0;min-height:42px;padding:8px 3px;font-size:11px;line-height:1.2;white-space:nowrap}
