@@ -26,6 +26,9 @@ function fixture() {
   const missing = snapshot.vendorOrderLines.find(line => line.skuId === "91000011");
   missing.vendorName = "거래처 미등록"; missing.draftId = queueId + "::거래처 미등록"; missing.optionLabel = "14호";
   snapshot.vendorOrderDrafts.push({ id: missing.draftId, waveId: queueId, vendorName: missing.vendorName, status: "draft", createdAt: now, updatedAt: now });
+  const sentVendor = "전송거래처", sentDraftId = queueId + "::" + sentVendor;
+  snapshot.vendorOrderDrafts.push({ id: sentDraftId, waveId: queueId, vendorName: sentVendor, status: "sent", statusBeforeSent: "approved", sentAt: now, createdAt: now, updatedAt: now });
+  snapshot.vendorOrderLines.push({ ...snapshot.vendorOrderLines[0], id: queueId + "::92000000", draftId: sentDraftId, vendorName: sentVendor, skuId: "92000000", productName: "전송완료 상품", barcode: "R92000000" });
   return snapshot;
 }
 const catalog = [
@@ -97,6 +100,13 @@ async function run(browser, width) {
     await page.goto(`${baseUrl}/wms/picking/waves/${queueId}/vendor-orders`, { waitUntil: "domcontentloaded", timeout: 90000 });
     await card("78483551").waitFor({ timeout: 90000 });
     console.log(width + ": editor loaded");
+    const sentGroup = page.locator('[data-vendor-group="전송거래처"]');
+    await sentGroup.getByRole("button", { name: "펼치기 ↓", exact: true }).waitFor();
+    assert.equal(await card("92000000").isVisible(), false, "sent vendor order is collapsed by default");
+    await sentGroup.getByRole("button", { name: "펼치기 ↓", exact: true }).click();
+    await card("92000000").waitFor();
+    await sentGroup.getByRole("button", { name: "접기 ↑", exact: true }).click();
+    assert.equal(await card("92000000").isVisible(), false, "sent vendor order can be collapsed again after review");
     if (width >= 1000) {
       const rowHeights = await page.locator('[data-vendor-group="창성"] [data-vendor-sku]').evaluateAll(nodes => {
         const rows = new Map();

@@ -68,6 +68,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
   const vendorMoving = useRef(false);
   const [saving, setSaving] = useState(false);
   const [statusSavingVendor, setStatusSavingVendor] = useState<string | null>(null);
+  const [expandedSentVendors, setExpandedSentVendors] = useState<Set<string>>(new Set());
   const [photoWorkCount, setPhotoWorkCount] = useState(0);
   const reportQueueEditing = useContext(VendorQueueEditingContext);
   useEffect(() => { reportQueueEditing?.(dirty || saving || photoWorkCount > 0 || loading); return () => reportQueueEditing?.(false); }, [dirty, saving, photoWorkCount, loading, reportQueueEditing]);
@@ -631,8 +632,15 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
 
   async function toggleSent(vendorName: string) {
     const draft = draftsByVendor[vendorName];
+    const nextStatus = draft?.status === "sent" ? (draft.statusBeforeSent || "approved") : "sent";
     setStatusSavingVendor(vendorName);
-    try { await persistAll({ vendorName, status: draft?.status === "sent" ? (draft.statusBeforeSent || "approved") : "sent" }); }
+    try {
+      const saved = await persistAll({ vendorName, status: nextStatus });
+      if (saved && nextStatus === "sent") setExpandedSentVendors(previous => {
+        if (!previous.has(vendorName)) return previous;
+        const next = new Set(previous); next.delete(vendorName); return next;
+      });
+    }
     finally { setStatusSavingVendor(null); }
   }
 
@@ -754,6 +762,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
             const totalOrderQuantity = group.lines.reduce((sum, l) => sum + l.shortageQuantity, 0);
             const totalActualShortage = group.lines.reduce((sum, l) => sum + (l.actualShortageQuantity ?? l.shortageQuantity), 0);
             const pendingReorders = pendingReorderLines.filter(line => (line.vendorName || UNASSIGNED_VENDOR_NAME) === group.vendorName);
+            const sentCollapsed = status === "sent" && !expandedSentVendors.has(group.vendorName);
 
             return (
               <div key={group.vendorName} data-vendor-group={group.vendorName} style={cardStyle}>
@@ -764,8 +773,26 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                       실제부족 {totalActualShortage}개 · 발주 {totalOrderQuantity}개 · {group.lines.length}종
                     </span>
                   </h2>
-                  <StatusBadge status={status} />
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
+                    <StatusBadge status={status} />
+                    {status === "sent" && (
+                      <button
+                        type="button"
+                        aria-expanded={!sentCollapsed}
+                        aria-controls={`vendor-order-${group.vendorName}`}
+                        onClick={() => setExpandedSentVendors(previous => {
+                          const next = new Set(previous);
+                          if (next.has(group.vendorName)) next.delete(group.vendorName); else next.add(group.vendorName);
+                          return next;
+                        })}
+                        style={{ ...wmsGhostButton, minHeight: "32px", padding: "0 10px", fontSize: "11px" }}
+                      >
+                        {sentCollapsed ? "펼치기 ↓" : "접기 ↑"}
+                      </button>
+                    )}
+                  </div>
                 </div>
+                <div id={`vendor-order-${group.vendorName}`} hidden={sentCollapsed}>
                 <div style={{ fontSize: "11px", color: wmsColors.muted, marginBottom: "8px" }}>
                   발주일 {new Date().toLocaleDateString("ko-KR")}
                 </div>
@@ -853,6 +880,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                     onReviseAgain={() => beginVendorRevision(group.vendorName)}
                   />
                 )}
+                </div>
               </div>
             );
           })}
