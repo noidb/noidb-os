@@ -52,7 +52,7 @@ export class SharedVendorOrderRepository implements VendorOrderRepository {
 
   async listDrafts(waveId: string) { try { const snapshot = await this.refresh(); return deriveVendorOrderDrafts(snapshot.vendorOrderDrafts, snapshot.vendorOrderLines).filter(value => value.waveId === waveId); } catch { return this.local.listDrafts(waveId); } }
   async saveDraft(draft: VendorOrderDraft, expected?: { updatedAt?: string | null; lineIds?: string[] }) { return this.save(() => this.local.saveDraft(draft), { action: "saveVendorDraft", draft, expectedUpdatedAt: expected?.updatedAt, expectedLineIds: expected?.lineIds }); }
-  async deleteDraft(draftId: string) { await this.ensureMigrated(); mirror(await requestSnapshot({ action: "deleteVendorDraft", draftId, deletedAt: new Date().toISOString() })); }
+  async deleteDraft(draftId: string, expected?: { updatedAt?: string | null; lineIds?: string[] }) { await this.ensureMigrated(); mirror(await requestSnapshot({ action: "deleteVendorDraft", draftId, deletedAt: new Date().toISOString(), expectedUpdatedAt: expected?.updatedAt, expectedLineIds: expected?.lineIds })); }
   async listLines(waveId: string) { try { return (await this.refresh()).vendorOrderLines.filter(value => value.waveId === waveId); } catch { return this.local.listLines(waveId); } }
   async saveLine(line: VendorOrderDraftLine, expectedUpdatedAt?: string | null) { return this.save(() => this.local.saveLine(line), { action: "saveVendorLine", line, expectedUpdatedAt }); }
   async deleteLine(lineId: string) { await this.ensureMigrated(); mirror(await requestSnapshot({ action: "deleteVendorLine", lineId, deletedAt: new Date().toISOString() })); }

@@ -48,6 +48,12 @@ export function assertVendorQueueMutation(store: PickingWaveStoreSnapshot, mutat
     if (isServerVendorQueueRecord(mutation.draft) && store.deletedVendorDraftIds[mutation.draft.id]) throw new VendorOrderWriteConflictError("이미 삭제한 발주서입니다. 최신 거래처 발주대기를 열어 다시 확인해 주세요.");
   } else if (mutation.action === "deleteVendorDraft") {
     const current = store.vendorOrderDrafts.find(draft => draft.id === mutation.draftId);
+    if (mutation.expectedUpdatedAt !== undefined && (current?.updatedAt ?? null) !== mutation.expectedUpdatedAt) throw new VendorOrderWriteConflictError("다른 화면에서 발주서가 변경되었습니다. 최신 발주서를 확인한 뒤 다시 삭제해 주세요.");
+    if (mutation.expectedLineIds !== undefined) {
+      const currentIds = store.vendorOrderLines.filter(line => line.draftId === mutation.draftId && !store.deletedVendorLineIds[line.id]).map(line => line.id);
+      const expected = new Set(mutation.expectedLineIds);
+      if (expected.size !== currentIds.length || currentIds.some(id => !expected.has(id))) throw new VendorOrderWriteConflictError("다른 화면에서 발주서 상품이 변경되었습니다. 최신 발주서를 확인한 뒤 다시 삭제해 주세요.");
+    }
     if (retired(store, current || { id: mutation.draftId }) && current?.status !== "sent") fail();
   } else if (mutation.action === "deleteVendorLine" || mutation.action === "saveVendorLineImage") {
     const current = store.vendorOrderLines.find(line => line.id === mutation.lineId);

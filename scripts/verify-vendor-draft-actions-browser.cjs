@@ -42,7 +42,7 @@ const catalog = [
 async function run(browser, width) {
   let snapshot = fixture(), completionExcluded = [], completionFailure = null;
   const runCatalog = catalog.map(item => ({ ...item }));
-  const mutations = [], completionCalls = [], unexpected = [], errors = [], downloads = [];
+  const mutations = [], completionCalls = [], discontinueActions = [], unexpected = [], errors = [], downloads = [];
   let acceptDialog = true;
   const context = await browser.newContext({ viewport: { width, height: 844 }, acceptDownloads: true });
   await context.addInitScript(() => {
@@ -84,7 +84,13 @@ async function run(browser, width) {
         if (item) item.currentStatus = body.currentStatus;
         result = { success: true };
       } else if (url.pathname === "/api/wms/product-catalog") result = { success: true, configured: true, items: runCatalog };
-      else if (url.pathname === "/api/wms/vendor-order-actions") result = { success: true, delaySummaries: [] };
+      else if (url.pathname === "/api/wms/vendor-order-actions") {
+        if (method === "POST") {
+          assert.equal(body.action, "queue-discontinue");
+          discontinueActions.push(body);
+          result = { success: true, record: { id: "fixture-discontinue-" + body.skuId, skuId: body.skuId, requestType: "단종", supplyHubStatus: "처리대기" } };
+        } else result = { success: true, delaySummaries: [] };
+      }
       else {
         unexpected.push(method + " " + url.pathname);
         assert.notEqual(method, "POST", "unexpected writes are forbidden");
@@ -122,6 +128,7 @@ async function run(browser, width) {
       for (const heights of rowHeights) assert(Math.max(...heights) - Math.min(...heights) <= 1, "cards in the same row keep equal heights with or without the option button");
     }
     await card("91000011").getByText("거래처: 창성", { exact: true }).waitFor();
+    assert.equal(await card("90000003").getByRole("button", { name: "단종대기로 이동", exact: true }).count(), 1, "approved orders still expose the direct discontinue queue action");
     assert(await card("91000011").locator("input").evaluateAll(inputs => inputs.some(input => input.value === "로즈골드, 14호")), "size-only saved option is filled from exact SKU catalog");
     assert((await card("91000011").locator("img").first().getAttribute("src")).includes("fixture-catalog.png"), "missing photo is filled from catalog");
     assert.equal(snapshot.vendorOrderLines.find(line => line.skuId === "91000011").vendorName, "거래처 미등록", "catalog display preparation does not silently write originals");
@@ -160,10 +167,11 @@ async function run(browser, width) {
     assert.equal(snapshot.vendorOrderLines.filter(line => ["99000002", "99000004"].includes(line.skuId)).length, 2, "added options are saved by their own SKU identities");
     await page.reload({ waitUntil: "domcontentloaded" }); await card("99000004").waitFor();
     assert.equal(await card("99000002").count(), 1, "added options survive reopening");
-    await card("99000004").getByRole("button", { name: "단종", exact: true }).click();
+    await card("99000004").getByRole("button", { name: "단종대기로 이동", exact: true }).click();
     await card("99000004").waitFor({ state: "detached" });
-    assert.equal(runCatalog.find(item => item.skuId === "99000004").currentStatus, "단종", "catalog status is saved before the card disappears");
-    assert(snapshot.vendorOrderLines.some(line => line.skuId === "99000004"), "status completion hides the draft card while preserving source history");
+    assert.equal(discontinueActions.at(-1).skuId, "99000004", "the card queues the exact SKU for the shared discontinue list");
+    assert.equal(runCatalog.find(item => item.skuId === "99000004").currentStatus, "판매중", "queuing does not falsely mark Product DB as completed");
+    assert.equal(snapshot.vendorOrderLines.some(line => line.skuId === "99000004"), false, "queued SKU is removed from this draft and stays suppressed until explicitly re-added");
     assert.equal(await check("90000002").isDisabled(), true, "received row cannot be selected");
     assert.match(await check("90000002").getAttribute("title"), /입고·원가 이력/);
     assert.equal(await check("90000003").isDisabled(), true, "approved row cannot be selected");
@@ -180,16 +188,17 @@ async function run(browser, width) {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, "no horizontal overflow");
     await page.screenshot({ path: `${out}/selection-${width}.png` });
     const beforeCancel = structuredClone(snapshot);
+    const deleteCountBeforeCancel = mutations.filter(m => m.action === "deleteVendorLines").length;
     acceptDialog = false;
     await selection.getByRole("button", { name: "선택한 상품 삭제 (2)", exact: true }).click();
     assert.deepEqual(snapshot, beforeCancel, "cancel preserves all server data");
-    assert.equal(mutations.filter(m => m.action === "deleteVendorLines").length, 0, "cancel never sends a deletion");
+    assert.equal(mutations.filter(m => m.action === "deleteVendorLines").length, deleteCountBeforeCancel, "cancel never sends a deletion");
     assert.equal(await check("78483551").isChecked(), true);
     acceptDialog = true;
     await selection.getByRole("button", { name: "선택한 상품 삭제 (2)", exact: true }).click();
     await card("78483551").waitFor({ state: "detached" });
     assert.equal(await card("78483550").count(), 0);
-    const deletes = mutations.filter(m => m.action === "deleteVendorLines");
+    const deletes = mutations.filter(m => m.action === "deleteVendorLines" && m.lineIds.length === 2);
     assert.equal(deletes.length, 1);
     assert.deepEqual([...deletes[0].lineIds].sort(), ids(["78483550", "78483551"]).sort());
     assert.equal(snapshot.vendorOrderLines.length, beforeCancel.vendorOrderLines.length - 2);
@@ -292,6 +301,10 @@ async function run(browser, width) {
     await page.getByText("신규수동거래처 발주서에 넣을 상품을 검색해 선택해 주세요.", { exact: true }).waitFor({ state: "attached" });
     await page.getByRole("button", { name: "닫기", exact: true }).click();
     await page.locator('[data-vendor-group="신규수동거래처"]').waitFor();
+    assert.equal(await page.locator("[data-vendor-group]").first().getAttribute("data-vendor-group"), "신규수동거래처", "the newly created manual vendor order appears at the top immediately");
+    await page.locator('[data-vendor-group="신규수동거래처"]').getByRole("button", { name: "발주서 삭제", exact: true }).click();
+    await page.locator('[data-vendor-group="신규수동거래처"]').waitFor({ state: "detached" });
+    assert.equal(mutations.filter(m => m.action === "deleteVendorDraft" && m.draftId.includes("신규수동거래처")).length, 0, "an unsaved empty manual order is removed locally without a server write");
     assert.equal(errors.length, 0, errors.join("\n"));
     const result = { width, passed: true, checks: ["catalog vendor/photo/size option completion without writes", "registered vendor list and search selection", "same model option search, disabled existing/discontinued options, multi-add and save/reopen", "approved product add after edit transition and save/reopen", "targeted server revision unlock before image editing", "fixed selection toolbar at deep scroll", "cancel is read-only", "atomic exact selection deletion", "unselected dirty quantity and memo preserved", "deletion persists on reopen", "receiving and approved locks", "409 retains selection and state", "focus completion hides selected row without history loss", "failed export check blocks preview/copy/share/download"], mutationCount: mutations.length, completionCheckCount: completionCalls.length, errors, unexpected };
     fs.writeFileSync(`${out}/results-${width}.json`, JSON.stringify(result, null, 2));

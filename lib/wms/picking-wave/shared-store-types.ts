@@ -61,7 +61,7 @@ export type PickingWaveStoreMutation =
   | { action: "clearPoConfirmationErrors"; poNumbers: string[]; waveId?: string; deletedAt: string }
   | { action: "saveVendorDraft"; draft: VendorOrderDraft; expectedUpdatedAt?: string | null; expectedLineIds?: string[] }
   | { action: "saveVendorWorkspace"; operationId: string; waveId: string; lines: VendorOrderDraftLine[]; drafts: VendorOrderDraft[]; removedLineIds: string[]; expectedUpdatedAtByLineId: Record<string, string | null>; expectedUpdatedAtByDraftId: Record<string, string | null>; expectedLineIdsByDraftId: Record<string, string[]>; now: string }
-  | { action: "deleteVendorDraft"; draftId: string; deletedAt: string }
+  | { action: "deleteVendorDraft"; draftId: string; deletedAt: string; expectedUpdatedAt?: string | null; expectedLineIds?: string[] }
   | { action: "restoreVendorDraft"; draft: VendorOrderDraft; lines: VendorOrderDraftLine[] }
   | { action: "saveVendorLine"; line: VendorOrderDraftLine; expectedUpdatedAt?: string | null }
   | { action: "saveVendorLineImage"; lineId: string; imageUrl: string; expectedImageUrl: string; now: string }
@@ -175,7 +175,11 @@ export function isPickingWaveStoreMutation(value: unknown): value is PickingWave
         && Array.isArray(lineIds) && lineIds.length <= 5000 && lineIds.every(lineId => typeof lineId === "string" && lineId.trim()) && new Set(lineIds).size === lineIds.length;
     });
   }
-  if (value.action === "deleteVendorDraft") return hasText(value, "draftId") && hasText(value, "deletedAt");
+  if (value.action === "deleteVendorDraft") return hasText(value, "draftId") && hasText(value, "deletedAt")
+    && Number.isFinite(Date.parse(String(value.deletedAt)))
+    && (value.expectedUpdatedAt === undefined || value.expectedUpdatedAt === null || typeof value.expectedUpdatedAt === "string")
+    && (value.expectedLineIds === undefined || Array.isArray(value.expectedLineIds) && value.expectedLineIds.length <= 5000
+      && value.expectedLineIds.every(id => typeof id === "string" && id.trim()) && new Set(value.expectedLineIds).size === value.expectedLineIds.length);
   if (value.action === "restoreVendorDraft") {
     if (!isObject(value.draft) || !hasText(value.draft, "id") || !hasText(value.draft, "waveId") || !hasText(value.draft, "updatedAt") || !Array.isArray(value.lines) || value.lines.length > 10000) return false;
     const draft = value.draft;

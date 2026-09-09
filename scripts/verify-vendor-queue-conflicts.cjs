@@ -30,6 +30,9 @@ assert.doesNotThrow(()=>apply(snapshot,{action:'saveVendorDraft',draft:{...histo
 const saved=apply(snapshot,{action:'saveVendorLine',line:{...a,memo:'다른 탭 최신 메모',updatedAt:now},expectedUpdatedAt:before});
 assert.throws(()=>apply(saved,{action:'saveVendorLine',line:{...a,shortageQuantity:36,updatedAt:later},expectedUpdatedAt:before}),VendorOrderWriteConflictError);
 assert.throws(()=>apply(saved,{action:'saveVendorLine',line:{...a,updatedAt:later},expectedUpdatedAt:null}),VendorOrderWriteConflictError);
+assert.throws(()=>apply(saved,{action:'deleteVendorDraft',draftId:a.draftId,deletedAt:later,expectedUpdatedAt:now,expectedLineIds:[a.id]}),VendorOrderWriteConflictError,'A stale draft timestamp cannot delete a newer order');
+assert.throws(()=>apply(saved,{action:'deleteVendorDraft',draftId:a.draftId,deletedAt:later,expectedUpdatedAt:before,expectedLineIds:[]}),VendorOrderWriteConflictError,'A stale product list cannot delete a populated order');
+assert.equal(apply(saved,{action:'deleteVendorDraft',draftId:a.draftId,deletedAt:later,expectedUpdatedAt:before,expectedLineIds:[a.id]}).vendorOrderDrafts.some(draft=>draft.id===a.draftId),false,'An exact current draft can be deleted');
 const manualOne={...line(active+'::manual-first'),skuId:'OPTION-1',isManuallyAdded:true};
 const manualTwo={...manualOne,id:active+'::manual-second'};
 const withManual=apply(snapshot,{action:'saveVendorLine',line:manualOne,expectedUpdatedAt:null});

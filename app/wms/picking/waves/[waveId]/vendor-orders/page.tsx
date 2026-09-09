@@ -251,6 +251,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
 
   const groups = useMemo(() => {
     const map = new Map<string, VendorOrderDraftLine[]>();
+    const manualVendorPriority = new Map(manualVendorNames.map((vendorName, index) => [vendorName, index]));
     for (const line of lines) {
       if (excludedLineIds.has(line.id) || line.orderExclusion) continue;
       const vendor = line.vendorName || UNASSIGNED_VENDOR_NAME;
@@ -272,7 +273,16 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
         a.optionLabel.localeCompare(b.optionLabel, "ko", { numeric: true }) ||
         a.skuId.localeCompare(b.skuId, "ko", { numeric: true });
       }) }))
-      .sort((a, b) => (a.vendorName === UNASSIGNED_VENDOR_NAME ? 1 : b.vendorName === UNASSIGNED_VENDOR_NAME ? -1 : a.vendorName.localeCompare(b.vendorName)));
+      .sort((a, b) => {
+        const aPriority = manualVendorPriority.get(a.vendorName);
+        const bPriority = manualVendorPriority.get(b.vendorName);
+        if (aPriority !== undefined || bPriority !== undefined) {
+          if (aPriority === undefined) return 1;
+          if (bPriority === undefined) return -1;
+          return aPriority - bPriority;
+        }
+        return a.vendorName === UNASSIGNED_VENDOR_NAME ? 1 : b.vendorName === UNASSIGNED_VENDOR_NAME ? -1 : a.vendorName.localeCompare(b.vendorName);
+      });
   }, [lines, manualVendorNames, pendingReorderLines, excludedLineIds]);
 
   const variantSkuIds = useMemo(() => {
@@ -413,10 +423,10 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
     setDirty(true);
   }
 
-  async function beginVendorRevision(vendorName: string) {
-    if (saving || statusSavingVendor || workspaceMoved) return;
+  async function beginVendorRevision(vendorName: string): Promise<boolean> {
+    if (saving || statusSavingVendor || workspaceMoved) return false;
     const current = draftsRef.current[vendorName];
-    if (!current || ["draft", "review", "resend_needed"].includes(current.status)) return;
+    if (!current || ["draft", "review", "resend_needed"].includes(current.status)) return true;
     const expectedUpdatedAt = draftBaselines.current.get(current.id) ?? null;
     const revised: VendorOrderDraft = {
       ...current,
@@ -440,11 +450,89 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
       setDraftsByVendor(previous => ({ ...previous, [vendorName]: revised }));
       setCompletionMessage(`${vendorName} 발주서를 수정 상태로 전환했습니다. 사진과 발주내용을 바로 변경할 수 있습니다.`);
       notifyQueueChange();
+      return true;
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "발주서를 수정 상태로 전환하지 못했습니다.");
+      return false;
     } finally {
       setStatusSavingVendor(null);
     }
+  }
+
+  async function queueLineForDiscontinue(line: VendorOrderDraftLine) {
+    if (saving || workspaceMoved) throw new Error("다른 저장이 끝난 뒤 다시 눌러 주세요.");
+    const vendorName = line.vendorName || UNASSIGNED_VENDOR_NAME;
+    const status = statusOf(vendorName);
+    if (status === "sent") throw new Error("전송완료 발주서는 먼저 '발주내용 수정'을 눌러 수정 상태로 전환해 주세요.");
+    if (status === "approved" && !(await beginVendorRevision(vendorName))) throw new Error("발주서를 수정 상태로 전환하지 못했습니다.");
+    await assertCurrentWorkspace();
+    const response = await fetch("/api/wms/vendor-order-actions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "queue-discontinue",
+        skuId: line.skuId,
+        purchaseOrderNumber: line.relatedPurchaseOrderNumbers.join(","),
+        operator: rawWave?.workerName || "WMS 거래처 발주",
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || "단종대기에 추가하지 못했습니다.");
+
+    // 단종대기에 넣은 상품은 같은 초안에서 다시 주문하지 않도록 즉시 삭제 이력을 남긴다.
+    const baseline = lineBaselines.current.get(line.id);
+    if (baseline) {
+      const deletedAt = new Date().toISOString();
+      const deleteResponse = await fetch("/api/wms/picking-waves", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "deleteVendorLines", waveId: params.waveId, lineIds: [line.id], expectedUpdatedAtByLineId: { [line.id]: baseline.updatedAt }, deletedAt }),
+      });
+      const deleteData = await deleteResponse.json();
+      if (!deleteResponse.ok || !deleteData.ok) throw new Error(`단종대기에는 추가했지만 발주서에서 제외하지 못했습니다. ${deleteData.error || "목록을 새로 확인해 주세요."}`);
+    }
+    lineBaselines.current.delete(line.id);
+    setLines(previous => previous.filter(item => item.id !== line.id));
+    setSelectedLineIds(previous => { const next = new Set(previous); next.delete(line.id); return next; });
+    setRemovedLineIds(previous => { const next = new Set(previous); next.delete(line.id); return next; });
+    setCompletionMessage(`SKU ${line.skuId}를 단종대기에 추가하고 이번 발주서에서 제외했습니다.`);
+    notifyQueueChange();
+  }
+
+  async function deleteVendorOrder(vendorName: string, vendorLines: VendorOrderDraftLine[]) {
+    if (saving || workspaceMoved) return;
+    const draft = draftsRef.current[vendorName];
+    if (draft?.status === "sent") { setSaveError("전송완료 발주서는 삭제할 수 없습니다. 완료 이력에서 확인해 주세요."); return; }
+    const allDraftLines = draft ? linesRef.current.filter(line => line.draftId === draft.id) : vendorLines;
+    const blocked = allDraftLines.map(line => getVendorLineDeletionBlockReason(line, draft)).find(Boolean);
+    if (blocked) { setSaveError(blocked); return; }
+    const itemText = vendorLines.length ? ` 포함 상품 ${vendorLines.length}개도 함께 삭제됩니다.` : "";
+    if (!window.confirm(`'${vendorName}' 거래처 발주서를 삭제할까요?${itemText}`)) return;
+    setSaving(true); setSaveError(null);
+    try {
+      await assertCurrentWorkspace();
+      if (draft) {
+        await vendorOrderRepository.deleteDraft(draft.id, {
+          updatedAt: draftBaselines.current.get(draft.id) ?? null,
+          lineIds: allDraftLines.filter(line => lineBaselines.current.has(line.id)).map(line => line.id),
+        });
+        draftBaselines.current.delete(draft.id);
+      }
+      const ids = new Set(allDraftLines.map(line => line.id));
+      for (const id of ids) lineBaselines.current.delete(id);
+      const nextLines = linesRef.current.filter(line => !ids.has(line.id) && (line.vendorName || UNASSIGNED_VENDOR_NAME) !== vendorName);
+      const nextRemoved = new Set([...removedLineIds].filter(id => !ids.has(id)));
+      setLines(nextLines);
+      setDraftsByVendor(previous => { const next = { ...previous }; delete next[vendorName]; return next; });
+      setManualVendorNames(previous => previous.filter(name => name !== vendorName));
+      setSelectedLineIds(previous => new Set([...previous].filter(id => !ids.has(id))));
+      setRemovedLineIds(nextRemoved);
+      setDirty(Boolean(nextRemoved.size || nextLines.some(line => JSON.stringify(line) !== JSON.stringify(lineBaselines.current.get(line.id)))));
+      setCompletionMessage(`${vendorName} 거래처 발주서를 삭제했습니다.`);
+      notifyQueueChange();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "거래처 발주서를 삭제하지 못했습니다.");
+    } finally { setSaving(false); }
   }
 
   function addProductsFromSearch(
@@ -527,7 +615,8 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
       setSaveError("수동 발주서를 만들 거래처명을 입력해 주세요.");
       return;
     }
-    setManualVendorNames(prev => (prev.includes(name) ? prev : [...prev, name]));
+    // 방금 만든 거래처를 첫 번째 그룹으로 올려 검색창을 닫은 직후 바로 확인할 수 있게 한다.
+    setManualVendorNames(prev => [name, ...prev.filter(value => value !== name)]);
     setNewVendorNameInput("");
     setAddingManualVendor(false);
     setSaveError(null);
@@ -835,10 +924,12 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                       partialCompletion={partialCompletionSkus.has(line.skuId)}
                       deleteBlockReason={getVendorLineDeletionBlockReason(line, draftsByVendor[group.vendorName])}
                       onRemove={() => removeLine(line)}
+                      canQueueDiscontinue={!isPreview && !workspaceMoved && status !== "sent"}
+                      onQueueDiscontinue={() => queueLineForDiscontinue(line)}
                       onCatalogStatusSaved={() => {
                         setExcludedLineIds(previous => new Set(previous).add(line.id));
                         setSelectedLineIds(previous => { const next = new Set(previous); next.delete(line.id); return next; });
-                        setCompletionMessage(`단종·과재고 처리된 SKU ${line.skuId}를 이번 발주에서 제외했습니다.`);
+                        setCompletionMessage(`과재고 처리된 SKU ${line.skuId}를 이번 발주에서 제외했습니다.`);
                       }}
                     />
                     </div>
@@ -872,6 +963,9 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                     >
                       승인
                     </button>
+                    <button type="button" disabled={saving} onClick={() => void deleteVendorOrder(group.vendorName, group.lines)} style={{ ...wmsWarnButton, minHeight: "36px", fontSize: "12px" }}>
+                      발주서 삭제
+                    </button>
                   </div>
                 )}
 
@@ -886,7 +980,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                     statusSaving={statusSavingVendor === group.vendorName}
                     onBeforeExport={async () => (await checkCompletion(undefined, true)).filter(line => (line.vendorName || UNASSIGNED_VENDOR_NAME) === group.vendorName)}
                     onMarkSent={() => toggleSent(group.vendorName)}
-                    onReviseAgain={() => beginVendorRevision(group.vendorName)}
+                    onReviseAgain={async () => { await beginVendorRevision(group.vendorName); }}
                   />
                 )}
                 </div>
@@ -963,6 +1057,8 @@ function VendorOrderLineCard({
   partialCompletion,
   onAddOptions,
   optionsBusy,
+  canQueueDiscontinue,
+  onQueueDiscontinue,
   onCatalogStatusSaved,
 }: {
   line: VendorOrderDraftLine;
@@ -985,6 +1081,8 @@ function VendorOrderLineCard({
   partialCompletion?: boolean;
   onAddOptions?: () => void;
   optionsBusy?: boolean;
+  canQueueDiscontinue: boolean;
+  onQueueDiscontinue: () => Promise<void>;
   onCatalogStatusSaved: () => void;
 }) {
   const pasteUploading = useRef(false);
@@ -1091,6 +1189,18 @@ function VendorOrderLineCard({
   }
 
   async function handleSetCatalogStatus(status: "단종" | "과재고") {
+    if (status === "단종") {
+      if (!window.confirm(`SKU ${line.skuId}를 단종대기에 추가하고 이 발주서에서 제외할까요?`)) return;
+      setStatusSaving(status);
+      setStatusMessage(null);
+      try {
+        await onQueueDiscontinue();
+        setStatusMessage("단종대기 이동 완료");
+      } catch (error) {
+        setStatusMessage(error instanceof Error ? error.message : "단종대기 이동 실패");
+      } finally { setStatusSaving(null); }
+      return;
+    }
     if (!window.confirm(`SKU ${line.skuId}의 현재상태를 '${status}'로 저장할까요?`)) return;
     setStatusSaving(status);
     setStatusMessage(null);
@@ -1360,9 +1470,9 @@ function VendorOrderLineCard({
           {vendorSaveError && <p style={{ fontSize: "10px", color: "#c0392b", margin: 0 }}>{vendorSaveError}</p>}
           <input className="wms-input" value={line.memo} placeholder="메모" onChange={e => onChange({ memo: e.target.value })} style={inputStyle} />
           <div style={{ display: "flex", gap: "6px" }}>
-            <button onClick={() => handleSetCatalogStatus("단종")} disabled={Boolean(statusSaving)} style={{ ...wmsWarnButton, flex: 1, minHeight: "34px", fontSize: "11px" }}>
-              {statusSaving === "단종" ? "저장 중..." : "단종"}
-            </button>
+            {canQueueDiscontinue && <button onClick={() => handleSetCatalogStatus("단종")} disabled={Boolean(statusSaving)} style={{ ...wmsWarnButton, flex: 1, minHeight: "34px", fontSize: "11px" }}>
+              {statusSaving === "단종" ? "이동 중..." : "단종대기로 이동"}
+            </button>}
             <button onClick={() => handleSetCatalogStatus("과재고")} disabled={Boolean(statusSaving)} style={{ ...wmsSecondaryButton, flex: 1, minHeight: "34px", fontSize: "11px" }}>
               {statusSaving === "과재고" ? "저장 중..." : "과재고"}
             </button>
@@ -1374,6 +1484,15 @@ function VendorOrderLineCard({
           <button onClick={onRemove} disabled={Boolean(deleteBlockReason)} title={deleteBlockReason || undefined} style={{ ...wmsWarnButton, minHeight: "32px", fontSize: "11px", opacity: deleteBlockReason ? .5 : 1 }}>
             삭제
           </button>
+        </div>
+      )}
+
+      {!editable && canQueueDiscontinue && (
+        <div style={{ marginTop: "10px" }}>
+          <button type="button" onClick={() => handleSetCatalogStatus("단종")} disabled={Boolean(statusSaving)} style={{ ...wmsWarnButton, width: "100%", minHeight: "40px", fontSize: "12px" }}>
+            {statusSaving === "단종" ? "단종대기로 이동 중..." : "단종대기로 이동"}
+          </button>
+          {statusMessage && <div style={{ marginTop: "6px", fontSize: "10px", color: statusMessage.includes("완료") ? wmsColors.greenDark : "#c0392b" }}>{statusMessage}</div>}
         </div>
       )}
 
