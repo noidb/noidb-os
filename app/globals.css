@@ -431,6 +431,7 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
   .shell{padding:calc(16px + env(safe-area-inset-top)) 10px calc(34px + env(safe-area-inset-bottom))}
   .card{padding:16px 14px}
   .hero{margin-bottom:18px}
+  .heroBrandArea{width:100%;min-width:0}
   .brandLockup{margin-bottom:12px}
   .hero h1{font-size:27px;margin-bottom:8px}
   .heroUtilityActions{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}
