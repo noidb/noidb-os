@@ -38,7 +38,7 @@ import { useReceivingDelays } from "@/lib/wms/vendor-order/use-receiving-delays"
 import { receivingDelayDate, type ReceivingDelaySummary } from "@/lib/wms/vendor-order/receiving-delay";
 import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 import ReceivingDelayDialog from "./ReceivingDelayDialog";
-import { prepareVendorReassignment } from "@/lib/wms/vendor-order/reassign-vendor";
+import { planVendorReassignment } from "@/lib/wms/vendor-order/reassign-vendor";
 import Barcode from "./Barcode";
 import VendorOrderExportPanel from "./ExportPanel";
 import ProductSearchAddSheet from "./ProductSearchAddSheet";
@@ -411,24 +411,29 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     let catalogSaved = false;
     try {
       await assertCurrentWorkspace();
-      const [latestLines, latestDrafts] = await Promise.all([vendorOrderRepository.listLines(params.waveId), vendorOrderRepository.listDrafts(params.waveId)]);
-      const plan = prepareVendorReassignment({ line, vendorName, baseline: lineBaselines.current.get(lineId), latestLines, localLines: linesRef.current, latestDrafts, now: new Date().toISOString() });
+      const latest = await requestVendorJson<{ snapshot: PickingWaveStoreSnapshot }>("/api/wms/picking-waves", { cache: "no-store" });
+      if (!latest.response.ok || !latest.data.snapshot) throw new Error("최신 발주서를 확인하지 못했습니다.");
+      const plan = planVendorReassignment({ snapshot: latest.data.snapshot, line, vendorName, baseline: lineBaselines.current.get(lineId), localLines: linesRef.current, operationId: crypto.randomUUID(), now: new Date().toISOString() });
       const response = await fetch("/api/wms/product-catalog/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuId: line.skuId, vendorName: plan.line.vendorName }) });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || "제품DB 거래처 저장에 실패했습니다.");
       catalogSaved = true;
-      if (plan.createDraft) await vendorOrderRepository.saveDraft(plan.draft);
-      await vendorOrderRepository.saveLine(plan.line, latestLines.find(item => item.id === lineId)?.updatedAt ?? null);
+      const saved = await requestVendorJson<{ ok: boolean; error?: string }>("/api/wms/picking-waves", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(plan.mutation) }, 45000);
+      if (!saved.response.ok || !saved.data.ok) throw new Error(saved.data.error || "발주서 이동을 저장하지 못했습니다.");
+      const archived = new Set(plan.archivedDraftIds);
+      for (const [id, previous] of lineBaselines.current) if (archived.has(previous.draftId)) lineBaselines.current.delete(id);
+      for (const id of archived) draftBaselines.current.delete(id);
       lineBaselines.current.set(plan.line.id, plan.line);
       draftBaselines.current.set(plan.draft.id, plan.draft.updatedAt);
-      const nextLines = linesRef.current.map(candidate => candidate.id === lineId ? plan.line : candidate);
+      const nextLines = linesRef.current.filter(candidate => !archived.has(candidate.draftId)).map(candidate => candidate.id === lineId ? plan.line : candidate);
       linesRef.current = nextLines;
       draftsRef.current = { ...draftsRef.current, [plan.draft.vendorName]: plan.draft };
-      draftBaselineRecords.current = draftBaselineRecords.current.filter(draft => draft.id !== plan.draft.id).concat(plan.draft);
+      draftBaselineRecords.current = draftBaselineRecords.current.filter(draft => draft.id !== plan.draft.id && !archived.has(draft.id)).concat(plan.draft);
       setLines(nextLines);
       setDraftsByVendor(previous => ({ ...previous, [plan.draft.vendorName]: plan.draft }));
       setLiveCatalogByProductCode(previous => { const next = new Map(previous); for (const [key, value] of next) if (value.skuId === line.skuId) next.set(key, { ...value, vendorName: plan.line.vendorName }); return next; });
       setDirty(Boolean(removedLineIds.size || nextLines.some(candidate => JSON.stringify(candidate) !== JSON.stringify(lineBaselines.current.get(candidate.id)))));
+      notifyQueueChange();
     } catch (reason) {
       throw new Error(`${catalogSaved ? "제품DB 거래처는 저장됐지만 발주 초안 이동은 완료되지 않았습니다. 입력한 수량·메모를 유지했으니 다시 시도해 주세요. " : ""}${reason instanceof Error ? reason.message : "거래처 이동에 실패했습니다."}`);
     } finally { vendorMoving.current = false; setSaving(false); }
