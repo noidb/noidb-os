@@ -53,6 +53,12 @@ function harness(options = {}) {
   assert.equal(h.shared[0].title, undefined);
   assert.equal(h.shared[0].text, undefined);
 
+  const manyLines = Array.from({ length: 17 }, (_, index) => ({ ...latest[0], skuId: `KEEP-${index}` }));
+  const paged = harness({ getLatest: async () => manyLines });
+  paged.click("카카오톡으로 공유"); await paged.settle();
+  assert.equal(paged.rendered.length, 3, "large vendor orders are split before exceeding mobile canvas limits");
+  assert.equal(paged.shared[0].files.length, 3, "all PNG pages are shared in one action");
+
   for (const options of [{ empty: true }, { failure: new Error("최신 상태 서버 연결 실패") }, { noGuard: true }, { failure: Object.assign(new Error("원본 확인 시간 초과"), { name: "AbortError" }) }]) {
     const failed = harness(options); failed.click("카카오톡으로 공유"); await failed.settle();
     assert.equal(failed.shared.length + failed.rendered.length + failed.downloads.length, 0);

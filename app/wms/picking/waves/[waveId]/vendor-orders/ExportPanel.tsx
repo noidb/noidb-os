@@ -43,20 +43,28 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
     try {
       const latestLines = await onBeforeExport();
       if (!Array.isArray(latestLines) || latestLines.length === 0) throw new Error("모든 품목이 처리되어 보낼 발주가 없습니다.");
-      const blob = await renderVendorOrderImage(vendorName, latestLines, wave.id);
-      if (!blob) throw new Error("이미지 발주서 생성에 실패했습니다. 다시 시도해 주세요.");
-      const fileName = `발주서_${vendorName}_${wave.id}.png`;
-      const file = new File([blob], fileName, { type: "image/png" });
+      // Mobile Safari cannot export an extremely tall canvas. Split large vendors
+      // into safe-sized PNG pages and hand all pages to KakaoTalk in one share action.
+      const pageSize = 6;
+      const blobs: Blob[] = [];
+      for (let offset = 0; offset < latestLines.length; offset += pageSize) {
+        const blob = await renderVendorOrderImage(vendorName, latestLines.slice(offset, offset + pageSize), wave.id);
+        if (!blob) throw new Error(`이미지 발주서 ${Math.floor(offset / pageSize) + 1}페이지 생성에 실패했습니다. 다시 시도해 주세요.`);
+        blobs.push(blob);
+      }
+      const files = blobs.map((blob, index) => {
+        const suffix = blobs.length > 1 ? `_${index + 1}of${blobs.length}` : "";
+        return new File([blob], `발주서_${vendorName}_${wave.id}${suffix}.png`, { type: "image/png" });
+      });
       const nav = navigator as Navigator & { share?: (data: ShareData) => Promise<void>; canShare?: (data: ShareData) => boolean };
-      const canShareFile = Boolean(nav.share) && (!nav.canShare || nav.canShare({ files: [file] }));
+      const canShareFile = Boolean(nav.share) && (!nav.canShare || nav.canShare({ files }));
       if (!canShareFile) {
-        downloadBlob(blob, fileName);
-        setNotice({ message: "이 브라우저에서는 카카오톡 공유창을 열 수 없어 발주서 이미지를 저장했습니다. 휴대폰의 Chrome 또는 Safari에서 다시 누르면 카카오톡 채팅방을 선택할 수 있습니다." });
+        files.forEach((file, index) => downloadBlob(blobs[index], file.name));
+        setNotice({ message: `이 브라우저에서는 카카오톡 공유창을 열 수 없어 발주서 이미지 ${files.length}장을 저장했습니다. 휴대폰의 Chrome 또는 Safari에서 다시 누르면 카카오톡 채팅방을 선택할 수 있습니다.` });
         return;
       }
       try {
-        // A single PNG attachment keeps KakaoTalk in its normal chat-share flow.
-        await nav.share!({ files: [file] });
+        await nav.share!({ files });
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") return;
         throw new Error("카카오톡 공유창을 열지 못했습니다. 휴대폰의 Chrome 또는 Safari에서 다시 눌러 주세요.");
@@ -71,7 +79,7 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
 
   return (
     <div aria-busy={locked} style={{ marginTop: "12px", paddingTop: "12px", borderTop: `1px dashed ${wmsColors.border}` }}>
-      <div style={{ fontSize: "11px", color: wmsColors.muted, marginBottom: "8px" }}>발주서 이미지를 카카오톡 채팅방으로 바로 공유합니다.</div>
+      <div style={{ fontSize: "11px", color: wmsColors.muted, marginBottom: "8px" }}>발주서 이미지를 카카오톡 채팅방으로 바로 공유합니다. 상품이 많으면 여러 장으로 자동 분할됩니다.</div>
       {exportBusy && <p role="status" style={{ fontSize: "12px", marginBottom: "8px" }}>최신 발주서를 준비하고 있습니다…</p>}
       {notice && <p role={notice.error ? "alert" : "status"} style={{ fontSize: "12px", color: notice.error ? wmsColors.warn : wmsColors.greenDark, marginBottom: "8px", overflowWrap: "anywhere" }}>{notice.message}</p>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "8px" }}>

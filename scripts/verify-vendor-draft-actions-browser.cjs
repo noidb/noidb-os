@@ -208,7 +208,7 @@ async function run(browser, width) {
     assert.equal(downloads.length, 0);
     await page.screenshot({ path: `${out}/export-error-${width}.png` });
     completionFailure = null;
-    await page.getByRole("button", { name: "+ 상품 추가 · 발주내용 수정", exact: true }).click();
+    await page.getByRole("button", { name: "+ 상품 추가", exact: true }).click();
     const search = page.getByPlaceholder("SKU ID, 상품명, 모델명, 옵션명, 거래처로 검색", { exact: true });
     await search.waitFor(); await search.fill("99000001");
     await page.getByRole("button", { name: /검색 추가 상품.*SKU 99000001/ }).click();

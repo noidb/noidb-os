@@ -776,7 +776,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                   </div>
                 )}
 
-                {status === "approved" && !workspaceMoved && <button type="button" disabled={saving} onClick={async () => { if (await persistAll({ vendorName: group.vendorName, status: "resend_needed" })) setSearchAddVendor(group.vendorName); }} style={{ ...wmsGhostButton, minHeight: "44px", width: "100%", fontSize: "13px" }}>+ 상품 추가 · 발주내용 수정</button>}
+                {status === "approved" && !workspaceMoved && <button type="button" disabled={saving} onClick={async () => { if (await persistAll({ vendorName: group.vendorName, status: "resend_needed" })) setSearchAddVendor(group.vendorName); }} style={{ ...wmsGhostButton, minHeight: "44px", width: "100%", fontSize: "13px" }}>+ 상품 추가</button>}
                 {(status === "approved" || status === "sent") && (
                   <VendorOrderExportPanel
                     wave={wave}
