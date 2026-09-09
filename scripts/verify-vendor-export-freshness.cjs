@@ -11,6 +11,7 @@ function flatten(node) {
 function harness(options = {}) {
   const state = [], refs = [], initialized = new Set(); let cursor = 0, calls = 0, marked = 0, revised = 0;
   const shared = [], rendered = [], downloads = [];
+  class FixtureZip { file() { return this; } async generateAsync() { return new Blob(["zip"]); } }
   const module = { exports: {} };
   const jsx = (type, props) => ({ type, props: props || {} });
   const react = {
@@ -24,6 +25,7 @@ function harness(options = {}) {
   const deps = {
     react,
     "react/jsx-runtime": { jsx, jsxs: jsx },
+    "jszip": { __esModule: true, default: FixtureZip },
     "@/lib/wms/vendor-order/render-order-image": { renderVendorOrderImage: async (_vendor, lines) => { rendered.push(structuredClone(lines)); return options.imageFails ? null : new Blob(["verified image"]); } },
     "@/lib/wms/ui-tokens": { wmsColors: {}, wmsGreenDarkButton: {}, wmsPrimaryButton: {}, wmsSecondaryButton: {} },
   };
@@ -31,7 +33,7 @@ function harness(options = {}) {
     URL: { createObjectURL: () => "blob:fixture", revokeObjectURL: () => {} },
     document: { body: { appendChild: () => {} }, createElement: () => ({ click() { downloads.push(this.download); }, remove: () => {} }) },
     require: name => { assert(deps[name], name); return deps[name]; } });
-  const props = { wave: { id: "W1" }, vendorName: "창성", lines: stale, status: "approved", busy: Boolean(options.busy),
+  const props = { wave: { id: "W1" }, vendorName: "창성", lines: stale, status: "approved", busy: Boolean(options.busy), statusSaving: Boolean(options.statusSaving),
     onBeforeExport: options.noGuard ? undefined : async () => { calls++; if (options.failure) throw options.failure; return options.getLatest ? options.getLatest() : options.empty ? [] : latest; },
     onMarkSent: () => { marked++; }, onReviseAgain: () => { revised++; } };
   const render = () => { cursor = 0; return module.exports.default(props); };
@@ -87,8 +89,13 @@ function harness(options = {}) {
   pending.click("공유창 열기"); await pending.settle(); assert.equal(pending.shared.length, 1);
 
   const busy = harness({ busy: true }); busy.click("카카오톡으로 공유"); assert.equal(busy.calls(), 0);
+  assert(busy.button("전송완료"), "another vendor's save may lock actions without showing a false saving label");
+  const ownSave = harness({ busy: true, statusSaving: true }); assert(ownSave.button("저장 중..."), "only the vendor being saved shows the saving label");
   const fallback = harness({ noShare: true }); fallback.click("카카오톡으로 공유"); await fallback.settle();
   assert.deepEqual(fallback.rendered, [latest]); assert.equal(fallback.downloads.length, 1); assert.equal(fallback.shared.length, 0);
+  const fallbackMany = harness({ noShare: true, getLatest: async () => manyLines }); fallbackMany.click("카카오톡으로 공유"); await fallbackMany.settle();
+  assert.equal(fallbackMany.downloads.length, 1, "desktop fallback downloads one archive instead of many separate files");
+  assert.match(fallbackMany.downloads[0], /_3장\.zip$/, "the single fallback archive identifies its image count");
   const cancelled = harness({ shareCancels: true }); cancelled.click("카카오톡으로 공유"); await cancelled.settle(); cancelled.click("공유창 열기"); await cancelled.settle();
   assert.equal(cancelled.shared.length, 1); assert.equal(cancelled.elements().filter(node => node.props.role === "alert").length, 0);
   const imageFailed = harness({ imageFails: true }); imageFailed.click("카카오톡으로 공유"); await imageFailed.settle();

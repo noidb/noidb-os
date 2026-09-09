@@ -12,13 +12,14 @@ interface Props {
   lines: VendorOrderDraftLine[];
   status: VendorOrderDraftStatus;
   busy?: boolean;
+  statusSaving?: boolean;
   onBeforeExport: () => Promise<VendorOrderDraftLine[]>;
   onMarkSent: () => void | Promise<void>;
   onReviseAgain: () => void | Promise<void>;
 }
 
 /** Validate current rows, then open the device share sheet with one PNG attachment. */
-export default function VendorOrderExportPanel({ wave, vendorName, status, busy = false, onBeforeExport, onMarkSent, onReviseAgain }: Props) {
+export default function VendorOrderExportPanel({ wave, vendorName, status, busy = false, statusSaving = false, onBeforeExport, onMarkSent, onReviseAgain }: Props) {
   const [exportBusy, setExportBusy] = useState(false);
   const [exportProgress, setExportProgress] = useState("");
   const exporting = useRef(false);
@@ -35,6 +36,20 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  }
+
+  async function downloadPreparedFiles(blobs: Blob[], files: File[]) {
+    if (files.length === 1) {
+      downloadBlob(blobs[0], files[0].name);
+      return;
+    }
+    setExportProgress(`발주서 이미지 ${files.length}장을 ZIP으로 묶고 있습니다…`);
+    const JSZip = (await import("jszip")).default;
+    const zip = new JSZip();
+    files.forEach((file, index) => zip.file(file.name, blobs[index]));
+    const zipBlob = await zip.generateAsync({ type: "blob" });
+    const safeVendor = vendorName.replace(/[\\/:*?"<>|]/g, "_");
+    downloadBlob(zipBlob, `발주서_${safeVendor}_${wave.id}_${files.length}장.zip`);
   }
 
   async function handleShare() {
@@ -69,9 +84,9 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
             setNotice({ message: `휴대폰 공유창이 여러 파일을 한 번에 받지 못했습니다. 1/${preparedShare.files.length}페이지부터 한 장씩 공유해 주세요.` });
             return;
           }
-          preparedShare.files.forEach((file, index) => downloadBlob(preparedShare.blobs[index], file.name));
+          await downloadPreparedFiles(preparedShare.blobs, preparedShare.files);
           setPreparedShare(null);
-          setNotice({ message: `컴퓨터 공유창을 열 수 없어 발주서 이미지 ${preparedShare.files.length}장을 다운로드 폴더에 저장했습니다. 카카오톡 채팅창에 파일을 끌어 넣어 주세요.` });
+          setNotice({ message: `컴퓨터 공유창을 열 수 없어 발주서 이미지 ${preparedShare.files.length}장을 ZIP 파일 1개로 다운로드했습니다. 압축을 풀어 카카오톡 채팅창에 한꺼번에 넣어 주세요.` });
         }
         return;
       }
@@ -104,8 +119,10 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
       const nav = navigator as Navigator & { share?: (data: ShareData) => Promise<void>; canShare?: (data: ShareData) => boolean };
       const canShareFile = Boolean(nav.share) && (!nav.canShare || nav.canShare({ files }));
       if (!canShareFile) {
-        files.forEach((file, index) => downloadBlob(blobs[index], file.name));
-        setNotice({ message: `컴퓨터 공유창을 사용할 수 없어 발주서 이미지 ${files.length}장을 다운로드 폴더에 저장했습니다. 카카오톡 채팅창에 파일을 끌어 넣어 주세요.` });
+        await downloadPreparedFiles(blobs, files);
+        setNotice({ message: files.length > 1
+          ? `컴퓨터 공유창을 사용할 수 없어 발주서 이미지 ${files.length}장을 ZIP 파일 1개로 다운로드했습니다. 압축을 풀어 카카오톡 채팅창에 한꺼번에 넣어 주세요.`
+          : "컴퓨터 공유창을 사용할 수 없어 발주서 이미지 1장을 다운로드했습니다. 카카오톡 채팅창에 넣어 주세요." });
         return;
       }
       setPreparedShare({ files, blobs });
@@ -126,7 +143,7 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
       {notice && <p role={notice.error ? "alert" : "status"} style={{ fontSize: "12px", color: notice.error ? wmsColors.warn : wmsColors.greenDark, marginBottom: "8px", overflowWrap: "anywhere" }}>{notice.message}</p>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "8px" }}>
         <button type="button" onClick={() => void handleShare()} disabled={locked} style={{ ...wmsPrimaryButton, minHeight: "52px", fontSize: "13px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25, opacity: locked ? 0.6 : 1 }}>{exportBusy ? "준비 중…" : preparedShare?.nextIndex !== undefined ? `${preparedShare.nextIndex + 1}/${preparedShare.files.length} 페이지 공유` : preparedShare ? "공유창 열기" : "카카오톡으로 공유"}</button>
-        <button type="button" onClick={() => { if (!exporting.current) void onMarkSent(); }} disabled={locked} style={{ ...wmsGreenDarkButton, minHeight: "52px", fontSize: "13px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25 }}>{busy ? "저장 중..." : status === "sent" ? "전송완료 해제" : "전송완료"}</button>
+        <button type="button" onClick={() => { if (!exporting.current) void onMarkSent(); }} disabled={locked} style={{ ...wmsGreenDarkButton, minHeight: "52px", fontSize: "13px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25 }}>{statusSaving ? "저장 중..." : status === "sent" ? "전송완료 해제" : "전송완료"}</button>
         <button type="button" onClick={() => { if (!exporting.current) void onReviseAgain(); }} disabled={locked} style={{ ...wmsSecondaryButton, gridColumn: "1 / -1", minHeight: "42px", fontSize: "12px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25 }}>{status === "sent" ? "다시 수정" : "발주내용 수정"}</button>
       </div>
     </div>

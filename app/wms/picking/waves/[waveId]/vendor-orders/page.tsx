@@ -67,6 +67,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
   const [deletedDraftIds, setDeletedDraftIds] = useState<Record<string, string>>({});
   const vendorMoving = useRef(false);
   const [saving, setSaving] = useState(false);
+  const [statusSavingVendor, setStatusSavingVendor] = useState<string | null>(null);
   const [photoWorkCount, setPhotoWorkCount] = useState(0);
   const reportQueueEditing = useContext(VendorQueueEditingContext);
   useEffect(() => { reportQueueEditing?.(dirty || saving || photoWorkCount > 0 || loading); return () => reportQueueEditing?.(false); }, [dirty, saving, photoWorkCount, loading, reportQueueEditing]);
@@ -589,12 +590,16 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
   }
 
   async function handleApprove(vendorName: string) {
-    await persistAll({ vendorName, status: "approved" });
+    setStatusSavingVendor(vendorName);
+    try { await persistAll({ vendorName, status: "approved" }); }
+    finally { setStatusSavingVendor(null); }
   }
 
   async function toggleSent(vendorName: string) {
     const draft = draftsByVendor[vendorName];
-    await persistAll({ vendorName, status: draft?.status === "sent" ? (draft.statusBeforeSent || "approved") : "sent" });
+    setStatusSavingVendor(vendorName);
+    try { await persistAll({ vendorName, status: draft?.status === "sent" ? (draft.statusBeforeSent || "approved") : "sent" }); }
+    finally { setStatusSavingVendor(null); }
   }
 
   async function saveReceivingDelay(memo: string) {
@@ -808,6 +813,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                     lines={group.lines}
                     status={status}
                     busy={saving || workspaceMoved}
+                    statusSaving={statusSavingVendor === group.vendorName}
                     onBeforeExport={async () => (await checkCompletion(undefined, true)).filter(line => (line.vendorName || UNASSIGNED_VENDOR_NAME) === group.vendorName)}
                     onMarkSent={() => toggleSent(group.vendorName)}
                     onReviseAgain={() => beginVendorRevision(group.vendorName)}
