@@ -27,7 +27,7 @@ function harness(options = {}) {
     "@/lib/wms/vendor-order/render-order-image": { renderVendorOrderImage: async (_vendor, lines) => { rendered.push(structuredClone(lines)); return options.imageFails ? null : new Blob(["verified image"]); } },
     "@/lib/wms/ui-tokens": { wmsColors: {}, wmsGreenDarkButton: {}, wmsPrimaryButton: {}, wmsSecondaryButton: {} },
   };
-  vm.runInNewContext(compiled, { module, exports: module.exports, Error, Array, Blob, File: global.File || require("node:buffer").File, navigator: nav,
+  vm.runInNewContext(compiled, { module, exports: module.exports, Error, Array, Blob, File: global.File || require("node:buffer").File, navigator: nav, window: { innerWidth: options.mobile ? 390 : 1280, matchMedia: () => ({ matches: Boolean(options.mobile) }) },
     URL: { createObjectURL: () => "blob:fixture", revokeObjectURL: () => {} },
     document: { body: { appendChild: () => {} }, createElement: () => ({ click() { downloads.push(this.download); }, remove: () => {} }) },
     require: name => { assert(deps[name], name); return deps[name]; } });

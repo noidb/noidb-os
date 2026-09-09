@@ -2,6 +2,7 @@ import { applyPickingWaveStoreMutation } from "../lib/wms/picking-wave/server-st
 import { emptyPickingWaveStoreSnapshot } from "../lib/wms/picking-wave/shared-store-types";
 import assert from "node:assert/strict";
 import { resolveVendorOrderCatalog } from "../lib/wms/vendor-order/resolve-catalog";
+import { normalizeProductLink } from "../lib/wms/product-catalog";
 import { resolveDisplayNameAndOption } from "../lib/wms/display-name";
 import { buildKakaoOrderText } from "../lib/wms/vendor-order/export-text";
 import { renderVendorOrderImage } from "../lib/wms/vendor-order/render-order-image";
@@ -9,6 +10,10 @@ import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraft, type VendorOrderDraftLin
 
 async function main() {
   const now = "2026-09-08T12:00:00.000Z", waveId = "VENDOR-QUEUE-TEST";
+  const linkedProduct = "https://www.coupang.com/vp/products/123?itemId=456&vendorItemId=789";
+  assert.equal(normalizeProductLink('=HYPERLINK("' + linkedProduct + '","제품 열기")'), linkedProduct);
+  assert.equal(normalizeProductLink(linkedProduct), linkedProduct);
+  assert.equal(normalizeProductLink("링크 없음"), "");
   const baseName = "써지컬스틸 하프 큐빅라인 여성 반지";
   const catalog = ["로즈골드", "실버"].flatMap((color, group) => [9, 11, 14, 17, 20].map((size, index) => ({ skuId: String(78490103 + group * 5 + index), vendorName: "창성", productName: `${baseName}, ${color}, ${size}호`, optionLabel: color, imageUrl: `https://example.com/${78490103 + group * 5 + index}.jpg` })));
   for (const [skuId, option] of [["39129599", "실버 9호(한국사이즈 20호) 랜덤발송(패키지)"], ["39129600", "실버 6호(한국사이즈 11호) 랜덤발송(패키지)"], ["39129601", "로즈골드 5호(한국사이즈 9호) 랜덤발송(패키지)"]]) catalog.push({ skuId, vendorName: "창성", productName: `${baseName}, ${option}`, optionLabel: "", imageUrl: "" });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { wmsColors, wmsGhostButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
 import { compareWarehouseProducts } from "@/lib/wms/category-order";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
@@ -36,6 +36,7 @@ export default function ProductSearchAddSheet({ onClose, onSelect }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const composingRef = useRef(false);
 
   /**
    * 다른 WMS 화면(작업센터/웨이브 상세/완료 화면)과 동일한 /api/wms/product-catalog를 그대로
@@ -134,8 +135,14 @@ export default function ProductSearchAddSheet({ onClose, onSelect }: Props) {
         </div>
         <input
           className="wms-input"
-          value={query}
-          onChange={e => setQuery(e.target.value)}
+          lang="ko"
+          inputMode="text"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          onCompositionStart={() => { composingRef.current = true; }}
+          onCompositionEnd={event => { composingRef.current = false; setQuery(event.currentTarget.value); }}
+          onChange={event => { if (!composingRef.current) setQuery(event.currentTarget.value); }}
           placeholder="SKU ID, 상품명, 모델명, 옵션명, 거래처로 검색"
           style={{ width: "100%", minWidth: 0, boxSizing: "border-box", minHeight: "40px", fontSize: "16px", padding: "8px 10px", borderRadius: "8px", border: `1px solid ${wmsColors.borderStrong}`, marginBottom: "10px" }}
         />

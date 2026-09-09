@@ -389,6 +389,16 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
     void deleteLines(selectedLines, `선택한 ${selectedLines.length}개 품목을 발주 초안에서 삭제할까요? 삭제는 즉시 저장됩니다.`);
   }
 
+  function beginVendorRevision(vendorName: string) {
+    const now = new Date().toISOString();
+    setDraftsByVendor(previous => {
+      const current = previous[vendorName];
+      if (!current || current.status === "resend_needed") return previous;
+      return { ...previous, [vendorName]: { ...current, status: "resend_needed", updatedAt: now } };
+    });
+    setDirty(true);
+  }
+
   function addProductsFromSearch(
     vendorName: string,
     products: { skuId: string; modelName: string; category: string; productName: string; optionLabel: string; imageUrl: string; barcode: string; currentStock: string }[]
@@ -411,15 +421,16 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
         relatedPurchaseOrderNumbers: [], memo: "", isManuallyAdded: true, createdAt: now, updatedAt: now,
       });
     }
-    if (added.length) { setLines(previous => [...previous, ...added]); setDirty(true); }
-    else setCompletionMessage("선택한 상품은 이미 발주 초안에 있습니다.");
+    if (added.length) {
+      setLines(previous => [...previous, ...added]);
+      beginVendorRevision(vendorName);
+    } else setCompletionMessage("선택한 상품은 이미 발주 초안에 있습니다.");
     setSearchAddVendor(null); setVariantTarget(null);
   }
 
-  async function beginVariantAdd(line: VendorOrderDraftLine) {
+  function beginVariantAdd(line: VendorOrderDraftLine) {
     if (saving || workspaceMoved) return;
     const vendorName = line.vendorName || UNASSIGNED_VENDOR_NAME;
-    if (statusOf(vendorName) === "approved" && !await persistAll({ vendorName, status: "resend_needed" })) return;
     setVariantTarget({ skuId: line.skuId, vendorName });
   }
 
@@ -722,7 +733,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                       }}
                       editable={editable}
                       knownVendorNames={knownVendorNames}
-                      productLink={liveCatalogByProductCode.get(line.skuId)?.productLink || ""}
+                      productLink={liveCatalogByProductCode.get(normalizeSkuId(line.skuId))?.productLink || ""}
                       delaySummary={receivingDelays.summaries.get(normalizeSkuId(line.skuId))}
                       delayDisabled={receivingDelays.loading || receivingDelays.saving || Boolean(receivingDelays.error) || saving}
                       onDelay={() => { setDelayError(null); setDelayTarget({ line, previous: receivingDelays.summaries.get(normalizeSkuId(line.skuId)) }); }}
@@ -776,7 +787,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                   </div>
                 )}
 
-                {status === "approved" && !workspaceMoved && <button type="button" disabled={saving} onClick={async () => { if (await persistAll({ vendorName: group.vendorName, status: "resend_needed" })) setSearchAddVendor(group.vendorName); }} style={{ ...wmsGhostButton, minHeight: "44px", width: "100%", fontSize: "13px" }}>+ 상품 추가</button>}
+                {status === "approved" && !workspaceMoved && <button type="button" disabled={saving} onClick={() => setSearchAddVendor(group.vendorName)} style={{ ...wmsGhostButton, minHeight: "44px", width: "100%", fontSize: "13px" }}>+ 상품 추가</button>}
                 {(status === "approved" || status === "sent") && (
                   <VendorOrderExportPanel
                     wave={wave}
@@ -786,7 +797,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                     busy={saving || workspaceMoved}
                     onBeforeExport={async () => (await checkCompletion(undefined, true)).filter(line => (line.vendorName || UNASSIGNED_VENDOR_NAME) === group.vendorName)}
                     onMarkSent={() => toggleSent(group.vendorName)}
-                    onReviseAgain={async () => { await persistAll({ vendorName: group.vendorName, status: "resend_needed" }); }}
+                    onReviseAgain={() => beginVendorRevision(group.vendorName)}
                   />
                 )}
               </div>

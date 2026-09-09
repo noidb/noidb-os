@@ -80,6 +80,16 @@ function extractImageUrl(rawCell: string | undefined): string {
   return "";
 }
 
+/** 제품DB 링크 셀의 HYPERLINK 수식 또는 일반 URL에서 브라우저가 열 수 있는 실제 URL만 반환한다. */
+export function normalizeProductLink(rawCell: unknown): string {
+  const text = String(rawCell ?? "").trim();
+  if (!text) return "";
+  const hyperlinkMatch = text.match(/=HYPERLINK\(\s*["']([^"']+)["']/i);
+  if (hyperlinkMatch?.[1]) return hyperlinkMatch[1].trim();
+  const embeddedUrl = text.match(/https?:\/\/[^"'\s,)]+/i);
+  return embeddedUrl?.[0]?.trim() ?? "";
+}
+
 /** 후보 헤더 중 시트에 실제로 존재하고 값이 있는 첫 번째 것을 반환한다. 없으면 "". */
 function firstNonEmpty(row: Record<string, string>, headerCandidates: string[]): string {
   for (const header of headerCandidates) {
@@ -113,7 +123,7 @@ export async function fetchProductCatalog(): Promise<{ configured: boolean; item
       vendorName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.vendorName),
       barcode: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.barcode),
       countryOfOrigin: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.countryOfOrigin),
-      productLink: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productLink),
+      productLink: normalizeProductLink(firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productLink)),
     }))
     .filter(item => item.skuId);
   return { configured: true, items };
