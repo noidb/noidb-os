@@ -63,6 +63,7 @@ function createHarness() {
     advertisingToken:["all","marketing"].includes(kind)&&selectionFor(run).optionIds.length?selectionFor(run).token:undefined,
   } });
   const dependencies = {
+    "@/lib/wms/weekly-discontinue-transfer": { transferWeeklyDiscontinue: async () => { throw new Error("Use the dedicated transfer fixture for queue writes"); } },
     "next/server": { NextResponse: TestResponse },
     "@/lib/wms/noidb-action-auth": { isSameOriginActionRequest: () => sameOrigin },
     "@/lib/wms/weekly-work-source": {
@@ -226,7 +227,7 @@ async function verifyOutputsAndAcknowledgment() {
   const vendorStatus = await h.post({ action: "status", runId, expectedRevision: revision, kind: "vendor", vendorName: "거래처A" });
   assert.equal(vendorStatus.status, 200);
   assert.deepEqual(h.calls.vendorDispatch, [{ runId, expectedRevision: revision, vendorName: "거래처A" }], "Vendor dispatch must use the dedicated transaction helper.");
-  assert.equal((await h.post({ action: "status", runId, expectedRevision: h.current().revision, kind: "coupon" })).status, 200);
+  assert.equal((await h.post({ action: "status", runId, expectedRevision: h.current().revision, kind: "coupon", couponExpiresOn: "2099-12-31" })).status, 200);
   assert.ok(h.current().couponUploadedAt);
   assert.equal((await h.post({ action: "status", runId, expectedRevision: h.current().revision, kind: "discontinue" })).status, 409, "Coupon/vendor acknowledgments do not imply a discontinue file exists.");
   assert.equal(h.current().discontinueSubmittedAt, undefined);
@@ -278,7 +279,7 @@ async function verifyOverlappingCouponRuns() {
   const other=(await h.post({action:"analyze",period:otherPeriod})).body.run;
   const otherOutput=await h.output({runId:other.id,expectedRevision:other.revision,kind:"coupon"});
   const otherMarked=(await h.post({action:"generated",runId:other.id,expectedRevision:other.revision,outputKey:otherOutput.headers["X-NOIDB-Output-Key"]})).body.run;
-  const uploaded=await h.post({action:"status",runId:other.id,expectedRevision:otherMarked.revision,kind:"coupon"});
+  const uploaded=await h.post({action:"status",runId:other.id,expectedRevision:otherMarked.revision,kind:"coupon",couponExpiresOn:"2099-12-31"});
   assert.equal(uploaded.status,200);
   const before=h.workspace(),writes=h.calls.workspaceWrites,fileReads=h.calls.fileReads;
   for(const kind of ["all","coupon"]) {
@@ -333,7 +334,7 @@ async function verifyCouponSelectionAndStaleRules() {
   const restored=await h.output({runId,expectedRevision:h.current().revision,kind:"coupon"});
   assert.equal(restored.status,200);
   assert.equal((await h.post({action:"generated",runId,expectedRevision:h.current().revision,outputKey:restored.headers["X-NOIDB-Output-Key"]})).status,200);
-  assert.equal((await h.post({action:"status",runId,expectedRevision:h.current().revision,kind:"coupon"})).status,200);
+  assert.equal((await h.post({action:"status",runId,expectedRevision:h.current().revision,kind:"coupon",couponExpiresOn:"2099-12-31"})).status,200);
   const registered=h.workspace(),registeredWrites=h.calls.workspaceWrites;
   const locked=await select(["1001"]);assert.equal(locked.status,409);assert.match(locked.body.error,/이미 쿠팡에 등록/);
   unchanged(h,registered,registeredWrites,"registered selection remains immutable");

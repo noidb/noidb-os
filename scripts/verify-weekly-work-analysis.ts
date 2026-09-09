@@ -42,7 +42,7 @@ assert.deepEqual(result.vendorItems.find(item => item.skuId === "SKU-A")?.shorta
 ], "exact PO detail uses cumulative receipts once, independently of rounded supplier order quantity");
 assert.ok(!result.vendorItems.some(item => item.skuId === "SKU-ONE"), "fully received PO/SKU is excluded");
 assert.equal(result.vendorItems.find(item => item.skuId === "SKU-A")?.suggestedQuantity, 12, "catalog stock is not deducted and proposed vendor quantity retains the 12-unit rule");
-assert.equal(result.rulesVersion, 3, "snapshot declares confirmed-shortage-only business rules");
+assert.equal(result.rulesVersion, 4, "snapshot declares recurring coupon and confirmed-shortage rules");
 assert.equal(result.source.selectedEventCount, 4);
 assert.equal(result.source.duplicateCount, 3);
 assert.equal(JSON.stringify(input), original, "pure function preserves every input including operating store");

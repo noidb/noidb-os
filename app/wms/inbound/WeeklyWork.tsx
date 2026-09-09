@@ -7,9 +7,12 @@ import type { WeeklyBrowserSource, WeeklyPeriod, WeeklyReview, WeeklyRun, Weekly
 import { WEEKLY_RULES_VERSION } from "@/lib/wms/weekly-work-types";
 import { defaultReview, displayImageUrl, prepareWeeklyDownload, recentMonthPeriod, recentPeriod, resizeProductPhoto, reviewNeedsAttention, reorderNeedsAttention, type WeeklyDownload } from "./weekly-client";
 import styles from "./weekly-work.module.css";
-import { weeklyReviewCompletion, weeklyReviewIsActive } from "@/lib/wms/weekly-work-progress";
+import { weeklyFreshVendorItem, weeklyReviewCompletion, weeklyReviewIsActive } from "@/lib/wms/weekly-work-progress";
+import { weeklyCouponCompletion } from "@/lib/wms/weekly-coupon-completion";
+import { weeklyReorderQueueRuns } from "@/lib/wms/weekly-reorder-queue-view";
 
 const LegacyInbound = dynamic(() => import("./LegacyInbound"), { loading: () => <p>이전 입고기록을 불러오는 중입니다.</p> });
+import WeeklyCouponHistory from "./WeeklyCouponHistory";
 type OutputKind = "all" | "coupon" | "vendors" | "discontinue" | "reorder" | "marketing";
 type AdvertisingPreview = { resolved: Array<{ skuId: string; optionId: string }>; optionIds: string[]; missingSkuIds: string[]; conflictingSkuIds: string[] };
 type SaveState = "saved" | "pending" | "saving" | "error";
@@ -17,9 +20,9 @@ type ApiResult = { success?: boolean; run?: WeeklyRun; error?: string; code?: st
 const samePeriod = (left: WeeklyPeriod, right: WeeklyPeriod) => left.startDate === right.startDate && left.endDate === right.endDate;
 const formatTime = (value?: string) => value ? new Date(value).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
 
-function ProductReviewCard({ item, review, vendors, disabled, sent, requested, previouslyRequested, onChange, onImageWork, onImageFailure }: {
+function ProductReviewCard({ item, review, vendors, disabled, sent, requested, previouslyRequested, onChange, onRoute, onImageWork, onImageFailure }: {
   item: WeeklyVendorItem; review: WeeklyReview; vendors: string[]; disabled: boolean; sent: boolean; requested: boolean; previouslyRequested: Set<string>;
-  onChange: (skuId: string, patch: Partial<WeeklyReview>) => void; onImageWork: (delta: number) => void; onImageFailure: (skuId: string) => void;
+  onChange: (skuId: string, patch: Partial<WeeklyReview>) => void; onRoute: (skuId: string, decision: WeeklyReview["decision"]) => void; onImageWork: (delta: number) => void; onImageFailure: (skuId: string) => void;
 }) {
   const [uploading, setUploading] = useState(false);
   const [imageError, setImageError] = useState("");
@@ -58,14 +61,14 @@ function ProductReviewCard({ item, review, vendors, disabled, sent, requested, p
       <div className={styles.quantities}><span>실제 미입고 <strong>{item.shortageQuantity.toLocaleString()}개</strong></span>{item.confirmedQuantity !== undefined ? <span>발주 확정 <strong>{item.confirmedQuantity.toLocaleString()}개</strong></span> : null}{item.receivedQuantity !== undefined ? <span>실제 누적 입고 <strong>{item.receivedQuantity.toLocaleString()}개</strong></span> : null}</div>
       <fieldset disabled={disabled || uploading || requested} className={styles.reviewFields}>
         <legend className={styles.srOnly}>SKU {item.skuId} 발주 검토</legend>
-        <label className={styles.field}><span>처리 방법</span><select value={review.decision} onChange={event => onChange(item.skuId, { decision: event.target.value as WeeklyReview["decision"] })}><option value="order" disabled={item.discontinued || sent && review.decision !== "order"}>거래처 발주</option><option value="reorder" disabled={sent}>재발주요청 · 재고 있음</option><option value="hold" disabled={sent}>이번에는 보류</option><option value="discontinue">단종 · 생산 종료</option></select></label>
+        <label className={styles.field}><span>처리 방법 · 선택하면 바로 이동</span><select aria-label={`SKU ${item.skuId} 처리 방법`} value="" onChange={event => onRoute(item.skuId, event.target.value as WeeklyReview["decision"])}><option value="" disabled>처리 방법 선택</option><option value="order" disabled={item.discontinued || sent && review.decision !== "order"}>거래처 발주</option><option value="reorder" disabled={sent}>재발주요청 · 재고 있음</option><option value="hold" disabled={sent}>이번에는 보류</option><option value="discontinue">단종 · 생산 종료</option></select></label>
         {review.decision === "order" ? <>
           <label className={styles.field}><span>거래처{!review.vendorName.trim() ? <b className={styles.required}> 선택 필요</b> : null}</span><input disabled={sent} list={`vendors-${item.skuId}`} value={review.vendorName} placeholder="거래처 선택 또는 입력" onChange={event => onChange(item.skuId, { vendorName: event.target.value })} /><datalist id={`vendors-${item.skuId}`}>{vendors.map(name => <option key={name} value={name} />)}</datalist></label>
         </> : review.decision === "reorder" ? <div className={styles.reorderNote}>
           <p>보유 재고로 출고할 미납분을 쿠팡에 재발주 요청합니다. 원래 발주서별 미납수량이 그대로 들어갑니다.</p>
           {reorderNeedsAttention(item) ? <p role="alert" className={styles.inlineError}>발주번호별 미납수량을 다시 확인해야 합니다. 위의 ‘최신 자료로 다시 확인’을 누른 뒤 재발주요청을 선택해 주세요.</p> : <div className={styles.reorderTable}><table><caption>SKU {item.skuId} 재발주 요청 내역</caption><thead><tr><th scope="col">원래 발주번호</th><th scope="col">미납수량</th><th scope="col">처리</th></tr></thead><tbody>{item.shortageDetails!.map(row => <tr key={row.purchaseOrderNumber}><td>{row.purchaseOrderNumber}</td><td>{row.shortageQuantity.toLocaleString()}개</td><td>{previouslyRequested.has(row.purchaseOrderNumber) ? "기요청 · 제외" : requested ? "요청 완료" : "파일에 포함"}</td></tr>)}</tbody></table></div>}
           <p>요청입고예정일: 생성일 다음 첫 금요일<br />요청사유: 업체실수로 인한 출고누락</p>
-        </div> : <p className={styles.decisionNote}>{review.decision === "discontinue" ? "거래처 발주에서 제외하고 단종 공문 PDF와 SKU 엑셀에 모읍니다." : "이번 발주 파일에서 제외합니다. 검토 내용은 저장됩니다."}</p>}
+        </div> : <p className={styles.decisionNote}>{review.decision === "discontinue" ? "거래처 발주에서 제외합니다. 단종관리로 보내면 공용 목록에서 파일과 완료를 처리합니다." : "이번 발주 파일에서 제외합니다. 검토 내용은 저장됩니다."}</p>}
       </fieldset>
       {item.discontinued ? <p className={styles.outputHint}>단종으로 등록된 상품이라 거래처 발주를 선택할 수 없습니다. <a href="/wms/vendor-orders/status-requests">단종·해제 관리에서 상태 확인 ↗</a></p> : null}
       {imageError ? <p role="alert" className={styles.inlineError}>{imageError}</p> : null}
@@ -76,7 +79,8 @@ function ProductReviewCard({ item, review, vendors, disabled, sent, requested, p
   </article>;
 }
 
-export default function WeeklyWork() {
+export default function WeeklyWork({ processingOnly = false }: { processingOnly?: boolean }) {
+  const routing = useRef(false);
   const [period, setPeriod] = useState<WeeklyPeriod>(recentMonthPeriod);
   const [preset, setPreset] = useState("month");
   const [runs, setRuns] = useState<WeeklyRun[]>([]);
@@ -89,14 +93,15 @@ export default function WeeklyWork() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [saveState, setSaveState] = useState<SaveState>("saved");
-  const [filter, setFilter] = useState("needs");
+  const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [couponSearch, setCouponSearch] = useState("");
+  const [couponStartsOn, setCouponStartsOn] = useState("");
+  const [couponExpiresOn, setCouponExpiresOn] = useState("");
   const [advertising, setAdvertising] = useState<{ key: string; data?: AdvertisingPreview; error?: string } | null>(null);
   const [advertisingRefresh, setAdvertisingRefresh] = useState(0);
   const [visibleLimit, setVisibleLimit] = useState(40);
   const [invalidImages, setInvalidImages] = useState<Set<string>>(() => new Set());
-  const [selectedOutputs, setSelectedOutputs] = useState<OutputKind[]>(["vendors", "reorder", "discontinue"]);
   const [outputProgress, setOutputProgress] = useState("");
   const [outputError, setOutputError] = useState("");
   const outputLock = useRef(false);
@@ -127,6 +132,8 @@ export default function WeeklyWork() {
   }, []);
 
   const installRun = useCallback((next: WeeklyRun, resetReviews = true) => {
+    setCouponStartsOn(next.couponStartsOn || "");
+    setCouponExpiresOn(next.couponExpiresOn || "");
     runRef.current = next; setRun(next);
     setRuns(previous => [next, ...previous.filter(item => item.id !== next.id)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
     if (resetReviews) {
@@ -212,7 +219,8 @@ export default function WeeklyWork() {
         const saved = (data.runs || []).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
         setRuns(saved);
         setKnownVendors(Array.from(new Set(Object.values(data.productOverrides || {}).map(item => item.vendorName).filter(Boolean))).sort());
-        if (saved[0] && !saved[0].completedAt) { installRun(saved[0]); setPeriod(saved[0].snapshot.period); setPreset("custom"); }
+        const initial = processingOnly ? weeklyReorderQueueRuns(saved)[0] : saved[0];
+        if (initial && !initial.completedAt) { installRun(initial); setPeriod(initial.snapshot.period); setPreset("custom"); }
         else if (saved.length) { setPeriod(recentPeriod(7)); setPreset("week"); }
       } catch (failure) { if (!cancelled) setError(failure instanceof Error ? failure.message : "주간 업무를 불러오지 못했습니다."); }
       finally { if (!cancelled) setLoading(false); }
@@ -235,7 +243,7 @@ export default function WeeklyWork() {
       const data = await response.json() as ApiResult;
       if (!response.ok || !data.success || !data.run) { setDriveReconnect(data.code === "DRIVE_RECONNECT_REQUIRED"); throw new Error(data.error || "자료를 분석하지 못했습니다."); }
       if (sequence !== requestNumber.current || !samePeriod(periodRef.current, selectedPeriod)) return;
-      installRun(data.run); setDriveReconnect(false); setFilter("needs"); setSearch("");
+      installRun(data.run); setDriveReconnect(false); setFilter("all"); setSearch("");
       setMessage(`실제 입고일 ${selectedPeriod.startDate} ~ ${selectedPeriod.endDate} 기준으로 준비했습니다. 아래 확인할 상품만 검토해 주세요.`);
       if (browserSource) { seenTransfers.current.add(browserSource.transferId); window.postMessage({ type: "NOIDB_INBOUND_EXTENSION_ACK", transferId: browserSource.transferId, accepted: true }, window.location.origin); }
     } catch (failure) { if (sequence === requestNumber.current) setError(failure instanceof Error ? failure.message : "자료를 분석하지 못했습니다."); }
@@ -273,7 +281,8 @@ export default function WeeklyWork() {
   const staleRules = !!run && run.snapshot.rulesVersion !== WEEKLY_RULES_VERSION;
   const readyRun = run && !staleRules && samePeriod(period, run.snapshot.period) ? run : null;
   const couponExcluded = new Set(readyRun?.couponExcludedSkuIds || []);
-  const selectedCoupons = readyRun && !readyRun.couponUploadedAt && !readyRun.completedAt ? readyRun.snapshot.couponItems.filter(item => !couponExcluded.has(item.skuId)) : [];
+  const couponCompletion = readyRun ? weeklyCouponCompletion(readyRun, runs) : undefined;
+  const selectedCoupons = readyRun && !couponCompletion && !readyRun.completedAt ? readyRun.snapshot.couponItems.filter(item => !couponExcluded.has(item.skuId)) : [];
   const completedCoupons = readyRun?.couponUploadedAt ? readyRun.snapshot.couponItems.filter(item => !couponExcluded.has(item.skuId)) : [];
   const advertisingSelectionKey = readyRun ? JSON.stringify([readyRun.id, selectedCoupons.map(item => item.skuId)]) : "";
   const advertisingReady = !selectedCoupons.length || advertising?.key === advertisingSelectionKey && !!advertising.data && !advertising.data.missingSkuIds.length && !advertising.data.conflictingSkuIds.length;
@@ -302,7 +311,12 @@ export default function WeeklyWork() {
   const currentReviews = readyRun ? reviews : {};
   const queuedSkuIds = new Set(readyRun?.vendorQueueTransfers?.flatMap(t => t.lines.map(l => l.skuId)) || []);
   const allEntries = useMemo(() => readyRun?.snapshot.vendorItems.map(item => ({ item, review: currentReviews[item.skuId] || defaultReview(item) })) || [], [readyRun, currentReviews]);
-  const entries = allEntries.filter(({ review }) => readyRun && weeklyReviewIsActive(readyRun, review));
+  const entries = allEntries.filter(({ item, review }) => {
+    if (!readyRun || !weeklyReviewIsActive(readyRun, review, processingOnly)) return false;
+    if (processingOnly || readyRun.itemRoutes?.[review.skuId] && !readyRun.itemRoutes[review.skuId].completed) return true;
+    if (review.decision === "discontinue") return !runs.some(other => other.id !== readyRun.id && other.discontinueQueueRequestIds?.[review.skuId]?.length);
+    return !!weeklyFreshVendorItem(item, runs, readyRun.id);
+  });
   const completedEntries = allEntries.flatMap(entry => { const completion = readyRun && weeklyReviewCompletion(readyRun, entry.review); return completion ? [{ ...entry, completion }] : []; });
   const vendorNeeds = entries.filter(entry => reviewNeedsAttention(entry.review) || entry.review.decision === "order" && invalidImages.has(entry.item.skuId));
   const orders = entries.filter(entry => entry.review.decision === "order");
@@ -313,32 +327,30 @@ export default function WeeklyWork() {
   const held = entries.filter(entry => entry.review.decision === "hold");
   const vendorNames = Array.from(new Set([...knownVendors, ...entries.map(entry => entry.review.vendorName.trim()).filter(Boolean)])).sort((a, b) => a.localeCompare(b, "ko"));
   const orderedVendors = Array.from(new Set(orders.map(entry => entry.review.vendorName.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "ko"));
-  const filtered = entries.filter(({ item, review }) => (filter === "all" || filter === "needs" && (reviewNeedsAttention(review) || review.decision === "order" && invalidImages.has(item.skuId) || review.decision === "reorder" && reorderNeedsAttention(item)) || filter === "reorder" && review.decision === "reorder" || filter === "discontinue" && review.decision === "discontinue" || filter === "hold" && review.decision === "hold") && (!search.trim() || `${item.skuId} ${item.productName} ${item.optionLabel} ${review.vendorName}`.toLowerCase().includes(search.trim().toLowerCase())));
+  const reviewEntries = entries.filter(({ review }) => !(review.decision === "reorder" && readyRun?.generated?.reorderCount));
+  const discontinueWork = allEntries.filter(({review}) => review.decision === "discontinue" && !readyRun?.routedElsewhereSkuIds?.includes(review.skuId) && !weeklyReviewCompletion(readyRun!, review));
+  const filtered = reviewEntries.filter(({ item, review }) => (filter === "all" || filter === "needs" && (reviewNeedsAttention(review) || review.decision === "order" && invalidImages.has(item.skuId) || review.decision === "reorder" && reorderNeedsAttention(item)) || filter === "reorder" && review.decision === "reorder" || filter === "discontinue" && review.decision === "discontinue" || filter === "hold" && review.decision === "hold") && (!search.trim() || `${item.skuId} ${item.productName} ${item.optionLabel} ${review.vendorName}`.toLowerCase().includes(search.trim().toLowerCase())));
   const visible = filtered.slice(0, visibleLimit);
   const groups = visible.reduce((all, entry) => { const key = entry.review.decision === "discontinue" ? "단종 신청 대상" : entry.review.decision === "reorder" ? "쿠팡 재발주요청" : entry.review.vendorName.trim() || "거래처를 선택해 주세요"; if (!all.has(key)) all.set(key, []); all.get(key)!.push(entry); return all; }, new Map<string, typeof filtered>());
   const disabled = !!busy || loading;
   const outputDisabled = disabled || imageWork > 0 || saveState === "error" || !!readyRun?.snapshot.blockers.length;
   const outputOptions: Array<{ kind: OutputKind; label: string; reason: string; count: number }> = [
     { kind: "marketing", label: "30% 쿠폰·광고등록 엑셀", count: selectedCoupons.length, reason: !selectedCoupons.length ? "대상 없음" : !advertisingReady ? "광고 옵션ID 확인 필요" : "" },
-    { kind: "vendors", label: "거래처 발주 이미지·엑셀", count: orders.length, reason: !orders.length ? "대상 없음" : vendorNeeds.length ? "상품 검토 필요" : "" },
     { kind: "reorder", label: "미납발주건 재발주요청 엑셀", count: reorders.length, reason: !reorders.length ? "대상 없음" : reorderNeeds.length ? "발주별 수량 확인 필요" : "" },
-    { kind: "discontinue", label: "단종 공문 PDF·SKU 엑셀", count: discontinued.length, reason: !discontinued.length ? "대상 없음" : "" },
   ];
-  const chosenOutputs = outputOptions.filter(option => option.count > 0 && selectedOutputs.includes(option.kind));
-  useEffect(() => setSelectedOutputs(["vendors", "reorder", "discontinue"]), [run?.id]);
   const reviewImageWork = useCallback((delta: number) => setImageWork(value => Math.max(0, value + delta)), []);
   const reportImageFailure = useCallback((skuId: string) => setInvalidImages(previous => previous.has(skuId) ? previous : new Set([...previous, skuId])), []);
 
-  async function syncDiscontinueQueue() {
+  async function syncDiscontinueQueue(navigate = true) {
     if (disabled || imageWork || !await flushSave()) return;
     const current=runRef.current;
     if (!current) return;
-    setBusy("누적된 단종대기를 불러오고 있습니다…"); setError("");
+    setBusy("단종관리로 보내고 있습니다…"); setError("");
     try {
-      const response=await fetch("/api/wms/weekly-work", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"sync-discontinue-queue",runId:current.id,expectedRevision:current.revision}) });
+      const response=await fetch("/api/wms/weekly-work", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"transfer-discontinue",runId:current.id,expectedRevision:current.revision}) });
       const data=await response.json() as ApiResult;
       if(!response.ok || !data.success || !data.run)throw new Error(data.error || "단종대기를 불러오지 못했습니다.");
-      installRun(data.run); clearDownloads(); setFilter("discontinue"); setMessage("누적된 단종대기를 현재 단종 목록에 반영했습니다. 이미 신청을 완료한 항목은 제외합니다.");
+      installRun(data.run); if (navigate) window.location.assign("/wms/vendor-orders/status-requests");
     } catch(failure) { setError(failure instanceof Error ? failure.message : "단종대기를 불러오지 못했습니다."); await refreshCurrent(current.id).catch(()=>undefined); }
     finally { setBusy(""); }
   }
@@ -347,7 +359,7 @@ export default function WeeklyWork() {
     if (disabled || imageWork || !await flushSave()) return;
     const current = runRef.current;
     if (!current) return;
-    setBusy("기존 발주대기와 중복 SKU를 취합하고 있습니다…"); setError("");
+    setBusy("발주관리로 보내는 중…"); setError("");
     try {
       const response = await fetch("/api/wms/vendor-orders/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: current.id, expectedRevision: current.revision }) });
       const data = await response.json();
@@ -356,6 +368,26 @@ export default function WeeklyWork() {
       window.location.assign("/wms/vendor-orders/manage");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "발주대기로 이동하지 못했습니다."); await refreshCurrent(current.id).catch(() => undefined); }
     finally { setBusy(""); }
+  }
+
+  async function routeItem(skuId: string, decision: WeeklyReview["decision"]) {
+    if (routing.current || disabled || imageWork) return;
+    if (decision === "hold") { changeReview(skuId, { decision }); return; }
+    routing.current = true;
+    try {
+      if (!await flushSave()) return;
+      const current = runRef.current;
+      if (!current) return;
+      setBusy(`SKU ${skuId} 이동 중…`); setError("");
+      const response = await fetch("/api/wms/weekly-work/route-item", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: current.id, expectedRevision: current.revision, skuId, decision }) });
+      const data = await response.json() as ApiResult;
+      if (!response.ok || !data.success || !data.run) throw new Error(data.error || "이동하지 못했습니다. 같은 처리 방법으로 다시 시도해 주세요.");
+      installRun(data.run); clearDownloads();
+      setMessage(`SKU ${skuId} · ${decision === "order" ? "거래처 발주관리" : decision === "discontinue" ? "단종·해제 관리" : "재발주요청 대기"}로 이동했습니다.`);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "이동하지 못했습니다. 다시 시도해 주세요.");
+      if (runRef.current) await refreshCurrent(runRef.current.id).catch(() => undefined);
+    } finally { routing.current = false; setBusy(""); }
   }
 
   function updatePeriod(next: WeeklyPeriod, nextPreset = "custom") { setPeriod(next); periodRef.current = next; setPreset(nextPreset); clearDownloads(); setMessage(""); setError(""); }
@@ -374,7 +406,7 @@ export default function WeeklyWork() {
     const next = runs.find(item => item.id === id); if (!next || disabled || imageWork) return;
     if (!await flushSave()) return;
     const selected = runRef.current?.id === id ? runRef.current : next;
-    installRun(selected); updatePeriod(selected.snapshot.period); setFilter("needs"); setSearch("");
+    installRun(selected); updatePeriod(selected.snapshot.period); setFilter("all"); setSearch("");
   }
 
   async function refreshCurrent(id: string) {
@@ -451,13 +483,18 @@ export default function WeeklyWork() {
       setDownloads(preparedFiles); setBundle({ name, url });
       downloadBlobPreservingPage(blob, name);
       setOutputProgress("파일 " + preparedFiles.length + "개 준비 완료 · ZIP 다운로드를 요청했습니다.");
+      return true;
     } catch (failure) {
       preparedFiles.forEach(file => URL.revokeObjectURL(file.url));
       const detail = failure instanceof Error ? failure.message : "파일을 만들지 못했습니다.";
       setOutputProgress(""); setOutputError(detail); setError(detail);
-      if (failure && typeof failure === "object" && "skuIds" in failure && Array.isArray(failure.skuIds)) { setInvalidImages(previous => new Set([...previous, ...failure.skuIds as string[]])); setFilter("needs"); setSearch(""); }
+      if (failure && typeof failure === "object" && "skuIds" in failure && Array.isArray(failure.skuIds)) { setInvalidImages(previous => new Set([...previous, ...failure.skuIds as string[]])); setFilter("all"); setSearch(""); }
       try { await refreshCurrent(current.id); } catch { /* Preserve the original error. */ }
     } finally { outputLock.current = false; setBusy(""); }
+  }
+
+  async function generateDiscontinue() {
+    if (await generate("discontinue")) await syncDiscontinueQueue(false);
   }
 
   async function markStatus(kind: "coupon" | "discontinue" | "vendor" | "complete" | "reorder", vendorName?: string) {
@@ -465,10 +502,12 @@ export default function WeeklyWork() {
     const current = runRef.current!;
     setBusy("처리 완료를 기록하고 있습니다…"); setError("");
     try {
-      const response = await fetch("/api/wms/weekly-work", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "status", runId: current.id, expectedRevision: current.revision, kind, ...(vendorName ? { vendorName } : {}) }) });
+      const response = await fetch("/api/wms/weekly-work", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "status", runId: current.id, expectedRevision: current.revision, kind, ...(kind === "coupon" ? { couponStartsOn, couponExpiresOn } : {}), ...(vendorName ? { vendorName } : {}) }) });
       const data = await response.json() as ApiResult;
       if (!response.ok || !data.success || !data.run) throw new Error(data.error || "처리 상태를 기록하지 못했습니다.");
-      installRun(data.run); clearDownloads(); setMessage(kind === "complete" ? "이번 주간 업무를 완료로 기록했습니다. 다음에는 최근 일주일로 시작합니다." : "처리 완료를 저장했습니다. 완료한 항목은 목록에서 제외하고 아래 완료 이력에 보관했습니다.");
+      installRun(data.run); clearDownloads();
+      if (kind === "coupon") requestAnimationFrame(() => document.getElementById("weekly-review-title")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      setMessage(kind === "complete" ? "이번 주간 업무를 완료로 기록했습니다. 다음에는 최근 일주일로 시작합니다." : "처리 완료를 저장했습니다. 완료한 항목은 목록에서 제외하고 아래 완료 이력에 보관했습니다.");
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "처리 상태를 기록하지 못했습니다.");
       try { await refreshCurrent(current.id); } catch { /* Preserve the original error for a safe retry. */ }
@@ -476,8 +515,23 @@ export default function WeeklyWork() {
     finally { setBusy(""); }
   }
 
+  if (processingOnly) return <main className={styles.page}>
+    <div className={styles.topLinks}><a href="/wms/inbound">← 새 미입고 검토</a><a href="/wms/vendor-orders/manage">거래처 발주관리</a><a href="/wms/vendor-orders/status-requests">단종관리</a></div>
+    <header className={styles.header}><div><h1>재발주요청 대기</h1><p>재발주요청으로 선택한 상품은 여기에 보관됩니다. 쿠팡에서 실제 요청을 마친 뒤 완료를 기록하세요.</p></div></header>
+    {error ? <p className={styles.error} role="alert">{error}</p> : null}
+    {busy ? <p role="status">{busy}</p> : null}
+    {message ? <p role="status">{message}</p> : null}
+    <label className={styles.field}><span>처리할 작업</span><select aria-label="재발주요청 작업" value={run?.id || ""} disabled={disabled} onChange={event => void chooseRun(event.target.value)}><option value="">작업 선택</option>{weeklyReorderQueueRuns(runs).map(item => <option key={item.id} value={item.id}>{item.snapshot.period.startDate} ~ {item.snapshot.period.endDate} · {formatTime(item.snapshot.createdAt)} · {item.reorderRequestedAt ? "요청 완료" : "요청 대기"}</option>)}</select></label>
+    {readyRun ? <section><h2>재발주요청 {reorders.length}개 SKU</h2><p>발주번호별 미납수량으로 생성합니다. 요청입고예정일은 생성일 다음 첫 금요일입니다.</p>
+      <div className={styles.couponTable}><table><thead><tr><th>SKU</th><th>상품명</th><th>발주번호 · 미납수량</th></tr></thead><tbody>{reorders.map(({item}) => <tr key={item.skuId}><td>{item.skuId}</td><td>{item.productName}</td><td>{item.shortageDetails?.map(detail => <div key={detail.purchaseOrderNumber}>{detail.purchaseOrderNumber} · {detail.shortageQuantity}개</div>)}</td></tr>)}</tbody></table></div>
+      <div className={styles.inlineActions}><button className={styles.primary} disabled={outputDisabled || !reorders.length || reorderNeeds.length > 0} onClick={() => void generate("reorder")}>재발주요청 파일 받기</button><a href="https://supplier.coupang.com/plan/ticket/reportIssue/Reorder" target="_blank" rel="noreferrer">쿠팡 재발주요청 화면 ↗</a><button className={styles.secondary} disabled={disabled || !reorders.length || !readyRun.generated?.reorderCount} onClick={() => void markStatus("reorder")}>쿠팡 재발주 요청 완료</button></div>
+      {bundle ? <a href={bundle.url} download={bundle.name}>생성한 파일 다시 받기</a> : null}
+      {readyRun.reorderRequestedAt ? <p>요청 완료 · {formatTime(readyRun.reorderRequestedAt)}</p> : null}
+    </section> : <p>{loading ? "불러오는 중…" : "재발주요청 대기 작업이 없습니다."}</p>}
+  </main>;
+
   return <main className={styles.page}>
-    <div className={styles.topLinks} style={{ flexWrap: "wrap" }}><a href="/wms/work-center">← 작업센터</a><a href="/downloads/noidb-weekly-work-manual-v1.4.pdf" target="_blank" rel="noreferrer">사용설명서 PDF ↗</a><a href="/wms/vendor-orders/manage">거래처 발주관리 ↗</a></div>
+    <div className={styles.topLinks} style={{ flexWrap: "wrap" }}><a href="/wms/work-center">← 작업센터</a><a href="/downloads/noidb-weekly-work-manual-v1.4.pdf" target="_blank" rel="noreferrer">사용설명서 PDF ↗</a><a href="/wms/vendor-orders/manage">거래처 발주관리 ↗</a><a href="/wms/inbound/reorder">재발주요청 대기 ↗</a><a href="/wms/vendor-orders/status-requests">단종관리 ↗</a></div>
     <header className={styles.header}><div><p className={styles.eyebrow}>NOID-B · WEEKLY WORK</p><h1>주간 업무</h1><p className={styles.lead}>입고 확인부터 쿠폰, 거래처 발주, 재발주요청, 단종 신청까지 한곳에서.</p></div><span className={styles.weeklyBadge}>매주 한 번, 세 단계</span></header>
     <ol className={styles.steps} aria-label="주간 업무 진행 순서"><li className={styles.activeStep}><span>1</span> 기간·자료 준비</li><li className={readyRun ? styles.activeStep : ""}><span>2</span> 확인할 상품 검토</li><li className={readyRun?.generated ? styles.activeStep : ""}><span>3</span> 파일 받기·완료</li></ol>
 
@@ -494,6 +548,14 @@ export default function WeeklyWork() {
       {run && !readyRun ? <p className={styles.periodChanged}>{staleRules ? <>쿠폰·미입고 기준이 변경되었습니다. 이전 작업을 계속하려면 <strong>이 기간 업무 준비</strong>를 눌러 새 기준으로 다시 확인하세요.</> : <>기간이 바뀌었습니다. <strong>이 기간 업무 준비</strong>를 눌러 새 결과를 확인하세요.</>}</p> : null}
     </section>
 
+    <section className={styles.panel} aria-label="매주 처리 순서">
+      <strong>매주 이 순서로 완료하세요</strong>
+      <p className={styles.help}>정규 실행일은 매주 수요일, 대상은 전날 화요일까지의 입고분입니다. 이미 처리한 날짜가 있으면 그 다음 날부터 시작하세요.</p>
+      <ol><li>지난 종료일 다음 날부터 이번 종료일까지 입고상세내역을 내려받고 같은 기간으로 업무를 준비합니다.</li><li>쿠폰 대상과 미입고 처리 방법을 검토하고 필요한 파일을 받습니다.</li><li>쿠팡 쿠폰 등록·계약 상태와 종료일을 확인하고, 재발주요청·단종 신청 및 거래처 발송을 실제로 처리합니다.</li><li>아래에서 각 <strong>실제 처리 완료</strong>를 기록한 뒤 <strong>이번 주간 업무 완료</strong>를 누릅니다.</li></ol>
+      <p className={styles.help}>파일 다운로드만으로는 완료되지 않습니다. 일부 상품만 성공했다면 전체 완료를 누르지 말고 실패 항목을 먼저 확인하세요. 화면 밖에서 새로 등록하거나 기간을 변경한 쿠폰은 ‘기존 쿠폰 중복 관리’에도 반영하세요.</p>
+      <a href="/downloads/weekly-work-checklist.md" target="_blank" rel="noreferrer">매주 업무 체크리스트 보기 ↗</a>
+    </section>
+    <WeeklyCouponHistory disabled={disabled || imageWork > 0 || saveState !== "saved"} onSaved={() => { clearDownloads(); setRun(null); runRef.current = null; setReviews({}); reviewsRef.current = {}; setMessage("쿠폰 이력을 저장했습니다. 위에서 이 기간 업무 준비를 눌러 중복을 다시 대조하세요."); }} />
     {!readyRun ? <section className={styles.emptyStart}><span className={styles.emptySymbol} aria-hidden="true">✓</span><h2>파일을 날짜마다 만들 필요 없어요.</h2><p>기간을 정해 한 번 준비하면<br />30% 쿠폰, 거래처별 발주, 재발주요청, 단종 신청을 이어서 처리할 수 있습니다.</p></section> : <>
       <section className={styles.sourceSummary} aria-label="확인한 입고 자료"><div><span>분석 기간 · 실제 입고일 기준</span><strong>{readyRun.snapshot.period.startDate} ~ {readyRun.snapshot.period.endDate}</strong></div><div><span>자료의 최신 실제 입고일</span><strong>{readyRun.snapshot.source.latestActualDate || "입고 기록 없음"}</strong></div><div><span>확인한 시각</span><strong>{formatTime(readyRun.snapshot.createdAt)}</strong></div><details><summary>{readyRun.snapshot.source.mode === "browser" ? "서플라이 허브" : readyRun.snapshot.source.mode === "upload" ? "직접 선택한 파일" : "Drive 입고파일"} · 자료 확인</summary><p>선택 기간 입고·반출 기록 {readyRun.snapshot.source.selectedEventCount.toLocaleString()}건 · 겹친 기록 {readyRun.snapshot.source.duplicateCount.toLocaleString()}건 제외</p>{readyRun.snapshot.source.files.map((file, index) => <p key={`${index}-${file}`}>{file}</p>)}</details></section>
       {readyRun.snapshot.blockers.length ? <div className={styles.error} role="alert"><strong>자료를 다시 확인해야 파일을 만들 수 있습니다.</strong>{readyRun.snapshot.blockers.map((item, index) => <p key={`${index}-${item}`}>{item}</p>)}</div> : null}
@@ -502,12 +564,13 @@ export default function WeeklyWork() {
       {readyRun.snapshot.unresolvedItems?.length ? <details className={styles.warnings}><summary>자료 확인 필요 · {readyRun.snapshot.unresolvedItems.length}개 SKU · 미납 목록에서 제외</summary><p>확정수량이나 실제 누적 입고수량을 정확히 대조하지 못한 상품입니다. 미납 건수와 거래처 발주·재발주요청 파일에 포함하지 않습니다.</p>{readyRun.snapshot.unresolvedItems.map(item => <div key={item.skuId}><p><strong>SKU {item.skuId} · {item.productName}</strong><br />발주번호 {item.relatedPurchaseOrderNumbers.join(", ")}</p>{item.issues.map((issue, index) => <p key={index}>{issue}</p>)}</div>)}</details> : null}
       <div className={styles.overview}><div className={styles.couponSummary}><span>30% 쿠폰 · 선택한 상품</span><strong>{selectedCoupons.length.toLocaleString()}<small>개 SKU</small></strong></div><div><span>거래처 발주 후보</span><strong>{orders.length.toLocaleString()}<small>개 SKU · {orderedVendors.length}개 거래처</small></strong></div><div><span>확인할 상품</span><strong className={needs.length ? styles.warningNumber : ""}>{needs.length.toLocaleString()}<small>개 SKU</small></strong></div><div><span>재발주요청 · 재고 있음</span><strong>{reorders.length.toLocaleString()}<small>개 SKU</small></strong></div><div><span>단종 신청</span><strong>{discontinued.length.toLocaleString()}<small>개 SKU</small></strong></div></div>
 
-      {!readyRun.couponUploadedAt && !readyRun.completedAt ? <section className={styles.panel} aria-labelledby="weekly-coupon-title">
+      {couponCompletion ? <p role="status" className={styles.help}>쿠폰·광고 업무 완료 · {couponCompletion.couponStartsOn} ~ {couponCompletion.couponExpiresOn}</p> : null}
+      {!couponCompletion && !readyRun.completedAt && readyRun.snapshot.couponItems.length > 0 ? <section className={styles.panel} aria-labelledby="weekly-coupon-title">
         <div className={styles.sectionHeading}><div><span className={styles.stepNumber}>02</span><h2 id="weekly-coupon-title">쿠폰 적용 상품을 선택하세요</h2></div><span className={styles.saveState} role="status">{couponSaving.current ? "쿠폰 선택 저장 중…" : readyRun.couponUploadedAt ? "쿠팡 등록 완료 · 선택 고정" : "✓ 쿠폰 선택 저장됨"}</span></div>
         <p className={styles.help}>선택 기간에 실제 입고된 수량을 SKU별로 합쳐 <strong>정확히 1개인 상품</strong>만 표시합니다. 곧 단종되거나 생산 계획이 없는 상품은 체크를 해제하세요. <strong>체크한 SKU만 30% 쿠폰 엑셀에 들어갑니다.</strong></p>
         <div className={styles.couponControls}><strong>쿠폰 적용 {selectedCoupons.length}개 <span>· 제외 {readyRun.snapshot.couponItems.length - selectedCoupons.length}개</span></strong><div className={styles.inlineActions}><button type="button" className={styles.secondary} disabled={disabled || imageWork > 0 || !!readyRun.couponUploadedAt || !couponExcluded.size} onClick={() => void selectCoupons([])}>전체 선택</button><button type="button" className={styles.secondary} disabled={disabled || imageWork > 0 || !!readyRun.couponUploadedAt || !selectedCoupons.length} onClick={() => void selectCoupons(readyRun.snapshot.couponItems.map(item => item.skuId))}>전체 해제</button></div><input className={styles.search} type="search" aria-label="쿠폰 SKU 또는 상품명 검색" placeholder="SKU, 상품명 검색" value={couponSearch} onChange={event => setCouponSearch(event.target.value)} /></div>
         {visibleCoupons.length ? <div className={styles.couponTable}><table><thead><tr><th scope="col">쿠폰 적용</th><th scope="col">SKU</th><th scope="col">상품명</th><th scope="col">기간 입고</th></tr></thead><tbody>{visibleCoupons.map(item => <tr key={item.skuId} className={couponExcluded.has(item.skuId) ? styles.couponExcluded : ""}><td><label className={styles.couponChoice}><input type="checkbox" aria-label={"SKU " + item.skuId + " 쿠폰 적용"} checked={!couponExcluded.has(item.skuId)} disabled={disabled || imageWork > 0 || !!readyRun.couponUploadedAt} onChange={event => void selectCoupons(event.target.checked ? [...couponExcluded].filter(skuId => skuId !== item.skuId) : [...couponExcluded, item.skuId])} /><span>{couponExcluded.has(item.skuId) ? "제외" : "적용"}</span></label></td><td>{item.skuId}</td><td>{item.productName}{item.productLink ? <> <a href={item.productLink} target="_blank" rel="noreferrer" aria-label={item.productName + " 제품 정보 확인"}>↗</a></> : null}</td><td>1개</td></tr>)}</tbody></table></div> : <p className={styles.help}>{couponSearch.trim() ? "검색한 상품이 없습니다." : "선택 기간에 입고수량 합계가 1개인 미등록 쿠폰 대상이 없습니다."}</p>}
-        <p className={styles.help}>체크 해제는 이번 작업의 쿠폰 대상에서만 제외합니다. 입고 기록이나 상품의 단종 상태는 변경하지 않습니다. 다음 작업에서는 다시 검토할 수 있습니다.</p>
+        <p className={styles.help}>체크 해제는 이번 작업의 쿠폰 대상에서만 제외합니다. 입고 기록이나 상품의 단종 상태는 변경하지 않습니다. 이 업무를 완료하면 제외한 상품도 같은 입고 건으로 다시 나오지 않습니다.</p>
         <div className={styles.advertisingSummary} aria-live="polite">
           <strong>선택한 쿠폰 SKU의 광고등록 파일</strong>
           <p>옵션ID만 500개씩 나눠 <b>3-1_광고등록.xlsx, 3-2_광고등록.xlsx…</b>로 함께 만듭니다. 같은 옵션ID는 한 번만 넣습니다.</p>
@@ -516,53 +579,40 @@ export default function WeeklyWork() {
             {advertising.data.missingSkuIds.length || advertising.data.conflictingSkuIds.length ? <details className={styles.warnings}><summary>옵션ID 확인 필요 {advertising.data.missingSkuIds.length + advertising.data.conflictingSkuIds.length}개 SKU</summary><p>모든 선택 SKU의 옵션ID가 확인되어야 쿠폰·광고 파일을 함께 만들 수 있습니다. 쿠폰만 먼저 받을 수도 있습니다.</p>{advertising.data.missingSkuIds.map(skuId => <p key={skuId}>SKU {skuId} · 옵션ID 없음 · {selectedCoupons.find(item => item.skuId === skuId)?.productName}</p>)}{advertising.data.conflictingSkuIds.map(skuId => <p key={skuId}>SKU {skuId} · 옵션ID 불일치 · {selectedCoupons.find(item => item.skuId === skuId)?.productName}</p>)}</details> : null}
           </> : null}
           <div className={styles.inlineActions}><button type="button" className={styles.secondary} disabled={outputDisabled || !selectedCoupons.length || !advertisingReady} onClick={() => void generate("marketing")}>쿠폰·광고 파일 함께 받기</button><button type="button" className={styles.secondary} disabled={outputDisabled || !selectedCoupons.length} onClick={() => void generate("coupon")}>쿠폰만 받기</button><button type="button" className={styles.secondary} disabled={advertisingLoading || disabled || !selectedCoupons.length} onClick={() => setAdvertisingRefresh(value => value + 1)}>광고 옵션ID 다시 확인</button></div>
+          <div className={styles.couponCompletion}>
+            <strong>쿠팡 등록 후 여기에서 완료하세요</strong>
+            <label className={styles.field}><span>쿠폰 시작일</span><input type="date" aria-label="쿠팡 쿠폰 시작일" value={couponStartsOn} max={couponExpiresOn || undefined} disabled={disabled} onChange={event => setCouponStartsOn(event.target.value)} /></label>
+            <label className={styles.field}><span>쿠폰 종료일</span><input type="date" aria-label="쿠팡 쿠폰 종료일" value={couponExpiresOn} min={couponStartsOn || undefined} disabled={disabled} onChange={event => setCouponExpiresOn(event.target.value)} /></label>
+            <small>쿠팡에 등록한 쿠폰 기간을 입력하세요. 쿠폰 등록·계약과 광고 등록을 마친 뒤 처리완료를 누르면 아래 미입고 검토 단계로 이동합니다.</small>
+            <button type="button" className={styles.primary} disabled={disabled || imageWork > 0 || !readyRun.generated?.couponCount || !couponStartsOn || !couponExpiresOn || couponStartsOn > couponExpiresOn} onClick={() => void markStatus("coupon")}>{readyRun.generated?.advertisingCount ? "쿠폰·광고 처리완료 → 다음 단계" : "쿠폰 처리완료 → 다음 단계"}</button>
+          </div>
         </div>
       </section> : null}
 
       <section className={styles.panel} aria-labelledby="weekly-review-title"><div className={styles.sectionHeading}><div><span className={styles.stepNumber}>02</span><h2 id="weekly-review-title">미입고 상품을 검토하세요</h2></div><span className={saveState === "error" ? styles.saveError : styles.saveState} role="status">{imageWork > 0 ? "사진 저장 중…" : saveState === "saved" ? "✓ 검토 내용 저장됨" : saveState === "pending" ? "변경 내용 저장 대기…" : saveState === "saving" ? "자동 저장 중…" : "저장 실패 · 다시 저장 필요"}</span></div><p className={styles.help}><strong>실제 입고가 확인된 발주서에서, 확정수량보다 입고가 적거나 0인 SKU</strong>만 대조합니다. 아직 입고가 전혀 잡히지 않은 발주서는 제외합니다. 확정수량과 실제 누적 입고를 정확히 대조하지 못한 상품은 별도 자료 확인 안내로 옮기며, 미납 목록과 발주 파일에서 제외합니다. 실제 미입고 수량을 확인하고 처리 방법을 선택하세요. 거래처 발주수량과 사진·거래처는 통합 발주대기에서 수정할 수 있습니다. 재고가 있지만 출고하지 못한 상품은 <strong>재발주요청 · 재고 있음</strong>으로 선택하세요. 생산이 끝난 상품은 처리 방법을 <strong>단종 · 생산 종료</strong>로 바꾸면 됩니다. 쿠폰 파일은 이 검토와 별도로 받을 수 있습니다.</p>
-        <div className={styles.inlineActions}><button type="button" className={styles.secondary} disabled={disabled || imageWork > 0 || !!readyRun.pendingDiscontinueSubmission} onClick={() => void syncDiscontinueQueue()}>누적 단종대기 불러오기</button><a href="/wms/vendor-orders/status-requests">단종대기 목록 바로가기 ↗</a></div>
-        <div className={styles.reviewToolbar}><div className={styles.filters} aria-label="상품 필터">{[["needs", "확인 필요", needs.length], ["all", "전체", entries.length], ["reorder", "재발주요청", reorders.length], ["discontinue", "단종", discontinued.length], ["hold", "보류", held.length]].map(([key, label, count]) => <button key={key} type="button" className={filter === key ? styles.selected : ""} aria-pressed={filter === key} onClick={() => setFilter(String(key))}>{label} <span>{count}</span></button>)}</div><input type="search" className={styles.search} value={search} placeholder="SKU, 상품명, 거래처 검색" aria-label="검토 상품 검색" onChange={event => setSearch(event.target.value)} /></div>
-        {!filtered.length ? <div className={styles.reviewEmpty}><strong>{filter === "needs" && !search ? "현재 목록에 검토할 미납 상품이 없습니다." : "해당하는 상품이 없습니다."}</strong><p>{filter === "needs" && entries.length ? "전체 탭에서 다시 확인하거나 아래에서 필요한 파일을 받으세요." : "선택한 기간과 자료를 확인해 주세요."}</p></div> : Array.from(groups, ([vendor, rows]) => <section key={vendor} className={styles.vendorGroup}><div className={styles.vendorHeading}><h3>{vendor}</h3><span>{rows.length}개 SKU</span></div>{rows.map(({ item, review }) => <ProductReviewCard key={item.skuId} item={item} review={review} vendors={vendorNames} disabled={disabled || Boolean(readyRun.pendingDiscontinueSubmission?.skuIds.includes(item.skuId)) || review.decision === "order" && Boolean(readyRun.pendingVendorSends?.[review.vendorName])} sent={review.decision === "order" && Boolean(readyRun.sentVendors[review.vendorName])} requested={review.decision === "reorder" && Boolean(readyRun.reorderRequestedAt)} previouslyRequested={new Set((readyRun.reorderPreviouslyRequestedLines || []).filter(row => row.skuId === item.skuId).map(row => row.purchaseOrderNumber))} onChange={changeReview} onImageWork={reviewImageWork} onImageFailure={reportImageFailure} />)}</section>)}
+
+        <p className={styles.help}>처리 방법을 선택하면 해당 대기 목록에 바로 저장되고 여기에서는 사라집니다. 화면은 이동하지 않습니다. 재발주요청은 <a href="/wms/inbound/reorder">재발주요청 대기</a>에서 확인할 수 있습니다.</p><div className={styles.reviewToolbar}><div className={styles.filters} aria-label="상품 필터">{[["needs", "확인 필요", needs.length], ["all", "전체", reviewEntries.length], ["discontinue", "단종", discontinued.length], ["hold", "보류", held.length]].map(([key, label, count]) => <button key={key} type="button" className={filter === key ? styles.selected : ""} aria-pressed={filter === key} onClick={() => setFilter(String(key))}>{label} <span>{count}</span></button>)}</div><input type="search" className={styles.search} value={search} placeholder="SKU, 상품명, 거래처 검색" aria-label="검토 상품 검색" onChange={event => setSearch(event.target.value)} /></div>
+        {!filtered.length ? <div className={styles.reviewEmpty}><strong>{filter === "needs" && !search ? "현재 목록에 검토할 미납 상품이 없습니다." : "해당하는 상품이 없습니다."}</strong><p>{filter === "needs" && entries.length ? "전체 탭에서 다시 확인하거나 아래에서 필요한 파일을 받으세요." : "선택한 기간과 자료를 확인해 주세요."}</p></div> : Array.from(groups, ([vendor, rows]) => <section key={vendor} className={styles.vendorGroup}><div className={styles.vendorHeading}><h3>{vendor}</h3><span>{rows.length}개 SKU</span></div>{rows.map(({ item, review }) => <ProductReviewCard key={item.skuId} item={item} review={review} vendors={vendorNames} disabled={disabled || Boolean(readyRun.pendingDiscontinueSubmission?.skuIds.includes(item.skuId)) || review.decision === "order" && Boolean(readyRun.pendingVendorSends?.[review.vendorName])} sent={review.decision === "order" && Boolean(readyRun.sentVendors[review.vendorName])} requested={review.decision === "reorder" && Boolean(readyRun.reorderRequestedAt)} previouslyRequested={new Set((readyRun.reorderPreviouslyRequestedLines || []).filter(row => row.skuId === item.skuId).map(row => row.purchaseOrderNumber))} onChange={changeReview} onRoute={(skuId, decision) => void routeItem(skuId, decision)} onImageWork={reviewImageWork} onImageFailure={reportImageFailure} />)}</section>)}
         {filtered.length > 0 ? <div className={styles.loadMore}><span>조회 결과 {filtered.length}개 중 {visible.length}개 표시</span>{visible.length < filtered.length ? <button type="button" className={styles.secondary} onClick={() => setVisibleLimit(value => value + 40)}>다음 40개 더 보기</button> : null}</div> : null}
 
       </section>
 
-      {orders.length || readyRun.vendorQueueTransfers?.length ? <section className={styles.panel}><h2>거래처 발주대기에서 한 번에 주문</h2><p>거래처 발주로 선택한 상품을 기존 발주대기와 취합합니다. 중복 SKU는 기존 수량을 유지하고 사진·거래처는 이동한 화면에서 보충할 수 있습니다.</p><button type="button" className={styles.primary} disabled={disabled || imageWork > 0 || !orders.length && !readyRun.vendorQueueTransfers?.length} onClick={() => void openVendorQueue()}>{busy.includes("취합") ? busy : readyRun.vendorQueueTransfers?.some(t => !t.completed) ? "발주대기 연결 다시 확인" : "거래처 발주대기로 이동 →"}</button>{queuedSkuIds.size > 0 && <p>{queuedSkuIds.size}개 SKU 이동 · 실제 발송완료는 거래처 발주대기에서 표시하세요.</p>}<a href="/wms/vendor-orders/manage">메인 거래처 발주대기 바로가기 ↗</a></section> : null}
       <section className={styles.panel} aria-labelledby="weekly-output-title">
-        <div className={styles.sectionHeading}><div><span className={styles.stepNumber}>03</span><h2 id="weekly-output-title">필요한 파일 선택해서 받기</h2></div>{readyRun.completedAt ? <span className={styles.badgeGood}>이 작업 완료 · {formatTime(readyRun.completedAt)}</span> : null}</div>
-        {outputOptions.some(option => option.count > 0) ? <>
-        <p className={styles.help}>거래처 발주·재발주요청·단종 자료가 기본 선택되어 있습니다. 이미 받은 쿠폰·광고는 필요한 경우에만 추가하세요. 체크한 자료를 ZIP 하나로 받습니다.</p>
-        <div className={styles.inlineActions}><button type="button" className={styles.secondary} disabled={outputDisabled} onClick={() => setSelectedOutputs(outputOptions.filter(option => !option.reason).map(option => option.kind))}>받을 수 있는 자료 전체 선택</button><button type="button" className={styles.secondary} disabled={outputDisabled || !selectedOutputs.length} onClick={() => setSelectedOutputs([])}>선택 해제</button></div>
-        <div className={styles.outputChoices}>{outputOptions.filter(option => option.count > 0).map(option => <label key={option.kind} className={styles.outputChoice}><input type="checkbox" checked={option.count > 0 && selectedOutputs.includes(option.kind)} disabled={outputDisabled || !option.count} onChange={event => setSelectedOutputs(previous => event.target.checked ? [...previous, option.kind] : previous.filter(kind => kind !== option.kind))} /><span><strong>{option.label}</strong><small>{option.reason || option.count + "개 SKU · 선택해서 함께 받기 가능"}</small></span></label>)}</div>
-        <div className={styles.inlineActions}>
-          <button type="button" className={styles.primary} disabled={outputDisabled || !chosenOutputs.length || chosenOutputs.some(option => !!option.reason)} onClick={() => void generate(chosenOutputs.map(option => option.kind))}>{outputLock.current ? "파일 준비 중…" : "선택 파일만 받기 (" + chosenOutputs.length + "종) ↓"}</button>
-          <button type="button" className={styles.secondary} disabled={outputDisabled || !advertisingReady || needs.length > 0 || !selectedCoupons.length && !orders.length && !discontinued.length && !reorders.length} onClick={() => void generate(outputOptions.filter(option => option.count > 0).map(option => option.kind))}>남은 파일 한 번에 받기 ↓</button>
-          <button type="button" className={styles.secondary} disabled={outputDisabled || !selectedCoupons.length} onClick={() => void generate("coupon")}>쿠폰만 받기 ↓</button>
+        <div className={styles.sectionHeading}><div><span className={styles.stepNumber}>03</span><h2 id="weekly-output-title">이동한 상품 처리하기</h2></div></div>
+        <div className={styles.workActions}>
+          <a className={styles.secondary} href="/wms/vendor-orders/manage">거래처 발주관리</a>
+          <a className={styles.secondary} href="/wms/vendor-orders/status-requests">단종·해제 관리</a>
+          <a className={styles.secondary} href="/wms/inbound/reorder">재발주요청 대기</a>
         </div>
-        <p className={styles.help}>저장 위치는 브라우저에서 설정한 다운로드 폴더입니다. 저장 위치를 묻는 창이 뜨면 직접 선택하세요. 브라우저 다운로드 목록에서 파일과 저장 폴더를 확인할 수 있습니다.</p>
-        {outputProgress ? <div className={styles.downloadStatus} role="status" aria-live="polite">{outputLock.current ? <span className={styles.spinner} aria-hidden="true" /> : null}<strong>{outputProgress}</strong>{bundle ? <p>저장 완료 여부는 브라우저 다운로드 목록에서 확인해 주세요. 파일이 보이지 않으면 아래 ‘같은 ZIP 다시 받기’를 누르세요.</p> : null}</div> : null}
-        {outputError ? <p className={styles.error} role="alert">{outputError}<br />이번 다운로드 요청을 완료하지 못했습니다. 원인을 확인한 뒤 다시 받아 주세요.</p> : null}
-
-        {reorders.length ? <p className={styles.help}>재발주요청은 발주번호별 정확한 미납수량으로 생성합니다. 요청입고예정일은 <strong>생성일 다음 첫 금요일</strong>이며, 금요일에 만들면 다음 주 금요일입니다.{readyRun.generated?.reorderCount && readyRun.generated.reorderRequestDate ? <> 생성한 파일의 요청입고예정일: <strong>{readyRun.generated.reorderRequestDate}</strong>.</> : null}</p> : null}
-        {reorderNeeds.length ? <p role="alert" className={styles.outputHint}>재발주요청 {reorderNeeds.length}개 SKU는 발주서별 미납수량 확인이 필요합니다. ‘최신 자료로 다시 확인’ 후 선택해 주세요.</p> : null}
-        {reorders.length ? <p className={styles.help}><a href="https://supplier.coupang.com/plan/ticket/reportIssue/Reorder" target="_blank" rel="noreferrer">쿠팡 미납발주건 요청 화면 열기 ↗</a> → ‘대량 가져 오기’에서 생성한 엑셀을 선택하세요.</p> : null}
-        {bundle ? <div className={styles.downloads}><div className={styles.downloadHeading}><strong>생성한 파일 {downloads.length}개 · {bundle.name}</strong><a href={bundle.url} download={bundle.name}>같은 ZIP 다시 받기 ↓</a></div><ul>{downloads.map(file => <li key={file.name}><span className={styles.fileType}>{file.name.split(".").pop()?.toUpperCase()}</span><a href={file.url} download={file.name.split("/").pop()}>{file.name.split("/").pop()}</a>{/\.(png|pdf)$/i.test(file.name) ? <a className={styles.previewLink} href={file.url} target="_blank" rel="noreferrer" aria-label={file.name.split("/").pop() + " 미리보기"}>미리보기 ↗</a> : null}<span>{Math.max(1, Math.round(file.size / 1024)).toLocaleString()} KB</span></li>)}</ul></div> : null}
-        </> : <p className={styles.help}>남은 파일 업무가 없습니다. 처리한 내역은 아래 완료 이력에서 확인하세요.</p>}
-        <div className={styles.completion} aria-labelledby="weekly-completion-title">
-          <h3 id="weekly-completion-title">실제 처리한 항목 완료하기</h3>
-          <p>파일 다운로드는 완료 표시가 아닙니다. 쿠팡 등록·신청 또는 거래처 주문을 마친 항목의 완료 버튼을 누르세요. 완료하면 위 상품·파일 목록에서 사라지고 완료 이력에 저장됩니다.</p>
-          <div className={styles.completionRows}>
-            {selectedCoupons.length ? <div><span>30% 쿠폰{readyRun.generated?.advertisingCount ? " · 광고등록" : ""}</span><button type="button" className={styles.secondary} disabled={disabled || !readyRun.generated?.couponCount} onClick={() => void markStatus("coupon")}>{readyRun.generated?.advertisingCount ? "쿠폰·광고 등록 완료" : "쿠폰 등록 완료"}</button></div> : null}
-            {orderedVendors.map(vendor => <div key={vendor}><span>{vendor} 발주서</span><button type="button" className={styles.secondary} disabled={disabled || !readyRun.generated?.vendors.includes(vendor) && !readyRun.pendingVendorSends?.[vendor] || needs.length > 0 && !readyRun.pendingVendorSends?.[vendor] || saveState !== "saved"} onClick={() => void markStatus("vendor", vendor)}>{readyRun.pendingVendorSends?.[vendor] ? "입고관리 연결 다시 확인" : "거래처 주문 완료"}</button></div>)}
-            {reorders.length ? <div><span>미납발주건 재발주요청</span><button type="button" className={styles.secondary} disabled={disabled || !readyRun.generated?.reorderCount || saveState !== "saved"} onClick={() => void markStatus("reorder")}>쿠팡 재발주 요청 완료</button></div> : null}
-            {discontinued.length || readyRun.pendingDiscontinueSubmission ? <div><span>단종 신청</span><button type="button" className={styles.secondary} disabled={disabled || !readyRun.pendingDiscontinueSubmission && (!readyRun.generated?.discontinueCount || saveState !== "saved")} onClick={() => void markStatus("discontinue")}>{readyRun.pendingDiscontinueSubmission ? "단종대기 완료 연결 다시 확인" : "쿠팡 단종 신청 완료"}</button></div> : null}
-          </div>
-          {!readyRun.completedAt ? <button type="button" className={styles.finishButton} disabled={disabled || imageWork > 0 || needs.length > 0 || reorders.length > 0 || saveState !== "saved" || selectedCoupons.length > 0 || discontinued.length > 0 || orderedVendors.length > 0 || Object.keys(readyRun.pendingVendorSends || {}).length > 0 || !!readyRun.pendingDiscontinueSubmission || !!readyRun.snapshot.blockers.length} onClick={() => void markStatus("complete")}>이번 주간 업무 완료</button> : <button type="button" className={styles.finishButton} disabled={disabled} onClick={() => { setRun(null); runRef.current = null; setReviews({}); reviewsRef.current = {}; updatePeriod(recentPeriod(7), "week"); }}>다음 주간 업무 준비</button>}
-        </div>
+        {outputProgress ? <p role="status">{outputProgress}</p> : null}
+        {outputError ? <p role="alert" className={styles.error}>{outputError}</p> : null}
+        {bundle ? <div className={styles.downloads}><strong>{bundle.name}</strong><a href={bundle.url} download={bundle.name}>생성한 서류 다시 받기</a></div> : null}
+        <p className={styles.help}>서류를 받는 것과 실제 처리완료는 별개입니다. 완료한 내역은 아래 이력에 남습니다.</p>
+        {!reviewEntries.length ? <p>미입고 상품 이동 완료 · 각 대기 목록에서 이어서 처리하세요.</p> : null}
         {completedCoupons.length || completedEntries.length ? <details className={styles.completedHistory}>
           <summary>처리 완료 이력 · {completedCoupons.length + completedEntries.length}개 항목</summary>
-          <p>직접 완료 표시한 기록입니다. 완료한 항목은 상품 검토와 파일 선택 목록에 다시 표시하지 않습니다.</p>
-          {completedCoupons.length ? <details><summary>쿠폰{readyRun.generated?.advertisingCount ? "·광고" : ""} 등록 완료 · {completedCoupons.length}개 SKU · {formatTime(readyRun.couponUploadedAt)}</summary><ul>{completedCoupons.map(item => <li key={item.skuId}>SKU {item.skuId} · {item.productName}</li>)}</ul></details> : null}
+          <p>직접 완료한 내역과 이전 처리 이력으로 자동 제외한 내역입니다. 원본 미입고 수량과 이력은 보존하며, 다른 발주번호의 새 미입고는 다시 검토합니다.</p>
+          {completedCoupons.length ? <details><summary>쿠폰{readyRun.generated?.advertisingCount ? "·광고" : ""} 등록 완료 · {completedCoupons.length}개 SKU · {formatTime(readyRun.couponUploadedAt)} · 기간 {readyRun.couponStartsOn || "시작일 미확인"} ~ {readyRun.couponExpiresOn || "종료일 미확인"}</summary><ul>{completedCoupons.map(item => <li key={item.skuId}>SKU {item.skuId} · {item.productName}</li>)}</ul></details> : null}
           <ul>{completedEntries.map(({ item, review, completion }) => <li key={item.skuId}><strong>{completion.label}</strong> · SKU {item.skuId} · {item.productName}{review.vendorName ? " · " + review.vendorName : ""} · {formatTime(completion.at)}</li>)}</ul>
         </details> : null}
       </section>

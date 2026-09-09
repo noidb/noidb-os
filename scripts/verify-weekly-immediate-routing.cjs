@@ -1,0 +1,20 @@
+const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict'),ts=require('typescript');
+require.extensions['.ts']=(m,f)=>m._compile(ts.transpileModule(fs.readFileSync(f,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,f);
+const state=require('../lib/wms/weekly-work-state.ts'),progress=require('../lib/wms/weekly-work-progress.ts'),coupon=require('../lib/wms/weekly-coupon-completion.ts');
+const m={exports:{}};const moduleSource=ts.transpileModule(fs.readFileSync('lib/wms/weekly-item-routing.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+vm.runInNewContext(moduleSource,{exports:m.exports,require:n=>n==='./weekly-work-state'?state:n==='./weekly-work-progress'?progress:{},Date,Set,Error});
+const make=()=>({id:'r',revision:0,updatedAt:'2026-09-09',sentVendors:{},reviews:{'123':{skuId:'123',decision:'hold',quantity:12,quantityConfirmed:false,vendorName:'A',imageUrl:''}},snapshot:{rulesVersion:4,id:'r',period:{startDate:'2026-09-09',endDate:'2026-09-09'},sourceToken:'s',couponItems:[],vendorItems:[{skuId:'123',productName:'P',vendorName:'A',imageUrl:'',shortageQuantity:1,relatedPurchaseOrderNumbers:['100'],shortageDetails:[{purchaseOrderNumber:'100',confirmedQuantity:1,receivedQuantity:0,shortageQuantity:1}],issues:[]}],blockers:[]}});
+(async()=>{for(const decision of ['order','discontinue','reorder']){
+const run=make(),workspace={schemaVersion:1,revision:0,runs:[run],productOverrides:{}},calls=[];
+const deps={readWeeklyWorkspace:async()=>structuredClone(workspace),mutateWeeklyWorkspace:async fn=>structuredClone(fn(workspace)),transferWeeklyVendorQueue:async(id,rev,ids)=>{assert.equal(ids.join(','),'123');calls.push('vendor');run.vendorQueueTransfers=[{id:'t',completed:true,lines:[{skuId:'123',relatedPurchaseOrderNumbers:['100']}]}];run.revision++;},queueDiscontinueCandidate:async()=>{calls.push('status');return{id:'q'}}};
+const routed=await m.exports.routeWeeklyItem('r',0,'123',decision,deps);assert.equal(routed.itemRoutes['123'].completed,true);assert(!progress.weeklyReviewIsActive(routed,routed.reviews['123'],false));if(decision==='reorder')assert.equal(state.weeklyReorderRows(routed).length,1);
+await m.exports.routeWeeklyItem('r',0,'123',decision,deps);assert.equal(calls.length,decision==='reorder'?0:1);
+assert.equal(progress.weeklyFreshVendorItem(run.snapshot.vendorItems[0],[routed],'new'),undefined);
+assert(progress.weeklyFreshVendorItem({...run.snapshot.vendorItems[0],relatedPurchaseOrderNumbers:['200'],shortageDetails:[{purchaseOrderNumber:'200',confirmedQuantity:1,receivedQuantity:0,shortageQuantity:1}]},decision==='discontinue'?[]:[routed],'new'));
+}
+const run=make(),workspace={runs:[run],productOverrides:{}},deps={mutateWeeklyWorkspace:async fn=>structuredClone(fn(workspace)),transferWeeklyVendorQueue:async()=>{throw Error('network failed')}};
+await assert.rejects(m.exports.routeWeeklyItem('r',0,'123','order',deps),/network failed/);assert(progress.weeklyReviewIsActive(run,run.reviews['123'],false));
+run.vendorQueueTransfers=[{id:'t',completed:true,lines:[{skuId:'123'}]}];await m.exports.routeWeeklyItem('r',0,'123','order',deps);assert(run.itemRoutes['123'].completed);
+const done=make();done.couponUploadedAt='2026-09-09';done.couponStartsOn='2026-09-10';done.couponExpiresOn='2026-09-20';done.snapshot.couponItems=[{skuId:'9'}];done.snapshot.couponReceiptKeys={'9':['receipt1']};done.couponExcludedSkuIds=['9'];const fresh=make();fresh.id='new';fresh.snapshot={...done.snapshot};assert.equal(coupon.weeklyCouponCompletion(fresh,[done]),done);assert.equal(state.eligibleWeeklyCoupons({runs:[done],productOverrides:{}},fresh.snapshot,'new').couponItems.length,0);fresh.snapshot={...fresh.snapshot,couponReceiptKeys:{'9':['receipt2']}};assert.equal(coupon.weeklyCouponCompletion(fresh,[done]),undefined);
+console.log('PASS immediate order/status/reorder destinations, no-photo routing, pending failure visible, retry once, lost acknowledgement, same PO excluded/new PO retained, excluded coupon receipts stay completed');
+})().catch(e=>{console.error(e);process.exitCode=1});

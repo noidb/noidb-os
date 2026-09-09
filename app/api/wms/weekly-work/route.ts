@@ -1,5 +1,6 @@
 import { readWeeklyDiscontinueQueue, syncWeeklyDiscontinueQueue } from "@/lib/wms/weekly-discontinue-queue";
 import { recordWeeklyDiscontinueSubmitted } from "@/lib/wms/weekly-discontinue-submit";
+import { transferWeeklyDiscontinue } from "@/lib/wms/weekly-discontinue-transfer";
 import { weeklyReviewCompletion, weeklyReviewIsActive } from "@/lib/wms/weekly-work-progress";
 import { NextRequest, NextResponse } from "next/server";
 import { isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
@@ -8,7 +9,7 @@ import { readInboundWorkbook } from "@/lib/wms/inbound-import-context";
 import { readWeeklyWorkspace, mutateWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { addWeeklyRun, assertWeeklyCurrentRules, assertWeeklyReorderEligibility, requireWeeklyRun, updateWeeklyCouponSelection, updateWeeklyReviews, weeklyReorderRows, weeklyReviewToken, weeklySelectedCoupons, weeklySelectedOrders } from "@/lib/wms/weekly-work-state";
 import { recordWeeklyVendorSent } from "@/lib/wms/weekly-work-sending";
-import { assertWeeklyCouponEligibility } from "@/lib/wms/weekly-work-state";
+import { assertWeeklyCouponEligibility, assertWeeklyReviewEligibility, recordWeeklyCouponChecks, recordWeeklyDiscontinueHistory, weeklyCouponBlocks, validWeeklyCouponDate, weeklyKoreaDay } from "@/lib/wms/weekly-work-state";
 import type { WeeklyBrowserSource, WeeklyPeriod } from "@/lib/wms/weekly-work-types";
 import type { InboundImportDataset } from "@/lib/wms/inbound-import-safety";
 import { readWeeklyFile } from "@/lib/wms/weekly-work-files";
@@ -21,7 +22,7 @@ export const dynamic="force-dynamic";
 export const maxDuration=300;
 const headers={"Cache-Control":"private, no-store"};
 export async function GET() {
-  try { const workspace=await readWeeklyWorkspace(); return NextResponse.json({success:true,...workspace},{headers}); }
+  try { const workspace=await readWeeklyWorkspace(); return NextResponse.json({success:true,...workspace,couponBlocks:weeklyCouponBlocks(workspace)},{headers}); }
   catch(error){return failure(error);}
 }
 function failure(error:unknown) { return NextResponse.json({success:false,error:error instanceof Error?error.message:"주간 업무 처리 중 오류가 발생했습니다."},{status:409,headers}); }
@@ -39,14 +40,32 @@ export async function POST(request:NextRequest) {
       for(const file of files)uploadedDatasets.push(await readInboundWorkbook(Buffer.from(await file.arrayBuffer()),file.name));
     } else body=await request.json();
     if(body.action==="analyze") {
-      const [snapshot,queue]=await Promise.all([
-        loadWeeklySnapshot(body.period as WeeklyPeriod,{browserSource:body.browserSource as WeeklyBrowserSource|undefined,uploadedDatasets}),
-        readWeeklyDiscontinueQueue(),
-      ]);
-      const run=await mutateWeeklyWorkspace(workspace=>{ const current=addWeeklyRun(workspace,snapshot); syncWeeklyDiscontinueQueue(current,queue); return current; });
+      const snapshot=await loadWeeklySnapshot(body.period as WeeklyPeriod,{browserSource:body.browserSource as WeeklyBrowserSource|undefined,uploadedDatasets});
+      const run=await mutateWeeklyWorkspace(workspace=>addWeeklyRun(workspace,snapshot));
       return NextResponse.json({success:true,run},{headers});
     }
     if(!Number.isSafeInteger(body.expectedRevision)||Number(body.expectedRevision)<0)throw new Error("업무의 최신 검토 상태를 확인하지 못했습니다. 새로고침 후 다시 진행해 주세요.");
+    if(body.action==="coupon-history") {
+      const result=await mutateWeeklyWorkspace(workspace=>{
+        if(workspace.revision!==body.expectedRevision)throw new Error("다른 화면에서 쿠폰 이력이 바뀌었습니다. 쿠폰 현황을 다시 불러와 주세요.");
+        const count=recordWeeklyCouponChecks(workspace,body.rows,body.source);
+        return {count,revision:workspace.revision+1,couponChecks:workspace.couponChecks,couponBlocks:weeklyCouponBlocks(workspace)};
+      });
+      return NextResponse.json({success:true,...result},{headers});
+    }
+    if(body.action==="discontinue-history") {
+      const result=await mutateWeeklyWorkspace(workspace=>{
+        if(workspace.revision!==body.expectedRevision)throw new Error("다른 화면에서 업무 이력이 바뀌었습니다. 다시 확인해 주세요.");
+        const run=requireWeeklyRun(workspace,body.runId);
+        const count=recordWeeklyDiscontinueHistory(workspace,run,body.rows,body.source);
+        return {count,run};
+      });
+      return NextResponse.json({success:true,...result},{headers});
+    }
+    if(body.action==="transfer-discontinue") {
+      const run=await transferWeeklyDiscontinue(String(body.runId||""),Number(body.expectedRevision));
+      return NextResponse.json({success:true,run},{headers});
+    }
     if(body.action==="sync-discontinue-queue") {
       const queue=await readWeeklyDiscontinueQueue();
       const run=await mutateWeeklyWorkspace(workspace=>{ const current=requireWeeklyRun(workspace,body.runId,body.expectedRevision); assertWeeklyCurrentRules(current); if(current.pendingDiscontinueSubmission)throw new Error("단종 완료 연결을 먼저 확인해 주세요."); syncWeeklyDiscontinueQueue(current,queue); return current; });
@@ -87,6 +106,7 @@ export async function POST(request:NextRequest) {
         if(weeklyOutputKey(item,kind!,now,advertising?.token)!==body.outputKey)throw new Error("파일 생성 후 날짜나 검토 내용이 변경됐습니다. 다시 생성해 주세요.");
         if(weeklyReviewToken(item)!==output.generated.reviewToken)throw new Error("파일 생성 후 내용이 변경됐습니다. 다시 생성해 주세요.");
         if(output.generated.couponCount)assertWeeklyCouponEligibility(workspace,item);
+        if(output.generated.vendors.length||output.generated.discontinueCount||output.generated.reorderCount)assertWeeklyReviewEligibility(workspace,item);
         if(advertising) {
           assertWeeklyAdvertisingSelection(item,advertising);
           if(output.generated.advertisingToken!==advertising.token||output.generated.advertisingCount!==advertising.optionIds.length)throw new Error("광고 옵션 ID 연결이 변경됐습니다. 파일을 다시 생성해 주세요.");
@@ -149,6 +169,12 @@ export async function POST(request:NextRequest) {
         if(kind==="coupon") {
           if(!weeklySelectedCoupons(current).length||!current.generated?.couponCount||current.generated.reviewToken!==weeklyReviewToken(current))throw new Error("현재 선택한 SKU로 쿠폰 파일을 먼저 생성해 주세요.");
           assertWeeklyCouponEligibility(workspace,current);
+          if (!current.couponUploadedAt) {
+            if(!validWeeklyCouponDate(body.couponExpiresOn)||body.couponExpiresOn<weeklyKoreaDay())throw new Error("쿠팡에 등록한 쿠폰의 종료일을 입력해 주세요. 종료일은 오늘 이후여야 합니다.");
+            if(body.couponStartsOn !== undefined && (!validWeeklyCouponDate(body.couponStartsOn) || body.couponStartsOn > body.couponExpiresOn))throw new Error("쿠폰 시작일과 종료일을 확인해 주세요.");
+            current.couponStartsOn=body.couponStartsOn;
+            current.couponExpiresOn=body.couponExpiresOn;
+          }
           current.couponUploadedAt ||= now;
         }
         else if(kind==="reorder") {
@@ -168,7 +194,7 @@ export async function POST(request:NextRequest) {
           if(!queueComplete)throw new Error("이동한 상품의 발송완료를 거래처 발주대기에서 표시한 뒤 다시 완료해 주세요.");
           if(Object.keys(current.pendingVendorSends||{}).length)throw new Error("거래처 발송과 입고관리 연결 결과를 먼저 확인해 주세요.");
           if(weeklySelectedCoupons(current).length&&!current.couponUploadedAt)throw new Error("쿠팡 쿠폰 등록 여부를 확인해 주세요.");
-          if(Object.values(current.reviews).some(r=>r.decision==="discontinue"&&!weeklyReviewCompletion(current,r)))throw new Error("단종 신청 여부를 확인해 주세요.");
+          if(Object.values(current.reviews).some(r=>r.decision==="discontinue"&&weeklyReviewIsActive(current,r)))throw new Error("단종관리로 보낼 상품을 확인해 주세요.");
           if(Object.values(current.reviews).some(r=>r.decision==="reorder")&&!current.reorderRequestedAt)throw new Error("쿠팡 재발주 요청 여부를 확인해 주세요.");
           if(weeklySelectedOrders(current).some(r=>!current.sentVendors[r.vendorName]))throw new Error("거래처 발송 여부를 확인해 주세요.");
           current.completedAt=now;

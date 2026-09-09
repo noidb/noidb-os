@@ -5,7 +5,7 @@ const {recordWeeklyDiscontinueSubmitted: submit} = require("../lib/wms/weekly-di
 const now = "2026-09-08T09:00:00.000Z";
 function harness({queue=true,failAck=false,missing=false}={}) {
   const workspace=state.emptyWeeklyWorkspace();
-  const run={id:"WEEKLY-submit",snapshot:{rulesVersion:3,sourceToken:"s",couponItems:[],vendorItems:[]},reviews:{"123":{skuId:"123",decision:"discontinue",quantity:0,quantityConfirmed:false,vendorName:"",imageUrl:""}},revision:0,updatedAt:now,sentVendors:{},discontinueQueueRequestIds:queue?{"123":["request-1"]}:{}};
+  const run={id:"WEEKLY-submit",snapshot:{rulesVersion:4,sourceToken:"s",couponItems:[],vendorItems:[]},reviews:{"123":{skuId:"123",decision:"discontinue",quantity:0,quantityConfirmed:false,vendorName:"",imageUrl:""}},revision:0,updatedAt:now,sentVendors:{},discontinueQueueRequestIds:queue?{"123":["request-1"]}:{}};
   run.generated={at:now,reviewToken:state.weeklyReviewToken(run),couponCount:0,vendors:[],discontinueCount:1,discontinueSkuIds:["123"]};
   workspace.runs.push(run);
   const requests=missing?[]:[{id:"request-1",skuId:"123",supplyHubStatus:"처리대기"},{id:"later-request",skuId:"456",supplyHubStatus:"처리대기"}];

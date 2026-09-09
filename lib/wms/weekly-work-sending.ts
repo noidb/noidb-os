@@ -1,5 +1,5 @@
 import { mutateWeeklyWorkspace, readWeeklyWorkspace } from "./weekly-work-store";
-import { requireWeeklyRun, weeklyReviewToken, weeklyVendorLines } from "./weekly-work-state";
+import { requireWeeklyRun, assertWeeklyReviewEligibility, weeklyReviewToken, weeklyVendorLines } from "./weekly-work-state";
 import { mutatePickingWaveStore, readPickingWaveStore } from "./picking-wave/server-store";
 
 /** Reserve immutable reviewed lines before adding a sent order to receiving.
@@ -11,6 +11,7 @@ export async function recordWeeklyVendorSent(runId: string, revision: number, ve
     if(run.sentVendors[vendorName])return run;
     if(!run.pendingVendorSends?.[vendorName] && (!run.generated?.vendors.includes(vendorName)||run.generated.reviewToken!==weeklyReviewToken(run)))throw new Error("현재 검토 내용으로 발주 파일을 먼저 생성해 주세요.");
     if(!run.pendingVendorSends?.[vendorName]) {
+      assertWeeklyReviewEligibility(workspace,run);
       run.pendingVendorSends={...run.pendingVendorSends,[vendorName]:{at:now,reviewToken:weeklyReviewToken(run),lines:weeklyVendorLines(run,vendorName)}};
       run.revision++;run.updatedAt=now;
     }

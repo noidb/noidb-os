@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mutateWeeklyWorkspace } from "./weekly-work-store";
-import { assertWeeklyCurrentRules, requireWeeklyRun, weeklySelectedOrders, weeklyVendorLines, weeklyReviewToken } from "./weekly-work-state";
+import { assertWeeklyCurrentRules, assertWeeklyReviewEligibility, requireWeeklyRun, weeklySelectedOrders, weeklyVendorLines, weeklyReviewToken } from "./weekly-work-state";
 import { mutatePickingWaveStore } from "./picking-wave/server-store";
 import { toVendorOrderQuantity } from "./vendor-order/aggregate";
 export async function transferWeeklyVendorQueue(runId: string, revision: number, skuIds?: string[]) {
@@ -16,6 +16,7 @@ export async function transferWeeklyVendorQueue(runId: string, revision: number,
       return pending;
     }
     assertWeeklyCurrentRules(run);
+    assertWeeklyReviewEligibility(workspace,run);
     if (run.snapshot.blockers.length) throw new Error("입고 자료 확인을 먼저 마쳐 주세요.");
     const queued = new Set(run.vendorQueueTransfers?.flatMap(t => t.lines.map(l => l.skuId)) || []);
     // Weekly review selects the action; the draft owns order quantities.

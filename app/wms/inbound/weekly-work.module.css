@@ -14,7 +14,15 @@
 .downloads li>a.previewLink{flex:none;font-size:11px;white-space:nowrap;padding:4px 8px;border:1px solid #cdd8cb;border-radius:5px}
 @media(max-width:650px){.outputChoices+.inlineActions{display:grid;grid-template-columns:1fr 1fr}.outputChoices+.inlineActions>.primary{grid-column:1/-1;width:100%}.outputChoices+.inlineActions>.secondary{width:100%;min-height:44px}}
 
+.couponCompletion { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #d9dfd1; }
+.couponCompletion > strong { flex-basis: 100%; }
+.couponCompletion small { flex-basis: 100%; line-height: 1.6; }
+.couponCompletion .field { flex: 1 1 200px; min-width: 0; }
+.panel textarea { width: 100%; max-width: 100%; padding: 10px; border: 1px solid #cdd8cb; border-radius: 8px; font: inherit; resize: vertical; }
+.panel > .field { margin: 12px 0; }
 .completedHistory { margin-top: 24px; padding: 20px; border: 1px solid var(--line, #ddd8cf); border-radius: 12px; background: var(--surface, #faf8f3); }
 .completedHistory summary { cursor: pointer; font-weight: 700; }
 .completedHistory ul { padding-left: 22px; }
 .completedHistory li { margin: 10px 0; overflow-wrap: anywhere; line-height: 1.6; }
+
+.workActions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}.workActions>div{padding:20px;border:1px solid #d9dfd1;border-radius:14px}.workActions button{margin:6px 8px 6px 0}.workActions p{line-height:1.6}@media(max-width:800px){.workActions{grid-template-columns:1fr}}

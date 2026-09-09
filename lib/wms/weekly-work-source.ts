@@ -123,7 +123,8 @@ export async function loadWeeklySnapshot(period: WeeklyPeriod, options?: { brows
   const purchaseRows = purchases.status === "fulfilled" ? purchases.value : [];
   const catalogItems = catalog.status === "fulfilled" ? catalog.value.items : [];
   const pickingStore = picking.status === "fulfilled" ? picking.value : emptyPickingWaveStoreSnapshot();
-  const carryPurchaseOrders = workspace.status === "fulfilled" ? weeklyCarryPurchaseOrders(workspace.value) : [];
+  // Prior work stays in its processing screen, outside new receipt analysis.
+  const carryPurchaseOrders: string[] = [];
   const targetPos = [...new Set([...datasets.flatMap(dataset => dataset.items.filter(item => item.kind === "inbound" && item.totalInbound > 0
     && item.actualDate >= period.startDate && item.actualDate <= period.endDate).map(item => item.po)), ...carryPurchaseOrders])].sort();
   let mergedPurchaseRows = purchaseRows;
@@ -170,7 +171,7 @@ export async function loadWeeklySnapshot(period: WeeklyPeriod, options?: { brows
     catalog.status === "rejected" || (catalog.status === "fulfilled" && !catalog.value.configured) ? "catalog" : "", picking.status === "rejected" ? "picking" : "", workspace.status === "rejected" ? "workspace" : "", purchaseFileFailure ? "purchase-files" : ""].filter(Boolean);
   const fileToken = manifest.status === "fulfilled" ? manifest.value.token : "unavailable";
   snapshot.operationalToken = failedChannels.length ? undefined : weeklyOperationsWithPurchaseFiles(weeklyOperationalToken({ historyRows, purchaseRows, catalogItems, pickingStore }), fileToken);
-  snapshot.sourceToken = createHash("sha256").update(JSON.stringify([snapshot.sourceToken, "weekly-purchase-files-v1", fileToken, failedChannels, purchaseFileWarnings])).digest("hex");
+  snapshot.sourceToken = createHash("sha256").update(JSON.stringify([snapshot.sourceToken, "weekly-new-receipt-scope-v1", "weekly-purchase-files-v1", fileToken, failedChannels, purchaseFileWarnings])).digest("hex");
   snapshot.id = `WEEKLY-${snapshot.sourceToken.slice(0,20)}`;
   return snapshot;
 }

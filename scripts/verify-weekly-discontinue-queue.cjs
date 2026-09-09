@@ -7,7 +7,7 @@ const now="2026-09-08T08:00:00.000Z";
 function request(id,skuId,status="처리대기",type="단종") {
  return {id,skuId,requestType:type,supplyHubStatus:status,productName:"큐 상품 "+skuId,optionLabel:"실버",productLink:"https://example.test/"+skuId,modelSku:"M"+skuId,purchaseOrderNumber:"9001"};
 }
-function run(){return {id:"R",revision:0,updatedAt:now,snapshot:{rulesVersion:3,sourceToken:"S",couponItems:[],vendorItems:[{skuId:"1001",productName:"기존상품",vendorName:"수정거래처",imageUrl:"https://example.test/user.jpg",shortageQuantity:5,openOrderQuantity:12,suggestedQuantity:12,relatedPurchaseOrderNumbers:["9002"],issues:[]}]},reviews:{"1001":{skuId:"1001",vendorName:"수정거래처",imageUrl:"https://example.test/user.jpg",quantity:36,decision:"order",quantityConfirmed:true}},sentVendors:{},generated:{at:now,reviewToken:"old",couponCount:5,vendors:["수정거래처","다른거래처"],discontinueCount:2}};}
+function run(){return {id:"R",revision:0,updatedAt:now,snapshot:{rulesVersion:4,sourceToken:"S",couponItems:[],vendorItems:[{skuId:"1001",productName:"기존상품",vendorName:"수정거래처",imageUrl:"https://example.test/user.jpg",shortageQuantity:5,openOrderQuantity:12,suggestedQuantity:12,relatedPurchaseOrderNumbers:["9002"],issues:[]}]},reviews:{"1001":{skuId:"1001",vendorName:"수정거래처",imageUrl:"https://example.test/user.jpg",quantity:36,decision:"order",quantityConfirmed:true}},sentVendors:{},generated:{at:now,reviewToken:"old",couponCount:5,vendors:["수정거래처","다른거래처"],discontinueCount:2}};}
 const source={requests:[request("A","1001"),request("B","1002"),request("C","1002"),request("OLD","1003","처리완료"),request("RELEASE","1004","처리대기","단종해제")],catalogItems:[]};
 const current=run();
 assert.equal(syncWeeklyDiscontinueQueue(current,source,now),1);

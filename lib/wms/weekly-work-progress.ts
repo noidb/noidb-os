@@ -21,8 +21,10 @@ export function weeklyReviewCompletion(run: WeeklyRun, review: WeeklyReview): { 
   return undefined;
 }
 
-export function weeklyReviewIsActive(run: WeeklyRun, review: WeeklyReview): boolean {
+export function weeklyReviewIsActive(run: WeeklyRun, review: WeeklyReview, includeReorderQueue = true): boolean {
+  if (run.itemRoutes?.[review.skuId] && !run.itemRoutes[review.skuId].completed) return true;
   return !run.routedElsewhereSkuIds?.includes(review.skuId) && !weeklyReviewCompletion(run, review)
+    && (includeReorderQueue || review.decision !== "reorder")
     && !(review.decision === "discontinue" && run.discontinueQueueRequestIds?.[review.skuId]?.length)
     && !(review.decision === "order" && run.vendorQueueTransfers?.some(transfer => transfer.lines.some(line => line.skuId === review.skuId)));
 }
@@ -35,6 +37,7 @@ export function weeklyFreshVendorItem(item: WeeklyVendorItem, runs: WeeklyRun[],
   if (!item.shortageDetails?.length) return item;
   const remaining = item.shortageDetails.filter(detail => !previous.some(run => {
     const review = run.reviews[item.skuId];
+    if (run.itemRoutes?.[item.skuId] && !run.itemRoutes[item.skuId].completed) return false;
     const old = run.snapshot.vendorItems.find(row => row.skuId === item.skuId);
     const covered = old?.shortageDetails?.some(row => row.purchaseOrderNumber === detail.purchaseOrderNumber && row.shortageQuantity >= detail.shortageQuantity);
     if (!covered) return false;

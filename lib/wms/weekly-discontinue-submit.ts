@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mutateWeeklyWorkspace } from "./weekly-work-store";
-import { assertWeeklyCurrentRules, requireWeeklyRun, weeklyReviewToken } from "./weekly-work-state";
+import { assertWeeklyCurrentRules, assertWeeklyReviewEligibility, requireWeeklyRun, weeklyReviewToken } from "./weekly-work-state";
 import { completeStatusRequests, listStatusRequests } from "./vendor-order-actions";
 import { weeklyDiscontinueQueueRequestIds } from "./weekly-discontinue-queue";
 
@@ -13,6 +13,7 @@ export async function recordWeeklyDiscontinueSubmitted(runId: string, revision: 
     const run = requireWeeklyRun(workspace, runId, revision);
     if (run.pendingDiscontinueSubmission) return run;
     assertWeeklyCurrentRules(run);
+    assertWeeklyReviewEligibility(workspace,run);
     const submitted = new Set(run.discontinueSubmittedSkuIds || []);
     const active = Object.values(run.reviews).filter(review => review.decision === "discontinue" && !submitted.has(review.skuId));
     if (run.discontinueSubmittedAt && (!run.discontinueSubmittedSkuIds || !active.length)) return run;

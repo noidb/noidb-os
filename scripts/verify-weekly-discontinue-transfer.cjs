@@ -1,0 +1,21 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),ts=require('typescript');
+require.extensions['.ts']=(m,f)=>m._compile(ts.transpileModule(fs.readFileSync(f,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,f);
+const {transferWeeklyDiscontinue:transfer}=require('../lib/wms/weekly-discontinue-transfer.ts');
+const {emptyWeeklyWorkspace}=require('../lib/wms/weekly-work-state.ts');
+const {weeklyReviewIsActive,weeklyReviewCompletion}=require('../lib/wms/weekly-work-progress.ts');
+(async()=>{
+ const workspace=emptyWeeklyWorkspace();
+ const review=skuId=>({skuId,decision:'discontinue',quantity:0,quantityConfirmed:false,vendorName:'A',imageUrl:''});
+ const run={id:'WEEKLY-transfer',snapshot:{rulesVersion:4,sourceToken:'s',couponItems:[],vendorItems:[]},reviews:{'123':review('123'),'456':review('456')},revision:0,sentVendors:{}};
+ workspace.runs.push(run);const requests=new Map();let lost=true,writes=0;
+ const deps={readWeeklyWorkspace:async()=>structuredClone(workspace),mutateWeeklyWorkspace:async fn=>{if(lost){lost=false;throw Error('lost acknowledgement');}return structuredClone(fn(workspace));},queueDiscontinueCandidate:async({skuId})=>{if(!requests.has(skuId)){writes++;requests.set(skuId,{id:'request-'+skuId,supplyHubStatus:'처리대기'});}return requests.get(skuId);}};
+ await assert.rejects(()=>transfer(run.id,0,deps),/lost acknowledgement/);
+ const result=await transfer(run.id,run.revision,deps);
+ assert.equal(writes,2);assert.deepEqual(result.discontinueQueueRequestIds,{'123':['request-123'],'456':['request-456']});
+ assert.equal(result.discontinueSubmittedAt,undefined);assert.equal(weeklyReviewCompletion(result,result.reviews['123']),undefined);
+ assert.equal(weeklyReviewIsActive(result,result.reviews['123']),false);
+ await transfer(run.id,run.revision,deps);assert.equal(writes,2);
+ await assert.rejects(()=>transfer(run.id,0,deps),/다른|최신|변경/);
+ assert([...requests.values()].every(row=>row.supplyHubStatus==='처리대기'));
+ console.log('PASS: weekly discontinuation transfer reuses exact IDs after lost acknowledgement, repeated transfer does not duplicate, stale revision rejected, common queue owns processing without false completion.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

@@ -25,6 +25,7 @@ function verifyCouponLedgerRace() {
   assert.equal(weeklyReviewToken(reordered),partialToken,"coupon receipt ordering/duplicates do not change cache identity");
   const other=addWeeklyRun(workspace,{...structuredClone(snapshot),id:"other-opened-run",period:{startDate:"2026-09-01",endDate:"2026-09-07"}});
   other.couponUploadedAt="2026-09-07T10:00:00Z";
+  other.couponExpiresOn="2000-01-01"; // Expired coupon: receipt dedup still applies.
   assert.throws(()=>assertWeeklyCouponEligibility(workspace,first),/기간 자료.*다시 준비/);
   assert.throws(()=>assertWeeklyCouponEligibility(workspace,partial),/기간 자료.*다시 준비/,"same SKU with partly consumed receipt keys also requires refresh");
   const token=weeklyReviewToken(first), revision=first.revision, reviews=structuredClone(first.reviews);
@@ -78,8 +79,8 @@ async function verifyCouponSelection() {
   run.couponUploadedAt="uploaded";
   assert.throws(()=>updateWeeklyCouponSelection(run,[],"later"),/이미 쿠팡에 등록/);
   const next=addWeeklyRun(workspace,{...structuredClone(source),id:"after-selected-upload"});
-  assert.deepEqual(next.snapshot.couponItems.map(item=>item.skuId),["70000001"],"only selected uploaded receipt keys are consumed; excluded receipt remains eligible");
-  updateWeeklyCouponSelection(next,["70000001"],"all-excluded");
+  assert.deepEqual(next.snapshot.couponItems.map(item=>item.skuId),[],"completed review consumes excluded receipt events too; the same work must not reappear");
+  updateWeeklyCouponSelection(next,[],"all-excluded");
   await assert.rejects(buildWeeklyOutput(next,"coupon"),/쿠폰을 적용할 SKU/);
 
   const stale=structuredClone(run);delete stale.snapshot.rulesVersion;
@@ -307,7 +308,9 @@ async function main(){
   const repeated=addWeeklyRun(workspace,{...structuredClone(snapshot),id:"different-period",period:{startDate:"2026-09-01",endDate:"2026-09-07"}});
   assert.equal(repeated.snapshot.couponItems.length,0,"overlapping period does not reissue same receipt");
   const newReceipt=addWeeklyRun(workspace,{...structuredClone(snapshot),id:"new-receipt",period:{startDate:"2026-09-08",endDate:"2026-09-14"},couponReceiptKeys:{"70000001":["receipt-B"]}});
-  assert.equal(newReceipt.snapshot.couponItems.length,1,"new receipt of same SKU remains eligible");
+  assert.equal(newReceipt.snapshot.couponItems.length,0,"unknown prior coupon expiry blocks the same SKU even on a new receipt");
+  current.couponExpiresOn="2000-01-01";
+  assert.equal(addWeeklyRun(workspace,{...structuredClone(snapshot),id:"after-expiry",couponReceiptKeys:{"70000001":["receipt-B"]}}).snapshot.couponItems.length,1,"new receipt becomes eligible only after confirmed expiry");
   const d=addWeeklyRun(workspace,{...structuredClone(snapshot),id:"discontinue"});
   updateWeeklyReviews(workspace,d,[{...d.reviews["70000002"],decision:"discontinue"}],"now");
   d.discontinueSubmittedAt="yesterday";d.discontinueSubmittedSkuIds=["70000002"];

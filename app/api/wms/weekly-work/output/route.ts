@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
 import { readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
-import { requireWeeklyRun, assertWeeklyCouponEligibility, assertWeeklyCurrentRules, assertWeeklyReorderEligibility, weeklyReorderRows, weeklySelectedCoupons } from "@/lib/wms/weekly-work-state";
+import { requireWeeklyRun, assertWeeklyCouponEligibility, assertWeeklyReviewEligibility, assertWeeklyCurrentRules, assertWeeklyReorderEligibility, weeklyReorderRows, weeklySelectedCoupons } from "@/lib/wms/weekly-work-state";
 import { readWeeklyOperationalToken } from "@/lib/wms/weekly-work-source";
 import { readWeeklyFile, saveWeeklyFile } from "@/lib/wms/weekly-work-files";
 import { buildWeeklyOutput, weeklyOutputKey, type WeeklyOutput, type WeeklyOutputKind } from "@/lib/wms/weekly-work-output";
@@ -24,6 +24,7 @@ export async function POST(request:NextRequest) {
     const includesReorders=(body.kind==="all"||body.kind==="reorder") && Object.values(run.reviews).some(review=>review.decision==="reorder");
     if((body.kind==="coupon"||body.kind==="marketing")&&!weeklySelectedCoupons(run).length)throw new Error("쿠폰을 적용할 SKU를 선택해 주세요.");
     if(includesCoupons)assertWeeklyCouponEligibility(workspace,run);
+    if(!["coupon","marketing"].includes(body.kind))assertWeeklyReviewEligibility(workspace,run);
     if(includesReorders) {
       weeklyReorderRows(run);
       assertWeeklyReorderEligibility(workspace,run);
@@ -54,6 +55,7 @@ export async function POST(request:NextRequest) {
       assertWeeklyCurrentRules(current);
       if(weeklyOutputKey(current,body.kind as WeeklyOutputKind,now,advertising?.token)!==outputKey)throw new Error("검토 내용이 변경됐습니다. 파일을 다시 생성해 주세요.");
       if(includesCoupons)assertWeeklyCouponEligibility(latest,current);
+      if(!["coupon","marketing"].includes(body.kind))assertWeeklyReviewEligibility(latest,current);
       if(includesReorders) {
         assertWeeklyReorderEligibility(latest,current);
       }

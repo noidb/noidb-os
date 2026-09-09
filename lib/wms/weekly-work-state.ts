@@ -1,14 +1,43 @@
 import { createHash } from "node:crypto";
 import type { WeeklyReview, WeeklyRun, WeeklySnapshot, WeeklyWorkspace } from "./weekly-work-types";
-import { weeklyReviewCompletion } from "./weekly-work-progress";
+import { weeklyReviewCompletion, weeklyFreshVendorItem } from "./weekly-work-progress";
 import { WEEKLY_RULES_VERSION } from "./weekly-work-types";
 import type { VendorOrderDraftLine } from "./vendor-order/types";
 
 export function emptyWeeklyWorkspace(): WeeklyWorkspace {
   return { schemaVersion: 1, revision: 0, runs: [], productOverrides: {} };
 }
+/** Import operator-provided submission evidence; this is not Coupang approval. */
+export function recordWeeklyDiscontinueHistory(workspace: WeeklyWorkspace, run: WeeklyRun, rows: unknown, source: unknown, now = new Date().toISOString()): number {
+  if (run.completedAt || run.pendingDiscontinueSubmission) throw new Error("완료 또는 연결 중인 업무는 신청 이력을 별도로 확인해 주세요.");
+  if (typeof source !== "string" || !source.trim() || source.length > 1000 || !Array.isArray(rows) || !rows.length || rows.length > 1000) throw new Error("단종 신청 근거와 상품 목록을 확인해 주세요.");
+  const seen = new Set<string>();
+  const requestIds = new Set<string>();
+  const normalized = rows.map((row: {skuId?:unknown;productName?:unknown;requestId?:unknown;submittedAt?:unknown}) => {
+    if (!row || typeof row.skuId !== "string" || !/^\d+$/.test(row.skuId) || typeof row.requestId !== "string" || !/^\d+$/.test(row.requestId)
+      || typeof row.submittedAt !== "string" || !/(Z|[+-]\d{2}:\d{2})$/.test(row.submittedAt) || !Number.isFinite(Date.parse(row.submittedAt)) || Date.parse(row.submittedAt) > Date.parse(now)
+      || seen.has(row.skuId) || requestIds.has(row.requestId)) throw new Error("SKU·신청번호·신청일 또는 중복 행을 확인해 주세요.");
+    seen.add(row.skuId); requestIds.add(row.requestId);
+    const items = run.snapshot.vendorItems.filter(item => item.skuId === row.skuId);
+    if (items.length !== 1 || items[0].productName !== row.productName || run.reviews[row.skuId]?.decision !== "discontinue") throw new Error("기존 단종 검토 상품명·옵션과 신청 내역이 일치하지 않습니다.");
+    if (run.discontinueQueueRequestIds?.[row.skuId]?.length) throw new Error("단종대기 연결 항목은 원래 신청 완료 기능으로 확인해 주세요.");
+    const existing = workspace.runs.flatMap(item => item.discontinueSubmissionChecks || []).filter(item => item.requestId === row.requestId);
+    if (existing.some(item => item.skuId !== row.skuId || item.submittedAt !== row.submittedAt)) throw new Error("기존 신청번호의 상품 또는 신청일과 충돌합니다.");
+    return {skuId:row.skuId,requestId:row.requestId,submittedAt:row.submittedAt,recordedAt:now,source:source.trim()};
+  });
+  const added = normalized.filter(row => !(run.discontinueSubmissionChecks || []).some(old => old.requestId === row.requestId));
+  if (!added.length) return 0;
+  run.discontinueSubmissionChecks = [...(run.discontinueSubmissionChecks || []), ...added];
+  run.discontinueSubmittedSkuIds = [...new Set([...(run.discontinueSubmittedSkuIds || []), ...normalized.map(row => row.skuId)])].sort();
+  if (Object.values(run.reviews).filter(row => row.decision === "discontinue").every(row => run.discontinueSubmittedSkuIds!.includes(row.skuId))) run.discontinueSubmittedAt = normalized.map(row => row.submittedAt).sort((a,b)=>Date.parse(a)-Date.parse(b)).at(-1);
+  run.revision++; run.updatedAt = now;
+  if (run.generated) run.generated = {...run.generated,discontinueCount:0,discontinueSkuIds:[]};
+  return added.length;
+}
 export function weeklyReviewToken(run: WeeklyRun): string {
   const parts: unknown[] = [run.snapshot.rulesVersion, run.snapshot.sourceToken, weeklyCouponSelection(run.snapshot), [...new Set(run.couponExcludedSkuIds || [])].sort(), Object.values(run.reviews).sort((a,b)=>a.skuId.localeCompare(b.skuId))];
+  if (run.routedElsewhereSkuIds?.length) parts.push(["routed-elsewhere", ...run.routedElsewhereSkuIds.slice().sort()]);
+  if (run.previouslyDiscontinuedSkuIds?.length) parts.push([...run.previouslyDiscontinuedSkuIds].sort());
   // Existing runs without reorder provenance retain their prior acknowledged token.
   if (run.snapshot.vendorItems.some(item => item.shortageDetails) || run.reorderPreviouslyRequestedLines?.length || Object.values(run.reviews).some(review => review.decision === "reorder")) {
     parts.push(run.snapshot.vendorItems.map(item => [item.skuId, item.shortageQuantity, item.shortageDetails]), [...(run.reorderPreviouslyRequestedLines || [])].sort((a,b)=>reorderPair(a).localeCompare(reorderPair(b))));
@@ -26,7 +55,7 @@ export function weeklyReorderRows(run: WeeklyRun): WeeklyReorderRow[] {
   const excluded = new Set((run.reorderPreviouslyRequestedLines || []).map(reorderPair));
   const rows: WeeklyReorderRow[] = [];
   const pairs = new Set<string>();
-  for (const review of Object.values(run.reviews).filter(r => r.decision === "reorder")) {
+  for (const review of Object.values(run.reviews).filter(r => r.decision === "reorder" && !run.routedElsewhereSkuIds?.includes(r.skuId))) {
     const matches = run.snapshot.vendorItems.filter(item => item.skuId === review.skuId);
     if (matches.length !== 1 || !/^\d+$/.test(review.skuId)) throw reorderSourceError();
     const item = matches[0];
@@ -57,6 +86,12 @@ function otherWeeklyReorderRequests(workspace: WeeklyWorkspace, ownRunId: string
     for (const line of run.reorderRequestedLines || []) lines.set(reorderPair(line), line);
   }
   return [...lines.values()];
+}
+export function assertWeeklyReviewEligibility(workspace: WeeklyWorkspace, run: WeeklyRun): void {
+  if (run.completedAt) return;
+  const otherDiscontinued = workspace.runs.filter(other => other.id !== run.id).flatMap(other => other.discontinueSubmittedSkuIds || (other.discontinueSubmittedAt ? Object.values(other.reviews).filter(review => review.decision === "discontinue").map(review => review.skuId) : []));
+  const current = { ...run, previouslyDiscontinuedSkuIds: [...new Set([...(run.previouslyDiscontinuedSkuIds || []), ...otherDiscontinued])], reorderPreviouslyRequestedLines: otherWeeklyReorderRequests(workspace, run.id) };
+  if (Object.values(run.reviews).some(review => !weeklyReviewCompletion(run, review) && weeklyReviewCompletion(current, review))) throw new Error("다른 업무에서 이미 단종 신청을 완료했거나 이미 재발주 요청을 완료한 상품이 있습니다. 기간 자료를 다시 준비해 주세요.");
 }
 export function assertWeeklyReorderEligibility(workspace: WeeklyWorkspace, run: WeeklyRun): void {
   if (run.reorderRequestedAt) return;
@@ -109,16 +144,49 @@ export function updateWeeklyCouponSelection(run: WeeklyRun, excludedSkuIds: unkn
   if (run.generated) run.generated = { ...run.generated, couponCount: 0, advertisingCount: 0, advertisingFiles: [], advertisingToken: undefined, reviewToken: weeklyReviewToken(run) };
   run.revision++; run.updatedAt = now;
 }
+export function weeklyKoreaDay(now = new Date()): string {
+  return new Date(now.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+export function validWeeklyCouponDate(value: unknown): value is string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+}
+/** The operator verifies the latest end date across ALL coupons on each SKU. */
+export function recordWeeklyCouponChecks(workspace: WeeklyWorkspace, rows: unknown, source: unknown, now = new Date().toISOString()): number {
+  if (!Array.isArray(rows) || !rows.length || rows.length > 10000 || typeof source !== "string" || !source.trim() || source.length > 300) throw new Error("확인한 쿠폰 SKU·마지막 종료일과 자료 출처를 입력해 주세요.");
+  const checked = new Map<string, string>();
+  for (const row of rows) {
+    if (!row || typeof row.skuId !== "string" || !/^\d+$/.test(row.skuId) || !validWeeklyCouponDate(row.expiresOn)) throw new Error("SKU는 숫자로, 종료일은 YYYY-MM-DD 형식으로 입력해 주세요.");
+    checked.set(row.skuId, [checked.get(row.skuId) || "", row.expiresOn].sort().at(-1)!);
+  }
+  workspace.couponChecks = [...(workspace.couponChecks || []), ...[...checked].map(([skuId, expiresOn]) => ({ skuId, expiresOn, checkedAt: now, source: source.trim() }))];
+  return checked.size;
+}
+export function weeklyCouponBlocks(workspace: WeeklyWorkspace, ownRunId?: string, now = new Date()): Array<{ skuId: string; expiresOn?: string; reason: string }> {
+  const known = new Map<string, { expiresOn?: string; checkedAt?: string }>();
+  for (const check of workspace.couponChecks || []) known.set(check.skuId, { expiresOn: check.expiresOn, checkedAt: check.checkedAt });
+  for (const run of workspace.runs) if (run.id !== ownRunId && run.couponUploadedAt) {
+    for (const item of weeklySelectedCoupons(run)) {
+      const prior = known.get(item.skuId);
+      if (prior?.checkedAt && Date.parse(run.couponUploadedAt) <= Date.parse(prior.checkedAt)) continue;
+      const expiresOn = validWeeklyCouponDate(run.couponExpiresOn) ? run.couponExpiresOn : undefined;
+      known.set(item.skuId, { checkedAt: prior?.checkedAt, expiresOn: prior && !prior.expiresOn || !expiresOn ? undefined : [prior?.expiresOn || "", expiresOn].sort().at(-1) });
+    }
+  }
+  const today = weeklyKoreaDay(now);
+  return [...known].filter(([, value]) => !value.expiresOn || value.expiresOn >= today).map(([skuId, value]) => ({ skuId, expiresOn: value.expiresOn, reason: value.expiresOn ? `${value.expiresOn}까지 쿠폰 적용` : "기존 쿠폰 종료일 확인 필요" }));
+}
 function weeklyCouponSelection(snapshot: Pick<WeeklySnapshot, "couponItems" | "couponReceiptKeys">): Array<[string, string[]]> {
   return snapshot.couponItems.map(item => [item.skuId, [...new Set(snapshot.couponReceiptKeys?.[item.skuId] || [])].sort()] as [string, string[]]).sort((a,b)=>a[0].localeCompare(b[0]));
 }
 /** Coupon eligibility follows completed receipt events, even for an already-open run. */
-export function eligibleWeeklyCoupons(workspace: WeeklyWorkspace, snapshot: WeeklySnapshot, ownRunId = snapshot.id): Pick<WeeklySnapshot, "couponItems" | "couponReceiptKeys"> {
+export function eligibleWeeklyCoupons(workspace: WeeklyWorkspace, snapshot: WeeklySnapshot, ownRunId = snapshot.id, now = new Date()): Pick<WeeklySnapshot, "couponItems" | "couponReceiptKeys"> {
   const uploaded = workspace.runs.filter(run => run.id !== ownRunId && run.couponUploadedAt);
-  const usedReceiptKeys = new Set(uploaded.flatMap(run => weeklySelectedCoupons(run).flatMap(item => run.snapshot.couponReceiptKeys?.[item.skuId] || [])));
+  const usedReceiptKeys = new Set(uploaded.flatMap(run => run.snapshot.couponItems.flatMap(item => run.snapshot.couponReceiptKeys?.[item.skuId] || [])));
   const couponItems: WeeklySnapshot["couponItems"] = [];
   const couponReceiptKeys: NonNullable<WeeklySnapshot["couponReceiptKeys"]> = {};
+  const blockedSkus = new Set(weeklyCouponBlocks(workspace, ownRunId, now).map(item => item.skuId));
   for (const item of snapshot.couponItems) {
+    if (blockedSkus.has(item.skuId)) continue;
     const events = [...new Set(snapshot.couponReceiptKeys?.[item.skuId] || [])];
     if (events.length) {
       const available = events.filter(key => !usedReceiptKeys.has(key));
@@ -136,7 +204,7 @@ export function assertWeeklyCouponEligibility(workspace: WeeklyWorkspace, run: W
   const selected = { ...run.snapshot, couponItems: weeklySelectedCoupons(run) };
   const selectedEligible = { ...eligible, couponItems: weeklySelectedCoupons({ snapshot: { ...run.snapshot, ...eligible }, couponExcludedSkuIds: run.couponExcludedSkuIds }) };
   if (JSON.stringify(weeklyCouponSelection(selectedEligible)) !== JSON.stringify(weeklyCouponSelection(selected))) {
-    throw new Error("다른 주간 업무에서 쿠폰 등록을 완료한 입고가 있습니다. 기간 자료를 다시 준비해 주세요.");
+    throw new Error("다른 주간 업무에서 쿠폰 등록을 완료한 입고 또는 아직 유효하거나 종료일을 확인하지 못한 쿠폰 SKU가 있습니다. 기간 자료를 다시 준비해 주세요.");
   }
 }
 function hasWeeklyUserReview(run: WeeklyRun, review: WeeklyReview): boolean {
@@ -170,12 +238,24 @@ function latestUnfinishedWeeklyUserReview(runs: WeeklyRun[], skuId: string): Wee
   }
   return undefined;
 }
+function refreshWeeklyRouteOwnership(workspace: WeeklyWorkspace, run: WeeklyRun, now: string): void {
+  let changed = false;
+  for (const item of run.snapshot.vendorItems) {
+    if (run.routedElsewhereSkuIds?.includes(item.skuId) || run.itemRoutes?.[item.skuId] || run.reviews[item.skuId]?.decision === "reorder"
+      || run.vendorQueueTransfers?.some(t => t.lines.some(line => line.skuId === item.skuId)) || run.discontinueQueueRequestIds?.[item.skuId]?.length) continue;
+    if (!weeklyFreshVendorItem(item, workspace.runs, run.id)) {
+      run.routedElsewhereSkuIds = [...(run.routedElsewhereSkuIds || []), item.skuId]; changed = true;
+    }
+  }
+  if (changed) { run.revision++; run.updatedAt = now; }
+}
 export function addWeeklyRun(workspace: WeeklyWorkspace, snapshot: WeeklySnapshot): WeeklyRun {
   const existing = workspace.runs.find(run => run.id === snapshot.id);
-  if (existing?.couponUploadedAt) { refreshWeeklyReorderLedger(workspace, existing, snapshot.createdAt); return existing; }
+  if (existing) refreshWeeklyRouteOwnership(workspace, existing, snapshot.createdAt);
+  if (existing?.couponUploadedAt) { refreshWeeklyReorderLedger(workspace, existing, snapshot.createdAt); refreshWeeklyDiscontinuedLedger(workspace, existing, snapshot.createdAt); return existing; }
   const eligible = eligibleWeeklyCoupons(workspace, snapshot);
   const excludedCoupons = snapshot.couponItems.length - eligible.couponItems.length;
-  snapshot = { ...snapshot, ...eligible, warnings: excludedCoupons ? [...snapshot.warnings, `이미 쿠폰 등록을 완료한 입고의 SKU ${excludedCoupons}개는 재발행 목록에서 제외했습니다.`] : snapshot.warnings };
+  snapshot = { ...snapshot, ...eligible, warnings: excludedCoupons ? [...snapshot.warnings, `기등록 입고 또는 유효한 쿠폰·종료일 미확인 SKU ${excludedCoupons}개는 쿠폰 재발행 목록에서 제외했습니다.`] : snapshot.warnings };
   if (existing) {
     if (JSON.stringify(weeklyCouponSelection(existing.snapshot)) !== JSON.stringify(weeklyCouponSelection(snapshot))) {
       existing.snapshot = { ...existing.snapshot, couponItems: snapshot.couponItems, couponReceiptKeys: snapshot.couponReceiptKeys,
@@ -185,8 +265,15 @@ export function addWeeklyRun(workspace: WeeklyWorkspace, snapshot: WeeklySnapsho
       existing.revision++; existing.updatedAt = snapshot.createdAt; existing.completedAt = undefined;
     }
     refreshWeeklyReorderLedger(workspace, existing, snapshot.createdAt);
+    refreshWeeklyDiscontinuedLedger(workspace, existing, snapshot.createdAt);
     return existing;
   }
+  const routedElsewhereSkuIds: string[] = [];
+  snapshot = { ...snapshot, vendorItems: snapshot.vendorItems.map(item => {
+    const fresh = weeklyFreshVendorItem(item, workspace.runs, snapshot.id);
+    if (!fresh) routedElsewhereSkuIds.push(item.skuId);
+    return fresh || item;
+  }) };
   const submittedDiscontinued = new Set(workspace.runs.flatMap(run => run.discontinueSubmittedSkuIds || (run.discontinueSubmittedAt ? Object.values(run.reviews).filter(r => r.decision === "discontinue").map(r => r.skuId) : [])));
   const reviews: Record<string, WeeklyReview> = {};
   for (const item of snapshot.vendorItems) {
@@ -198,7 +285,7 @@ export function addWeeklyRun(workspace: WeeklyWorkspace, snapshot: WeeklySnapsho
       decision: item.discontinued || submittedDiscontinued.has(item.skuId) ? "hold" : discontinued ? "discontinue" : item.shortageQuantity > 0 && item.openOrderQuantity >= item.shortageQuantity ? "hold" : "order",
       quantityConfirmed: item.issues.length === 0 && Boolean(vendorName) && Boolean(imageUrl) };
   }
-  const run: WeeklyRun = { id: snapshot.id, snapshot, reviews, reviewedSkuIds: [], revision: 0, updatedAt: snapshot.createdAt, sentVendors: {} };
+  const run: WeeklyRun = { id: snapshot.id, snapshot, reviews, routedElsewhereSkuIds, reviewedSkuIds: [], revision: 0, updatedAt: snapshot.createdAt, sentVendors: {} };
   const priorPeriods = [...workspace.runs].filter(old => old.snapshot.period.startDate === snapshot.period.startDate && old.snapshot.period.endDate === snapshot.period.endDate)
     .sort((a,b)=>Date.parse(b.snapshot.createdAt)-Date.parse(a.snapshot.createdAt) || Date.parse(b.updatedAt)-Date.parse(a.updatedAt));
   const priorPeriod = priorPeriods[0];
@@ -206,12 +293,24 @@ export function addWeeklyRun(workspace: WeeklyWorkspace, snapshot: WeeklySnapsho
   if (priorPeriod) for (const item of snapshot.vendorItems) {
     const priorReview = latestUnfinishedWeeklyUserReview(priorPeriods, item.skuId);
     if (!priorReview || item.discontinued || submittedDiscontinued.has(item.skuId)) continue;
+    const priorItem = priorPeriods.find(old => old.reviews[item.skuId] === priorReview)?.snapshot.vendorItems.find(row => row.skuId === item.skuId);
+    if (JSON.stringify(priorItem?.relatedPurchaseOrderNumbers.slice().sort()) !== JSON.stringify(item.relatedPurchaseOrderNumbers.slice().sort())) continue;
     reviews[item.skuId] = { ...priorReview, quantityConfirmed: false };
     run.reviewedSkuIds!.push(item.skuId);
   }
   refreshWeeklyReorderLedger(workspace, run, snapshot.createdAt);
+  refreshWeeklyDiscontinuedLedger(workspace, run, snapshot.createdAt);
   workspace.runs.unshift(run);
   return run;
+}
+function refreshWeeklyDiscontinuedLedger(workspace: WeeklyWorkspace, run: WeeklyRun, now: string): void {
+  if (run.completedAt) return;
+  const known = new Set(run.snapshot.vendorItems.map(item => item.skuId));
+  const next = [...new Set(workspace.runs.filter(other => other.id !== run.id).flatMap(other => other.discontinueSubmittedSkuIds || (other.discontinueSubmittedAt ? Object.values(other.reviews).filter(review => review.decision === "discontinue").map(review => review.skuId) : [])))].filter(skuId => known.has(skuId)).sort();
+  if (JSON.stringify(next) === JSON.stringify(run.previouslyDiscontinuedSkuIds || [])) return;
+  run.previouslyDiscontinuedSkuIds = next;
+  run.revision++; run.updatedAt = now;
+  if (run.generated) run.generated = { ...run.generated, reviewToken: weeklyReviewToken(run), vendors: [], discontinueCount: 0 };
 }
 export function requireWeeklyRun(workspace: WeeklyWorkspace, id: unknown, revision?: unknown): WeeklyRun {
   const run = workspace.runs.find(item => item.id === id);
@@ -240,6 +339,7 @@ export function updateWeeklyReviews(workspace: WeeklyWorkspace, run: WeeklyRun, 
       || !["order", "reorder", "hold", "discontinue"].includes(item.decision) || typeof item.quantityConfirmed !== "boolean"
       || !Number.isSafeInteger(item.quantity) || item.quantity < 0 || item.quantity > 100000) throw new Error("거래처·사진·발주수량을 확인해 주세요.");
     const old = run.reviews[item.skuId];
+    if (run.itemRoutes?.[item.skuId] && JSON.stringify(old) !== JSON.stringify(item)) throw new Error("이미 대기 목록으로 이동 중이거나 이동한 상품입니다. 해당 목록에서 확인해 주세요.");
     const normalized = { ...item, vendorName: item.vendorName.trim(), imageUrl: item.imageUrl.trim() };
     if (run.pendingDiscontinueSubmission?.skuIds.includes(item.skuId) && JSON.stringify(old) !== JSON.stringify(normalized)) throw new Error("단종 완료 연결을 처리 중입니다. 같은 완료 버튼으로 결과를 확인해 주세요.");
     if (old && old.decision !== "reorder" && !(old.decision === "order" && normalized.decision === "discontinue") && weeklyReviewCompletion(run, old) && JSON.stringify(old) !== JSON.stringify(normalized)) throw new Error("처리 완료한 상품입니다. 완료 이력은 변경할 수 없습니다.");
@@ -273,11 +373,11 @@ export function updateWeeklyReviews(workspace: WeeklyWorkspace, run: WeeklyRun, 
 }
 export function weeklySelectedOrders(run: WeeklyRun): WeeklyReview[] {
   const queued = new Set(run.vendorQueueTransfers?.flatMap(t => t.lines.map(l => l.skuId)) || []);
-  return Object.values(run.reviews).filter(review => review.decision === "order" && review.quantity > 0 && !queued.has(review.skuId) && !run.sentVendors[review.vendorName]);
+  return Object.values(run.reviews).filter(review => review.decision === "order" && !run.routedElsewhereSkuIds?.includes(review.skuId) && review.quantity > 0 && !queued.has(review.skuId) && !weeklyReviewCompletion(run, review));
 }
 export function assertWeeklyOrdersReady(run: WeeklyRun): void {
   const queued = new Set(run.vendorQueueTransfers?.flatMap(t => t.lines.map(l => l.skuId)) || []);
-  const bad = Object.values(run.reviews).filter(r => !queued.has(r.skuId) && r.decision === "order" && !run.sentVendors[r.vendorName] && (!r.vendorName || !r.imageUrl || r.quantity <= 0));
+  const bad = Object.values(run.reviews).filter(r => !queued.has(r.skuId) && !run.routedElsewhereSkuIds?.includes(r.skuId) && r.decision === "order" && !weeklyReviewCompletion(run, r) && (!r.vendorName || !r.imageUrl || r.quantity <= 0));
   if (bad.length) throw new Error(`발주 상품 ${bad.length}개의 사진·거래처를 확인해 주세요. 쿠폰은 별도로 받을 수 있습니다.`);
 }
 export function weeklyVendorLines(run: WeeklyRun, vendorName: string): VendorOrderDraftLine[] {

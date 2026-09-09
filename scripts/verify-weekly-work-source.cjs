@@ -72,7 +72,7 @@ function createHarness(options = {}) {
 async function main() {
   const good = createHarness();
   const snapshot = await good.analyze();
-  assert.equal(snapshot.rulesVersion, 3);
+  assert.equal(snapshot.rulesVersion, 4);
   assert.equal(snapshot.vendorItems.length, 1);
   assert.equal(snapshot.vendorItems[0].shortageQuantity, 2);
   assert.equal(snapshot.source.supplementedPurchaseRows, 1);

@@ -58,7 +58,7 @@ export async function buildWeeklyOutput(run: WeeklyRun, kind: WeeklyOutputKind, 
   const reorders=kind==="all"||kind==="reorder"?weeklyReorderRows(run):[];
   if(includeVendors)assertWeeklyOrdersReady(run);
   const vendors=includeVendors ? [...new Set(weeklySelectedOrders(run).map(r=>r.vendorName))].sort() : [];
-  const discontinued=includeDiscontinue ? Object.values(run.reviews).filter(r=>r.decision==="discontinue" && !weeklyReviewCompletion(run,r)).map(r=>({skuId:r.skuId,productName:run.snapshot.vendorItems.find(i=>i.skuId===r.skuId)!.productName})) : [];
+  const discontinued=includeDiscontinue ? Object.values(run.reviews).filter(r=>r.decision==="discontinue" && !run.routedElsewhereSkuIds?.includes(r.skuId) && !weeklyReviewCompletion(run,r)).map(r=>({skuId:r.skuId,productName:run.snapshot.vendorItems.find(i=>i.skuId===r.skuId)!.productName})) : [];
   const coupons=includeCoupons?weeklySelectedCoupons(run):[];
   if((kind==="coupon"||kind==="marketing")&&!coupons.length)throw new Error("쿠폰을 적용할 SKU를 선택해 주세요.");
   const includeAdvertising=(kind==="all"||kind==="marketing")&&coupons.length>0;

@@ -1,6 +1,6 @@
 /** Shared browser/server contract for one weekly operational review. */
 import type { VendorOrderDraftLine } from "./vendor-order/types";
-export const WEEKLY_RULES_VERSION = 3;
+export const WEEKLY_RULES_VERSION = 4;
 export interface WeeklyPeriod { startDate: string; endDate: string }
 export interface WeeklyCouponItem { skuId: string; productName: string; productLink: string }
 export interface WeeklyShortageDetail {
@@ -31,8 +31,8 @@ export interface WeeklyReview {
   decision: "order" | "hold" | "discontinue" | "reorder"; quantityConfirmed: boolean;
 }
 export interface WeeklyRun {
+  itemRoutes?: Record<string, { decision: WeeklyReview["decision"]; at: string; completed: boolean }>;
   routedElsewhereSkuIds?: string[];
-  previouslyDiscontinuedSkuIds?: string[];
   discontinueQueueRequestIds?: Record<string, string[]>;
   pendingDiscontinueSubmission?: { id: string; at: string; skuIds: string[]; requestIds: string[]; reviewToken: string };
 
@@ -41,17 +41,23 @@ export interface WeeklyRun {
   reviewedSkuIds?: string[];
   revision: number; updatedAt: string;
   couponUploadedAt?: string; discontinueSubmittedAt?: string; completedAt?: string;
+  couponStartsOn?: string;
+  couponExpiresOn?: string;
+  previouslyDiscontinuedSkuIds?: string[];
   reorderRequestedAt?: string;
   reorderRequestedLines?: Array<{ purchaseOrderNumber: string; skuId: string; shortageQuantity: number }>;
   reorderPreviouslyRequestedLines?: Array<{ purchaseOrderNumber: string; skuId: string; shortageQuantity: number }>;
   couponExcludedSkuIds?: string[];
   discontinueSubmittedSkuIds?: string[];
+  discontinueSubmissionChecks?: Array<{skuId:string;requestId:string;submittedAt:string;recordedAt:string;source:string}>;
   pendingVendorSends?: Record<string, { at: string; reviewToken: string; lines: VendorOrderDraftLine[] }>;
   sentVendors: Record<string, string>;
   generated?: { at: string; reviewToken: string; couponCount: number; vendors: string[]; discontinueCount: number; discontinueSkuIds?: string[]; reorderCount?: number; reorderRequestDate?: string; advertisingCount?: number; advertisingFiles?: string[]; advertisingToken?: string };
 }
 export interface WeeklyWorkspace {
   schemaVersion: 1; revision: number; runs: WeeklyRun[];
+  /** Append-only observations of the latest coupon end date for an exact SKU. */
+  couponChecks?: Array<{ skuId: string; expiresOn: string; checkedAt: string; source: string }>;
   productOverrides: Record<string, { vendorName: string; imageUrl: string; discontinued: boolean }>;
 }
 export interface WeeklyBrowserSource {
