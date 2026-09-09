@@ -13,7 +13,7 @@ const snapshot={rulesVersion:3,id:"WEEKLY-test",sourceToken:"test",createdAt:now
 let workspace=rules.emptyWeeklyWorkspace();let run=rules.addWeeklyRun(workspace,snapshot);
 function loadService(){const m={exports:{}};const deps={"./vendor-order/aggregate":require("../lib/wms/vendor-order/aggregate.ts"),"node:crypto":require("node:crypto"),"./weekly-work-store":{mutateWeeklyWorkspace:async fn=>{const answer=fn(workspace);workspace.revision++;return structuredClone(answer);}},"./weekly-work-state":rules,"./picking-wave/server-store":{mutatePickingWaveStore:async mutation=>{store=applyPickingWaveStoreMutation(store,mutation);return store;}}};vm.runInNewContext(ts.transpileModule(fs.readFileSync("lib/wms/weekly-vendor-queue.ts","utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module:m,exports:m.exports,require:n=>{assert(deps[n],n);return deps[n]},Date,Error,Set});return m.exports;}
 const service=loadService(),images=new Map(),errors=[],unexpected=[];
-(async()=>{fs.mkdirSync("outputs/vendor-queue-20260908",{recursive:true});
+(async()=>{fs.mkdirSync("outputs/vendor-queue-share-20260909",{recursive:true});
  const browser=await chromium.launch({executablePath:"C:/Program Files/Google/Chrome/Application/chrome.exe",headless:true});
  try{
  const context=await browser.newContext({viewport:{width:1280,height:960},acceptDownloads:true});
@@ -71,20 +71,20 @@ const service=loadService(),images=new Map(),errors=[],unexpected=[];
  assert.equal(await page.locator('[data-vendor-sku="1002"]').getAttribute("data-refresh-marker"),"kept","background refresh must not remount the active editor");
  await page.reload({waitUntil:"domcontentloaded"});
  await page.waitForFunction(()=>document.querySelector('[data-vendor-sku="1002"] img')?.complete,null,{timeout:30000});
- await page.screenshot({path:"outputs/vendor-queue-20260908/queue-desktop.png",fullPage:true});
+ await page.screenshot({path:"outputs/vendor-queue-share-20260909/queue-desktop.png",fullPage:true});
  await page.getByRole("button",{name:"승인",exact:true}).first().click();
  await page.getByRole("button",{name:/카카오톡으로 공유/}).first().waitFor({timeout:30000}).catch(async error=>{console.error("Approval diagnostics",await page.locator("body").innerText());throw error;});
  const downloadPromise=page.waitForEvent("download",{timeout:30000});
  await page.getByRole("button",{name:/카카오톡으로 공유/}).first().click();
- const download=await downloadPromise;await download.saveAs("outputs/vendor-queue-20260908/vendor-order.png");
- assert(fs.statSync("outputs/vendor-queue-20260908/vendor-order.png").size>5000);
+ const download=await downloadPromise;await download.saveAs("outputs/vendor-queue-share-20260909/vendor-order.png");
+ assert(fs.statSync("outputs/vendor-queue-share-20260909/vendor-order.png").size>5000);
  assert(!store.vendorOrderDrafts.some(d=>d.status==="sent"),"sharing never marks sent");
  await page.setViewportSize({width:390,height:844});
- await page.screenshot({path:"outputs/vendor-queue-20260908/queue-mobile.png",fullPage:true});
+ await page.screenshot({path:"outputs/vendor-queue-share-20260909/queue-mobile.png",fullPage:true});
  const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth+1);
  assert(!overflow,"mobile horizontal overflow");
  assert.equal(errors.length,0,errors.join("\n"));
- fs.writeFileSync("outputs/vendor-queue-20260908/browser-results.json",JSON.stringify({passed:true,checks:["weekly shortcut below list","missing photos allowed before transfer","same manage route","exact SKU dedupe; existing quantity retained","clipboard photo autosaved","photo patch preserves other-device quantity and memo","photo survives reload","approve and PNG export","share does not mark sent","390px no overflow"],errors,unexpected},null,2));
+ fs.writeFileSync("outputs/vendor-queue-share-20260909/browser-results.json",JSON.stringify({passed:true,checks:["weekly shortcut below list","missing photos allowed before transfer","same manage route","exact SKU dedupe; existing quantity retained","clipboard photo autosaved","photo patch preserves other-device quantity and memo","photo survives reload","approve and PNG export","share does not mark sent","390px no overflow"],errors,unexpected},null,2));
  console.log("PASS browser: shortcut, transfer/dedupe, paste+save+reload, approval and actual PNG, no automatic sent, mobile layout.",JSON.stringify({errors,unexpected}));
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -58,7 +58,13 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
     setExportBusy(true);
     setNotice(null);
     try {
-      const desktop = typeof window !== "undefined" && window.innerWidth >= 768 && !window.matchMedia("(pointer: coarse)").matches;
+      // Windows의 Web Share API가 true여도 카카오톡 PC가 PNG 파일 공유 대상으로 등록되어
+      // 있지 않으면 공유창만 닫히고 채팅방에는 아무것도 전달되지 않는다. 화면 폭이나 터치
+      // 지원 여부 대신 실제 모바일 UA만 OS 공유 대상으로 사용하고, PC는 확실한 파일 받기로
+      // 처리한다.
+      const mobileShare = typeof navigator !== "undefined"
+        && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+      const desktop = !mobileShare;
       // Web Share API는 클릭 순간의 사용자 동작 권한이 있어야 열린다. 이미지 생성·서버 확인을
       // 기다린 뒤 share()를 호출하면 PC뿐 아니라 품목이 많은 모바일에서도 권한이 사라질 수 있다.
       // 첫 클릭으로 최신 파일을 준비하고 다음 클릭에서는 기다림 없이 공유창부터 연다.
@@ -116,6 +122,13 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
         const suffix = blobs.length > 1 ? `_${index + 1}of${blobs.length}` : "";
         return new File([blob], `발주서_${vendorName}_${wave.id}${suffix}.png`, { type: "image/png" });
       });
+      if (desktop) {
+        await downloadPreparedFiles(blobs, files);
+        setNotice({ message: files.length > 1
+          ? `카카오톡용 발주서 이미지 ${files.length}장을 ZIP 파일 1개로 받았습니다. 압축을 푼 뒤 이미지 전체를 선택해 카카오톡 채팅창에 한꺼번에 넣어 주세요.`
+          : "카카오톡용 발주서 이미지 1장을 받았습니다. 파일을 카카오톡 채팅창에 넣어 주세요." });
+        return;
+      }
       const nav = navigator as Navigator & { share?: (data: ShareData) => Promise<void>; canShare?: (data: ShareData) => boolean };
       const canShareFile = Boolean(nav.share) && (!nav.canShare || nav.canShare({ files }));
       if (!canShareFile) {
@@ -138,7 +151,7 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
 
   return (
     <div aria-busy={locked} style={{ marginTop: "12px", paddingTop: "12px", borderTop: `1px dashed ${wmsColors.border}` }}>
-      <div style={{ fontSize: "11px", color: wmsColors.muted, marginBottom: "8px" }}>발주서 이미지를 카카오톡 채팅방으로 바로 공유합니다. 상품이 많으면 여러 장으로 자동 분할됩니다.</div>
+      <div style={{ fontSize: "11px", color: wmsColors.muted, marginBottom: "8px" }}>휴대폰은 카카오톡 공유창으로 보내고, 컴퓨터는 모든 발주서 이미지를 ZIP 파일 1개로 받습니다.</div>
       {exportBusy && <p role="status" style={{ fontSize: "12px", marginBottom: "8px" }}>{exportProgress || "발주서를 준비하고 있습니다…"}</p>}
       {notice && <p role={notice.error ? "alert" : "status"} style={{ fontSize: "12px", color: notice.error ? wmsColors.warn : wmsColors.greenDark, marginBottom: "8px", overflowWrap: "anywhere" }}>{notice.message}</p>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "8px" }}>

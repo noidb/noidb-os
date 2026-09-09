@@ -29,6 +29,7 @@ function harness(options = {}) {
     "@/lib/wms/vendor-order/render-order-image": { renderVendorOrderImage: async (_vendor, lines) => { rendered.push(structuredClone(lines)); return options.imageFails ? null : new Blob(["verified image"]); } },
     "@/lib/wms/ui-tokens": { wmsColors: {}, wmsGreenDarkButton: {}, wmsPrimaryButton: {}, wmsSecondaryButton: {} },
   };
+  nav.userAgent = options.mobile ? "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)" : "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
   vm.runInNewContext(compiled, { module, exports: module.exports, Error, Array, Blob, File: global.File || require("node:buffer").File, navigator: nav, window: { innerWidth: options.mobile ? 390 : 1280, matchMedia: () => ({ matches: Boolean(options.mobile) }) },
     URL: { createObjectURL: () => "blob:fixture", revokeObjectURL: () => {} },
     document: { body: { appendChild: () => {} }, createElement: () => ({ click() { downloads.push(this.download); }, remove: () => {} }) },
@@ -50,20 +51,25 @@ function harness(options = {}) {
   h.click("카카오톡으로 공유"); await h.settle();
   assert.equal(h.calls(), 1, "share always checks current lines");
   assert.deepEqual(h.rendered, [latest]);
-  assert(h.button("공유창 열기"), "prepared files expose an immediate user-gesture share button");
-  assert.equal(h.shared.length, 0, "rendering never consumes the click permission by opening share late");
-  h.click("공유창 열기"); await h.settle();
-  assert.equal(h.shared.length, 1);
-  assert.equal(h.shared[0].files.length, 1);
-  assert.equal(h.shared[0].title, undefined);
-  assert.equal(h.shared[0].text, undefined);
+  assert.equal(h.shared.length, 0, "desktop never opens an unreliable Windows share sheet");
+  assert.equal(h.downloads.length, 1, "desktop downloads the KakaoTalk attachment in one click");
 
   const manyLines = Array.from({ length: 17 }, (_, index) => ({ ...latest[0], skuId: `KEEP-${index}` }));
   const paged = harness({ getLatest: async () => manyLines });
   paged.click("카카오톡으로 공유"); await paged.settle();
   assert.equal(paged.rendered.length, 3, "large vendor orders are split before exceeding mobile canvas limits");
-  paged.click("공유창 열기"); await paged.settle();
-  assert.equal(paged.shared[0].files.length, 3, "all PNG pages are shared in one action");
+  assert.equal(paged.shared.length, 0);
+  assert.equal(paged.downloads.length, 1, "desktop downloads all PNG pages as one archive");
+  assert.match(paged.downloads[0], /_3장\.zip$/);
+
+  const mobile = harness({ mobile: true });
+  mobile.click("카카오톡으로 공유"); await mobile.settle();
+  assert(mobile.button("공유창 열기"), "mobile prepares files before opening the share sheet");
+  mobile.click("공유창 열기"); await mobile.settle();
+  assert.equal(mobile.shared.length, 1);
+  assert.equal(mobile.shared[0].files.length, 1);
+  assert.equal(mobile.shared[0].title, undefined);
+  assert.equal(mobile.shared[0].text, undefined);
 
   const mobileFallback = harness({ mobile: true, getLatest: async () => manyLines, shareFails: true });
   mobileFallback.click("카카오톡으로 공유"); await mobileFallback.settle();
@@ -86,7 +92,7 @@ function harness(options = {}) {
   assert.equal(pending.calls(), 1); assert.equal(pending.marked(), 0); assert.equal(pending.revised(), 0);
   release(latest); await pending.settle();
   assert.equal(pending.shared.length, 0);
-  pending.click("공유창 열기"); await pending.settle(); assert.equal(pending.shared.length, 1);
+  assert.equal(pending.downloads.length, 1);
 
   const busy = harness({ busy: true }); busy.click("카카오톡으로 공유"); assert.equal(busy.calls(), 0);
   assert(busy.button("전송완료"), "another vendor's save may lock actions without showing a false saving label");
@@ -96,7 +102,7 @@ function harness(options = {}) {
   const fallbackMany = harness({ noShare: true, getLatest: async () => manyLines }); fallbackMany.click("카카오톡으로 공유"); await fallbackMany.settle();
   assert.equal(fallbackMany.downloads.length, 1, "desktop fallback downloads one archive instead of many separate files");
   assert.match(fallbackMany.downloads[0], /_3장\.zip$/, "the single fallback archive identifies its image count");
-  const cancelled = harness({ shareCancels: true }); cancelled.click("카카오톡으로 공유"); await cancelled.settle(); cancelled.click("공유창 열기"); await cancelled.settle();
+  const cancelled = harness({ mobile: true, shareCancels: true }); cancelled.click("카카오톡으로 공유"); await cancelled.settle(); cancelled.click("공유창 열기"); await cancelled.settle();
   assert.equal(cancelled.shared.length, 1); assert.equal(cancelled.elements().filter(node => node.props.role === "alert").length, 0);
   const imageFailed = harness({ imageFails: true }); imageFailed.click("카카오톡으로 공유"); await imageFailed.settle();
   assert.equal(imageFailed.shared.length, 0); assert(imageFailed.elements().some(node => node.props.role === "alert"));
