@@ -1,4 +1,5 @@
 import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraft, type VendorOrderDraftLine } from "./types";
+import { normalizeSkuId } from "../sku-normalize";
 
 const editable = (draft?: VendorOrderDraft) => !draft || ["draft", "review", "resend_needed"].includes(draft.status);
 
@@ -8,6 +9,7 @@ export function prepareVendorReassignment(input: {
   vendorName: string;
   baseline?: VendorOrderDraftLine;
   latestLines: VendorOrderDraftLine[];
+  localLines?: readonly VendorOrderDraftLine[];
   latestDrafts: VendorOrderDraft[];
   now: string;
 }) {
@@ -19,11 +21,12 @@ export function prepareVendorReassignment(input: {
   const latest = matches[0];
   if (baseline && (!latest || latest.updatedAt !== baseline.updatedAt)) throw new Error("다른 화면에서 이 품목이 수정되었습니다. 저장된 최신 발주서를 다시 확인해 주세요.");
   const sourceDraft = latestDrafts.find(draft => draft.id === (latest?.draftId || line.draftId));
-  const targets = latestDrafts.filter(draft => draft.waveId === line.waveId && draft.vendorName === vendorName);
+  const targets = latestDrafts.filter(draft => draft.waveId === line.waveId && draft.vendorName === vendorName && !draft.archivedAt);
   if (targets.length > 1) throw new Error("새 거래처의 발주서가 중복되어 이동을 중단했습니다.");
   const targetDraft = targets[0];
   if (!editable(sourceDraft) || !editable(targetDraft)) throw new Error("승인·전송완료 발주서는 그대로 보존합니다. 먼저 해당 발주서를 수정 상태로 전환해 주세요.");
-  if (latestLines.some(candidate => candidate.id !== line.id && candidate.waveId === line.waveId && candidate.vendorName === vendorName && candidate.skuId === line.skuId)) throw new Error("새 거래처 초안에 같은 SKU가 있습니다. 중복 발주를 막기 위해 기존 수량을 먼저 확인해 주세요.");
+  const archivedIds = new Set(latestDrafts.filter(draft => draft.archivedAt).map(draft => draft.id));
+  if ([...latestLines, ...(input.localLines || [])].some(candidate => candidate.id !== line.id && candidate.waveId === line.waveId && candidate.vendorName.trim() === vendorName && !candidate.orderExclusion && !archivedIds.has(candidate.draftId) && normalizeSkuId(candidate.skuId) === normalizeSkuId(line.skuId))) throw new Error("새 거래처 초안에 같은 SKU가 있습니다. 중복 발주를 막기 위해 기존 수량을 먼저 확인해 주세요.");
   const draft: VendorOrderDraft = targetDraft || { id: `${line.waveId}::${vendorName}`, waveId: line.waveId, vendorName, status: "draft", createdAt: now, updatedAt: now };
   const movedLine: VendorOrderDraftLine = { ...line, vendorName, draftId: draft.id, updatedAt: now };
   return { line: movedLine, draft, createDraft: !targetDraft };

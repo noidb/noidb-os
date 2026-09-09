@@ -416,10 +416,10 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
     });
     const result = await response.json();
     if (!response.ok || !result.success) {
-      setVendorActionMessage("초안은 저장됐습니다. 거래처 발주대기에서 기존 대기를 취합해 연결을 마무리해 주세요.");
+      setVendorActionMessage("초안은 저장됐습니다. 같은 선택으로 다시 보내면 발주관리 연결을 이어서 처리합니다.");
       throw new Error(result.error || "초안은 저장됐지만 공통 발주대기 취합이 완료되지 않았습니다. 같은 선택으로 다시 시도해 주세요.");
     }
-    setVendorActionMessage(`거래처 발주대기에 취합했습니다 · 신규 ${addedCount}개 · 수량 갱신 ${updatedCount}개`);
+    setVendorActionMessage(`거래처 발주관리에 추가했습니다 · 신규 ${addedCount}개 · 수량 갱신 ${updatedCount}개`);
   }
 
   function openVendorTransfer() {
@@ -464,6 +464,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
       }
       await addItemsToVendorDraft(prepared.transferItems);
       setVendorTransferItems(null);
+      router.push("/wms/vendor-orders/manage");
     } catch (error) {
       setVendorTransferError(`${quantitiesSaved ? "부족수량은 저장됐지만 초안 연결이 완료되지 않았습니다. 같은 선택으로 다시 시도해 주세요. " : ""}${error instanceof Error ? error.message : "거래처 초안 저장에 실패했습니다."}`);
     } finally { setBulkProcessing(false); }

@@ -69,7 +69,7 @@ assert.equal(recalculateAutoVendorOrderLines(item.waveId, [{ ...prepared.transfe
 const legacyDuplicate = { ...autoLine, id: "old-auto-100" };
 assert.deepEqual(recalculateAutoVendorOrderLines(item.waveId, prepared.transferItems, [manualLine, legacyDuplicate], now).removedLineIds, [], "Legacy ambiguous rows must not be silently deleted.");
 
-const vendorPage = readFileSync("app/wms/picking/waves/[waveId]/vendor-orders/page.tsx", "utf8");
+const vendorPage = readFileSync("app/wms/picking/waves/[waveId]/vendor-orders/VendorOrderEditor.tsx", "utf8");
 const loadEffect = vendorPage.slice(vendorPage.indexOf("  useEffect(() => {"), vendorPage.indexOf("  const groups = useMemo"));
 assert.doesNotMatch(loadEffect, /vendorOrderRepository\.(?:saveLine|saveDraft|deleteLine|deleteDraft)\(/, "Opening the vendor page must not mutate or delete drafts.");
 assert.doesNotMatch(loadEffect, /setIsPreview\(true\)/, "Ongoing picking must not block vendor ordering.");

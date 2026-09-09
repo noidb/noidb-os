@@ -23,4 +23,9 @@ assert.throws(() => prepareVendorReassignment({ ...input, latestLines: [{ ...ori
 assert.throws(() => prepareVendorReassignment({ ...input, latestLines: [] }), /다른 화면/);
 assert.throws(() => prepareVendorReassignment({ ...input, latestLines: [original, { ...original, id: "target-line", vendorName: "거래처B", draftId: "W::거래처B" }] }), /같은 SKU/);
 assert.throws(() => prepareVendorReassignment({ ...input, latestDrafts: [source, existing, existing] }), /발주서가 중복/);
+const unsavedTarget = { ...original, id: "unsaved-target", vendorName: "거래처B", draftId: existing.id, skuId: "80,000,001.0" };
+assert.throws(() => prepareVendorReassignment({ ...input, localLines: [current, unsavedTarget] }), /같은 SKU/, "Unsaved target SKU must block a move before catalog writes");
+assert.throws(() => prepareVendorReassignment({ ...input, latestLines: [original, unsavedTarget] }), /같은 SKU/, "Normalize SKU formatting");
+const archivedTarget = { ...existing, id: "old-target", archivedAt: now, status: "sent" as const };
+assert.doesNotThrow(() => prepareVendorReassignment({ ...input, latestDrafts: [source, existing, archivedTarget], latestLines: [original, { ...unsavedTarget, draftId: archivedTarget.id }] }));
 console.log("거래처 즉시이동 검증 PASS: 동일 line ID, 수량·메모·입고정보 보존, 기존 초안 재사용, 승인·전송완료/중복SKU/외부변경 차단");

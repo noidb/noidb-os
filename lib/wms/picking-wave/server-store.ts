@@ -371,7 +371,7 @@ export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot,
         expectedLineIds: mutation.expectedLineIdsByDraftId[draft.id],
       };
       assertVendorQueueMutation(staged, draftMutation);
-      if (draft.status === "sent" && completionScope) {
+      if (draft.status === "sent" && !draft.archivedAt && completionScope) {
         archiveCompletedVendorOrderLines(staged, completionScope);
         if (!staged.vendorOrderLines.some(line => line.draftId === draft.id && !line.orderExclusion && line.shortageQuantity > 0)) throw new Error("모든 상품이 이미 처리완료되어 새로 전송할 발주가 없습니다. 발주대기를 새로 확인해 주세요.");
       }
@@ -494,7 +494,7 @@ export async function readPickingWaveStore(): Promise<PickingWaveStoreSnapshot> 
 
 export async function mutatePickingWaveStore(mutation: PickingWaveStoreMutation): Promise<PickingWaveStoreSnapshot> {
   const requiresCompletion = mutation.action === "consolidateVendorOrders" || mutation.action === "saveVendorDraft" && mutation.draft.status === "sent"
-    || mutation.action === "saveVendorWorkspace" && mutation.drafts.some(draft => draft.status === "sent");
+    || mutation.action === "saveVendorWorkspace" && mutation.drafts.some(draft => draft.status === "sent" && !draft.archivedAt);
   const completionContext = requiresCompletion ? await (await import("../vendor-order-completion")).loadVendorOrderCompletionContext() : undefined;
   const completionScope = completionContext?.scope;
   const catalogItems = mutation.action === "consolidateVendorOrders" ? completionContext?.catalogItems : undefined;

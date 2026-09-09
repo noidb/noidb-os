@@ -35,9 +35,9 @@ const sentQueueDraft=s.vendorOrderDrafts.find(d=>d.id===kept.draftId);sentQueueD
 const beforeSent=JSON.stringify(s.vendorOrderLines.find(l=>l.id===kept.id));
 consolidateVendorOrders(s,"op3",[line("2000","새거래처","weekly2")],now);
 assert.equal(JSON.stringify(s.vendorOrderLines.find(l=>l.id===kept.id)),beforeSent);
-assert.notEqual(s.activeVendorQueueId,kept.waveId);
+assert.equal(s.activeVendorQueueId,kept.waveId);
 const normalized=applyPickingWaveStoreMutation(s,{action:"migrate",snapshot:{}});assert.deepEqual(normalized.vendorQueueConsumedLineIds,s.vendorQueueConsumedLineIds);
-const run={id:"R",snapshot:{rulesVersion:3,sourceToken:"S",couponItems:[],vendorItems:[]},reviews:{"1001":{skuId:"1001",decision:"order",quantity:12,vendorName:"",imageUrl:"",quantityConfirmed:false}},revision:0,sentVendors:{}};
+const run={id:"R",snapshot:{rulesVersion:require("../lib/wms/weekly-work-types.ts").WEEKLY_RULES_VERSION,sourceToken:"S",couponItems:[],vendorItems:[]},reviews:{"1001":{skuId:"1001",decision:"order",quantity:12,vendorName:"",imageUrl:"",quantityConfirmed:false}},revision:0,sentVendors:{}};
 const beforeToken=rules.weeklyReviewToken(run);run.vendorQueueTransfers=[{id:"t",at:now,lines:[line("1001")]}];
 assert.equal(rules.weeklySelectedOrders(run).length,0);assert.notEqual(rules.weeklyReviewToken(run),beforeToken);rules.assertWeeklyOrdersReady(run);
 console.log("PASS: existing quantity/vendor/memo preserved; exact-SKU dedupe; missing image fill; sent/receiving preserved; unsent approved and resend included; retry idempotency; migration and stale source writes blocked; receipt persistence; transferred output excluded.");
@@ -91,7 +91,7 @@ assert.notEqual(zeroStore.vendorOrderLines.find(l=>l.shortageQuantity>0).id,JSON
 // Exercise reservation/retry across the two actual state machines, without disk or network writes.
 const vm=require("node:vm");
 let fixtureStore=emptyPickingWaveStoreSnapshot(), workspace=rules.emptyWeeklyWorkspace(), failOnce=true;
-const fixtureSnapshot={rulesVersion:3,id:"WEEKLY-retry",sourceToken:"source",createdAt:now,period:{startDate:"2026-09-01",endDate:"2026-09-07"},source:{files:[],mode:"upload"},couponItems:[],warnings:[],blockers:[],vendorItems:[{skuId:"901",productName:"retry",productLink:"",vendorName:"",imageUrl:"",modelName:"M",optionLabel:"SI",barcode:"",shortageQuantity:2,openOrderQuantity:0,suggestedQuantity:12,relatedPurchaseOrderNumbers:["123"],issues:[],discontinued:false}]};
+const fixtureSnapshot={rulesVersion:require("../lib/wms/weekly-work-types.ts").WEEKLY_RULES_VERSION,id:"WEEKLY-retry",sourceToken:"source",createdAt:now,period:{startDate:"2026-09-01",endDate:"2026-09-07"},source:{files:[],mode:"upload"},couponItems:[],warnings:[],blockers:[],vendorItems:[{skuId:"901",productName:"retry",productLink:"",vendorName:"",imageUrl:"",modelName:"M",optionLabel:"SI",barcode:"",shortageQuantity:2,openOrderQuantity:0,suggestedQuantity:12,relatedPurchaseOrderNumbers:["123"],issues:[],discontinued:false}]};
 const retryRun=rules.addWeeklyRun(workspace,fixtureSnapshot);
 retryRun.reviews["901"].quantity=0;
 retryRun.snapshot.vendorItems[0].shortageQuantity=13;

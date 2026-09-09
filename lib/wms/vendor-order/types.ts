@@ -39,6 +39,8 @@ export interface VendorOrderDraft {
   updatedAt: string;
   approvedAt?: string;
   sentAt?: string;
+  /** A sent order retained as history when new demand for the same vendor arrives. */
+  archivedAt?: string;
   /** sent 토글 해제 시 정확히 복원할 상태. */
   statusBeforeSent?: Exclude<VendorOrderDraftStatus, "sent">;
 }

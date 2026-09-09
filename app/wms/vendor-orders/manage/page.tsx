@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { VendorQueueEditingContext } from "@/lib/wms/vendor-order/queue-editing-context";
-const QueueEditor = dynamic(() => import("../../picking/waves/[waveId]/vendor-orders/page"), { loading: () => <p>취합한 상품을 불러오는 중…</p> });
+import { requestVendorJson } from "@/lib/wms/vendor-order/request-json";
+const QueueEditor = dynamic(() => import("../../picking/waves/[waveId]/vendor-orders/VendorOrderEditor"), { loading: () => <p>발주서를 불러오는 중…</p> });
 import { deriveVendorOrderDrafts } from "@/lib/wms/vendor-order/derive-drafts";
 import type { PickingWaveStoreSnapshot } from "@/lib/wms/picking-wave/shared-store-types";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
@@ -26,16 +27,17 @@ export default function VendorOrderManageListPage() {
   const { pushUndo } = useWmsUndo();
 
   const [queueId, setQueueId] = useState<string | null>(null);
-  const [consolidating, setConsolidating] = useState(false);
   const [queueEditing, setQueueEditing] = useState(false);
   const editingRef = useRef(false);
   const queueFingerprint = useRef<string | null>(null);
+  const queueIdRef = useRef<string | null>(null);
   const refreshRequest = useRef(0);
   const initialPreparationAttempted = useRef(false);
+  const preparationFailed = useRef(false);
   const [refreshPending, setRefreshPending] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const reportQueueEditing = useCallback((editing: boolean) => { editingRef.current = editing; setQueueEditing(editing); }, []);
-  const [queueVersion, setQueueVersion] = useState(0);
+  const [editorSnapshot, setEditorSnapshot] = useState<PickingWaveStoreSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [waves, setWaves] = useState<PickingWave[]>([]);
   const [drafts, setDrafts] = useState<VendorOrderDraft[]>([]);
@@ -44,40 +46,35 @@ export default function VendorOrderManageListPage() {
   const [deleting, setDeleting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  async function consolidate() {
-    if (consolidating || queueEditing) return;
-    setConsolidating(true); setMessage(null);
-    try {
-      const response = await fetch("/api/wms/vendor-orders/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-      const data = await response.json();
-      if (!response.ok || !data.success) throw new Error(data.error || "발주대기를 취합하지 못했습니다.");
-      setMessage("발주대기를 취합했습니다. 중복 " + data.receipt.duplicates + "건은 기존 수량을 유지했습니다.");
-      await reload(false, true);
-    } catch (e) { setMessage(e instanceof Error ? e.message : "취합 실패"); }
-    finally { setConsolidating(false); }
-  }
   const reload = useCallback(async (prepareMissingQueue = false, forceReplaceEditor = false) => {
     const request = ++refreshRequest.current;
     // One authoritative snapshot keeps queue identity and rows consistent. This read does
     // not mirror localStorage, so two open editors cannot trigger storage refresh loops.
-    const response = await fetch("/api/wms/picking-waves", { cache: "no-store" });
-    const data = await response.json();
+    const { response, data } = await requestVendorJson("/api/wms/picking-waves", { cache: "no-store" });
     if (!response.ok || !data.ok || !data.snapshot) throw new Error(data.error || "최신 발주 목록을 읽지 못했습니다. 다시 확인해 주세요.");
     if (request !== refreshRequest.current) return;
     let snapshot = data.snapshot as PickingWaveStoreSnapshot;
-    if (prepareMissingQueue && !snapshot.activeVendorQueueId && !initialPreparationAttempted.current) {
-      const pendingDrafts = new Set(deriveVendorOrderDrafts(snapshot.vendorOrderDrafts, snapshot.vendorOrderLines).filter(draft => draft.status !== "sent").map(draft => draft.id));
-      const hasPending = snapshot.vendorOrderLines.some(line => pendingDrafts.has(line.draftId) && !line.orderExclusion && line.shortageQuantity > 0);
-      if (hasPending) {
+    if (prepareMissingQueue && !initialPreparationAttempted.current) {
+      const pendingDrafts = new Set(deriveVendorOrderDrafts(snapshot.vendorOrderDrafts, snapshot.vendorOrderLines).filter(draft => draft.status !== "sent" && draft.waveId !== snapshot.activeVendorQueueId).map(draft => draft.id));
+      const hasPending = snapshot.vendorOrderLines.some(line => pendingDrafts.has(line.draftId) && !line.orderExclusion && !snapshot.deletedVendorLineIds[line.id] && !snapshot.vendorQueueConsumedLineIds?.[line.id] && line.shortageQuantity > 0);
+      if (!snapshot.activeVendorQueueId || hasPending) {
         initialPreparationAttempted.current = true;
-        const preparedResponse = await fetch("/api/wms/vendor-orders/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-        const prepared = await preparedResponse.json();
-        if (!preparedResponse.ok || !prepared.success) throw new Error(prepared.error || "기존 발주대기를 준비하지 못했습니다. 아래 취합 버튼으로 다시 시도해 주세요.");
-        const latestResponse = await fetch("/api/wms/picking-waves", { cache: "no-store" });
-        const latest = await latestResponse.json();
+        try {
+        const preparation = await requestVendorJson("/api/wms/vendor-orders/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        const { response: preparedResponse, data: prepared } = preparation;
+        if (!preparedResponse.ok || !prepared.success) { initialPreparationAttempted.current = false; throw new Error(prepared.error || "발주 목록을 준비하지 못했습니다. 다시 확인해 주세요."); }
+        const { response: latestResponse, data: latest } = await requestVendorJson("/api/wms/picking-waves", { cache: "no-store" });
         if (!latestResponse.ok || !latest.ok || !latest.snapshot) throw new Error(latest.error || "준비된 발주대기를 읽지 못했습니다. 최신 목록을 다시 확인해 주세요.");
         if (request !== refreshRequest.current) return;
         snapshot = latest.snapshot as PickingWaveStoreSnapshot;
+        preparationFailed.current = false;
+        } catch (error) {
+          initialPreparationAttempted.current = false;
+          preparationFailed.current = true;
+          if (!snapshot.activeVendorQueueId) throw error;
+          // A failed legacy transfer must not hide the already usable common queue.
+          setRefreshError(error instanceof Error ? error.message : "추가 발주 연결에 실패했습니다. 기존 발주는 계속 확인할 수 있습니다.");
+        }
       }
     }
     const nextQueueId = snapshot.activeVendorQueueId || null;
@@ -87,15 +84,16 @@ export default function VendorOrderManageListPage() {
       lines: snapshot.vendorOrderLines.filter(line => line.waveId === nextQueueId).sort((a, b) => a.id.localeCompare(b.id)),
     });
     setWaves(snapshot.waves); setDrafts(loadedDrafts); setLines(snapshot.vendorOrderLines);
-    if (nextQueueId || !initialPreparationAttempted.current) setRefreshError(null);
-    if (queueFingerprint.current !== null && queueFingerprint.current !== fingerprint && !forceReplaceEditor) {
+    if (nextQueueId && !preparationFailed.current) setRefreshError(null);
+    if (queueFingerprint.current !== null && queueFingerprint.current !== fingerprint && !forceReplaceEditor && editingRef.current && nextQueueId !== queueIdRef.current) {
       setRefreshPending(true);
       return;
     }
     if (queueFingerprint.current !== fingerprint) {
       queueFingerprint.current = fingerprint;
       setQueueId(nextQueueId);
-      setQueueVersion(version => version + 1);
+      queueIdRef.current = nextQueueId;
+      setEditorSnapshot(snapshot);
     }
     setRefreshPending(false);
   }, []);
@@ -118,19 +116,23 @@ export default function VendorOrderManageListPage() {
     const onStorage = (event: StorageEvent) => {
       if (!event.key || event.key.startsWith("noidb_vendor_order") || event.key.startsWith("noidb_picking")) refresh();
     };
-    const poll = window.setInterval(refresh, 30000);
+    const poll = window.setInterval(refresh, 10000);
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", refresh);
     window.addEventListener("storage", onStorage);
     return () => { if (timer) clearTimeout(timer); window.clearInterval(poll); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); window.removeEventListener("storage", onStorage); };
   }, [loading, reload]);
 
+  useEffect(() => {
+    if (refreshPending && !queueEditing) void reload().catch(error => setRefreshError(error instanceof Error ? error.message : "최신 발주 목록 확인 실패"));
+  }, [refreshPending, queueEditing, reload]);
+
 
   const waveById = useMemo(() => new Map(waves.map(wave => [wave.id, wave])), [waves]);
 
   const rows = useMemo(() => {
     return drafts
-      .filter(draft => draft.waveId !== queueId)
+      .filter(draft => draft.waveId !== queueId || Boolean(draft.archivedAt))
       .map(draft => {
         const draftLines = lines.filter(line => line.draftId === draft.id);
         const totalQuantity = draftLines.reduce((sum, line) => sum + line.shortageQuantity, 0);
@@ -183,23 +185,19 @@ export default function VendorOrderManageListPage() {
 
   return (
     <main style={pageStyle}>
-      <h1 style={{ fontSize: "20px", margin: "0 0 4px" }}>거래처 발주대기</h1>
-      <p>주간업무와 기존 대기건을 SKU당 한 번만 모아 거래처별로 수정하고 보냅니다.</p>
-      <button type="button" disabled={consolidating || queueEditing} style={{ ...wmsPrimaryButton, width: "100%" }} onClick={() => void consolidate()}>{consolidating ? "취합 중…" : "기존 발주대기 함께 취합"}</button>
+      <h1 style={{ fontSize: "20px", margin: "0 0 4px" }}>거래처 발주관리</h1>
+      <p>어디서 보낸 상품이든 이 목록에 추가됩니다. 거래처별로 수정하고 발주서를 보내세요.</p>
+      <nav style={{ display: "flex", gap: "16px", marginBottom: "12px" }}><a href="/wms/vendor-orders/receiving">입고관리</a><a href="/wms/vendor-orders/status-requests">단종·해제 관리</a></nav>
       {message && <p role="status">{message}</p>}
-      {queueEditing && <p role="status">편집한 내용을 아래에서 저장하면 다시 취합할 수 있습니다.</p>}
       {refreshPending && <p role="alert" style={{ color: "#934633", fontSize: "13px", lineHeight: 1.6 }}>다른 화면에서 발주 목록이 변경되었습니다. 입력한 내용은 유지했습니다. 저장을 마친 뒤 최신 목록을 확인해 주세요.</p>}
       {refreshError && <p role="alert" style={{ color: "#934633", fontSize: "13px" }}>{refreshError}</p>}
-      {(refreshPending || refreshError) && <button type="button" disabled={queueEditing || consolidating} onClick={() => void reload(false, true).catch(error => setRefreshError(error instanceof Error ? error.message : "최신 목록 확인 실패"))} style={{ ...wmsGhostButton, minHeight: "44px" }}>최신 목록 다시 확인</button>}
-      <VendorQueueEditingContext.Provider value={reportQueueEditing}>{queueId && <QueueEditor key={queueId + queueVersion} params={{ waveId: queueId }} />}</VendorQueueEditingContext.Provider>
+      {(refreshPending || refreshError) && <button type="button" disabled={queueEditing} onClick={() => void reload(true, true).catch(error => setRefreshError(error instanceof Error ? error.message : "최신 목록 확인 실패"))} style={{ ...wmsGhostButton, minHeight: "44px" }}>최신 목록 다시 확인</button>}
+      <VendorQueueEditingContext.Provider value={reportQueueEditing}>{queueId && <QueueEditor key={queueId} params={{ waveId: queueId }} sharedSnapshot={editorSnapshot} />}</VendorQueueEditingContext.Provider>
       <details><summary style={{ padding: "16px 0", cursor: "pointer" }}>이전 발주서 · 승인/전송 이력</summary>
       <p style={{ fontSize: "12px", color: wmsColors.muted, margin: "0 0 16px" }}>
         현재 발주대기는 위 통합 목록에서 수정합니다. 이전 미전송 발주도 같은 통합 목록으로 연결되며, 전송을 마친 발주서는 당시 이력을 확인합니다.
       </p>
 
-      <a href={`/wms/picking/waves/${MANUAL_VENDOR_WORKSPACE_ID}/vendor-orders`} style={{ display: "block", textDecoration: "none", marginBottom: "16px" }}>
-        <button style={{ ...wmsPrimaryButton, width: "100%" }}>+ 웨이브 없이 새 거래처 발주서 만들기</button>
-      </a>
 
       {rows.length === 0 ? (
         <p style={{ fontSize: "13px", color: wmsColors.muted }}>아직 거래처 발주서가 없습니다.</p>
@@ -215,7 +213,7 @@ export default function VendorOrderManageListPage() {
               <div key={row.draft.id} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "16px", padding: "12px", background: index % 2 === 0 ? "#f7f4ef" : "#f1f5f2" }}>
                 <div style={{ display: "flex", gap: "10px", alignItems: "flex-start" }}>
                   <input type="checkbox" checked={selectedDraftIds.has(row.draft.id)} onChange={event => setSelectedDraftIds(previous => { const next = new Set(previous); if (event.target.checked) next.add(row.draft.id); else next.delete(row.draft.id); return next; })} style={{ width: "23px", height: "23px", flexShrink: 0 }} />
-                  <a href={row.draft.status === "sent" ? `/wms/picking/waves/${row.draft.waveId}/vendor-orders` : "/wms/vendor-orders/manage"} style={{ flex: 1, minWidth: 0, textDecoration: "none", color: "inherit" }}>
+                  <a href={row.draft.status === "sent" ? `/wms/picking/waves/${row.draft.waveId}/vendor-orders?history=1&draftId=${encodeURIComponent(row.draft.id)}` : "/wms/vendor-orders/manage"} style={{ flex: 1, minWidth: 0, textDecoration: "none", color: "inherit" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
                   <strong style={{ fontSize: "14px" }}>{row.draft.vendorName}</strong>
                   <StatusBadge status={row.draft.status} />

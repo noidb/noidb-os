@@ -42,7 +42,7 @@
     "verify:quote-model-name": "node scripts/verify-quote-model-name.cjs",
     "verify:wims-registration-state": "node scripts/verify-wims-registration-state.cjs",
     "verify:supply-retired-sku": "node scripts/verify-supply-retired-sku.cjs",
-    "verify:vendor-draft-consistency": "node scripts/verify-vendor-line-batch-delete.cjs && node scripts/verify-vendor-order-completion.cjs && node scripts/verify-vendor-export-freshness.cjs && node scripts/verify-vendor-catalog-resolution.cjs && node scripts/verify-vendor-queue-conflicts.cjs && node scripts/verify-vendor-queue-stability.cjs && node scripts/verify-vendor-variant-options.cjs"
+    "verify:vendor-draft-consistency": "node scripts/verify-vendor-post-send.cjs && node scripts/verify-vendor-unified-entry.cjs && node scripts/verify-vendor-device-merge.cjs && node scripts/verify-vendor-line-batch-delete.cjs && node scripts/verify-vendor-order-completion.cjs && node scripts/verify-vendor-export-freshness.cjs && node scripts/verify-vendor-catalog-resolution.cjs && node scripts/verify-vendor-queue-conflicts.cjs && node scripts/verify-vendor-queue-stability.cjs && node scripts/verify-vendor-variant-options.cjs"
   },
   "dependencies": {
     "@tesseract.js-data/eng": "1.0.0",

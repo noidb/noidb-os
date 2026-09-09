@@ -15,6 +15,7 @@ function harness(options = {}) {
   const module = { exports: {} };
   const jsx = (type, props) => ({ type, props: props || {} });
   const react = {
+    useEffect: (effect, deps) => { const index = cursor++; if (JSON.stringify(refs[index]) !== JSON.stringify(deps)) { refs[index] = deps; effect(); } },
     useState: initial => { const index = cursor++; if (!initialized.has(index)) { state[index] = initial; initialized.add(index); } return [state[index], value => { state[index] = typeof value === "function" ? value(state[index]) : value; }]; },
     useRef: initial => { const index = cursor++; return refs[index] ||= { current: initial }; },
   };
@@ -88,14 +89,14 @@ function harness(options = {}) {
   let release; const pending = harness({ getLatest: () => new Promise(resolve => { release = resolve; }) });
   pending.click("카카오톡으로 공유");
   assert(pending.elements().filter(node => node.type === "button").every(node => node.props.disabled), "every action locks during the check");
-  pending.click("전송완료"); pending.click("발주내용 수정");
+  pending.click("발주 완료"); pending.click("발주내용 수정");
   assert.equal(pending.calls(), 1); assert.equal(pending.marked(), 0); assert.equal(pending.revised(), 0);
   release(latest); await pending.settle();
   assert.equal(pending.shared.length, 0);
   assert.equal(pending.downloads.length, 1);
 
   const busy = harness({ busy: true }); busy.click("카카오톡으로 공유"); assert.equal(busy.calls(), 0);
-  assert(busy.button("전송완료"), "another vendor's save may lock actions without showing a false saving label");
+  assert(busy.button("발주 완료"), "another vendor's save may lock actions without showing a false saving label");
   const ownSave = harness({ busy: true, statusSaving: true }); assert(ownSave.button("저장 중..."), "only the vendor being saved shows the saving label");
   const fallback = harness({ noShare: true }); fallback.click("카카오톡으로 공유"); await fallback.settle();
   assert.deepEqual(fallback.rendered, [latest]); assert.equal(fallback.downloads.length, 1); assert.equal(fallback.shared.length, 0);

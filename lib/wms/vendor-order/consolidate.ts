@@ -22,15 +22,15 @@ export function consolidateVendorOrders(store: PickingWaveStoreSnapshot, operati
   const excludedIncomingIds = new Set(excludedIncoming.map(line => line.id));
   incoming = incoming.filter(line => !excludedIncomingIds.has(line.id));
   const drafts = deriveVendorOrderDrafts(store.vendorOrderDrafts, store.vendorOrderLines);
-  const pendingIds = new Set(drafts.filter(draft => draft.status !== "sent" && !store.deletedVendorDraftIds[draft.id]).map(draft => draft.id));
+  const pendingIds = new Set(drafts.filter(draft => draft.status !== "sent" && !draft.archivedAt && !store.deletedVendorDraftIds[draft.id]).map(draft => draft.id));
   const pending = store.vendorOrderLines.filter(line => pendingIds.has(line.draftId) && line.shortageQuantity > 0 && !line.orderExclusion &&
     !store.deletedVendorLineIds[line.id] && !store.vendorQueueConsumedLineIds?.[line.id] &&
     !store.suppressedVendorSkuIds?.[normalizeSkuId(line.skuId)]);
-  if (pending.some(line => (line.receivedQuantity || 0) > 0 || line.receivedCostAppliedAt || line.receivingHistory?.length)) throw new Error("이미 입고 이력이 있는 대기 발주가 있습니다. 입고관리에서 상태를 확인한 뒤 취합해 주세요.");
   const currentQueue = store.activeVendorQueueId;
-  // Sent files retain their original batch. Approval, deletion and exclusions alone never rotate a live queue.
-  const hasSentBatch = currentQueue && drafts.some(draft => draft.waveId === currentQueue && draft.status === "sent");
-  const queueId = currentQueue && !hasSentBatch ? currentQueue : VENDOR_QUEUE_PREFIX + operationId;
+  // The shared workspace never moves when another vendor is sent.
+  const queueId = currentQueue || VENDOR_QUEUE_PREFIX + operationId;
+  const received = (line: VendorOrderDraftLine) => (line.receivedQuantity || 0) > 0 || line.receivedCostAppliedAt || line.receivingHistory?.length;
+  if (pending.some(line => line.waveId !== queueId && received(line))) throw new Error("이전 발주에 입고 이력이 있습니다. 입고관리에서 해당 발주의 상태를 확인해 주세요.");
   const baseLineId = (skuId: string, waveId = queueId) => waveId + "::" + normalizeSkuId(skuId);
   const rank = (line: VendorOrderDraftLine) => line.id === baseLineId(line.skuId, line.waveId) ? 2 :
     line.id.startsWith(baseLineId(line.skuId, line.waveId) + "::new-") ? 1 : 0;
@@ -41,13 +41,17 @@ export function consolidateVendorOrders(store: PickingWaveStoreSnapshot, operati
   const sourceIds = new Set(sources.map(line => line.id));
   const retainedIds = new Set(store.vendorOrderLines.filter(line => !sourceIds.has(line.id)).map(line => line.id));
   const activeDrafts = new Map<string, VendorOrderDraft>();
-  for (const draft of drafts.filter(draft => draft.waveId === queueId && draft.status !== "sent" && !store.deletedVendorDraftIds[draft.id])) {
+  for (const draft of drafts.filter(draft => draft.waveId === queueId && draft.status !== "sent" && !draft.archivedAt && !store.deletedVendorDraftIds[draft.id])) {
     if (activeDrafts.has(draft.vendorName) && activeDrafts.get(draft.vendorName)!.id !== draft.id) throw new Error("같은 거래처의 발주대기가 중복되어 있습니다. 저장된 목록을 다시 확인해 주세요.");
     activeDrafts.set(draft.vendorName, draft);
   }
   const draftFor = (vendorName: string) => {
     const existing = activeDrafts.get(vendorName);
     if (existing) return existing;
+    // Preserve sent line IDs, quantities, receipt records and original timestamps.
+    // Only its draft's history marker changes; other vendors stay untouched.
+    store.vendorOrderDrafts = store.vendorOrderDrafts.map(draft => draft.waveId === queueId && draft.vendorName === vendorName && draft.status === "sent" && !draft.archivedAt
+      ? { ...draft, archivedAt: now, updatedAt: now } : draft);
     const baseId = queueId + "::" + vendorName;
     let id = baseId;
     if (store.deletedVendorDraftIds[id] || store.vendorOrderDrafts.some(draft => draft.id === id)) {
@@ -67,10 +71,15 @@ export function consolidateVendorOrders(store: PickingWaveStoreSnapshot, operati
   for (const source of sources) {
     const skuId = normalizeSkuId(source.skuId);
     if (!skuId || !Number.isSafeInteger(source.shortageQuantity) || source.shortageQuantity <= 0) throw new Error("발주 SKU와 수량을 확인해 주세요.");
-    const existing = result.get(skuId);
+    // Keep intentional requests to different vendors. Incoming automatic demand
+    // may still refer to the old vendor name, so it follows an existing edited SKU.
+    const key = JSON.stringify([skuId, source.vendorName.trim() || UNASSIGNED_VENDOR_NAME]);
+    const explicitVendor = source.waveId === currentQueue || (source.isManuallyAdded && !source.relatedPurchaseOrderNumbers.length);
+    const existing = result.get(key) || (!explicitVendor ? [...result.values()].find(line => line.skuId === skuId) : undefined);
     if (existing) {
       duplicates++;
-      result.set(skuId, withTimestampIfChanged(existing, { ...existing, imageUrl: existing.imageUrl || source.imageUrl,
+      const existingKey = JSON.stringify([skuId, existing.vendorName]);
+      result.set(existingKey, withTimestampIfChanged(existing, { ...existing, imageUrl: existing.imageUrl || source.imageUrl,
         actualShortageQuantity: incomingIds.has(source.id) && source.actualShortageQuantity !== undefined ? source.actualShortageQuantity : existing.actualShortageQuantity,
         relatedPurchaseOrderNumbers: [...new Set([...existing.relatedPurchaseOrderNumbers, ...source.relatedPurchaseOrderNumbers])] }));
     } else {
@@ -82,7 +91,9 @@ export function consolidateVendorOrders(store: PickingWaveStoreSnapshot, operati
         let suffix = 1;
         while (store.deletedVendorLineIds[id] || retainedIds.has(id)) id = baseLineId(skuId) + "::new-" + operationId + "-" + suffix++;
       }
-      result.set(skuId, withTimestampIfChanged(source, { ...source, id, draftId: draft.id, waveId: queueId, vendorName, skuId }));
+      // Another vendor can have the same SKU without sharing its line identity.
+      if ([...result.values()].some(line => line.id === id)) id = baseLineId(skuId) + "::new-" + operationId + "-" + result.size;
+      result.set(key, withTimestampIfChanged(source, { ...source, id, draftId: draft.id, waveId: queueId, vendorName, skuId }));
       if (source.waveId !== queueId) added++;
     }
   }

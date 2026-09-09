@@ -52,21 +52,21 @@ assert.equal(changedDraft.updatedAt, latest);
 assert.deepEqual(store.vendorOrderLines.find(line => line.skuId === "101"), currentBefore);
 assert.equal(store.vendorOrderLines.filter(line => line.waveId === queueId).length, 2);
 
-// Sent history alone requires a new batch; the current unsent edits still win over earlier sources.
+// Sending another vendor keeps the queue and current edits stable.
 const sentLine = source("999", queueId, { id: queueId + "::999", draftId: queueId + "::이미 전송한 거래처", vendorName: "이미 전송한 거래처", receivedQuantity: 3, memo: "발송 원본 보존" });
 addSaved(store, sentLine, "sent");
 const sentBefore = structuredClone(sentLine);
 const oldSource = source("101", "another-legacy", { shortageQuantity: 12, memo: "되살아나면 안 되는 메모", createdAt: "2026-07-01T00:00:00.000Z" });
 addSaved(store, oldSource);
 consolidateVendorOrders(store, "after-actual-send", [], latest);
-assert.notEqual(store.activeVendorQueueId, queueId);
+assert.equal(store.activeVendorQueueId, queueId);
 assert.deepEqual(store.vendorOrderLines.find(line => line.id === sentLine.id), sentBefore, "sent and received source is immutable");
 const moved = store.vendorOrderLines.find(line => line.waveId === store.activeVendorQueueId && line.skuId === "101");
 assert.equal(moved.shortageQuantity, currentBefore.shortageQuantity);
 assert.equal(moved.memo, currentBefore.memo);
 assert.equal(moved.imageUrl, currentBefore.imageUrl);
 assert.equal(moved.vendorName, currentBefore.vendorName);
-assert.equal(store.vendorQueueConsumedLineIds[currentBefore.id], store.activeVendorQueueId);
+assert.equal(store.vendorQueueConsumedLineIds[currentBefore.id], undefined);
 const receipt = store.vendorQueueReceipts["after-actual-send"];
 assert(receipt.sourceLines.some(line => line.id === oldSource.id));
 assert(receipt.sourceLines.some(line => line.id === currentBefore.id && line.memo === currentBefore.memo));

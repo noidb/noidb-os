@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { renderVendorOrderImage } from "@/lib/wms/vendor-order/render-order-image";
 import type { VendorOrderDraftLine, VendorOrderDraftStatus } from "@/lib/wms/vendor-order/types";
 import type { PickingWave } from "@/lib/wms/picking-wave/types";
@@ -13,19 +13,22 @@ interface Props {
   status: VendorOrderDraftStatus;
   busy?: boolean;
   statusSaving?: boolean;
+  readOnly?: boolean;
   onBeforeExport: () => Promise<VendorOrderDraftLine[]>;
   onMarkSent: () => void | Promise<void>;
   onReviseAgain: () => void | Promise<void>;
 }
 
 /** Validate current rows, then open the device share sheet with one PNG attachment. */
-export default function VendorOrderExportPanel({ wave, vendorName, status, busy = false, statusSaving = false, onBeforeExport, onMarkSent, onReviseAgain }: Props) {
+export default function VendorOrderExportPanel({ wave, vendorName, lines, status, busy = false, statusSaving = false, readOnly = false, onBeforeExport, onMarkSent, onReviseAgain }: Props) {
   const [exportBusy, setExportBusy] = useState(false);
   const [exportProgress, setExportProgress] = useState("");
   const exporting = useRef(false);
   const [notice, setNotice] = useState<{ message: string; error?: boolean } | null>(null);
   const [preparedShare, setPreparedShare] = useState<{ files: File[]; blobs: Blob[]; nextIndex?: number } | null>(null);
-  const locked = busy || exportBusy;
+  const locked = busy || exportBusy || statusSaving;
+  const contentVersion = JSON.stringify(lines);
+  useEffect(() => { setPreparedShare(null); }, [contentVersion, status]);
 
   function downloadBlob(blob: Blob, fileName: string) {
     const url = URL.createObjectURL(blob);
@@ -81,7 +84,7 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
             setNotice({ message: `${sharingIndex + 1}/${preparedShare.files.length}페이지를 공유했습니다. 다음 페이지를 이어서 공유해 주세요.` });
           } else {
             setPreparedShare(null);
-            setNotice({ message: "발주서 공유가 완료됐습니다. 카카오톡 전송 여부를 확인한 뒤 전송완료를 눌러 주세요." });
+            setNotice({ message: "발주서 공유가 완료됐습니다. 카카오톡 전송 여부를 확인한 뒤 발주 완료를 눌러 주세요." });
           }
         } catch (error) {
           if (error instanceof Error && error.name === "AbortError") return;
@@ -156,8 +159,8 @@ export default function VendorOrderExportPanel({ wave, vendorName, status, busy 
       {notice && <p role={notice.error ? "alert" : "status"} style={{ fontSize: "12px", color: notice.error ? wmsColors.warn : wmsColors.greenDark, marginBottom: "8px", overflowWrap: "anywhere" }}>{notice.message}</p>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "8px" }}>
         <button type="button" onClick={() => void handleShare()} disabled={locked} style={{ ...wmsPrimaryButton, minHeight: "52px", fontSize: "13px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25, opacity: locked ? 0.6 : 1 }}>{exportBusy ? "준비 중…" : preparedShare?.nextIndex !== undefined ? `${preparedShare.nextIndex + 1}/${preparedShare.files.length} 페이지 공유` : preparedShare ? "공유창 열기" : "카카오톡으로 공유"}</button>
-        <button type="button" onClick={() => { if (!exporting.current) void onMarkSent(); }} disabled={locked} style={{ ...wmsGreenDarkButton, minHeight: "52px", fontSize: "13px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25 }}>{statusSaving ? "저장 중..." : status === "sent" ? "전송완료 해제" : "전송완료"}</button>
-        <button type="button" onClick={() => { if (!exporting.current) void onReviseAgain(); }} disabled={locked} style={{ ...wmsSecondaryButton, gridColumn: "1 / -1", minHeight: "42px", fontSize: "12px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25 }}>{status === "sent" ? "다시 수정" : "발주내용 수정"}</button>
+        {!readOnly && status !== "sent" && <button type="button" onClick={() => { if (!exporting.current) void onMarkSent(); }} disabled={locked} style={{ ...wmsGreenDarkButton, minHeight: "52px", fontSize: "13px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25 }}>{statusSaving ? "저장 중..." : "발주 완료"}</button>}
+        {!readOnly && <button type="button" onClick={() => { if (!exporting.current) void onReviseAgain(); }} disabled={locked} style={{ ...wmsSecondaryButton, gridColumn: "1 / -1", minHeight: "42px", fontSize: "12px", padding: "0 6px", whiteSpace: "normal", lineHeight: 1.25 }}>발주내용 수정</button>}
       </div>
     </div>
   );

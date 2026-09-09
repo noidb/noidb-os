@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { requestVendorJson } from "@/lib/wms/vendor-order/request-json";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import type { StatusFileGenerationRecord, StatusRequestRecord } from "@/lib/wms/vendor-order-actions";
 import { downloadBlobPreservingPage } from "@/lib/wms/download-client";
@@ -23,27 +24,34 @@ export default function StatusRequestsPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
-  async function reload() {
-    setLoading(true);
+  const reloadVersion = useRef(0);
+  async function reload(quiet = false) {
+    const version = ++reloadVersion.current;
+    if (!quiet) setLoading(true);
     try {
-      const [historyResponse, catalogResponse] = await Promise.all([
-        fetch("/api/wms/vendor-order-actions", { cache: "no-store" }),
-        fetch("/api/wms/product-catalog", { cache: "no-store" }),
-      ]);
-      const history = await historyResponse.json();
-      const products = await catalogResponse.json();
+      const { response: historyResponse, data: history } = await requestVendorJson<{ success: boolean; error?: string; statusRequests?: StatusRequestRecord[]; statusFileGenerations?: StatusFileGenerationRecord[] }>("/api/wms/vendor-order-actions", { cache: "no-store" });
       if (!historyResponse.ok || !history.success) throw new Error(history.error || "단종/해제 이력 조회에 실패했습니다.");
+      if (version !== reloadVersion.current) return;
       setRequests((history.statusRequests || []).reverse());
       setGenerations((history.statusFileGenerations || []).reverse());
-      setCatalog(new Map(((products.items || []) as ProductCatalogItem[]).map(item => [normalizeSkuId(item.skuId), item])));
+      setSelected(previous => new Set([...previous].filter(id => history.statusRequests?.some(request => request.id === id && request.supplyHubStatus === "처리대기"))));
     } catch (error) { setMessage(error instanceof Error ? error.message : "목록을 불러오지 못했습니다."); }
-    finally { setLoading(false); }
+    finally { if (version === reloadVersion.current) setLoading(false); }
   }
 
   useEffect(() => {
     setOperator(window.localStorage.getItem("noidb_wms_operator") || "");
     reload();
+    void requestVendorJson<{ items?: ProductCatalogItem[] }>("/api/wms/product-catalog", { cache: "no-store" }).then(({data}) => setCatalog(new Map((data.items || []).map(item => [normalizeSkuId(item.skuId), item])))).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (saving) return;
+    const refresh = () => { if (document.visibilityState === "visible") void reload(true); };
+    const timer = window.setInterval(refresh, 15000);
+    window.addEventListener("focus", refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); };
+  }, [saving]);
 
   const filtered = useMemo(() => requests.filter(request => {
     if (filter === "전체") return true;
