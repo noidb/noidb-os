@@ -62,6 +62,7 @@ function normalizeSnapshot(value: unknown): PickingWaveStoreSnapshot {
     poConfirmationRecords: Array.isArray(raw.poConfirmationRecords) ? raw.poConfirmationRecords : [],
     vendorOrderDrafts: Array.isArray(raw.vendorOrderDrafts) ? raw.vendorOrderDrafts : [],
     vendorOrderLines: Array.isArray(raw.vendorOrderLines) ? raw.vendorOrderLines : [],
+    supplierHubOrderStatuses: Array.isArray(raw.supplierHubOrderStatuses) ? raw.supplierHubOrderStatuses : [],
     warehouseZones: Array.isArray(raw.warehouseZones) ? raw.warehouseZones : [],
     warehouseShelves: Array.isArray(raw.warehouseShelves) ? raw.warehouseShelves : [],
     warehouseBoxes: Array.isArray(raw.warehouseBoxes) ? raw.warehouseBoxes : [],
@@ -255,6 +256,10 @@ function applyMutation(current: PickingWaveStoreSnapshot, mutation: PickingWaveS
   } else if (mutation.action === "saveVendorLine") {
     if (next.deletedVendorDraftIds[mutation.line.draftId]) throw new Error("삭제된 거래처 발주서에는 라인을 저장할 수 없습니다.");
     next.vendorOrderLines = mergeByKey(next.vendorOrderLines, [mutation.line], value => value.id, next.deletedVendorLineIds, true);
+  } else if (mutation.action === "upsertSupplierHubOrderStatuses") {
+    const existing = new Map(next.supplierHubOrderStatuses.map(status => [status.orderNo, status]));
+    for (const status of mutation.statuses) existing.set(status.orderNo, status);
+    next.supplierHubOrderStatuses = [...existing.values()];
   } else if (mutation.action === "deleteVendorLine") {
     next.deletedVendorLineIds[mutation.lineId] = mutation.deletedAt;
     next.vendorOrderLines = next.vendorOrderLines.filter(value => value.id !== mutation.lineId);
