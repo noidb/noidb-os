@@ -11,6 +11,20 @@ export interface SupplierHubOrderStatus {
   collectedAt: string;
 }
 
+export interface SupplierHubInboundEvent {
+  id: string;
+  eventKey: string;
+  source: "supplier-hub-extension";
+  collectedAt: string;
+  orderNo: string;
+  skuId: string;
+  inboundDate: string;
+  quantity: string;
+  division: string;
+  warehouse: string;
+  skuName: string;
+}
+
 export interface PickingWaveStoreSnapshot {
   schemaVersion: 1;
   revision: number;
@@ -28,6 +42,7 @@ export interface PickingWaveStoreSnapshot {
   warehouseModelLocations: ModelLocation[];
   warehouseSkuExceptions: SkuLocation[];
   warehouseMigrationMappings: WarehouseMigrationMapping[];
+  supplierHubInboundEvents: SupplierHubInboundEvent[];
   deletedWaveIds: Record<string, string>;
   deletedItemIds: Record<string, string>;
   deletedBasketKeys: Record<string, string>;
@@ -61,7 +76,8 @@ export type PickingWaveStoreMutation =
   | { action: "saveWarehouseModelLocation"; location: ModelLocation }
   | { action: "saveWarehouseSkuException"; exception: SkuLocation }
   | { action: "deleteWarehouseSkuException"; skuId: string; deletedAt: string }
-  | { action: "saveWarehouseMigrationMapping"; mapping: WarehouseMigrationMapping };
+  | { action: "saveWarehouseMigrationMapping"; mapping: WarehouseMigrationMapping }
+  | { action: "appendSupplierHubInboundEvents"; events: SupplierHubInboundEvent[] };
 
 export function emptyPickingWaveStoreSnapshot(): PickingWaveStoreSnapshot {
   return {
@@ -81,6 +97,7 @@ export function emptyPickingWaveStoreSnapshot(): PickingWaveStoreSnapshot {
     warehouseModelLocations: [],
     warehouseSkuExceptions: [],
     warehouseMigrationMappings: [],
+    supplierHubInboundEvents: [],
     deletedWaveIds: {},
     deletedItemIds: {},
     deletedBasketKeys: {},
@@ -102,6 +119,13 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function hasText(value: unknown, key: string): boolean {
   return isObject(value) && typeof value[key] === "string" && String(value[key]).trim().length > 0;
+}
+
+function isSupplierHubInboundEvent(value: unknown): value is SupplierHubInboundEvent {
+  if (!isObject(value)) return false;
+  return value.source === "supplier-hub-extension"
+    && ["id", "eventKey", "collectedAt", "orderNo", "skuId", "inboundDate", "quantity", "division", "warehouse", "skuName"]
+      .every(key => hasText(value, key));
 }
 
 export function isPickingWaveStoreMutation(value: unknown): value is PickingWaveStoreMutation {
@@ -140,5 +164,8 @@ export function isPickingWaveStoreMutation(value: unknown): value is PickingWave
   if (value.action === "saveWarehouseSkuException") return hasText(value.exception, "skuId");
   if (value.action === "deleteWarehouseSkuException") return hasText(value, "skuId") && hasText(value, "deletedAt");
   if (value.action === "saveWarehouseMigrationMapping") return hasText(value.mapping, "id");
+  if (value.action === "appendSupplierHubInboundEvents") {
+    return Array.isArray(value.events) && value.events.length <= 10_000 && value.events.every(isSupplierHubInboundEvent);
+  }
   return false;
 }

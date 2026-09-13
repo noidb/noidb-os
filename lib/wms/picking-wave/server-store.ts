@@ -69,6 +69,7 @@ function normalizeSnapshot(value: unknown): PickingWaveStoreSnapshot {
     warehouseModelLocations: Array.isArray(raw.warehouseModelLocations) ? raw.warehouseModelLocations : [],
     warehouseSkuExceptions: Array.isArray(raw.warehouseSkuExceptions) ? raw.warehouseSkuExceptions : [],
     warehouseMigrationMappings: Array.isArray(raw.warehouseMigrationMappings) ? raw.warehouseMigrationMappings : [],
+    supplierHubInboundEvents: Array.isArray(raw.supplierHubInboundEvents) ? raw.supplierHubInboundEvents : [],
     deletedWaveIds: raw.deletedWaveIds && typeof raw.deletedWaveIds === "object" ? raw.deletedWaveIds : {},
     deletedItemIds: raw.deletedItemIds && typeof raw.deletedItemIds === "object" ? raw.deletedItemIds : {},
     deletedBasketKeys: raw.deletedBasketKeys && typeof raw.deletedBasketKeys === "object" ? raw.deletedBasketKeys : {},
@@ -278,6 +279,13 @@ function applyMutation(current: PickingWaveStoreSnapshot, mutation: PickingWaveS
     next.warehouseSkuExceptions = next.warehouseSkuExceptions.filter(value => value.skuId !== mutation.skuId);
   } else if (mutation.action === "saveWarehouseMigrationMapping") {
     next.warehouseMigrationMappings = mergeByKey(next.warehouseMigrationMappings, [mutation.mapping], value => value.id, {}, true);
+  } else if (mutation.action === "appendSupplierHubInboundEvents") {
+    const existingKeys = new Set(next.supplierHubInboundEvents.map(event => event.eventKey));
+    for (const event of mutation.events) {
+      if (existingKeys.has(event.eventKey)) continue;
+      next.supplierHubInboundEvents.push(event);
+      existingKeys.add(event.eventKey);
+    }
   }
   next.revision = current.revision + 1;
   next.updatedAt = new Date().toISOString();
