@@ -73,6 +73,10 @@ export interface VendorOrderDraftLine {
   memo: string;
   /** 자동 집계가 아니라 사용자가 화면에서 직접 추가한 라인인지 */
   isManuallyAdded: boolean;
+  /** 계산·처리 출처. 실제 Supplier Hub 미납은 수량을 그대로 사용한다. */
+  sourceType?: "picking-shortage" | "actual-inbound-shortage";
+  coupangConfirmedQuantity?: number;
+  coupangReceivedQuantity?: number;
   /** 발주 입고처리 화면에서 저장하는 실제 입고수량 (2026-08-19 4차 실사용 테스트 신규 필드).
    *  없으면 0으로 취급한다. 이 값을 저장해도 제품DB(구글시트) 현재고는 자동으로 바뀌지 않는다 —
    *  재고 자동 반영은 별도 사용자 지시가 있을 때까지 구현하지 않는다. */

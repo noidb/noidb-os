@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
@@ -21,6 +21,7 @@ import {
  */
 
 const INCOMING_DIR = path.join(process.cwd(), "lib", "wms", "data", "incoming-purchase-orders");
+const LOCAL_SOURCE_DIR = process.env.WMS_PURCHASE_ORDER_SOURCE_DIR || "G:\\내 드라이브\\쿠팡데이터\\발주서리스트다운";
 
 export interface SupplierHubPurchaseOrderLine {
   lineNo: number;
@@ -56,6 +57,31 @@ export interface SupplierHubPurchaseOrder {
   sourceFileName: string;
   /** 파일 수정 시각 — "실시간 조회가 아니라 특정 시점 스냅샷"임을 화면에 표시하기 위함 */
   capturedAt: string;
+}
+
+function purchaseOrderContentSignature(order: SupplierHubPurchaseOrder): string {
+  return JSON.stringify({
+    orderType: order.orderType,
+    fulfillmentCenter: order.fulfillmentCenter,
+    fulfillmentAddress: order.fulfillmentAddress,
+    fulfillmentContactPhone: order.fulfillmentContactPhone,
+    expectedDate: order.expectedDate,
+    items: order.items.map(item => [
+      item.lineNo,
+      item.productCode,
+      item.productName,
+      item.barcode,
+      item.purchaseType,
+      item.taxType,
+      item.orderedQuantity,
+      item.vendorConfirmedQuantity,
+      item.receivedQuantity,
+    ]),
+  });
+}
+
+export function hasSupplierHubPurchaseOrderContentChange(existing: SupplierHubPurchaseOrder, incoming: SupplierHubPurchaseOrder): boolean {
+  return purchaseOrderContentSignature(existing) !== purchaseOrderContentSignature(incoming);
 }
 
 function cellText(value: unknown): string {
@@ -147,32 +173,100 @@ export async function parseSupplierHubPurchaseOrderBuffer(
  * 폴더가 없거나 비어 있으면 빈 배열을 반환한다. 이 함수는 파일을 절대 수정/삭제하지 않는다.
  */
 export async function loadSupplierHubPurchaseOrders(): Promise<SupplierHubPurchaseOrder[]> {
+  return (await loadSupplierHubPurchaseOrderSnapshots()).orders;
+}
+
+async function loadSupplierHubPurchaseOrderSnapshots(): Promise<SupplierHubSnapshotSelection> {
   if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
     const files = (await listDriveFilesFromEnv("GOOGLE_DRIVE_COUPANG_PURCHASE_ORDER_FOLDER_ID"))
-      .filter(file => /\.(zip|xlsx)$/i.test(file.name))
-      .sort((a, b) => a.modifiedTime.localeCompare(b.modifiedTime));
-    return loadSupplierHubPurchaseOrdersFromDriveFiles(files);
+      .filter(file => /\.(zip|xlsx)$/i.test(file.name));
+    return loadSupplierHubPurchaseOrderSnapshotsFromDriveFiles(files);
   }
 
-  let fileNames: string[];
-  try {
-    fileNames = (await readdir(INCOMING_DIR)).filter(name => name.toLowerCase().endsWith(".xlsx"));
-  } catch {
-    return [];
+  const candidates: SupplierHubPurchaseOrder[] = [];
+  const directories = [...new Set([LOCAL_SOURCE_DIR, INCOMING_DIR])];
+  for (const directory of directories) {
+    let fileNames: string[];
+    try { fileNames = (await readdir(directory)).filter(name => /\.(zip|xlsx)$/i.test(name)); }
+    catch { continue; }
+    for (const fileName of fileNames) {
+      const filePath = path.join(directory, fileName), fileStat = await stat(filePath);
+      if (!fileStat.isFile()) continue;
+      const raw = await readFile(filePath);
+      if (fileName.toLowerCase().endsWith(".zip")) {
+        const zip = await JSZip.loadAsync(raw);
+        for (const [entryName, entry] of Object.entries(zip.files)) if (!entry.dir && entryName.toLowerCase().endsWith(".xlsx")) {
+          const order = await parseSupplierHubPurchaseOrderBuffer(await entry.async("nodebuffer"), `${fileName} :: ${entryName}`, resolveSupplierHubSnapshotTime(entryName, fileName, fileStat.mtime.toISOString()));
+          if (order) candidates.push(order);
+        }
+      } else {
+        const order = await parseSupplierHubPurchaseOrderBuffer(raw, fileName, resolveSupplierHubSnapshotTime(fileName, fileName, fileStat.mtime.toISOString()));
+        if (order) candidates.push(order);
+      }
+    }
   }
+  return selectLatestSupplierHubPurchaseOrderSnapshots(candidates);
+}
 
-  const orders: SupplierHubPurchaseOrder[] = [];
-  for (const fileName of fileNames) {
-    const filePath = path.join(INCOMING_DIR, fileName);
-    const fileStat = await stat(filePath);
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(filePath);
-    const sheet = workbook.worksheets[0];
-    if (!sheet) continue;
-    orders.push(parseWorksheet(sheet, fileName, fileStat.mtime.toISOString()));
+export interface SupplierHubPurchaseOrderSnapshotConflict {
+  purchaseOrderNumber: string;
+  snapshotTime: string;
+  sourceFileNames: string[];
+}
+
+interface SupplierHubSnapshotSelection {
+  orders: SupplierHubPurchaseOrder[];
+  conflicts: SupplierHubPurchaseOrderSnapshotConflict[];
+}
+
+function timestampFromFileName(fileName: string): number | undefined {
+  const match = path.basename(fileName).match(/(?:^|\D)(\d{14})(?:\D|$)/);
+  if (!match) return undefined;
+  const value = match[1];
+  const parts = [value.slice(0, 4), value.slice(4, 6), value.slice(6, 8), value.slice(8, 10), value.slice(10, 12), value.slice(12, 14)].map(Number);
+  const [year, month, day, hour, minute, second] = parts;
+  const localClock = Date.UTC(year, month - 1, day, hour, minute, second);
+  const verified = new Date(localClock);
+  if (verified.getUTCFullYear() !== year || verified.getUTCMonth() + 1 !== month || verified.getUTCDate() !== day
+    || verified.getUTCHours() !== hour || verified.getUTCMinutes() !== minute || verified.getUTCSeconds() !== second) return undefined;
+  return localClock - 9 * 60 * 60 * 1000;
+}
+
+export function resolveSupplierHubSnapshotTime(entryName: string, containerName: string, modifiedTime: string): string {
+  const time = timestampFromFileName(entryName) ?? timestampFromFileName(containerName) ?? Date.parse(modifiedTime);
+  if (!Number.isFinite(time)) throw new Error(`${containerName}의 스냅샷 시각을 확인할 수 없습니다.`);
+  return new Date(time).toISOString();
+}
+
+export function selectLatestSupplierHubPurchaseOrderSnapshots(candidates: SupplierHubPurchaseOrder[]): SupplierHubSnapshotSelection {
+  const byPo = new Map<string, SupplierHubPurchaseOrder[]>();
+  for (const order of candidates) if (order.purchaseOrderNumber) byPo.set(order.purchaseOrderNumber, [...(byPo.get(order.purchaseOrderNumber) || []), order]);
+  const orders: SupplierHubPurchaseOrder[] = [], conflicts: SupplierHubPurchaseOrderSnapshotConflict[] = [];
+  for (const [purchaseOrderNumber, versions] of byPo) {
+    const latestTime = Math.max(...versions.map(order => Date.parse(order.capturedAt)));
+    const latest = versions.filter(order => Date.parse(order.capturedAt) === latestTime);
+    if (new Set(latest.map(purchaseOrderContentSignature)).size > 1) {
+      conflicts.push({ purchaseOrderNumber, snapshotTime: new Date(latestTime).toISOString(), sourceFileNames: latest.map(order => order.sourceFileName).sort() });
+      continue;
+    }
+    orders.push([...latest].sort((a, b) => a.sourceFileName.localeCompare(b.sourceFileName))[0]);
   }
+  return { orders: orders.sort((a, b) => a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber)), conflicts: conflicts.sort((a, b) => a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber)) };
+}
 
-  return orders.sort((a, b) => a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber));
+/** 실제 입고 미납 API가 사용할 읽기 전용 호환 반환값. 기존 파서의 capturedAt을
+ * 발주번호별 최신 확인 시각으로 노출하며, 기존 로딩 규칙과 파일 보존 동작은 그대로 둔다. */
+export async function loadSupplierHubPurchaseOrdersWithSnapshotTimes(): Promise<{
+  orders: SupplierHubPurchaseOrder[];
+  latestSnapshotTimeMsByPurchaseOrderNumber: Record<string, number>;
+  snapshotConflicts: SupplierHubPurchaseOrderSnapshotConflict[];
+}> {
+  const { orders, conflicts: snapshotConflicts } = await loadSupplierHubPurchaseOrderSnapshots();
+  const latestSnapshotTimeMsByPurchaseOrderNumber = Object.fromEntries(
+    orders.map(order => [order.purchaseOrderNumber, Date.parse(order.capturedAt)] as [string, number])
+      .filter(([, time]) => Number.isFinite(time))
+  );
+  return { orders, latestSnapshotTimeMsByPurchaseOrderNumber, snapshotConflicts };
 }
 
 /** 한국시간 오늘(YYYY-MM-DD). 서버가 UTC로 실행되는 Vercel에서도 날짜 경계가 어긋나지 않게 한다. */
@@ -315,46 +409,31 @@ export function filterCurrentPurchaseOrders(orders: SupplierHubPurchaseOrder[], 
 }
 
 export async function loadSupplierHubPurchaseOrdersFromDriveFiles(files: DriveFileInfo[]): Promise<SupplierHubPurchaseOrder[]> {
-  const byPoNumber = new Map<string, SupplierHubPurchaseOrder>();
+  return (await loadSupplierHubPurchaseOrderSnapshotsFromDriveFiles(files)).orders;
+}
+
+async function loadSupplierHubPurchaseOrderSnapshotsFromDriveFiles(files: DriveFileInfo[]): Promise<SupplierHubSnapshotSelection> {
+  const candidates: SupplierHubPurchaseOrder[] = [];
   for (const file of files) {
       const raw = await downloadDriveFile(file.id);
-      const inputs: { name: string; buffer: Buffer }[] = [];
+      const inputs: { name: string; displayName: string; buffer: Buffer }[] = [];
       if (file.name.toLowerCase().endsWith(".zip")) {
         const zip = await JSZip.loadAsync(raw);
         for (const [name, entry] of Object.entries(zip.files)) {
           if (!entry.dir && name.toLowerCase().endsWith(".xlsx")) {
-            inputs.push({ name, buffer: await entry.async("nodebuffer") });
+            inputs.push({ name, displayName: `${file.name} :: ${name}`, buffer: await entry.async("nodebuffer") });
           }
         }
       } else {
-        inputs.push({ name: file.name, buffer: raw });
+        inputs.push({ name: file.name, displayName: file.name, buffer: raw });
       }
       for (const input of inputs) {
-        const order = await parseSupplierHubPurchaseOrderBuffer(input.buffer, input.name, file.modifiedTime);
+        const order = await parseSupplierHubPurchaseOrderBuffer(input.buffer, input.displayName, resolveSupplierHubSnapshotTime(input.name, file.name, file.modifiedTime));
         if (!order?.purchaseOrderNumber) continue;
-        const existing = byPoNumber.get(order.purchaseOrderNumber);
-        if (!existing) {
-          byPoNumber.set(order.purchaseOrderNumber, order);
-          continue;
-        }
-
-        // 같은 발주번호의 후속 파일은 신규 발주로 다시 등록하지 않는다. 쿠팡에서 수정 가능한
-        // 일정 정보가 실제로 달라진 경우에만 그 필드들을 최신값으로 반영하고 상품/수량은 보존한다.
-        if (existing.expectedDate !== order.expectedDate || existing.fulfillmentCenter !== order.fulfillmentCenter) {
-          byPoNumber.set(order.purchaseOrderNumber, {
-            ...existing,
-            fulfillmentCenter: order.fulfillmentCenter,
-            fulfillmentAddress: order.fulfillmentAddress,
-            fulfillmentContactPhone: order.fulfillmentContactPhone,
-            expectedDate: order.expectedDate,
-            sourceFileName: order.sourceFileName,
-            // 일정 수정 파일이 나중에 올라와도 최초 감지일(화면의 최초 발주일)은 바꾸지 않는다.
-            capturedAt: existing.capturedAt,
-          });
-        }
+        candidates.push(order);
       }
   }
-  return [...byPoNumber.values()].sort((a, b) => a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber));
+  return selectLatestSupplierHubPurchaseOrderSnapshots(candidates);
 }
 
 /** incoming-purchase-orders 폴더 절대경로 — 최신 발주 불러오기 기능이 새 파일을 쓸 때 재사용한다. */

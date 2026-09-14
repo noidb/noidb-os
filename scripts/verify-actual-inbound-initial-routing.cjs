@@ -1,0 +1,14 @@
+const fs=require('fs'),assert=require('node:assert/strict'),ts=require('typescript');
+require.extensions['.ts']=(module,file)=>module._compile(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,file);
+const {queueActualInboundReorder}=require('../lib/wms/vendor-order/actual-inbound-routing.ts');
+const line=(po,sku)=>({purchaseOrderNumber:po,productCode:sku,productName:'상품',confirmedQuantity:5,receivedQuantity:2,shortageQuantity:3,vendorName:'거래처',modelName:'모델',category:'',optionLabel:'',imageUrl:'',barcode:'',sourceType:'actual-inbound-shortage'});
+const workspace={schemaVersion:1,revision:0,runs:[],productOverrides:{}};
+const first=queueActualInboundReorder(workspace,line('100','200'),'2026-09-14T00:00:00.000Z');
+assert.equal(workspace.runs.length,1);assert.equal(workspace.runs[0].reviews['200'].decision,'reorder');assert.equal(workspace.runs[0].snapshot.vendorItems[0].relatedPurchaseOrderNumbers.join(','),'100');assert.equal(workspace.runs[0].snapshot.vendorItems[0].shortageQuantity,3);
+const reused=queueActualInboundReorder(workspace,line('100','200'));assert.equal(reused.reused,true);assert.equal(reused.runId,first.runId);assert.equal(workspace.runs.length,1);
+queueActualInboundReorder(workspace,line('101','200'));assert.equal(workspace.runs.length,2);assert.equal(workspace.runs.map(run=>run.snapshot.vendorItems[0].relatedPurchaseOrderNumbers[0]).join(','),'100,101');
+workspace.runs[0].reorderRequestedAt='done';workspace.runs[0].reorderRequestedLines=[{purchaseOrderNumber:'100',skuId:'200',shortageQuantity:3}];
+assert.throws(()=>queueActualInboundReorder(workspace,line('100','200')),/이미 재발주 요청을 완료/);
+const page=fs.readFileSync('app/wms/vendor-orders/actual-inbound-shortage/page.tsx','utf8');
+assert.match(page,/Classification = "vendor" \| "discontinue" \| "reorder"/);assert.match(page,/const targets = rows\.filter\(row => classifications\[keyOf\(row\.purchaseOrderNumber, row\.productCode\)\]/);assert.match(page,/else if \(!row\.needsConfirmation\) result\.unclassified\+\+/);
+console.log('PASS exact PO+SKU reorder routing, duplicate reuse, same SKU different PO isolation, completed guard, explicit three-way classification');
