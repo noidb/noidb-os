@@ -12,6 +12,11 @@ import {
 import { mutateWeeklyWorkspace, readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import type { ActualInboundShortageLine } from "@/lib/wms/vendor-order/actual-inbound-shortage";
 import { queueActualInboundReorder } from "@/lib/wms/vendor-order/actual-inbound-routing";
+import { calculateSupplierHubShortages } from "@/lib/wms/supplier-hub-shortage";
+import { readPickingWaveStore } from "@/lib/wms/picking-wave/server-store";
+import { normalizeSkuId } from "@/lib/wms/sku-normalize";
+import { resolveDisplayOption } from "@/lib/wms/display-name";
+import { UNASSIGNED_VENDOR_NAME } from "@/lib/wms/vendor-order/types";
 
 /**
  * "실제 미납" 목록 읽기 전용 API. Supplier Hub 발주서리스트(로컬 폴더/Drive, 읽기 전용)와
@@ -29,12 +34,51 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 async function loadLines() {
-  const [{ orders, latestSnapshotTimeMsByPurchaseOrderNumber, snapshotConflicts }, catalog, stockedFile, workspace] = await Promise.all([
+  const [{ orders, latestSnapshotTimeMsByPurchaseOrderNumber, snapshotConflicts }, catalog, stockedFile, workspace, pickingStore] = await Promise.all([
       loadSupplierHubPurchaseOrdersWithSnapshotTimes(),
       fetchProductCatalog(),
       loadLatestActualInboundHistoryFile(getDefaultActualInboundHistoryLocalDir()),
       readWeeklyWorkspace(),
+      readPickingWaveStore(),
   ]);
+
+    const statuses = pickingStore.supplierHubOrderStatuses || [];
+    const events = pickingStore.supplierHubInboundEvents || [];
+    if (statuses.length > 0 && events.length > 0) {
+      const purchaseRows = [
+        ["발주번호", "SKU ID", "상품명", "확정수량", "_주간원문검증오류"],
+        ...orders.flatMap(order => order.items.map(item => [
+          order.purchaseOrderNumber,
+          item.productCode,
+          item.productName,
+          String(item.vendorConfirmedQuantity),
+          "",
+        ])),
+      ];
+      const calculation = calculateSupplierHubShortages({ statuses, events, purchaseRows });
+      const catalogBySku = new Map(catalog.items.map(item => [normalizeSkuId(item.skuId), item]));
+      const lines = calculation.shortagePairs.map(item => {
+        const catalogEntry = catalogBySku.get(normalizeSkuId(item.skuId));
+        const productName = catalogEntry?.productName || item.skuName;
+        return {
+          purchaseOrderNumber: item.orderNo,
+          productCode: item.skuId,
+          productName,
+          confirmedQuantity: item.confirmedQuantity,
+          receivedQuantity: item.receivedQuantity,
+          shortageQuantity: item.shortageQuantity,
+          vendorName: catalogEntry?.vendorName || UNASSIGNED_VENDOR_NAME,
+          modelName: catalogEntry?.modelName || productName,
+          category: catalogEntry?.category || "",
+          optionLabel: resolveDisplayOption(productName, catalogEntry?.optionLabel),
+          imageUrl: catalogEntry?.imageUrl || "",
+          barcode: catalogEntry?.barcode || "",
+          sourceType: "actual-inbound-shortage" as const,
+          needsConfirmation: false,
+        };
+      });
+      return { lines, stockedFile, snapshotConflicts, calculation };
+    }
 
     const actualByKey = aggregateActualReceivedByPoSku(stockedFile?.rows || []);
     const { orders: mergedOrders } = applyActualInboundHistory(orders, actualByKey);
@@ -60,13 +104,28 @@ async function loadLines() {
       ),
     }));
 
-  return { lines, stockedFile, snapshotConflicts };
+  return { lines, stockedFile, snapshotConflicts, calculation: null };
 }
 
 export async function GET() {
   try {
-    const { lines, stockedFile, snapshotConflicts } = await loadLines();
-    return NextResponse.json({ lines, snapshotConflicts, inboundHistorySourceFile: stockedFile?.fileName || null, inboundHistorySourceMtime: stockedFile?.mtime || null });
+    const { lines, stockedFile, snapshotConflicts, calculation } = await loadLines();
+    return NextResponse.json({
+      lines,
+      snapshotConflicts,
+      inboundHistorySourceFile: stockedFile?.fileName || null,
+      inboundHistorySourceMtime: stockedFile?.mtime || null,
+      calculation: calculation ? {
+        statusCount: calculation.statusCount,
+        excludedPurchaseTypeCount: calculation.excludedPurchaseTypeCount,
+        exactSettledCount: calculation.exactSettledCount,
+        inboundEventCount: calculation.inboundEventCount,
+        uniqueInboundEventCount: calculation.uniqueInboundEventCount,
+        duplicateInboundEventCount: calculation.duplicateInboundEventCount,
+        unresolvedPairs: calculation.unresolvedPairs,
+        missingSourceOrderNumbers: calculation.missingSourceOrderNumbers,
+      } : null,
+    });
   } catch (error) {
     return NextResponse.json(
       { lines: [], error: error instanceof Error ? error.message : "실제 미납 목록을 불러오는 중 오류가 발생했습니다." },
