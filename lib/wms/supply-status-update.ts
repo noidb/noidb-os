@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import { backupSheetWithinSpreadsheet, fetchSheetRows, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
 import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
+import { collectRetiredSkuIds, fetchSkuReplacementHistory, skuRetirementKey } from "./sku-retirement";
 import { coupangSupplyMatchPriority } from "../coupang-option-name";
 import {
   downloadDriveFile,
@@ -84,6 +85,21 @@ export interface LatestSupplyStatusFile {
   fileName: string;
   mtime: string;
 }
+
+export interface SupplyStatusTableCapture {
+  schemaVersion: 1;
+  source: "supplier-hub-live";
+  headers: string[];
+  rows: string[][];
+  capturedAt: string;
+  sourceUrl: string;
+  totalRowCount: number;
+  pageCount: number;
+  pageSize: number;
+  coverageComplete: true;
+}
+
+const MAX_SUPPLY_STATUS_CAPTURE_ROWS = 10_000;
 
 /** 대상 폴더에서 ~$ 임시파일·숨김파일을 제외하고 수정일이 가장 최근인 xlsx 1개를 고른다. */
 export async function findLatestSupplyStatusFile(): Promise<LatestSupplyStatusFile | null> {
@@ -188,7 +204,7 @@ async function parseSupplyStatusFile(fileInfo: LatestSupplyStatusFile): Promise<
   };
 }
 
-interface ProductDbHeaderIndex {
+export interface ProductDbHeaderIndex {
   status: number;
   modelSku: number;
   skuId: number;
@@ -242,6 +258,85 @@ export interface MatchedRow {
   eligible: boolean;
   matchRule: SupplyStatusMatchRule | null;
   reasons: string[];
+}
+
+export function parseSupplyStatusCapture(capture: SupplyStatusTableCapture): ParsedSupplyStatusFile {
+  if (capture?.schemaVersion !== 1 || capture.source !== "supplier-hub-live" || capture.coverageComplete !== true) {
+    throw new Error("Supplier Hub 전체 수집 정보가 올바르지 않습니다.");
+  }
+  if (!Array.isArray(capture.headers) || !Array.isArray(capture.rows) || capture.headers.length === 0) {
+    throw new Error("Supplier Hub 표의 헤더 또는 행이 없습니다.");
+  }
+  if (!Number.isSafeInteger(capture.totalRowCount) || capture.totalRowCount <= 0 || capture.totalRowCount > MAX_SUPPLY_STATUS_CAPTURE_ROWS) {
+    throw new Error(`상품공급상태 수집 건수는 1~${MAX_SUPPLY_STATUS_CAPTURE_ROWS.toLocaleString()}건이어야 합니다.`);
+  }
+  if (capture.rows.length !== capture.totalRowCount) {
+    throw new Error(`Supplier Hub 전체 ${capture.totalRowCount.toLocaleString()}건 중 ${capture.rows.length.toLocaleString()}건만 전달되었습니다.`);
+  }
+  if (!Number.isSafeInteger(capture.pageSize) || capture.pageSize <= 0 || capture.pageSize > 500) {
+    throw new Error("Supplier Hub 페이지 표시 건수가 올바르지 않습니다.");
+  }
+  if (!Number.isSafeInteger(capture.pageCount) || capture.pageCount !== Math.ceil(capture.totalRowCount / capture.pageSize)) {
+    throw new Error("Supplier Hub 전체 페이지 수가 수집 건수와 맞지 않습니다.");
+  }
+  if (!capture.capturedAt || Number.isNaN(Date.parse(capture.capturedAt))) throw new Error("Supplier Hub 수집 시간이 올바르지 않습니다.");
+  try {
+    const sourceUrl = new URL(capture.sourceUrl);
+    if (sourceUrl.origin !== "https://supplier.coupang.com") throw new Error();
+  } catch {
+    throw new Error("Supplier Hub 출처 주소가 올바르지 않습니다.");
+  }
+
+  const headers = ["", ...capture.headers.map(value => String(value ?? "").trim())];
+  const explicitModelSkuCol = findHeaderIndex(headers, EXPLICIT_MODEL_SKU_HEADERS);
+  const optionNameCol = findHeaderIndex(headers, OPTION_NAME_HEADERS);
+  const skuIdCol = findHeaderIndex(headers, SKU_ID_HEADERS);
+  const productNameCol = findHeaderIndex(headers, ["상품명"]);
+  const barcodeCol = findHeaderIndex(headers, ["바코드", "쿠팡 바코드", "쿠팡바코드"]);
+  let approvalCol: { index: number; header: string } | null = null;
+  let approvedValues: string[] = [];
+  for (const [headerName, values] of APPROVAL_HEADER_APPROVED_VALUES) {
+    const found = findHeaderIndex(headers, [headerName]);
+    if (found) {
+      approvalCol = found;
+      approvedValues = values;
+      break;
+    }
+  }
+  const requiredMissing = [
+    !skuIdCol && "SKU ID",
+    !productNameCol && "상품명",
+    !barcodeCol && "바코드",
+    !approvalCol && "발주가능상태",
+  ].filter(Boolean);
+  if (requiredMissing.length) throw new Error(`Supplier Hub 표에서 필요한 열을 찾지 못했습니다: ${requiredMissing.join(", ")}`);
+
+  const rows: DownloadRow[] = [];
+  const seenSkuIds = new Set<string>();
+  for (const rawRow of capture.rows) {
+    if (!Array.isArray(rawRow) || rawRow.length !== capture.headers.length) throw new Error("Supplier Hub 표의 열 개수가 페이지마다 다릅니다.");
+    const value = (column: { index: number } | null) => column ? String(rawRow[column.index - 1] ?? "").trim() : "";
+    const skuId = value(skuIdCol);
+    const skuKey = norm(skuId);
+    if (skuKey && seenSkuIds.has(skuKey)) throw new Error(`Supplier Hub 표에 SKU ID ${skuId}가 반복되어 있습니다.`);
+    if (skuKey) seenSkuIds.add(skuKey);
+    const explicitModelSku = value(explicitModelSkuCol);
+    const optionName = value(optionNameCol);
+    const matchKey = explicitModelSku || optionName;
+    const productName = value(productNameCol);
+    const barcode = value(barcodeCol);
+    const approvalRaw = value(approvalCol);
+    const approved = approvedValues.includes(approvalRaw);
+    if (!matchKey && !skuId) continue;
+    rows.push({ matchKey, explicitModelSku, optionName, skuId, productName, barcode, approvalRaw, approved });
+  }
+  if (rows.length !== capture.rows.length) throw new Error("Supplier Hub 표에 SKU ID와 매칭키가 모두 비어 있는 행이 있습니다.");
+  return {
+    matchKeyColumnHeader: explicitModelSkuCol?.header ?? optionNameCol?.header ?? null,
+    approvalColumnHeader: approvalCol?.header ?? null,
+    skuIdColumnHeader: skuIdCol?.header ?? null,
+    rows,
+  };
 }
 
 function normalizeExactProductText(value: unknown): string {
@@ -329,6 +424,47 @@ export interface SupplyStatusPreview {
 
 export type SupplyStatusPreviewOrNotFound = SupplyStatusPreview | { fileFound: false };
 
+export type SupplyStatusAuditIssueType = "duplicate" | "barcode_conflict" | "unmatched";
+
+export interface SupplyStatusAuditIssue {
+  type: SupplyStatusAuditIssueType;
+  sheetRowNumber?: number;
+  modelSku?: string;
+  skuId?: string;
+  productName?: string;
+  optionName?: string;
+  message: string;
+}
+
+export interface SupplyStatusAudit {
+  fileFound: true;
+  readOnly: true;
+  fileName: string;
+  fileMtime: string;
+  downloadedCount: number;
+  rocketBarcodeCount: number;
+  excludedSBarcodeCount: number;
+  excludedOtherBarcodeCount: number;
+  pendingProductCount: number;
+  newApprovalCandidateCount: number;
+  /** 상품공급상태 파일만으로는 미등록·검수중·반려를 구분할 수 없는 행 수 */
+  registrationStatusCheckRequiredCount: number;
+  /** @deprecated 이전 UI/API 호환용. registrationStatusCheckRequiredCount와 동일하다. */
+  awaitingApprovalCount: number;
+  existingSkuMatchedCount: number;
+  existingNameChangeCount: number;
+  existingAvailabilityChangeCount: number;
+  safeUpdateCount: number;
+  duplicateCount: number;
+  barcodeConflictCount: number;
+  unmatchedCount: number;
+  proposedNewRowCount: 0;
+  issues: SupplyStatusAuditIssue[];
+  dryRunToken: string;
+}
+
+export type SupplyStatusAuditOrNotFound = SupplyStatusAudit | { fileFound: false };
+
 interface InternalMatchResult {
   preview: SupplyStatusPreview;
   headerIndex: ProductDbHeaderIndex;
@@ -361,11 +497,13 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
   const parsed = await parseSupplyStatusFile(fileInfo);
 
   const sheetRows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" });
+  const retiredSkuIds = collectRetiredSkuIds(await fetchSkuReplacementHistory(sheetRows));
   const headers = sheetRows[0].map(h => String(h ?? "").trim());
   const idx = resolveProductDbHeaderIndex(headers);
   const dataRows = sheetRows.slice(1);
 
   const approvedStatusValue = verifyApprovedStatusValue(dataRows, idx);
+  const activeDownloadRows = parsed.rows.filter(row => !retiredSkuIds.has(skuRetirementKey(row.skuId)));
 
   const pendingRows = dataRows
     .map((row, i) => ({ row, sheetRowNumber: i + 2 }))
@@ -391,7 +529,7 @@ async function computeSupplyStatusMatch(): Promise<InternalMatchResult | null> {
       reasons.push("제품DB 모델SKU가 비어 있습니다.");
     } else {
       const matchResult = findSupplyStatusCandidates(
-        parsed.rows,
+        activeDownloadRows,
         modelSku,
         String(row[idx.skuId] ?? "").trim(),
         String(row[idx.productName] ?? "").trim(),
@@ -498,6 +636,233 @@ export async function buildSupplyStatusPreview(): Promise<SupplyStatusPreviewOrN
   return result.preview;
 }
 
+/** 최신 상품공급상태 파일과 제품DB를 비교하는 읽기 전용 진단이다.
+ * 백업·셀 업데이트·Apps Script 호출을 하지 않으며 실제 반영 로직과 분리한다. */
+export interface SupplyStatusProposedUpdate {
+  kind: "new_approval" | "existing_sku";
+  sheetRowNumber: number;
+  modelSku: string;
+  skuId: string;
+  productName: string;
+  barcode: string;
+  orderAvailability: string;
+  updateProductName: boolean;
+  updateOrderAvailability: boolean;
+}
+
+interface InternalSupplyStatusAudit {
+  audit: SupplyStatusAudit;
+  headerIndex: ProductDbHeaderIndex;
+  updates: SupplyStatusProposedUpdate[];
+}
+
+function createAuditDryRunToken(fileName: string, fileMtime: string, updates: SupplyStatusProposedUpdate[], issues: SupplyStatusAuditIssue[]): string {
+  return createHash("sha256").update(JSON.stringify({ fileName, fileMtime, updates, issues })).digest("hex");
+}
+
+async function computeSupplyStatusAudit(capture?: SupplyStatusTableCapture): Promise<InternalSupplyStatusAudit | null> {
+  const fileInfo = capture
+    ? { fileName: "Supplier Hub 실시간 상품공급상태", mtime: capture.capturedAt }
+    : await findLatestSupplyStatusFile();
+  if (!fileInfo) return null;
+
+  const parsed = capture ? parseSupplyStatusCapture(capture) : await parseSupplyStatusFile(fileInfo);
+  const sheetRows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" });
+  const retiredSkuIds = collectRetiredSkuIds(await fetchSkuReplacementHistory(sheetRows));
+  const headers = sheetRows[0].map(value => String(value ?? "").trim());
+  const idx = resolveProductDbHeaderIndex(headers);
+  const dataRows = sheetRows.slice(1);
+  const allRocketRows = parsed.rows.filter(row => /^R/i.test(row.barcode));
+  const retiredRows = allRocketRows.filter(row => retiredSkuIds.has(skuRetirementKey(row.skuId)));
+  const rocketRows = allRocketRows.filter(row => !retiredSkuIds.has(skuRetirementKey(row.skuId)));
+  const excludedSBarcodeCount = parsed.rows.filter(row => /^S/i.test(row.barcode)).length;
+  const issues: SupplyStatusAuditIssue[] = retiredRows.map(row => ({
+    type: "unmatched", skuId: row.skuId, productName: row.productName,
+    message: "재등록 이력에서 교체된 이전 SKU라 연결 대상에서 제외했습니다. 이번 승인 결과를 확인해주세요.",
+  }));
+
+  const productRowsBySku = new Map<string, { row: string[]; sheetRowNumber: number }[]>();
+  dataRows.forEach((row, index) => {
+    const skuId = norm(row[idx.skuId]);
+    if (!skuId) return;
+    productRowsBySku.set(skuId, [...(productRowsBySku.get(skuId) || []), { row, sheetRowNumber: index + 2 }]);
+  });
+
+  const downloadRowsBySku = new Map<string, DownloadRow[]>();
+  const downloadRowsByBarcode = new Map<string, DownloadRow[]>();
+  for (const row of rocketRows) {
+    const skuId = norm(row.skuId);
+    if (!skuId) continue;
+    downloadRowsBySku.set(skuId, [...(downloadRowsBySku.get(skuId) || []), row]);
+    const barcode = norm(row.barcode);
+    if (barcode) downloadRowsByBarcode.set(barcode, [...(downloadRowsByBarcode.get(barcode) || []), row]);
+  }
+
+  let existingSkuMatchedCount = 0;
+  let existingNameChangeCount = 0;
+  let existingAvailabilityChangeCount = 0;
+  let duplicateCount = 0;
+  let barcodeConflictCount = 0;
+  const updates: SupplyStatusProposedUpdate[] = [];
+
+  for (const [skuKey, downloads] of downloadRowsBySku) {
+    const products = productRowsBySku.get(skuKey) || [];
+    if (downloads.length > 1) {
+      duplicateCount += 1;
+      issues.push({ type: "duplicate", skuId: downloads[0].skuId, message: `다운로드 파일에 같은 SKU ID가 ${downloads.length}행 있습니다.` });
+      continue;
+    }
+    if (products.length > 1) {
+      duplicateCount += 1;
+      issues.push({ type: "duplicate", skuId: downloads[0].skuId, message: `제품DB에 같은 SKU ID가 ${products.length}행 있습니다.` });
+      continue;
+    }
+    if (products.length !== 1) continue;
+
+    existingSkuMatchedCount += 1;
+    const download = downloads[0];
+    const product = products[0];
+    const currentBarcode = String(product.row[idx.barcode] ?? "").trim();
+    if (currentBarcode && norm(currentBarcode) !== norm(download.barcode)) {
+      barcodeConflictCount += 1;
+      const barcodeOwners = (downloadRowsByBarcode.get(norm(currentBarcode)) || [])
+        .map(owner => owner.skuId)
+        .filter(ownerSkuId => ownerSkuId && norm(ownerSkuId) !== skuKey);
+      const ownerMessage = barcodeOwners.length > 0
+        ? ` 현재 제품DB 바코드는 쿠팡 파일에서 다른 SKU ${[...new Set(barcodeOwners)].join(", ")}에 연결되어 있습니다.`
+        : "";
+      issues.push({
+        type: "barcode_conflict",
+        sheetRowNumber: product.sheetRowNumber,
+        modelSku: String(product.row[idx.modelSku] ?? "").trim(),
+        skuId: download.skuId,
+        productName: String(product.row[idx.productName] ?? "").trim(),
+        optionName: String(product.row[idx.color] ?? "").trim(),
+        message: `불변 바코드가 다릅니다: 제품DB ${currentBarcode} / 다운로드 ${download.barcode}.${ownerMessage}`,
+      });
+      continue;
+    }
+    const updateProductName = Boolean(download.productName) && norm(product.row[idx.productName]) !== norm(download.productName);
+    const updateOrderAvailability = norm(product.row[idx.orderAvailability]) !== norm(download.approvalRaw);
+    if (updateProductName) existingNameChangeCount += 1;
+    if (updateOrderAvailability) existingAvailabilityChangeCount += 1;
+    if (updateProductName || updateOrderAvailability) {
+      updates.push({
+        kind: "existing_sku",
+        sheetRowNumber: product.sheetRowNumber,
+        modelSku: String(product.row[idx.modelSku] ?? "").trim(),
+        skuId: download.skuId,
+        productName: download.productName,
+        barcode: download.barcode,
+        orderAvailability: download.approvalRaw,
+        updateProductName,
+        updateOrderAvailability,
+      });
+    }
+  }
+
+  const pendingRows = dataRows
+    .map((row, index) => ({ row, sheetRowNumber: index + 2 }))
+    .filter(({ row }) => PENDING_STATUS_VALUES.has(String(row[idx.status] ?? "").trim()) && !norm(row[idx.skuId]));
+
+  const pendingCandidates: { sheetRowNumber: number; modelSku: string; skuId: string }[] = [];
+  let awaitingApprovalCount = 0;
+  let unmatchedCount = retiredRows.length;
+  for (const { row, sheetRowNumber } of pendingRows) {
+    const modelSku = String(row[idx.modelSku] ?? "").trim();
+    const match = findSupplyStatusCandidates(
+      rocketRows,
+      modelSku,
+      "",
+      String(row[idx.productName] ?? "").trim(),
+      String(row[idx.color] ?? "").trim()
+    );
+    if (match.candidates.length > 1) {
+      duplicateCount += 1;
+      issues.push({ type: "duplicate", sheetRowNumber, modelSku, productName: String(row[idx.productName] ?? "").trim(), optionName: String(row[idx.color] ?? "").trim(), message: `승인 후보가 ${match.candidates.length}개입니다.` });
+      continue;
+    }
+    if (match.candidates.length === 0) {
+      awaitingApprovalCount += 1;
+      continue;
+    }
+    const candidate = match.candidates[0];
+    if (!candidate.approved) {
+      awaitingApprovalCount += 1;
+      continue;
+    }
+    if (!candidate.skuId) {
+      unmatchedCount += 1;
+      issues.push({ type: "unmatched", sheetRowNumber, modelSku, productName: String(row[idx.productName] ?? "").trim(), optionName: String(row[idx.color] ?? "").trim(), message: "승인 후보는 있으나 SKU ID가 비어 있습니다." });
+      continue;
+    }
+    if (productRowsBySku.has(norm(candidate.skuId))) {
+      duplicateCount += 1;
+      issues.push({ type: "duplicate", sheetRowNumber, modelSku, skuId: candidate.skuId, message: "후보 SKU ID가 제품DB의 다른 행에 이미 연결되어 있습니다." });
+      continue;
+    }
+    pendingCandidates.push({ sheetRowNumber, modelSku, skuId: candidate.skuId });
+  }
+
+  const candidateUsage = new Map<string, number>();
+  pendingCandidates.forEach(candidate => candidateUsage.set(norm(candidate.skuId), (candidateUsage.get(norm(candidate.skuId)) || 0) + 1));
+  const duplicatedCandidateKeys = new Set([...candidateUsage].filter(([, count]) => count > 1).map(([skuId]) => skuId));
+  for (const candidate of pendingCandidates.filter(item => duplicatedCandidateKeys.has(norm(item.skuId)))) {
+    duplicateCount += 1;
+    issues.push({ type: "duplicate", ...candidate, message: "같은 신규 SKU ID가 여러 승인대기 행에 배정될 후보입니다." });
+  }
+
+  for (const candidate of pendingCandidates.filter(item => !duplicatedCandidateKeys.has(norm(item.skuId)))) {
+    const source = rocketRows.find(row => norm(row.skuId) === norm(candidate.skuId));
+    if (!source) continue;
+    updates.push({
+      kind: "new_approval",
+      sheetRowNumber: candidate.sheetRowNumber,
+      modelSku: candidate.modelSku,
+      skuId: source.skuId,
+      productName: source.productName,
+      barcode: source.barcode,
+      orderAvailability: source.approvalRaw,
+      updateProductName: Boolean(source.productName),
+      updateOrderAvailability: Boolean(source.approvalRaw),
+    });
+  }
+
+  const auditWithoutToken: Omit<SupplyStatusAudit, "dryRunToken"> = {
+    fileFound: true,
+    readOnly: true,
+    fileName: fileInfo.fileName,
+    fileMtime: fileInfo.mtime,
+    downloadedCount: parsed.rows.length,
+    rocketBarcodeCount: allRocketRows.length,
+    excludedSBarcodeCount,
+    excludedOtherBarcodeCount: parsed.rows.length - allRocketRows.length - excludedSBarcodeCount,
+    pendingProductCount: pendingRows.length,
+    newApprovalCandidateCount: pendingCandidates.filter(candidate => !duplicatedCandidateKeys.has(norm(candidate.skuId))).length,
+    registrationStatusCheckRequiredCount: awaitingApprovalCount,
+    awaitingApprovalCount,
+    existingSkuMatchedCount,
+    existingNameChangeCount,
+    existingAvailabilityChangeCount,
+    safeUpdateCount: updates.length,
+    duplicateCount,
+    barcodeConflictCount,
+    unmatchedCount,
+    proposedNewRowCount: 0,
+    issues,
+  };
+  const audit: SupplyStatusAudit = {
+    ...auditWithoutToken,
+    dryRunToken: createAuditDryRunToken(fileInfo.fileName, fileInfo.mtime, updates, issues),
+  };
+  return { audit, headerIndex: idx, updates };
+}
+
+export async function buildSupplyStatusAudit(capture?: SupplyStatusTableCapture): Promise<SupplyStatusAuditOrNotFound> {
+  const result = await computeSupplyStatusAudit(capture);
+  return result?.audit ?? { fileFound: false };
+}
+
 export interface SupplyStatusApplyResult {
   applied: boolean;
   preview: SupplyStatusPreview;
@@ -514,6 +879,65 @@ export class SupplyStatusPreviewChangedError extends Error {
     super("dry-run 이후 대상 데이터가 변경되었습니다. 미리보기를 다시 확인해주세요.");
     this.name = "SupplyStatusPreviewChangedError";
   }
+}
+
+export interface SupplyStatusAuditApplyResult {
+  applied: boolean;
+  audit: SupplyStatusAudit;
+  backupSheetName?: string;
+  writtenRowCount: number;
+  newApprovalCount: number;
+  existingSkuUpdateCount: number;
+  writtenCellCount: number;
+}
+
+export function buildSafeSupplyStatusCellUpdates(
+  headerIndex: ProductDbHeaderIndex,
+  updates: SupplyStatusProposedUpdate[]
+): SheetCellUpdate[] {
+  const cellUpdates: SheetCellUpdate[] = [];
+  for (const update of updates) {
+    if (update.kind === "new_approval") {
+      cellUpdates.push(
+        { row: update.sheetRowNumber, col: headerIndex.status + 1, value: APPROVED_STATUS_CANDIDATE },
+        { row: update.sheetRowNumber, col: headerIndex.skuId + 1, value: update.skuId }
+      );
+      if (update.barcode) cellUpdates.push({ row: update.sheetRowNumber, col: headerIndex.barcode + 1, value: update.barcode });
+    }
+    if (update.updateProductName) cellUpdates.push({ row: update.sheetRowNumber, col: headerIndex.productName + 1, value: update.productName });
+    if (update.updateOrderAvailability) cellUpdates.push({ row: update.sheetRowNumber, col: headerIndex.orderAvailability + 1, value: update.orderAvailability });
+  }
+  return cellUpdates;
+}
+
+/** 진단에서 확정된 안전 항목만 반영한다. 기존 SKU는 상품명·발주가능상태만 수정하고
+ * SKU ID와 바코드는 절대 수정하지 않는다. 신규 승인은 기존 승인대기 행만 채우며 행을 추가하지 않는다. */
+export async function applySupplyStatusAudit(expectedDryRunToken: string, capture?: SupplyStatusTableCapture): Promise<SupplyStatusAuditApplyResult | { fileFound: false }> {
+  const result = await computeSupplyStatusAudit(capture);
+  if (!result) return { fileFound: false };
+  if (!expectedDryRunToken || expectedDryRunToken !== result.audit.dryRunToken) throw new SupplyStatusPreviewChangedError();
+  if (result.updates.length === 0) {
+    return { applied: false, audit: result.audit, writtenRowCount: 0, newApprovalCount: 0, existingSkuUpdateCount: 0, writtenCellCount: 0 };
+  }
+
+  const backup = await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME);
+  const rechecked = await computeSupplyStatusAudit(capture);
+  if (!rechecked || rechecked.audit.dryRunToken !== result.audit.dryRunToken) throw new SupplyStatusPreviewChangedError();
+
+  const cellUpdates = buildSafeSupplyStatusCellUpdates(rechecked.headerIndex, rechecked.updates);
+
+  await updateSheetCells(PRODUCT_DB_SHEET_NAME, cellUpdates);
+  const newApprovalCount = rechecked.updates.filter(update => update.kind === "new_approval").length;
+  const existingSkuUpdateCount = rechecked.updates.length - newApprovalCount;
+  return {
+    applied: true,
+    audit: rechecked.audit,
+    backupSheetName: backup.sheetName,
+    writtenRowCount: rechecked.updates.length,
+    newApprovalCount,
+    existingSkuUpdateCount,
+    writtenCellCount: cellUpdates.length,
+  };
 }
 
 export async function applySupplyStatusUpdate(expectedDryRunToken: string): Promise<SupplyStatusApplyResult | { fileFound: false }> {

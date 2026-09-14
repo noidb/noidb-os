@@ -13,17 +13,22 @@ import {
   buildAdditionalImagesCsv,
   collectProductImageFiles,
   collectProductDbFiles,
+  syncProductDbToGoogleSheet,
   createLabelBlob,
-  colorCode,
-  ringSizeNumber,
 } from "@/lib/product-db/files";
-import { ensureProductFolderTree, writeCategoryFile, writeProductDbFiles, writeRootFolderFile } from "@/lib/product-db/fs";
+import { buildSkuRows } from "@/lib/excel/common";
+import type { SkuRow } from "@/lib/excel/types";
+import { assertProductDbFilesWritable, ensureProductFolderTree, rootFolderFileExists, writeCategoryFile, writeProductDbFiles, writeRootFolderFile } from "@/lib/product-db/fs";
 import { dataUrlToBlob } from "@/lib/product-db/files";
 import { buildProductDbZip } from "@/lib/product-db/zip";
 import { compressImageDataUrl } from "@/lib/image/compress";
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
 import { coverSquareCanvas, defaultFitAdjust, fitToWhiteCanvas, type FitAdjust } from "@/lib/thumbnail/fit";
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
+import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
+import WimsRegistrationImportPanel from "@/app/product-registration/WimsRegistrationImportPanel";
+import SupplyStatusAuditPanel from "@/app/product-registration/SupplyStatusAuditPanel";
+import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 
 type Product = {
   supplier: string;
@@ -54,6 +59,7 @@ type Analysis = {
 
 type ProductPhoto = { id: string; name: string; dataUrl: string };
 type SlotImage = { dataUrl: string; fileName: string };
+type VariantOption = SkuRow & { key: string; label: string };
 type DetailImage = { id: string; name: string; dataUrl: string };
 type CustomSlot = { id: string; type: "all" | "detail" | "wear"; slot: SlotImage | null };
 type QuoteQueueRecord = { model: string; gender: string; category: string; skuCount: number; savedAt: number | string; payload: any };
@@ -223,6 +229,16 @@ function readFile(file: File) {
   });
 }
 
+async function postGoogleSheet(body: unknown, signal?: AbortSignal): Promise<Response> {
+  if (!await ensureNoidbActionSession()) throw new Error("관리자 잠금 해제를 취소했습니다.");
+  return fetch("/api/google-sheet", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
 function loadImage(src: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
     const img = new Image();
@@ -250,6 +266,8 @@ export default function Home() {
   const [mainWear, setMainWear] = useState<SlotImage | null>(null);
   const [allOptions, setAllOptions] = useState<SlotImage | null>(null);
   const [optionThumbs, setOptionThumbs] = useState<Record<string, SlotImage | null>>({});
+  const [variantThumbs, setVariantThumbs] = useState<Record<string, SlotImage | null>>({});
+  const variantUploadRevision = useRef<Record<string, number>>({});
   const [extra01, setExtra01] = useState<SlotImage | null>(null);
   const [extra02, setExtra02] = useState<SlotImage | null>(null);
   const [extra03, setExtra03] = useState<SlotImage | null>(null);
@@ -286,15 +304,22 @@ export default function Home() {
   const [labelImporterName, setLabelImporterName] = useState("프리스타일");
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchStatus, setBatchStatus] = useState("");
+  const [batchMode, setBatchMode] = useState<"practice" | "actual">("practice");
   const [coupangImportBusy, setCoupangImportBusy] = useState("");
   const [coupangImportMessage, setCoupangImportMessage] = useState("");
   const [quoteQueue, setQuoteQueue] = useState<QuoteQueueRecord[]>([]);
   const [quoteQueueBusy, setQuoteQueueBusy] = useState("");
-  const [drafts, setDrafts] = useState<ProductDraftRecord[]>([]);
+  const [drafts, setDrafts] = useState<ListedProductDraft[]>([]);
   const [showDrafts, setShowDrafts] = useState(false);
   const [draftStatus, setDraftStatus] = useState("");
+  const [draftSaving, setDraftSaving] = useState(false);
+  const draftSavingRef = useRef(false);
+  const draftRefreshRef = useRef(0);
+  const restoringDraftRef = useRef(false);
+  const [draftRestoreRevision, setDraftRestoreRevision] = useState(0);
   const [modelDuplicate, setModelDuplicate] = useState(false);
   const [modelCheckMessage, setModelCheckMessage] = useState("");
+  const [modelReregisterable, setModelReregisterable] = useState(false);
   const [pendingReplacementCleanup, setPendingReplacementCleanup] = useState<PendingReplacementCleanup | null>(null);
 
   const [dbSupported, setDbSupported] = useState(false);
@@ -302,6 +327,7 @@ export default function Home() {
   const [dbFolderName, setDbFolderName] = useState("");
   const [dbStatus, setDbStatus] = useState("");
   const [dbSavedFiles, setDbSavedFiles] = useState<string[]>([]);
+  const [registrationUploadReady, setRegistrationUploadReady] = useState<{ model: string; files: string[] } | null>(null);
   const existingDetailInputRef = useRef<HTMLInputElement>(null);
   const uploadPoolInputRef = useRef<HTMLInputElement>(null);
 
@@ -353,6 +379,7 @@ export default function Home() {
       if (draft.mainWear) setMainWear(draft.mainWear);
       if (draft.allOptions) setAllOptions(draft.allOptions);
       if (draft.optionThumbs) setOptionThumbs(draft.optionThumbs);
+      if (draft.variantThumbs) setVariantThumbs(draft.variantThumbs);
       if (draft.extra01) setExtra01(draft.extra01);
       if (draft.extra02) setExtra02(draft.extra02);
       if (draft.extra03) setExtra03(draft.extra03);
@@ -391,7 +418,15 @@ export default function Home() {
     return product.modelName?.trim() || buildAutoModel(product);
   }, [product.category, product.gender, product.modelNo, product.modelName]);
 
+  // 실제 등록은 한 상품에만 쓰는 1회성 선택이다. 다른 상품으로 바뀌면 연습 모드로 자동 복귀한다.
   useEffect(() => {
+    setBatchMode("practice");
+  }, [model, product.category]);
+
+  useEffect(() => {
+    let active = true;
+    setModelReregisterable(false);
+    setModelCheckMessage("");
     if (!model) {
       setModelDuplicate(false);
       setModelCheckMessage("");
@@ -401,16 +436,21 @@ export default function Home() {
       try {
         const res = await fetch(`/api/google-sheet?model=${encodeURIComponent(model)}`, { cache: "no-store" });
         const data = await res.json();
+        if (!active) return;
+        if (!res.ok || data.error) throw new Error(data.error || "중복확인 실패");
         setModelDuplicate(Boolean(data.duplicate));
+        setModelReregisterable(Boolean(data.reregisterable));
         setModelCheckMessage(
-          data.duplicate ? "중복번호" : data.configured === false ? "Google DB 연결 후 중복확인" : "사용 가능한 모델명"
+          data.reregisterable ? "기존 행 재등록 가능" : data.duplicate ? (data.reason || "중복번호") : data.configured === false ? "Google DB 연결 후 중복확인" : "사용 가능한 모델명"
         );
       } catch {
+        if (!active) return;
         setModelDuplicate(false);
+        setModelReregisterable(false);
         setModelCheckMessage("중복확인 실패");
       }
     }, 450);
-    return () => window.clearTimeout(timer);
+    return () => { active = false; window.clearTimeout(timer); };
   }, [model]);
 
   const cleanedKeyword = useMemo(() => normalizeKeyword(product.keyword, product), [product]);
@@ -440,10 +480,31 @@ export default function Home() {
     product.sizes && product.modelNo && product.keyword && product.price
   );
 
-  const options = useMemo(
-    () => product.colors.split(",").map(v => v.trim()).filter(Boolean),
-    [product.colors]
-  );
+  const variantOptions = useMemo(() => {
+    try {
+      const rows: VariantOption[] = buildSkuRows({ model: "", product }).map(row => ({
+        ...row, key: JSON.stringify([product.category, row.color, row.size]), label: `${row.color} ${row.size}`,
+      }));
+      return { rows, error: "" };
+    } catch (error) {
+      return { rows: [] as VariantOption[], error: error instanceof Error ? error.message : "색상과 사이즈를 확인해주세요." };
+    }
+  }, [product.category, product.colors, product.sizes]);
+  const variants = variantOptions.rows;
+  const activeVariantThumbs = useMemo(() => Object.fromEntries(variants.map(variant => [
+    variant.key,
+    Object.prototype.hasOwnProperty.call(variantThumbs, variant.key)
+      ? variantThumbs[variant.key]
+      : variants.filter(item => item.color === variant.color).length === 1 ? optionThumbs[variant.color] || null : null,
+  ])), [variants, variantThumbs, optionThumbs]);
+  const legacyColorThumbs = Object.entries(optionThumbs).filter(([color, slot]) =>
+    slot?.dataUrl && variants.filter(variant => variant.color === color).length > 1);
+  const requireVariantImages = () => {
+    if (variantOptions.error) throw new Error(variantOptions.error);
+    if (!variants.length) throw new Error("색상과 사이즈 옵션을 먼저 입력해주세요.");
+    const missing = variants.filter(variant => !activeVariantThumbs[variant.key]?.dataUrl);
+    if (missing.length) throw new Error(`옵션 사진을 모두 올려주세요: ${missing.map(variant => variant.label).join(", ")}`);
+  };
   const quoteGroups = useMemo(() => {
     const groups = new Map<string, { key: string; gender: string; category: string; models: number; modelNames: string[]; skuCount: number; records: QuoteQueueRecord[] }>();
     quoteQueue.forEach(record => {
@@ -459,20 +520,24 @@ export default function Home() {
   }, [quoteQueue]);
 
   useEffect(() => {
+    if (restoringDraftRef.current) {
+      restoringDraftRef.current = false;
+      return;
+    }
     const automatic: DetailImage[] = [];
     const add = (id: string, name: string, slot: SlotImage | null | undefined) => {
       if (slot?.dataUrl) automatic.push({ id: `slot:${id}`, name, dataUrl: slot.dataUrl });
     };
     add("mainWear", "메인착용컷", mainWear);
     add("all", "전체옵션", allOptions);
-    options.forEach(option => add(`option:${option}`, `${option} 썸네일`, optionThumbs[option]));
+    variants.forEach(variant => add(`variant:${variant.key}`, `${variant.label} 썸네일`, activeVariantThumbs[variant.key]));
     add("detail", "디테일컷", detailCut);
     add("wear01", "착용컷 01", wear01);
     add("wear02", "착용컷 02", wear02);
     customSlots.forEach((item, index) => add(`custom:${item.id}`, `${item.type === "all" ? "전체옵션" : item.type === "detail" ? "디테일컷" : "착용컷"} 추가 ${index + 1}`, item.slot));
     setDetailImages(prev => [...automatic, ...prev.filter(item => !item.id.startsWith("slot:"))]);
     setDetailPreview("");
-  }, [mainWear, allOptions, optionThumbs, options, detailCut, wear01, wear02, customSlots]);
+  }, [mainWear, allOptions, activeVariantThumbs, variants, detailCut, wear01, wear02, customSlots, draftRestoreRevision]);
 
   const update = (key: keyof Product, value: string) => {
     setProduct(prev => {
@@ -518,16 +583,12 @@ export default function Home() {
     if (!window.confirm(`${model}에 구 SKU ${legacySku}의 옵션별 창고번호와 재고 이력을 이관할까요?\n\n이 단계에서는 기존행을 삭제하지 않습니다.`)) return;
     const requestLink = async (forceLegacyOptions: boolean) => {
       const linkPayload = exportPayload();
-      const response = await fetch("/api/google-sheet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "linkReplacementExisting",
-          model,
-          replacementSku: legacySku,
-          forceLegacyOptions,
-          payload: { ...linkPayload, optionImages: {} },
-        }),
+      const response = await postGoogleSheet({
+        action: "linkReplacementExisting",
+        model,
+        replacementSku: legacySku,
+        forceLegacyOptions,
+        payload: { ...linkPayload, optionImages: {}, skuImages: undefined },
       });
       const responseText = await response.text();
       let data: any = {};
@@ -586,11 +647,7 @@ export default function Home() {
     }
     setModelCheckMessage("확인된 기존행만 삭제하고 있습니다...");
     try {
-      const response = await fetch("/api/google-sheet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "deleteReplacementLegacyRows", model: pending.model, replacementSku: pending.legacySku, confirmed: true }),
-      });
+      const response = await postGoogleSheet({ action: "deleteReplacementLegacyRows", model: pending.model, replacementSku: pending.legacySku, confirmed: true });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "기존행 삭제 실패");
       setPendingReplacementCleanup(null);
@@ -607,11 +664,7 @@ export default function Home() {
     if (!window.confirm(`${pending.model}의 이번 SKU 연결을 취소하고 기존행을 복원할까요?`)) return;
     setModelCheckMessage("기존행을 복원하고 있습니다...");
     try {
-      const response = await fetch("/api/google-sheet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "undoReplacementLink", model: pending.model, replacementSku: pending.legacySku }),
-      });
+      const response = await postGoogleSheet({ action: "undoReplacementLink", model: pending.model, replacementSku: pending.legacySku });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "연결 취소 실패");
       setPendingReplacementCleanup(null);
@@ -885,9 +938,12 @@ export default function Home() {
   };
 
   const resetCoupangImages = () => {
+    setDraftRestoreRevision(value => value + 1);
     setMainWear(null);
     setAllOptions(null);
     setOptionThumbs({});
+    setVariantThumbs({});
+    Object.keys(variantUploadRevision.current).forEach(key => { variantUploadRevision.current[key] += 1; });
     setExtra01(null);
     setExtra02(null);
     setExtra03(null);
@@ -920,6 +976,7 @@ export default function Home() {
     setSourcingSaveStatus("");
     setExportMessage("");
     setBatchStatus("");
+    setBatchMode("practice");
     setDbSavedFiles([]);
     localStorage.removeItem(DRAFT_STORAGE_KEY);
     localStorage.removeItem(LAURA_DRAFT_STORAGE_KEY);
@@ -1078,11 +1135,7 @@ export default function Home() {
     if (!window.confirm(`${group.gender} ${group.category} 대기목록 ${group.records.length}모델을 비울까요? 견적서를 다운로드하고 쿠팡 업로드까지 확인한 뒤 비우세요.`)) return;
     setQuoteQueueBusy(group.key);
     try {
-      const response = await fetch("/api/google-sheet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "quoteQueueClear", gender: group.gender, category: group.category }),
-      });
+      const response = await postGoogleSheet({ action: "quoteQueueClear", gender: group.gender, category: group.category });
       const data = await response.json();
       if (!response.ok || data.error) throw new Error(data.error || "견적서 대기목록 비우기 실패");
       setExportMessage(`${group.gender} ${group.category} 대기목록 ${Number(data.cleared || 0).toLocaleString()}모델을 비웠습니다.`);
@@ -1098,11 +1151,7 @@ export default function Home() {
     if (!window.confirm(`${modelName}을(를) 묶음 견적서 대기목록에서 삭제할까요?\n상품DB의 제품 정보는 삭제되지 않습니다.`)) return;
     setQuoteQueueBusy(`삭제:${modelName}`);
     try {
-      const response = await fetch("/api/google-sheet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "quoteQueueDeleteModel", model: modelName }),
-      });
+      const response = await postGoogleSheet({ action: "quoteQueueDeleteModel", model: modelName });
       const data = await response.json();
       if (!response.ok || data.error) throw new Error(data.error || "모델 삭제 실패");
       setExportMessage(`${modelName}을(를) 묶음 견적서 대기목록에서 삭제했습니다.`);
@@ -1127,7 +1176,8 @@ export default function Home() {
     if (key === "detail") return detailCut;
     if (key === "wear01") return wear01;
     if (key === "wear02") return wear02;
-    if (key.startsWith("opt:")) return optionThumbs[key.slice(4)] || null;
+    if (key.startsWith("opt:")) return activeVariantThumbs[key.slice(4)] || null;
+    if (key.startsWith("legacy:")) return optionThumbs[key.slice(7)] || null;
     if (key.startsWith("custom:")) return customSlots.find(item => item.id === key.slice(7))?.slot || null;
     return null;
   };
@@ -1148,7 +1198,7 @@ export default function Home() {
     if (!sourceKey || sourceKey === targetKey) return;
     const source = getSlotValue(sourceKey);
     const target = getSlotValue(targetKey);
-    setSlotValue(sourceKey, target);
+    if (!sourceKey.startsWith("legacy:")) setSlotValue(sourceKey, target);
     setSlotValue(targetKey, source);
   };
 
@@ -1194,16 +1244,18 @@ export default function Home() {
   };
 
   const setOptionThumb = (option: string, slot: SlotImage | null) => {
-    setOptionThumbs(prev => ({ ...prev, [option]: slot }));
+    setVariantThumbs(prev => ({ ...prev, [option]: slot }));
   };
 
   const setOptionThumbCovered = async (option: string, slot: SlotImage | null) => {
+    const revision = (variantUploadRevision.current[option] || 0) + 1;
+    variantUploadRevision.current[option] = revision;
     if (!slot) {
       setOptionThumb(option, null);
       return;
     }
     const dataUrl = await coverSquareCanvas(slot.dataUrl);
-    setOptionThumb(option, { ...slot, dataUrl });
+    if (variantUploadRevision.current[option] === revision) setOptionThumb(option, { ...slot, dataUrl });
   };
 
   const openAdjust = (key: string, dataUrl: string) => {
@@ -1337,17 +1389,17 @@ export default function Home() {
   };
 
   const exportPayload = () => {
-    const fallbackOptionImage = allOptions?.dataUrl || photos[0]?.dataUrl || "";
+    if (variantOptions.error) throw new Error(variantOptions.error);
     return {
     product,
     model,
     title,
     tags,
     sourcingUrl,
-    optionImages: Object.fromEntries(
-      options.flatMap(option => {
-        const dataUrl = optionThumbs[option]?.dataUrl || fallbackOptionImage;
-        return dataUrl ? [[option, dataUrl]] : [];
+    skuImages: Object.fromEntries(
+      variants.flatMap(variant => {
+        const dataUrl = activeVariantThumbs[variant.key]?.dataUrl;
+        return dataUrl ? [[`${model}${variant.sku}`, dataUrl]] : [];
       })
     ),
     additionalImagesCsv: [
@@ -1366,69 +1418,109 @@ export default function Home() {
   };
 
   const refreshDrafts = async () => {
-    try {
-      const local = await listProductDrafts();
-      const cloudRes = await fetch("/api/google-sheet?action=cloudDraftList");
-      const cloud = await cloudRes.json().catch(() => ({}));
-      const merged = new Map<string, ProductDraftRecord>();
-      for (const record of (cloud.drafts || [])) merged.set(record.model, record);
-      for (const record of local) merged.set(record.model, record);
-      setDrafts([...merged.values()].sort((a, b) => b.savedAt - a.savedAt).slice(0, 20));
-    } catch {
-      setDraftStatus("임시저장 목록을 불러오지 못했습니다.");
+    const revision = ++draftRefreshRef.current;
+    const results = await Promise.allSettled([
+      listProductDrafts().then(local => {
+        if (revision === draftRefreshRef.current) setDrafts(current => mergeProductDrafts(current, local));
+        return local;
+      }),
+      fetch("/api/google-sheet?action=cloudDraftList", { cache: "no-store", signal: AbortSignal.timeout(15000) })
+        .then(readDraftResponse).then(data => {
+          if (!Array.isArray(data.drafts)) throw new Error("동기화 목록 응답이 올바르지 않습니다.");
+          return data.drafts as ProductDraftRecord[];
+        }),
+    ]);
+    if (revision !== draftRefreshRef.current) return;
+    const available = results.flatMap(result => result.status === "fulfilled" ? result.value : []);
+    if (results.every(result => result.status === "fulfilled")) {
+      setDrafts(mergeProductDrafts(available));
+    } else if (results.some(result => result.status === "fulfilled")) {
+      setDrafts(current => mergeProductDrafts(current, available));
+    } else {
+      setDraftStatus("임시저장 목록을 불러오지 못했습니다. 저장 공간과 연결을 확인해주세요.");
     }
   };
 
-  const saveDraft = async () => {
+  const saveDraft = async (revealList = true) => {
+    if (draftSavingRef.current) return;
     if (!model) {
       setDraftStatus("모델명을 먼저 입력해주세요.");
       return;
     }
-    try {
-      await saveProductDraft({
+    draftSavingRef.current = true;
+    setDraftSaving(true);
+    setDraftStatus("이 기기에 임시저장 중...");
+    const record: ProductDraftRecord = {
         model,
         savedAt: Date.now(),
         data: {
-          product, analysis, photos, mainWear, allOptions, optionThumbs, detailCut, wear01, wear02, customSlots,
+          product, analysis, photos, mainWear, allOptions, optionThumbs, variantThumbs, detailCut, wear01, wear02, customSlots,
           detailImages, detailHeader, detailFooter, detailPreview, sourcingUrls, sourcingUrlInputs, sourcingImages,
-          uploadPool, title, tags,
+          uploadPool, title, tags, sourcingAnalysis,
+          labelManufactureYearMonth, labelManufacturerName, labelImporterName,
         },
-      });
-      await fetch("/api/google-sheet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "cloudDraftSave",
-          record: {
-            model,
-            savedAt: Date.now(),
-            data: { product, analysis, sourcingUrls, sourcingUrlInputs, title, tags, cloudOnly: true },
-          },
-        }),
-      });
-      localStorage.removeItem(DRAFT_STORAGE_KEY);
-      localStorage.removeItem(LAURA_DRAFT_STORAGE_KEY);
-      localStorage.removeItem(LEGACY_DRAFT_STORAGE_KEY);
-      setDraftStatus(`${model}으로 임시저장되었습니다.`);
-      setMessage(`${model}으로 임시저장되었습니다.`);
-      await refreshDrafts();
-    } catch {
-      setDraftStatus("임시저장 공간이 부족합니다. 오래된 임시저장을 삭제해주세요.");
+      };
+    try {
+      await saveProductDraft(record);
+    } catch (error) {
+      setDraftStatus(`이 기기 임시저장 실패: ${error instanceof Error ? error.message : "저장 공간을 확인해주세요."}`);
+      draftSavingRef.current = false;
+      setDraftSaving(false);
+      return;
+    }
+    const revision = ++draftRefreshRef.current;
+    setDrafts(current => mergeProductDrafts(current, [record]));
+    void listProductDrafts().then(local => {
+      if (revision === draftRefreshRef.current) setDrafts(current => mergeProductDrafts(current, local));
+    }).catch(() => undefined);
+    if (revealList) setShowDrafts(true);
+    setDraftStatus(`${record.model} · 이 기기에 이미지와 입력내용을 저장했습니다. 다른 기기 동기화 중...`);
+    try {
+      try {
+        localStorage.removeItem(DRAFT_STORAGE_KEY);
+        localStorage.removeItem(LAURA_DRAFT_STORAGE_KEY);
+        localStorage.removeItem(LEGACY_DRAFT_STORAGE_KEY);
+      } catch { /* IndexedDB has already committed the complete draft. */ }
+      const cloudResponse = await postGoogleSheet({
+        action: "cloudDraftSave",
+        record: {
+          model: record.model,
+          savedAt: record.savedAt,
+          data: { product, analysis, sourcingUrls, sourcingUrlInputs, title, tags, sourcingAnalysis,
+            labelManufactureYearMonth, labelManufacturerName, labelImporterName, cloudOnly: true },
+        },
+      }, AbortSignal.timeout(15000));
+      const cloudResult = await readDraftResponse(cloudResponse);
+      if (cloudResult.ok !== true) throw new Error("동기화 저장 완료를 확인하지 못했습니다.");
+      setDraftStatus(`${record.model} 임시저장 완료 · 이 기기에는 이미지까지 저장했고, 다른 기기에는 기본정보를 동기화했습니다.`);
+    } catch (error) {
+      setDraftStatus(`${record.model} · 이 기기에 임시저장 완료. 임시저장 목록에서 다시 불러올 수 있습니다. 다른 기기 동기화 실패: ${error instanceof Error ? error.message : "연결을 확인해주세요."}`);
+    } finally {
+      draftSavingRef.current = false;
+      setDraftSaving(false);
     }
   };
 
   const loadDraft = (record: ProductDraftRecord) => {
     const data = record.data as any;
+    Object.keys(variantUploadRevision.current).forEach(key => { variantUploadRevision.current[key] += 1; });
+    restoringDraftRef.current = true;
+    setDraftRestoreRevision(value => value + 1);
     if (data.product) setProduct({
       ...DEFAULT_PRODUCT,
       ...data.product,
       supplier: normalizeSupplierName(data.product.supplier || DEFAULT_PRODUCT.supplier),
     });
-    if (data.analysis) setAnalysis(data.analysis);
+    setAnalysis(data.analysis || {});
+    setSourcingAnalysis(data.sourcingAnalysis || {});
+    setLabelManufactureYearMonth(data.labelManufactureYearMonth ?? DEFAULT_LABEL_YEAR_MONTH);
+    setLabelManufacturerName(data.labelManufacturerName ?? "프리스타일 협력사");
+    setLabelImporterName(data.labelImporterName ?? "프리스타일");
     setPhotos(Array.isArray(data.photos) ? data.photos : []);
     setMainWear(data.mainWear || null);
     setAllOptions(data.allOptions || null);
     setOptionThumbs(data.optionThumbs || {});
+    setVariantThumbs(data.variantThumbs || {});
     setDetailCut(data.detailCut || null);
     setWear01(data.wear01 || null);
     setWear02(data.wear02 || null);
@@ -1468,11 +1560,11 @@ export default function Home() {
     }
   };
 
-  const collectInput = async (detailOverride?: string) => {
+  const buildCollectInput = async (detailOverride?: string) => {
     const thumbs: Record<string, string> = {};
-    await Promise.all(options.map(async opt => {
-      const source = optionThumbs[opt]?.dataUrl;
-      if (source) thumbs[opt] = await normalizeCoupangImage(source);
+    await Promise.all(variants.map(async variant => {
+      const source = activeVariantThumbs[variant.key]?.dataUrl;
+      if (source) thumbs[`${model}${variant.sku}`] = await normalizeCoupangImage(source);
     }));
     const normalizeOptional = async (source?: string) => source ? normalizeCoupangImage(source) : undefined;
     const [normalizedAll, normalizedDetail, normalizedWear01, normalizedWear02] = await Promise.all([
@@ -1488,7 +1580,7 @@ export default function Home() {
         filename: `${model}-${String(index + 5).padStart(2, "0")}.jpg`,
         dataUrl: await normalizeCoupangImage(item.slot!.dataUrl),
       }));
-    return collectProductDbFiles({
+    return {
       category: product.category,
       model,
       title,
@@ -1497,7 +1589,8 @@ export default function Home() {
       analysis,
       ready,
       photos: photos.map(p => p.dataUrl),
-      optionThumbs: thumbs,
+      optionThumbs: {},
+      skuImages: thumbs,
       allOptionsImage: undefined,
       includeAllOptionsInQuote: false,
       extra01: normalizedAll,
@@ -1515,8 +1608,11 @@ export default function Home() {
         manufacturerName: labelManufacturerName,
         importerName: labelImporterName,
       },
-    });
+    };
   };
+
+  const collectInput = async (detailOverride?: string, syncGoogleSheet = true) =>
+    collectProductDbFiles(await buildCollectInput(detailOverride), { syncGoogleSheet });
 
   const migrateExistingDbToGoogle = async () => {
     if (!dbHandle) {
@@ -1532,6 +1628,10 @@ export default function Home() {
     let found = 0;
     let lastError = "";
     try {
+      if (!await ensureNoidbActionSession()) {
+        setBatchStatus("기존 DB 이전을 취소했습니다. 제품DB는 변경하지 않았습니다.");
+        return;
+      }
       async function* findInfoFiles(dir: FileSystemDirectoryHandle): AsyncGenerator<FileSystemFileHandle> {
         for await (const [name, handle] of (dir as any).entries()) {
           if (handle.kind === "directory") {
@@ -1565,6 +1665,7 @@ export default function Home() {
               tags: info.tags || "",
               sourcingUrl: info.sourcingUrl || "",
               syncMode: "skipDuplicate",
+              operationId: globalThis.crypto?.randomUUID?.() || `migration-${Date.now()}-${found}`,
             }),
           });
           const result = await res.json().catch(() => ({}));
@@ -1595,6 +1696,12 @@ export default function Home() {
   };
 
   const batchSave = async () => {
+    const isActual = batchMode === "actual";
+    // 실제 등록 버튼을 누른 뒤 성공·실패·검증 차단 여부와 무관하게 다음 실행은 연습 모드다.
+    if (isActual) {
+      setBatchMode("practice");
+      setRegistrationUploadReady(null);
+    }
     if (pendingReplacementCleanup) {
       setBatchStatus("SKU 이관 결과 확인이 끝나지 않았습니다. 기존행 삭제 또는 연결 취소를 먼저 선택해주세요.");
       return;
@@ -1602,21 +1709,28 @@ export default function Home() {
     const required: string[] = [];
     if (!model) required.push("모델명");
     if (!product.category) required.push("카테고리");
-    if (!dbHandle && dbSupported) required.push("상품DB 폴더 연결");
+    if (isActual && !dbHandle && dbSupported) required.push("상품DB 폴더 연결");
     if (required.length) {
       setBatchStatus(`필수 항목 부족: ${required.join(", ")}`);
       return;
     }
 
-    if (modelDuplicate && !window.confirm(`${model}은(는) 이미 등록된 모델명입니다. 기존 Google 상품DB 내용을 업데이트할까요?`)) {
-      setBatchStatus("기존 모델 업데이트를 취소했습니다.");
+    if (isActual && modelDuplicate && !modelReregisterable) {
+      setBatchStatus("기존 모델의 일괄 저장은 안전을 위해 차단했습니다. 필요한 파일만 개별 다운로드하세요.");
+      return;
+    }
+    if (isActual && modelCheckMessage !== "사용 가능한 모델명" && !modelReregisterable) {
+      setBatchStatus("실제 등록은 Google DB에서 사용 가능한 모델명 확인이 끝난 뒤에만 저장할 수 있습니다.");
       return;
     }
 
-    const recommended: string[] = [];
-    for (const opt of options) {
-      if (!optionThumbs[opt]?.dataUrl) recommended.push(`${opt} 썸네일`);
+    try {
+      requireVariantImages();
+    } catch (error) {
+      setBatchStatus(`오류: ${error instanceof Error ? error.message : "옵션 사진을 확인해주세요."}`);
+      return;
     }
+    const recommended: string[] = [];
     if (!allOptions || !detailCut || !wear01) recommended.push("전체옵션·디테일컷·착용컷 01");
     if (!detailImages.length && !detailPreview) recommended.push("상세페이지 이미지");
 
@@ -1633,6 +1747,10 @@ export default function Home() {
     setBatchBusy(true);
     setBatchStatus("등록파일을 생성·저장하고 있습니다...");
     try {
+      if (isActual && !await ensureNoidbActionSession()) {
+        setBatchStatus("실제 등록을 취소했습니다. 상품 폴더와 Google 제품DB는 변경하지 않았습니다.");
+        return;
+      }
       let preview = detailPreview;
       if (!preview && detailImages.length) {
         const built = await composeDetailPage();
@@ -1640,25 +1758,38 @@ export default function Home() {
         setDetailPreview(preview);
       }
 
-      const { files, skipped, readyFiles } = await collectInput(preview);
-      const googleStatus = skipped.find(item => item.startsWith("Google 시트"));
-      if (dbHandle) {
-        const saved = await writeProductDbFiles(dbHandle, product.category, model, files);
+      const { files, skipped, readyFiles } = await collectInput(preview, false);
+      if (!isActual) {
+        const blob = await buildProductDbZip(product.category, model, files);
+        downloadBlobFile(blob, `연습용_상품DB_${model}.zip`);
+        setDbSavedFiles(readyFiles);
+        setBatchStatus("테스트·교육용 ZIP 생성 완료 · 실제 상품 폴더와 Google 제품DB는 변경하지 않았습니다.");
+      } else if (dbHandle) {
+        // 파일 충돌 여부를 Google 시트 변경보다 먼저 확인하여 기존 상품과 시트가 모두 보존되게 한다.
+        if (!modelReregisterable) await assertProductDbFilesWritable(dbHandle, product.category, model, files);
+        const sync = await syncProductDbToGoogleSheet((await buildCollectInput(preview)));
+        if (!sync.ok) throw new Error(`${sync.message} · 상품 폴더는 변경하지 않았습니다.`);
+        const saved = await writeProductDbFiles(dbHandle, product.category, model, files, { overwriteExisting: modelReregisterable });
         const fileSkips = skipped.filter(item => !item.startsWith("Google 시트"));
         setDbSavedFiles(saved);
         setBatchStatus(
           `상품 생성 완료 · ${saved.length}개 저장 → ${product.category}/${model}/` +
             (fileSkips.length ? ` · 미저장: ${fileSkips.join(", ")}` : "") +
-            (googleStatus ? ` · ${googleStatus}` : "")
+            ` · ${sync.message}`
         );
       } else {
         const blob = await buildProductDbZip(product.category, model, files);
         downloadBlobFile(blob, `상품DB_${model}.zip`);
         setDbSavedFiles(readyFiles);
-        setBatchStatus(`상품 생성 완료 · ZIP 다운로드 (${files.length}개 파일)` + (googleStatus ? ` · ${googleStatus}` : ""));
+        const sync = await syncProductDbToGoogleSheet((await buildCollectInput(preview)));
+        if (!sync.ok) throw new Error(`${sync.message} · ZIP은 다운로드됐지만 Google 제품DB는 변경되지 않았습니다. 같은 모델로 다시 실행할 수 있습니다.`);
+        setBatchStatus(`상품 생성 완료 · ZIP 다운로드 (${files.length}개 파일) · ${sync.message}`);
       }
-      await saveDraft();
-      await loadQuoteQueue();
+      if (isActual) {
+        setRegistrationUploadReady({ model, files: files.map(file => file.path) });
+        await saveDraft(false);
+        await loadQuoteQueue();
+      }
     } catch (e) {
       setBatchStatus(`오류: ${e instanceof Error ? e.message : "저장 실패"}`);
     } finally {
@@ -1676,7 +1807,7 @@ export default function Home() {
       const res = await fetch("/api/export-quote", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(exportPayload()),
+        body: JSON.stringify({ ...exportPayload(), skuImages: {} }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -1699,8 +1830,8 @@ export default function Home() {
     setExportLoading("auto");
     try {
       const payload = exportPayload();
-      payload.optionImages = Object.fromEntries(await Promise.all(
-        Object.entries(payload.optionImages).map(async ([option, dataUrl]) => [
+      payload.skuImages = Object.fromEntries(await Promise.all(
+        Object.entries(payload.skuImages).map(async ([option, dataUrl]) => [
           option,
           await normalizeCoupangImage(dataUrl),
         ])
@@ -1738,7 +1869,12 @@ export default function Home() {
         importerName: labelImporterName,
       });
       if (dbHandle) {
-        const savedPath = await writeRootFolderFile(dbHandle, "라벨", fileName, labelBlob);
+        const existing = await rootFolderFileExists(dbHandle, "라벨", fileName);
+        if (existing && !window.confirm(`${fileName}이 이미 있습니다.\n\n기존 라벨을 새 내용으로 교체할까요?`)) {
+          setExportMessage("기존 라벨을 유지했습니다.");
+          return;
+        }
+        const savedPath = await writeRootFolderFile(dbHandle, "라벨", fileName, labelBlob, { overwriteExisting: existing });
         setExportMessage(`라벨 저장 완료 → ${savedPath}`);
       } else {
         downloadBlobFile(labelBlob, fileName);
@@ -1758,10 +1894,11 @@ export default function Home() {
     }
     setExportLoading("images");
     try {
+      requireVariantImages();
       const normalizedThumbs = Object.fromEntries(await Promise.all(
-        options.flatMap(option => {
-          const dataUrl = optionThumbs[option]?.dataUrl;
-          return dataUrl ? [[option, normalizeCoupangImage(dataUrl)]] : [];
+        variants.flatMap(variant => {
+          const dataUrl = activeVariantThumbs[variant.key]?.dataUrl;
+          return dataUrl ? [[`${model}${variant.sku}`, normalizeCoupangImage(dataUrl)]] : [];
         }).map(async ([option, pending]) => [option, await pending])
       ));
       const normalizedExtras = await Promise.all(
@@ -1778,7 +1915,9 @@ export default function Home() {
         category: product.category,
         model,
         sizesCsv: product.sizes,
-        optionThumbs: normalizedThumbs,
+        colorsCsv: product.colors,
+        optionThumbs: {},
+        skuImages: normalizedThumbs,
         additionalImages: normalizedExtras,
         customImages: normalizedCustom,
       });
@@ -1790,22 +1929,6 @@ export default function Home() {
       setExportMessage(`오류: ${e instanceof Error ? e.message : "이미지 다운로드 실패"}`);
     } finally {
       setExportLoading("");
-    }
-  };
-
-  const downloadSkuManual = (option: string) => {
-    const slot = optionThumbs[option];
-    if (!slot) return;
-    const sizes = product.sizes.split(",").map(v => v.trim()).filter(Boolean);
-    const code = colorCode(option);
-    if (product.category === "반지" && sizes.length) {
-      sizes.forEach((size, i) => {
-        window.setTimeout(() => {
-          downloadDataUrl(slot.dataUrl, `${model}-${code}${ringSizeNumber(size)}.jpg`);
-        }, i * 250);
-      });
-    } else {
-      downloadDataUrl(slot.dataUrl, `${model}-${code}.jpg`);
     }
   };
 
@@ -1828,22 +1951,27 @@ export default function Home() {
         </div>
       </header>
       {showDrafts && (
-        <section className="card full draftPanel">
+        <section id="product-draft-list" className="card full draftPanel">
           <h2>임시저장 목록 ({drafts.length}/20)</h2>
           {!drafts.length && <p className="note">임시저장된 상품이 없습니다.</p>}
           <div className="draftList">
             {drafts.map(record => (
               <div className="draftItem" key={record.model}>
-                <div><strong>{record.model}</strong><span>{new Date(record.savedAt).toLocaleString("ko-KR")}</span></div>
-                <button type="button" className="green" onClick={() => loadDraft(record)}>불러오기</button>
+                <div><strong>{record.model}</strong><span>{new Date(record.savedAt).toLocaleString("ko-KR")}</span>
+                  {record.localCopy && <span>다른 기기에 더 최신 기본정보가 있습니다. 이 기기 저장본에는 이미지가 포함됩니다.</span>}
+                </div>
+                <button type="button" className="green" onClick={() => loadDraft(record.localCopy || record)}>{record.localCopy ? "이 기기 저장본 불러오기" : "불러오기"}</button>
+                {record.localCopy && <button type="button" className="secondaryButton" onClick={() => loadDraft(record)}>다른 기기 기본정보 불러오기</button>}
                 <button type="button" className="removeButton" onClick={() => void (async () => {
-                  await deleteProductDraft(record.model);
-                  await fetch("/api/google-sheet", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ action: "cloudDraftDelete", model: record.model }),
-                  });
-                  await refreshDrafts();
+                  try {
+                    const response = await postGoogleSheet({ action: "cloudDraftDelete", model: record.model });
+                    await readDraftResponse(response);
+                    await deleteProductDraft(record.model);
+                    setDrafts(current => current.filter(draft => draft.model !== record.model));
+                    await refreshDrafts();
+                  } catch (error) {
+                    setDraftStatus(`임시저장 삭제 실패: ${error instanceof Error ? error.message : "다시 시도해주세요."}`);
+                  }
                 })()}>삭제</button>
               </div>
             ))}
@@ -1971,7 +2099,7 @@ export default function Home() {
           </Field>
           <Field label="모델명">
             <input value={model} onChange={e => updateModel(e.target.value)} />
-            {modelCheckMessage && <small className={modelDuplicate ? "duplicateModel" : "modelAvailable"}>{modelCheckMessage}</small>}
+            {modelCheckMessage && <small className={modelDuplicate && !modelReregisterable ? "duplicateModel" : "modelAvailable"}>{modelCheckMessage}</small>}
           </Field>
           <Field label="창고번호">
             <input value={product.warehouse || ""} onChange={e => update("warehouse", e.target.value)}
@@ -2154,7 +2282,17 @@ export default function Home() {
           <button type="button" onClick={() => addCustomSlot("wear")}>+ 착용컷</button>
         </div>
 
-        <div className="imageSlotGrid">
+        <p className="note">색상·사이즈 조합별 사진 {variants.length}칸입니다. 각 옵션에 사용할 사진을 해당 칸에 올려주세요.</p>
+        {variantOptions.error && <p className="error">{variantOptions.error} 색상에는 블랙,화이트처럼 색상만, 사이즈에는 S,M처럼 사이즈만 입력해주세요.</p>}
+        {!!legacyColorThumbs.length && <div>
+          <p className="note">이전에 저장한 색상 사진입니다. 사용할 옵션 칸으로 직접 끌어놓으세요.</p>
+          <div className="uploadPool">{legacyColorThumbs.map(([color, slot]) => <div className="uploadPoolItem" key={color} draggable
+            onDragStart={event => event.dataTransfer.setData("application/x-laura-slot-key", `legacy:${color}`)}>
+            <img src={slot!.dataUrl} alt={`이전 ${color} 사진`} /><span>이전 {color} 사진</span>
+          </div>)}</div>
+        </div>}
+
+        <div className="imageSlotGrid" key={draftRestoreRevision}>
           <ImageSlot
             slotKey="mainWear"
             title="메인착용컷"
@@ -2184,31 +2322,26 @@ export default function Home() {
             }
           />
 
-          {options.map(option => (
+          {variants.map(variant => (
             <ImageSlot
-              slotKey={`opt:${option}`}
-              key={option}
-              title={`${option} 썸네일`}
-              filename={
-                model
-                  ? (product.category === "반지"
-                    ? `${model}-${colorCode(option)}*.jpg (전 사이즈)`
-                    : `${model}-${colorCode(option)}.jpg`)
-                  : "SKU.jpg"
-              }
-              value={optionThumbs[option] || null}
-              onChange={slot => void setOptionThumbCovered(option, slot)}
-              onPoolDrop={index => assignPoolItem(index, slot => void setOptionThumbCovered(option, slot))}
+              slotKey={`opt:${variant.key}`}
+              key={variant.key}
+              title={`${variant.label} 썸네일`}
+              subtitle="이 옵션에 사용할 사진"
+              filename={`${model || "모델명"}${variant.thumbFile}`}
+              value={activeVariantThumbs[variant.key] || null}
+              onChange={slot => void setOptionThumbCovered(variant.key, slot)}
+              onPoolDrop={index => assignPoolItem(index, slot => void setOptionThumbCovered(variant.key, slot))}
               coverSquare
               onSlotSwap={swapSlots}
               onExpand={setLightbox}
               onFit={() => {
-                const s = optionThumbs[option];
-                if (s) openAdjust(`opt:${option}`, s.dataUrl);
+                const s = activeVariantThumbs[variant.key];
+                if (s) openAdjust(`opt:${variant.key}`, s.dataUrl);
               }}
               onAddDetail={
-                optionThumbs[option]
-                  ? () => pushDetail(`${option} 썸네일`, optionThumbs[option]!.dataUrl)
+                activeVariantThumbs[variant.key]
+                  ? () => pushDetail(`${variant.label} 썸네일`, activeVariantThumbs[variant.key]!.dataUrl)
                   : undefined
               }
             />
@@ -2390,7 +2523,7 @@ export default function Home() {
       <section className="card full dbSetupCard">
         <h2>7. 상품DB · 등록파일 일괄 생성</h2>
         <div className="exportActions">
-          <button className="secondaryButton" type="button" onClick={() => void saveDraft()}>임시저장</button>
+          <button className="secondaryButton" type="button" disabled={draftSaving} onClick={() => void saveDraft()}>{draftSaving ? "임시저장 중..." : "임시저장"}</button>
           {dbSupported && <button className="secondaryButton" type="button" onClick={() => void openModelFolder()}>폴더 바로가기</button>}
         </div>
         {draftStatus && <p className="detailMessage">{draftStatus}</p>}
@@ -2417,17 +2550,40 @@ export default function Home() {
             {exportLoading === "images" ? "이미지 묶는 중..." : "썸네일 + 추가이미지만 다운로드"}
           </button>
           <button className="secondaryButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadLabel()}>
-            {exportLoading === "label" ? "라벨 생성 중..." : "라벨만 다운로드"}
+            {exportLoading === "label" ? "라벨 생성 중..." : dbHandle ? "라벨만 저장" : "라벨만 다운로드"}
           </button>
         </div>
         {exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
+        <div className="batchModePanel" role="group" aria-label="일괄 생성 용도">
+          <button type="button" className={batchMode === "practice" ? "selected" : ""} onClick={() => setBatchMode("practice")}>
+            <strong>테스트·교육용</strong><span>ZIP만 생성 · 폴더와 제품DB 변경 없음</span>
+          </button>
+          <button type="button" className={batchMode === "actual" ? "selected" : ""} onClick={() => setBatchMode("actual")}>
+            <strong>실제 등록용</strong><span>새 모델 등록 · 판매중지 모델은 기존 행 재사용</span>
+          </button>
+        </div>
+        {batchMode === "actual" && modelDuplicate && !modelReregisterable && <p className="dangerAlert">기존 모델입니다. 판매중지 상태가 아닌 모델의 일괄 등록은 차단됩니다.</p>}
+        {batchMode === "actual" && modelReregisterable && <p className="saveExplain">판매중지 제품의 기존 행을 맨 위로 옮기고 새 입력값만 갱신합니다. 누적입고·창고번호 등 미입력 정보는 보존하며, SKU ID·바코드·발주가능상태·제품링크·노출상품ID·옵션ID는 새 승인 전까지 비웁니다. 선택한 상품 폴더의 같은 이름 파일은 새 파일로 갱신합니다.</p>}
         <button className="batchSaveButton" type="button" disabled={batchBusy} onClick={batchSave}>
-          {batchBusy ? "저장 중..." : "등록파일 일괄 생성 및 저장"}
+          {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP 생성" : "실제 등록파일 일괄 생성 및 저장"}
         </button>
         {!dbSupported && <p className="saveExplain">모바일에서는 상품DB ZIP이 다운로드됩니다. 다운로드 완료 후 공유 또는 파일 앱에서 Google Drive에 저장하세요.</p>}
         {batchStatus && <p className={batchStatus.startsWith("오류") ? "error" : "detailMessage"}>{batchStatus}</p>}
         {dbSavedFiles.length > 0 && (
           <div className="dbFileList"><h3>저장된 파일</h3><ul>{dbSavedFiles.slice(0, 40).map(f => <li key={f}>{f}</li>)}</ul></div>
+        )}
+        {registrationUploadReady?.model === model && (
+          <div className="registrationNextStep" role="status">
+            <div>
+              <strong>실제 등록파일 준비 완료</strong>
+              <span>{model} · {registrationUploadReady.files.length.toLocaleString()}개 파일 · Google 제품DB 반영 완료</span>
+              <span>다음은 Supplier Hub에서 등록파일과 견적서를 올린 뒤 최종 제출하는 단계입니다.</span>
+            </div>
+            <div className="registrationNextActions">
+              {dbSupported && <button type="button" className="secondaryButton" onClick={() => void openModelFolder()}>저장 폴더 열기</button>}
+              <a href="https://supplier.coupang.com/qvt/registration" target="_blank" rel="noreferrer">Supplier Hub 대량상품등록 열기</a>
+            </div>
+          </div>
         )}
         <div className="quoteQueuePanel">
           <div className="quoteQueueHeader">
@@ -2470,26 +2626,20 @@ export default function Home() {
         </div>
         {dbStatus && <p className="note">{dbStatus}</p>}
         <details className="advancedPanel coupangDataPanel">
-          <summary>서플라이허브 데이터 업데이트</summary>
+          <summary>기타 쿠팡 데이터 수동 업데이트</summary>
           <div className="coupangImportGrid">
-            <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("skuMaster", e)}>
-              <strong>① 상품공급상태관리 다운로드</strong>
-              <span>파일명: 상품공급상태관리 SKU 다운로드</span>
-              <span>제품DB 행 추가 없음 · 기존 SKU는 상품명/바코드/발주가능상태만 갱신</span>
-              <input type="file" accept=".xlsx" disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("skuMaster", e.target.files); e.target.value = ""; }} />
-            </label>
             <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("inboundHistory", e)}>
-              <strong>② 입고상세내역 다운로드</strong>
+              <strong>입고상세내역 다운로드</strong>
               <span>파일명: Coupang_Stocked_Data_List</span>
               <input type="file" accept=".xlsx" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("inboundHistory", e.target.files); e.target.value = ""; }} />
             </label>
             <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("poList", e)}>
-              <strong>③ 발주SKU 리스트 다운로드</strong>
+              <strong>발주SKU 리스트 다운로드</strong>
               <span>파일명: PO_SKU_LIST</span>
               <input type="file" accept=".csv,.xlsx" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("poList", e.target.files); e.target.value = ""; }} />
             </label>
             <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("coupangExtract", e)}>
-              <strong>④ 쿠팡 추출DB 업데이트</strong>
+              <strong>쿠팡 추출DB 업데이트</strong>
               <span>쿠팡쇼핑몰 추출DB.xlsx 한 파일만 선택</span>
               <span>제품DB 행 추가 없음 · 기존 행의 상품링크/쿠팡 노출가/재고현황만 갱신</span>
               <input type="file" accept=".xlsx" disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("coupangExtract", e.target.files); e.target.value = ""; }} />
@@ -2497,6 +2647,31 @@ export default function Home() {
           </div>
           {coupangImportMessage && <p className={coupangImportMessage.startsWith("오류") ? "error" : "detailMessage"}>{coupangImportMessage}</p>}
         </details>
+      </section>
+
+      <section id="product-registration-status" className="card full">
+        <div className="wms-section-heading" style={{ marginTop: 0 }}>
+          <div><span>PRODUCT REGISTRATION</span><h2>8. 등록 진행상황 · 상품 운영정보</h2></div>
+          <p>WIMS 승인 확인 → SKU 연결 → 상품공급상태 갱신</p>
+        </div>
+        <div className="wms-automation-grid">
+          <WimsRegistrationImportPanel />
+          <SupplyStatusAuditPanel />
+        </div>
+      </section>
+
+      <section id="product-draft-save" className="card full">
+        <h2>임시저장</h2>
+        <p className="note">작성 중인 상품과 이미지를 이 기기에 저장합니다. 저장한 상품은 임시저장 목록에서 이어서 작업할 수 있습니다.</p>
+        <button className="batchSaveButton" type="button" disabled={draftSaving} onClick={() => void saveDraft()}>
+          {draftSaving ? "임시저장 중..." : "임시저장 목록에 저장"}
+        </button>
+        {draftStatus && <p className="detailMessage" role="status" aria-live="polite">{draftStatus}</p>}
+        <button className="secondaryButton draftListShortcut" type="button" onClick={() => {
+          setShowDrafts(true);
+          void refreshDrafts();
+          window.setTimeout(() => document.getElementById("product-draft-list")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+        }}>임시저장 목록 보기</button>
       </section>
 
       {lightbox && (
@@ -2552,13 +2727,16 @@ function ImageSlot({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const pendingFileRevision = useRef(0);
+  useEffect(() => () => { pendingFileRevision.current += 1; }, []);
 
   const applyFile = async (file: File | undefined) => {
     if (!file) return;
     if (!ACCEPTED.includes(file.type) && !/\.(jpe?g|png)$/i.test(file.name)) return;
+    const revision = ++pendingFileRevision.current;
     const sourceDataUrl = await readFile(file);
     const dataUrl = coverSquare ? await coverSquareCanvas(sourceDataUrl) : sourceDataUrl;
-    onChange({ dataUrl, fileName: file.name });
+    if (pendingFileRevision.current === revision) onChange({ dataUrl, fileName: file.name });
   };
 
   return (
@@ -2573,6 +2751,7 @@ function ImageSlot({
         <h3>{title}</h3>
         {subtitle && <p className="slotAlias">{subtitle}</p>}
       </div>
+      {slotKey.startsWith("opt:") && <p className="slotFilename" style={{ whiteSpace: "normal", overflow: "visible", overflowWrap: "anywhere" }}>{filename}</p>}
       <div
         className="slotDrop"
         onClick={() => inputRef.current?.click()}
@@ -2581,6 +2760,7 @@ function ImageSlot({
         onDrop={e => {
           e.preventDefault();
           setDragging(false);
+          pendingFileRevision.current += 1;
           const poolIndex = e.dataTransfer.getData("application/x-laura-pool-index");
           if (poolIndex !== "" && onPoolDrop) {
             onPoolDrop(Number(poolIndex));
@@ -2614,7 +2794,7 @@ function ImageSlot({
         }}
       />
       <div className="slotActions">
-        {value && <button type="button" className="removeButton" onClick={() => onChange(null)}>삭제</button>}
+        {value && <button type="button" className="removeButton" onClick={() => { pendingFileRevision.current += 1; onChange(null); }}>삭제</button>}
         {onRemoveSlot && <button type="button" className="removeButton" onClick={onRemoveSlot}>칸 삭제</button>}
       </div>
     </div>
