@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  filterCurrentPurchaseOrders,
   loadSupplierHubPurchaseOrdersWithSnapshotTimes,
   summarizeUpcomingInboundByDate,
 } from "@/lib/wms/supplier-hub-orders";
+import { readPickingWaveStore } from "@/lib/wms/picking-wave/server-store";
+import { readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
+import { projectActiveSupplierHubPurchaseOrders, summarizeSupplierHubInboundByMonth } from "@/lib/wms/supplier-hub-active-orders";
 
 /**
  * NOID WMS 서플라이어 허브 발주서 읽기 전용 API. 기존 app/api/wms/purchase-orders(구글시트 기반)와
@@ -16,12 +18,21 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const { orders: allOrders, snapshotConflicts } = await loadSupplierHubPurchaseOrdersWithSnapshotTimes();
+    const [{ orders: allOrders, snapshotConflicts }, store, workspace] = await Promise.all([
+      loadSupplierHubPurchaseOrdersWithSnapshotTimes(), readPickingWaveStore(), readWeeklyWorkspace(),
+    ]);
+    const projection = projectActiveSupplierHubPurchaseOrders({ orders: allOrders, events: store.supplierHubInboundEvents, workspace });
     // 신규 작업 선택 화면은 오늘 이후 발주만 보여주되, 이미 만들어진 출고작업을 다시
     // 열 때는 입고예정일이 지난 원본도 반드시 조회할 수 있어야 한다.
     const includePast = request.nextUrl.searchParams.get("includePast") === "1";
-    const orders = includePast ? allOrders : filterCurrentPurchaseOrders(allOrders);
-    return NextResponse.json({ orders, snapshotConflicts, upcomingInboundSummary: summarizeUpcomingInboundByDate(allOrders) });
+    const orders = includePast ? allOrders : projection.activeOrders;
+    return NextResponse.json({
+      orders,
+      snapshotConflicts,
+      completedPurchaseOrderNumbers: projection.completedPurchaseOrderNumbers,
+      monthlyInboundBySku: summarizeSupplierHubInboundByMonth(store.supplierHubInboundEvents),
+      upcomingInboundSummary: summarizeUpcomingInboundByDate(projection.activeOrders),
+    });
   } catch (error) {
     return NextResponse.json(
       {

@@ -177,10 +177,19 @@ export async function loadSupplierHubPurchaseOrders(): Promise<SupplierHubPurcha
 }
 
 async function loadSupplierHubPurchaseOrderSnapshots(): Promise<SupplierHubSnapshotSelection> {
+  const stored = (await (await import("./picking-wave/server-store")).readPickingWaveStore()).supplierHubPurchaseOrders || [];
+  let source: SupplierHubSnapshotSelection;
   if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
-    const files = (await listDriveFilesFromEnv("GOOGLE_DRIVE_COUPANG_PURCHASE_ORDER_FOLDER_ID"))
-      .filter(file => /\.(zip|xlsx)$/i.test(file.name));
-    return loadSupplierHubPurchaseOrderSnapshotsFromDriveFiles(files);
+    try {
+      const files = (await listDriveFilesFromEnv("GOOGLE_DRIVE_COUPANG_PURCHASE_ORDER_FOLDER_ID"))
+        .filter(file => /\.(zip|xlsx)$/i.test(file.name));
+      source = await loadSupplierHubPurchaseOrderSnapshotsFromDriveFiles(files);
+    } catch (error) {
+      if (!stored.length) throw error;
+      source = { orders: [], conflicts: [] };
+    }
+    const merged = selectLatestSupplierHubPurchaseOrderSnapshots([...stored, ...source.orders]);
+    return { orders: merged.orders, conflicts: [...source.conflicts, ...merged.conflicts] };
   }
 
   const candidates: SupplierHubPurchaseOrder[] = [];
@@ -205,7 +214,9 @@ async function loadSupplierHubPurchaseOrderSnapshots(): Promise<SupplierHubSnaps
       }
     }
   }
-  return selectLatestSupplierHubPurchaseOrderSnapshots(candidates);
+  source = selectLatestSupplierHubPurchaseOrderSnapshots(candidates);
+  const merged = selectLatestSupplierHubPurchaseOrderSnapshots([...stored, ...source.orders]);
+  return { orders: merged.orders, conflicts: [...source.conflicts, ...merged.conflicts] };
 }
 
 export interface SupplierHubPurchaseOrderSnapshotConflict {

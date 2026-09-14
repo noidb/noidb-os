@@ -4,6 +4,7 @@ import type { Shipment, ShipmentSplitPreview, ShipmentStatus } from "../shipment
 import type { PoConfirmationRecord } from "../po-confirm-state";
 import type { VendorOrderDraft, VendorOrderDraftLine } from "../vendor-order/types";
 import type { ModelLocation, Shelf, SkuLocation, WarehouseBox, WarehouseMigrationMapping, WarehouseZone } from "../types";
+import type { SupplierHubPurchaseOrder } from "../supplier-hub-orders";
 
 export interface SupplierHubOrderStatus {
   orderNo: string;
@@ -49,6 +50,8 @@ export interface PickingWaveStoreSnapshot {
   warehouseSkuExceptions: SkuLocation[];
   warehouseMigrationMappings: WarehouseMigrationMapping[];
   supplierHubInboundEvents: SupplierHubInboundEvent[];
+  /** Imported purchase-order snapshots retained independently from Drive source files. */
+  supplierHubPurchaseOrders?: SupplierHubPurchaseOrder[];
   shipments: Shipment[];
   outboundWorkStates?: Record<string, OutboundWorkState>;
   packingProgress?: Record<string, PackingProgress>;
@@ -96,6 +99,7 @@ export type PickingWaveStoreMutation =
   | { action: "deleteVendorDraft"; draftId: string; deletedAt: string; expectedUpdatedAt?: string | null; expectedLineIds?: string[] }
   | { action: "saveVendorLine"; line: VendorOrderDraftLine; expectedUpdatedAt?: string | null }
   | { action: "upsertSupplierHubOrderStatuses"; statuses: SupplierHubOrderStatus[] }
+  | { action: "upsertSupplierHubPurchaseOrders"; orders: SupplierHubPurchaseOrder[] }
   | { action: "deleteVendorLine"; lineId: string; deletedAt: string }
   | { action: "saveWarehouseZone"; zone: WarehouseZone }
   | { action: "saveWarehouseShelf"; shelf: Shelf }
@@ -193,6 +197,8 @@ export function isPickingWaveStoreMutation(value: unknown): value is PickingWave
   if (value.action === "saveVendorLine") return hasText(value.line, "id") && hasText(value.line, "updatedAt");
   if (value.action === "upsertSupplierHubOrderStatuses") return Array.isArray(value.statuses) && value.statuses.length <= 100_000
     && value.statuses.every(status => hasText(status, "orderNo") && hasText(status, "collectedAt"));
+  if (value.action === "upsertSupplierHubPurchaseOrders") return Array.isArray(value.orders) && value.orders.length <= 100_000
+    && value.orders.every(order => hasText(order, "purchaseOrderNumber") && hasText(order, "capturedAt") && Array.isArray((order as Record<string, unknown>).items));
   if (value.action === "deleteVendorLine") return hasText(value, "lineId") && hasText(value, "deletedAt");
   if (value.action === "saveWarehouseZone") return hasText(value.zone, "id");
   if (value.action === "saveWarehouseShelf") return hasText(value.shelf, "id");

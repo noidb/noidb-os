@@ -13,6 +13,8 @@ import {
   listDriveFilesFromEnv,
   shouldRequireDriveReader,
 } from "./google-drive-reader";
+import { mutatePickingWaveStore, readPickingWaveStore } from "./picking-wave/server-store";
+import { mergeStoredSupplierHubPurchaseOrders } from "./supplier-hub-active-orders";
 
 /**
  * "최신 발주서 불러오기" 기능. 쿠팡 서플라이허브에서 다운로드해 구글드라이브에 쌓아두는
@@ -103,12 +105,14 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
     const latest = files[0];
     if (!latest) throw new Error("Google Drive 발주서리스트 폴더에서 ZIP/xlsx 파일을 찾지 못했습니다.");
 
-    const [latestOrders, previousOrders] = await Promise.all([
+    const [latestOrders, previousSourceOrders, store] = await Promise.all([
       loadSupplierHubPurchaseOrdersFromDriveFiles([latest]),
       // 병합 함수는 입력 순서대로 같은 발주번호의 값을 덮어쓰므로, 과거→최신 순서로 넘겨
       // 직전 최신 상태와 이번 파일을 정확히 비교한다.
       loadSupplierHubPurchaseOrdersFromDriveFiles(files.slice(1).reverse()),
+      readPickingWaveStore(),
     ]);
+    const previousOrders = mergeStoredSupplierHubPurchaseOrders(store.supplierHubPurchaseOrders || [], previousSourceOrders).orders;
     const previousByPo = new Map(previousOrders.map(order => [order.purchaseOrderNumber, order]));
     const addedPurchaseOrderNumbers = latestOrders
       .map(order => order.purchaseOrderNumber)
@@ -153,6 +157,7 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
       }
     }
     const finalOrders = [...finalByPo.values()];
+    await mutatePickingWaveStore({ action: "upsertSupplierHubPurchaseOrders", orders: finalOrders });
     const upcomingSummary = summarizeUpcomingPurchaseOrders(finalOrders);
     return {
       sourceFileName: latest.name,
@@ -212,6 +217,7 @@ export async function importLatestPurchaseOrders(): Promise<ImportLatestResult> 
   }
 
   const finalOrders = [...existingByPo.values()];
+  await mutatePickingWaveStore({ action: "upsertSupplierHubPurchaseOrders", orders: finalOrders });
   const upcomingSummary = summarizeUpcomingPurchaseOrders(finalOrders);
 
   return {

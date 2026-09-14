@@ -21,6 +21,7 @@ import type { Shipment } from "../shipment/types";
 import { summarizeOutboundWork, kstWorkDate } from "../work-center";
 import { repairConfirmedFileLinks } from "../po-confirm-file-link";
 import { saveSimpleReceivingLine, completeReceivingLine, assertReceivingRecordPreserved } from "../simple-vendor-receiving";
+import { mergeStoredSupplierHubPurchaseOrders } from "../supplier-hub-active-orders";
 
 const BLOB_PATH = "noidb-wms/picking-waves/v1/store.json";
 const MAX_RETRIES = 6;
@@ -87,6 +88,7 @@ function normalizeSnapshot(value: unknown): PickingWaveStoreSnapshot {
     warehouseSkuExceptions: Array.isArray(raw.warehouseSkuExceptions) ? raw.warehouseSkuExceptions : [],
     warehouseMigrationMappings: Array.isArray(raw.warehouseMigrationMappings) ? raw.warehouseMigrationMappings : [],
     supplierHubInboundEvents: Array.isArray(raw.supplierHubInboundEvents) ? raw.supplierHubInboundEvents : [],
+    ...(Array.isArray(raw.supplierHubPurchaseOrders) ? { supplierHubPurchaseOrders: raw.supplierHubPurchaseOrders } : {}),
     shipments: Array.isArray(raw.shipments) ? raw.shipments : [],
     deletedWaveIds: raw.deletedWaveIds && typeof raw.deletedWaveIds === "object" ? raw.deletedWaveIds : {},
     deletedItemIds: raw.deletedItemIds && typeof raw.deletedItemIds === "object" ? raw.deletedItemIds : {},
@@ -281,6 +283,8 @@ export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot,
     if (matches[0].vendorTransfer || matches[0].sentResolution) throw new Error("이미 이동한 상품입니다. 이동한 목록에서 처리해 주세요.");
     const saved = saveSimpleReceivingLine(matches[0], mutation.before, mutation.input, mutation.now);
     next.vendorOrderLines = next.vendorOrderLines.map(line => line.id === saved.id ? saved : line);
+  } else if (mutation.action === "upsertSupplierHubPurchaseOrders") {
+    next.supplierHubPurchaseOrders = mergeStoredSupplierHubPurchaseOrders(next.supplierHubPurchaseOrders || [], mutation.orders).orders;
   } else if (mutation.action === "setOutboundWorkState") {
     const wave = next.waves.find(item => item.id === mutation.waveId);
     if (!wave) throw new Error("저장된 출고작업을 찾을 수 없습니다.");
