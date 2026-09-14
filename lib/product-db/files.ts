@@ -1,5 +1,5 @@
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
-import { colorCode as skuColorCode } from "@/lib/excel/common";
+import { buildSkuRows, colorCode as skuColorCode } from "@/lib/excel/common";
 
 export type ProductDbFile = {
   folder: string;
@@ -41,19 +41,20 @@ export function buildSkuThumbFilenames(
   option: string,
   sizesCsv: string
 ) {
-  const code = colorCode(option);
-  const sizes = sizesCsv.split(",").map(v => v.trim()).filter(Boolean);
-  if (category === "반지" && sizes.length) {
-    return sizes.map(size => `${model}-${code}${ringSizeNumber(size)}.jpg`);
-  }
-  return [`${model}-${code}.jpg`];
+  return buildSkuRows({
+    model,
+    product: { category, colors: option, sizes: sizesCsv },
+  }).map(row => row.thumbFile);
 }
 
 export type ImageOnlyInput = {
   category: string;
   model: string;
   sizesCsv: string;
+  colorsCsv?: string;
   optionThumbs: Record<string, string>;
+  /** 모델SKU별 사진이 명시되면 색상별 사진은 사용하지 않습니다. */
+  skuImages?: Record<string, string>;
   additionalImages: (string | undefined)[];
   customImages?: { filename: string; dataUrl: string }[];
 };
@@ -62,11 +63,20 @@ export type ImageOnlyInput = {
 export function collectProductImageFiles(input: ImageOnlyInput): ProductDbFile[] {
   if (!input.model) return [];
   const files: ProductDbFile[] = [];
-  for (const [option, dataUrl] of Object.entries(input.optionThumbs || {})) {
-    if (!dataUrl?.startsWith("data:image/")) continue;
-    const blob = dataUrlToBlob(dataUrl);
-    for (const filename of buildSkuThumbFilenames(input.model, input.category, option, input.sizesCsv)) {
-      pushFlat(files, filename, blob);
+  if (input.skuImages !== undefined) {
+    const colors = input.colorsCsv ?? Object.keys(input.optionThumbs || {}).join(",");
+    const skus = colors ? buildSkuRows({ model: input.model, product: { category: input.category, colors, sizes: input.sizesCsv } }).map(row => row.sku) : Object.keys(input.skuImages || {});
+    for (const sku of skus) {
+      const dataUrl = input.skuImages?.[sku];
+      if (sku.startsWith(`${input.model}-`) && dataUrl?.startsWith("data:image/")) pushFlat(files, `${sku}.jpg`, dataUrlToBlob(dataUrl));
+    }
+  } else {
+    for (const [option, dataUrl] of Object.entries(input.optionThumbs || {})) {
+      if (!dataUrl?.startsWith("data:image/")) continue;
+      const blob = dataUrlToBlob(dataUrl);
+      for (const filename of buildSkuThumbFilenames(input.model, input.category, option, input.sizesCsv)) {
+        pushFlat(files, filename, blob);
+      }
     }
   }
   input.additionalImages.forEach((dataUrl, index) => {
@@ -86,6 +96,11 @@ export type ProductLabelInput = {
   manufactureYearMonth?: string;
   manufacturerName?: string;
   importerName?: string;
+};
+
+export type GoogleSheetSyncResult = {
+  ok: boolean;
+  message: string;
 };
 
 export function buildProductLabelLines(input: ProductLabelInput, now = new Date()): string[] {
@@ -149,6 +164,9 @@ export async function createLabelBlob(input: string | ProductLabelInput): Promis
 }
 
 function pushFlat(files: ProductDbFile[], filename: string, blob: Blob) {
+  if (files.some(file => file.path.toLowerCase() === filename.toLowerCase())) {
+    throw new Error(`파일명이 중복되었습니다: ${filename}. 색상 옵션과 추가이미지 파일명을 확인해주세요.`);
+  }
   files.push({ folder: "", filename, blob, path: filename });
 }
 
@@ -168,6 +186,8 @@ export type CollectInput = {
   photos: string[];
   /** option → approved thumbnail dataUrl */
   optionThumbs: Record<string, string>;
+  /** 모델SKU별 사진이 명시되면 색상별 사진은 사용하지 않습니다. */
+  skuImages?: Record<string, string>;
   /** 전체옵션 → model-00.jpg */
   allOptionsImage?: string;
   /** include all-options in quote extras? default false */
@@ -186,6 +206,67 @@ export type CollectInput = {
   label?: Omit<ProductLabelInput, "model">;
 };
 
+function buildGoogleSheetPayload(input: CollectInput, optionImages: Record<string, string>, skuImages = input.skuImages) {
+  const extras = [input.extra01, input.extra02, input.extra03, input.extra04];
+  const customImages = (input.customImages || []).filter(item => item.dataUrl?.startsWith("data:image/") && item.filename);
+  const additionalImageNames = [
+    ...buildAdditionalImagesCsv(input.model, extras).split(",").filter(Boolean),
+    ...customImages.map(item => item.filename),
+  ];
+  const additionalImagesCsv = additionalImageNames.join(",");
+  return {
+    product: input.product,
+    model: input.model,
+    title: input.title,
+    tags: input.tags,
+    additionalImages: additionalImageNames,
+    additionalImagesCsv,
+    sourcingUrl: input.sourcingUrl || "",
+    optionImages,
+    ...(skuImages !== undefined ? { skuImages } : {}),
+  };
+}
+
+export async function syncProductDbToGoogleSheet(input: CollectInput): Promise<GoogleSheetSyncResult> {
+  if (!input.title) return { ok: false, message: "Google 시트 (상품명 없음)" };
+  try {
+    const sheetImages = Object.fromEntries(await Promise.all(
+      Object.entries(input.skuImages !== undefined ? input.skuImages || {} : input.optionThumbs || {}).map(async ([option, dataUrl]) => [
+        option,
+        dataUrl?.startsWith("data:image/") ? await normalizeCoupangImage(dataUrl, 240) : dataUrl,
+      ])
+    ));
+    const operationId = globalThis.crypto?.randomUUID?.() || `registration-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const requestBody = JSON.stringify({ ...buildGoogleSheetPayload(input, input.skuImages !== undefined ? {} : sheetImages, input.skuImages !== undefined ? sheetImages : undefined), syncMode: "reregisterStopped", operationId });
+    let syncRes: Response | null = null;
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        syncRes = await fetch("/api/google-sheet", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: requestBody,
+        });
+        if (syncRes.status < 500 || attempt === 1) break;
+      } catch (error) {
+        lastError = error;
+        if (attempt === 1) throw error;
+      }
+    }
+    if (!syncRes) throw lastError instanceof Error ? lastError : new Error("Google 시트 연결 실패");
+    const sync = await syncRes.json().catch(() => ({}));
+    if (!syncRes.ok || sync?.error) return { ok: false, message: `Google 시트 (${sync?.error || "누적 실패"})` };
+    if (!sync?.configured) return { ok: false, message: "Google 시트 연동 미설정" };
+    if (sync?.duplicate) return { ok: false, message: "Google 시트 (중복 모델명이라 건너뜀)" };
+    if (!sync?.synced) return { ok: false, message: "Google 시트 (저장 결과를 확인하지 못함)" };
+    const staged = Number(sync?.registrationStage?.updatedRows || 0);
+    if (sync?.reregistered) return { ok: true, message: `Google 시트 기존 ${staged}행 재등록 완료 · 누적정보 보존 · SKU/바코드/발주가능상태/제품링크/노출상품ID/옵션ID 초기화` };
+    return { ok: true, message: staged > 0 ? `Google 시트 상품DB 누적 완료 · 등록파일생성 ${staged}행` : "Google 시트 상품DB 누적 완료" };
+  } catch (error) {
+    return { ok: false, message: `Google 시트 (${error instanceof Error ? error.message : "누적 실패"})` };
+  }
+}
+
 export function buildAdditionalImagesCsv(model: string, extras: (string | undefined)[]) {
   const names: string[] = [];
   extras.forEach((url, i) => {
@@ -197,7 +278,8 @@ export function buildAdditionalImagesCsv(model: string, extras: (string | undefi
 }
 
 export async function collectProductDbFiles(
-  input: CollectInput
+  input: CollectInput,
+  collectOptions: { syncGoogleSheet?: boolean } = {}
 ): Promise<CollectResult> {
   const files: ProductDbFile[] = [];
   const skipped: string[] = [];
@@ -232,7 +314,19 @@ export async function collectProductDbFiles(
   }
 
   const options = Object.keys(input.optionThumbs || {});
-  if (options.length) {
+  if (input.skuImages !== undefined) {
+    const skus = buildSkuRows({ model, product: { category, colors: input.product.colors || "", sizes: input.product.sizes || "" } });
+    for (const sku of skus) {
+      const dataUrl = input.skuImages?.[sku.sku];
+      if (!dataUrl?.startsWith("data:image/")) {
+        missingFiles.push(sku.thumbFile);
+        skipped.push(`SKU 썸네일 없음: ${sku.sku}`);
+        continue;
+      }
+      pushFlat(files, sku.thumbFile, dataUrlToBlob(dataUrl));
+      readyFiles.push(sku.thumbFile);
+    }
+  } else if (options.length) {
     for (const option of options) {
       const dataUrl = input.optionThumbs[option];
       if (!dataUrl) continue;
@@ -299,30 +393,24 @@ export async function collectProductDbFiles(
     missingFiles.push(`라벨_${model}.jpg`);
   }
 
+  for (const item of customImages) {
+    pushFlat(files, item.filename, dataUrlToBlob(item.dataUrl));
+    readyFiles.push(item.filename);
+  }
+
   const additionalImageNames = [
     ...buildAdditionalImagesCsv(model, extras).split(",").filter(Boolean),
     ...customImages.map(item => item.filename),
   ];
   const additionalImagesCsv = additionalImageNames.join(",");
-  const payload = {
-    product: input.product,
-    model: input.model,
-    title: input.title,
-    tags: input.tags,
-    additionalImages: additionalImagesCsv
-      ? additionalImagesCsv.split(",")
-      : [],
-    additionalImagesCsv,
-    sourcingUrl: input.sourcingUrl || "",
-    optionImages: input.optionThumbs || {},
-  };
+  const payload = buildGoogleSheetPayload(input, input.optionThumbs || {});
 
   const quoteCategories = ["반지", "귀걸이", "피어싱", "목걸이", "팔찌", "발찌"];
   if (quoteCategories.includes(category) && input.title) {
     try {
       // 견적서에는 옵션 이미지가 들어가지 않는다. 원본 data URL까지 보내면
       // 이미지가 많은 상품에서 Vercel 요청 용량을 초과해 견적서만 누락될 수 있다.
-      const { optionImages: _unusedOptionImages, ...quotePayload } = payload;
+      const { optionImages: _unusedOptionImages, skuImages: _unusedSkuImages, ...quotePayload } = payload;
       const res = await fetch("/api/export-quote", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -343,41 +431,11 @@ export async function collectProductDbFiles(
     missingFiles.push("견적서");
   }
 
-  if (input.title) {
-    try {
-      // 제품DB 셀에는 80px 미리보기만 표시하므로 대용량 1000px 원본 대신 가벼운 시트 전용 썸네일을 전송합니다.
-      const sheetOptionImages = Object.fromEntries(await Promise.all(
-        Object.entries(input.optionThumbs || {}).map(async ([option, dataUrl]) => [
-          option,
-          dataUrl?.startsWith("data:image/") ? await normalizeCoupangImage(dataUrl, 240) : dataUrl,
-        ])
-      ));
-      const syncRes = await fetch("/api/google-sheet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, optionImages: sheetOptionImages }),
-      });
-      const sync = await syncRes.json().catch(() => ({}));
-      if (!syncRes.ok || sync?.error) {
-        skipped.push(`Google 시트 (${sync?.error || "누적 실패"})`);
-      } else if (!sync?.configured) {
-        skipped.push("Google 시트 연동 미설정");
-      } else if (sync?.duplicate) {
-        skipped.push("Google 시트 (중복 모델명이라 건너뜀)");
-      } else if (!sync?.synced) {
-        skipped.push("Google 시트 (저장 결과를 확인하지 못함)");
-      } else {
-        readyFiles.push("Google 시트 상품DB 누적 완료");
-      }
-    } catch (error) {
-      skipped.push(`Google 시트 (${error instanceof Error ? error.message : "누적 실패"})`);
-    }
+  if (input.title && collectOptions.syncGoogleSheet !== false) {
+    const sync = await syncProductDbToGoogleSheet(input);
+    if (sync.ok) readyFiles.push(sync.message);
+    else skipped.push(sync.message);
   }
-  for (const item of customImages) {
-    pushFlat(files, item.filename, dataUrlToBlob(item.dataUrl));
-    readyFiles.push(item.filename);
-  }
-
   if (input.sourcingUrl?.trim()) {
     pushFlat(
       files,

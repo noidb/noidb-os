@@ -1,4 +1,6 @@
-import type { BasketAssignment, PickingWave, PickingWaveItem } from "./types";
+import type { BasketAssignment, PickingWave, PickingWaveItem, OutboundWorkState, ShipmentOutputGeneration } from "./types";
+import type { PackingProgress, PackingRow } from "../packing-progress";
+import type { Shipment, ShipmentSplitPreview, ShipmentStatus } from "../shipment/types";
 import type { PoConfirmationRecord } from "../po-confirm-state";
 import type { VendorOrderDraft, VendorOrderDraftLine } from "../vendor-order/types";
 import type { ModelLocation, Shelf, SkuLocation, WarehouseBox, WarehouseMigrationMapping, WarehouseZone } from "../types";
@@ -26,6 +28,10 @@ export interface SupplierHubInboundEvent {
 }
 
 export interface PickingWaveStoreSnapshot {
+  activeVendorQueueId?: string;
+  vendorQueueConsumedLineIds?: Record<string, string>;
+  vendorQueueReceipts?: Record<string, import("../vendor-order/consolidate").VendorQueueReceipt>;
+  suppressedVendorSkuIds?: Record<string, string>;
   schemaVersion: 1;
   revision: number;
   updatedAt: string;
@@ -43,6 +49,11 @@ export interface PickingWaveStoreSnapshot {
   warehouseSkuExceptions: SkuLocation[];
   warehouseMigrationMappings: WarehouseMigrationMapping[];
   supplierHubInboundEvents: SupplierHubInboundEvent[];
+  shipments: Shipment[];
+  outboundWorkStates?: Record<string, OutboundWorkState>;
+  packingProgress?: Record<string, PackingProgress>;
+  discardedVendorLines?: Record<string, { line: VendorOrderDraftLine; draft: VendorOrderDraft; deletedAt: string }>;
+  discardedVendorOrders?: Record<string, import("../vendor-order/discard-order").DiscardedVendorOrder>;
   deletedWaveIds: Record<string, string>;
   deletedItemIds: Record<string, string>;
   deletedBasketKeys: Record<string, string>;
@@ -51,9 +62,25 @@ export interface PickingWaveStoreSnapshot {
   deletedVendorLineIds: Record<string, string>;
   deletedWarehouseSkuIds: Record<string, string>;
   completedCreateOperations: Record<string, { waveId: string; completedAt: string }>;
+  deletedShipmentIds: Record<string, string>;
+  completedShipmentCreateOperations: Record<string, { shipmentIds: string[]; completedAt: string }>;
 }
 
 export type PickingWaveStoreMutation =
+  | { action: "consolidateVendorOrders"; operationId: string; lines: VendorOrderDraftLine[]; now: string }
+  | { action: "savePackingProgress"; waveId: string; generationKey: string; rows: PackingRow[]; checkedKeys: string[]; dispatchedShipmentNumbers?: string[]; expectedUpdatedAt: string | null; dispatched: boolean; now: string }
+  | { action: "repairConfirmedFileLinks"; before: PoConfirmationRecord[]; fileName: string; contentHash: string; now: string }
+  | { action: "setOutboundWorkState"; waveId: string; status: OutboundWorkState["status"]; expectedUpdatedAt: string | null; expectedWorkUpdatedAt?: string; confirmedDispatched?: boolean; now: string }
+  | { action: "saveVendorWorkspace"; operationId: string; waveId: string; lines: VendorOrderDraftLine[]; drafts: VendorOrderDraft[]; removedLineIds: string[]; expectedUpdatedAtByLineId: Record<string, string | null>; expectedUpdatedAtByDraftId: Record<string, string | null>; expectedLineIdsByDraftId: Record<string, string[]>; now: string }
+  | { action: "saveVendorLineImage"; lineId: string; imageUrl: string; expectedImageUrl: string; now: string }
+  | { action: "saveSimpleReceiving"; before: VendorOrderDraftLine; input: { quantity: number; unitPrice: number; usedImmediately: boolean }; now: string }
+  | { action: "completeVendorReceiving"; before: VendorOrderDraftLine; isStockReplenishment: boolean; now: string }
+  | { action: "transferSentVendorLine"; lineId: string; vendorName: string; operationId: string; expectedUpdatedAt: string; expectedQueueId: string; expectedTargetVersion: string; now: string }
+  | { action: "resolveSentVendorLine"; lineId: string; expectedUpdatedAt: string; kind: "reorder" | "discontinue"; destinationId: string; now: string }
+  | { action: "setSentVendorDelay"; lineId: string; expectedUpdatedAt: string; delayed: boolean; memo: string; now: string }
+  | { action: "discardVendorOrder"; draftId: string; expectedUpdatedAt: string; expectedUpdatedAtByLineId: Record<string, string>; reason: "잘못 생성" | "중복" | "테스트"; deletedAt: string }
+  | { action: "restoreVendorDraft"; draft: VendorOrderDraft; lines: VendorOrderDraftLine[] }
+  | { action: "deleteVendorLines"; waveId: string; lineIds: string[]; expectedUpdatedAtByLineId: Record<string, string>; deletedAt: string }
   | { action: "migrate"; snapshot: Partial<Pick<PickingWaveStoreSnapshot, "waves" | "items" | "baskets" | "poConfirmationRecords" | "vendorOrderDrafts" | "vendorOrderLines" | "warehouseZones" | "warehouseShelves" | "warehouseBoxes" | "warehouseModelLocations" | "warehouseSkuExceptions" | "warehouseMigrationMappings">> }
   | { action: "saveWave"; wave: PickingWave }
   | { action: "deleteWave"; waveId: string; deletedAt: string }
@@ -65,9 +92,9 @@ export type PickingWaveStoreMutation =
   | { action: "deleteBasket"; waveId: string; basketNumber: string; deletedAt: string }
   | { action: "upsertPoConfirmationRecords"; records: PoConfirmationRecord[] }
   | { action: "clearPoConfirmationErrors"; poNumbers: string[]; waveId?: string; deletedAt: string }
-  | { action: "saveVendorDraft"; draft: VendorOrderDraft }
-  | { action: "deleteVendorDraft"; draftId: string; deletedAt: string }
-  | { action: "saveVendorLine"; line: VendorOrderDraftLine }
+  | { action: "saveVendorDraft"; draft: VendorOrderDraft; expectedUpdatedAt?: string | null; expectedLineIds?: string[] }
+  | { action: "deleteVendorDraft"; draftId: string; deletedAt: string; expectedUpdatedAt?: string | null; expectedLineIds?: string[] }
+  | { action: "saveVendorLine"; line: VendorOrderDraftLine; expectedUpdatedAt?: string | null }
   | { action: "upsertSupplierHubOrderStatuses"; statuses: SupplierHubOrderStatus[] }
   | { action: "deleteVendorLine"; lineId: string; deletedAt: string }
   | { action: "saveWarehouseZone"; zone: WarehouseZone }
@@ -77,7 +104,14 @@ export type PickingWaveStoreMutation =
   | { action: "saveWarehouseSkuException"; exception: SkuLocation }
   | { action: "deleteWarehouseSkuException"; skuId: string; deletedAt: string }
   | { action: "saveWarehouseMigrationMapping"; mapping: WarehouseMigrationMapping }
-  | { action: "appendSupplierHubInboundEvents"; events: SupplierHubInboundEvent[] };
+  | { action: "appendSupplierHubInboundEvents"; events: SupplierHubInboundEvent[] }
+  | { action: "migrateShipments"; shipments: Shipment[] }
+  | { action: "createShipments"; operationId: string; previews: ShipmentSplitPreview[]; now: string }
+  | { action: "renameShipment"; shipmentId: string; name: string; now: string }
+  | { action: "updateShipmentStatus"; shipmentId: string; status: ShipmentStatus; now: string }
+  | { action: "updateShipmentGeneration"; shipmentId: string; generation: ShipmentOutputGeneration; now: string }
+  | { action: "deleteShipment"; shipmentId: string; deletedAt: string };
+
 
 export function emptyPickingWaveStoreSnapshot(): PickingWaveStoreSnapshot {
   return {
@@ -98,6 +132,7 @@ export function emptyPickingWaveStoreSnapshot(): PickingWaveStoreSnapshot {
     warehouseSkuExceptions: [],
     warehouseMigrationMappings: [],
     supplierHubInboundEvents: [],
+    shipments: [],
     deletedWaveIds: {},
     deletedItemIds: {},
     deletedBasketKeys: {},
@@ -106,6 +141,8 @@ export function emptyPickingWaveStoreSnapshot(): PickingWaveStoreSnapshot {
     deletedVendorLineIds: {},
     deletedWarehouseSkuIds: {},
     completedCreateOperations: {},
+    deletedShipmentIds: {},
+    completedShipmentCreateOperations: {},
   };
 }
 

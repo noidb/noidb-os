@@ -91,7 +91,7 @@ export async function buildAutomationWorkbook(payload: ExportPayload) {
     row.getCell(13).value = { formula: `ROUND(L${rowNumber}*0.58,0)`, result: supply };
     row.getCell(14).value = { formula: `CEILING(L${rowNumber}*1.5,1000)`, result: msrp };
     row.getCell(18).value = { formula: `M${rowNumber}-K${rowNumber}`, result: supply - cost };
-    const imageData = payload.optionImages?.[sku.color];
+    const imageData = payload.skuImages !== undefined ? payload.skuImages?.[sku.sku] : payload.optionImages?.[sku.color];
     if (imageData?.startsWith("data:image/")) {
       const extension: "jpeg" | "png" = imageData.startsWith("data:image/png") ? "png" : "jpeg";
       const imageId = workbook.addImage({ base64: imageData, extension });

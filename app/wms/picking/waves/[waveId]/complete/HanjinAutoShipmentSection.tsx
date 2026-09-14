@@ -5,6 +5,7 @@ import type { ShipmentOutputGeneration } from "@/lib/wms/picking-wave/types";
 import type { AutoShipmentTrackingPreview } from "@/lib/wms/hanjin-shipment-auto";
 import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
+import ConfirmedFileLinkRecovery from "./ConfirmedFileLinkRecovery";
 
 interface Props {
   generation?: ShipmentOutputGeneration;
@@ -16,7 +17,7 @@ interface Props {
 const TRACKING_PREVIEW_SESSION_TTL_MS = 60 * 1000;
 
 function trackingPreviewKey(generation: ShipmentOutputGeneration) {
-  return `noidb:wms:shipment-preview:${[...generation.purchaseOrderNumbers].sort().join("|")}`;
+  return `noidb:wms:shipment-preview:${JSON.stringify([generation.generationId, generation.invoiceGroups, [...generation.purchaseOrderNumbers].sort()])}`;
 }
 
 function readTrackingPreview(key: string): AutoShipmentTrackingPreview | null {
@@ -33,13 +34,16 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
   const [reasons, setReasons] = useState<string[] | null>(null);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
   const [preview, setPreview] = useState<AutoShipmentTrackingPreview | null>(null);
+  const [selectedReprintFileName, setSelectedReprintFileName] = useState<string | null>(null);
+  const [fileLinkBlocked, setFileLinkBlocked] = useState(true);
 
   useEffect(() => {
-    if (!generation) { setPreview(null); return; }
+    if (!generation) { setPreview(null); setSelectedReprintFileName(null); return; }
     const sessionKey = trackingPreviewKey(generation);
     const cached = readTrackingPreview(sessionKey);
     if (cached) {
       setPreview(cached);
+      setSelectedReprintFileName(cached.selectedReprintFileName ?? null);
       setChecking(false);
       setError(null);
       return;
@@ -50,7 +54,7 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
     fetch("/api/wms/hanjin-upload/shipment-preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ purchaseOrderNumbers: generation.purchaseOrderNumbers }),
+      body: JSON.stringify({ purchaseOrderNumbers: generation.purchaseOrderNumbers, invoiceGroups: generation.invoiceGroups }),
       signal: controller.signal,
     }).then(async response => {
       const data = await response.json();
@@ -58,6 +62,7 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
       if (active) {
         const nextPreview = data.preview as AutoShipmentTrackingPreview;
         setPreview(nextPreview);
+        setSelectedReprintFileName(nextPreview.selectedReprintFileName ?? null);
         try { sessionStorage.setItem(sessionKey, JSON.stringify({ savedAt: Date.now(), preview: nextPreview })); } catch { /* 다음 진입 때 다시 확인 */ }
       }
     }).catch(cause => {
@@ -67,14 +72,20 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
   }, [generation]);
 
   async function handleGenerate() {
-    if (!generation || !preview?.canGenerate || blockedByGeneration) return;
+    const selectedCandidate = preview?.candidateFiles?.find(candidate => candidate.fileName === selectedReprintFileName);
+    if (!generation || fileLinkBlocked || (!preview?.canGenerate && !selectedCandidate?.exactMatch) || blockedByGeneration) return;
     const downloadTarget = reserveDownloadTarget();
     setGenerating(true); setError(null); setReasons(null); setResultMessage(null);
     try {
       const response = await fetch("/api/wms/hanjin-upload/build-shipment-auto", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ purchaseOrderNumbers: generation.purchaseOrderNumbers }),
+        body: JSON.stringify({
+          waveId: generation.waveId,
+          generationId: generation.generationId,
+          purchaseOrderNumbers: generation.purchaseOrderNumbers,
+          selectedReprintFileName,
+        }),
       });
       if (!response.ok) {
         closeReservedDownloadTarget(downloadTarget);
@@ -89,9 +100,12 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
       const disposition = response.headers.get("Content-Disposition") || "";
       const fileNameMatch = disposition.match(/filename\*=UTF-8''(.+)$/);
       const fileName = fileNameMatch ? decodeURIComponent(fileNameMatch[1]) : "쉽먼트생성_업로드파일.xlsx";
+      const driveSaved = response.headers.get("X-NOIDB-Drive-Saved") === "true";
+      const driveFileName = decodeURIComponent(response.headers.get("X-NOIDB-Drive-File-Name") || "");
+      const driveWarning = decodeURIComponent(response.headers.get("X-NOIDB-Drive-Save-Warning") || "");
       downloadBlobPreservingPage(await response.blob(), fileName, downloadTarget);
-      setResultMessage(`${generationLabel || "현재 묶음"}의 발주 ${generation.purchaseOrderNumbers.length}건만 Shipment로 생성했습니다.`);
-      await onGenerated?.(generation.generationId, fileName);
+      setResultMessage(`${generationLabel || "현재 묶음"}의 발주 ${generation.purchaseOrderNumbers.length}건만 Shipment로 생성했습니다.${driveSaved ? " · Drive 자동저장 완료" : driveWarning ? ` · ${driveWarning}` : ""}`);
+      await onGenerated?.(generation.generationId, driveSaved && driveFileName ? driveFileName : fileName);
     } catch (cause) {
       closeReservedDownloadTarget(downloadTarget);
       setError(cause instanceof Error ? cause.message : "쉽먼트파일 생성 중 오류가 발생했습니다.");
@@ -102,17 +116,33 @@ export default function HanjinAutoShipmentSection({ generation, generationLabel,
   const total = generation.purchaseOrderNumbers.length;
   const matched = preview?.matchedPurchaseOrderCount || 0;
   const missing = preview?.missingPurchaseOrderNumbers.length || 0;
+  const exactCandidates = preview?.candidateFiles?.filter(candidate => candidate.exactMatch) ?? [];
+  const selectedCandidate = exactCandidates.find(candidate => candidate.fileName === selectedReprintFileName);
+  const canGenerate = !fileLinkBlocked && Boolean(preview?.canGenerate || selectedCandidate);
 
   return <div>
+    <ConfirmedFileLinkRecovery key={generation.waveId} waveId={generation.waveId} onBlockedChange={setFileLinkBlocked} />
     <div style={{ marginBottom: "8px", padding: "9px", borderRadius: "8px", background: wmsColors.surfaceBeige, fontSize: "12px", lineHeight: 1.6 }}>
       <strong>현재 Shipment 대상 · {generationLabel || "현재 묶음"} · 발주 {total}건</strong><br />
       {checking ? "운송장 확인 중..." : `운송장 확인 ${matched}/${total} · 미확인 ${missing}`}
-      {!checking && preview?.canGenerate && <><br /><span style={{ color: wmsColors.greenDark, fontWeight: 800 }}>Shipment 생성 가능</span></>}
+      {!checking && canGenerate && <><br /><span style={{ color: wmsColors.greenDark, fontWeight: 800 }}>Shipment 생성 가능</span></>}
     </div>
+    {!checking && exactCandidates.length > 1 && <div style={{ marginBottom: "8px", display: "grid", gap: "6px" }}>
+      <strong style={{ fontSize: "12px" }}>정확히 일치하는 한진 결과파일을 선택해 주세요.</strong>
+      {exactCandidates.map(candidate => <button
+        key={candidate.fileName}
+        type="button"
+        onClick={() => setSelectedReprintFileName(candidate.fileName)}
+        style={{ padding: "9px 10px", borderRadius: "8px", border: `1px solid ${selectedReprintFileName === candidate.fileName ? wmsColors.greenDark : wmsColors.border}`, background: selectedReprintFileName === candidate.fileName ? wmsColors.greenSoft : wmsColors.surface, textAlign: "left", fontSize: "11px", cursor: "pointer" }}
+      >
+        {candidate.fileName}<br />
+        {candidate.modifiedTime ? `${new Date(candidate.modifiedTime).toLocaleString("ko-KR")} · ` : ""}일치 {candidate.matchedPurchaseOrderCount} · 누락 0
+      </button>)}
+    </div>}
     {blockedByGeneration && <p style={{ fontSize: "11px", color: "#c0392b" }}>{blockedByGeneration}</p>}
     {error && <div style={{ fontSize: "12px", color: "#c0392b", marginBottom: "8px" }}><p style={{ margin: "0 0 4px", fontWeight: 700 }}>{error}</p>{reasons?.length ? <ul style={{ margin: 0, paddingLeft: "18px" }}>{reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul> : null}</div>}
     {resultMessage && <p style={{ fontSize: "12px", color: wmsColors.greenDark, marginBottom: "8px" }}>{resultMessage}</p>}
-    <button onClick={handleGenerate} disabled={generating || checking || !preview?.canGenerate || Boolean(blockedByGeneration)} style={{ ...wmsPrimaryButton, width: "100%", opacity: generating || checking || !preview?.canGenerate || blockedByGeneration ? 0.6 : 1 }}>
+    <button onClick={handleGenerate} disabled={generating || checking || !canGenerate || Boolean(blockedByGeneration)} style={{ ...wmsPrimaryButton, width: "100%", opacity: generating || checking || !canGenerate || blockedByGeneration ? 0.6 : 1 }}>
       {generating ? "생성 중..." : generation.shipmentFileName ? "Shipment 파일 재생성" : "Shipment 파일 생성"}
     </button>
   </div>;

@@ -22,6 +22,20 @@
 export type PickingWaveStatus = "in_progress" | "completed" | "result_confirmed" | "order_confirmed";
 export type PickingWaveItemStatus = "pending" | "full" | "partial" | "notfound";
 
+/** Explicit work-center filing or verified packing completion; never inferred from a date. */
+export interface OutboundWorkState {
+  status: "active" | "completed" | "archived";
+  updatedAt: string;
+  /** Manual completion survives file changes; automatic completion belongs to one output generation. */
+  source?: "manual" | "packing";
+  purchaseOrderNumbers?: string[];
+  generationKey?: string;
+  history: { status: "active" | "completed" | "archived"; changedAt: string; source?: "manual" | "packing"; purchaseOrderNumbers?: string[]; generationKey?: string }[];
+}
+
+/** Transient active-work projection marker; stripped before shared storage writes. */
+export interface PickingWorkScope { excludedPurchaseOrderNumbers: string[]; sourceRevision: number; }
+
 /** 아이템 합산 전, 발주서별 원본 요청 수량 */
 export interface PickingWaveSourceRef {
   purchaseOrderNumber: string;
@@ -42,6 +56,7 @@ export interface PickingAllocationResult {
 }
 
 export interface PickingWaveItem {
+  workScope?: PickingWorkScope;
   /** `${waveId}-${productCode}` */
   id: string;
   waveId: string;
@@ -99,6 +114,7 @@ export interface PickingWaveItem {
 }
 
 export interface PickingWave {
+  workScope?: PickingWorkScope;
   /** "WAVE-20260818-1" 형태 */
   id: string;
   /** 사용자가 직접 붙이는 표시용 이름 (선택, 없으면 화면에서 id를 그대로 보여준다) */
@@ -122,6 +138,12 @@ export interface PickingWave {
   orderConfirmedAt?: string;
   /** 송장 생성 당시의 선택 발주 집합. 기존 웨이브에는 없을 수 있으며 출력 재생성에만 사용한다. */
   outputGenerations?: ShipmentOutputGeneration[];
+  /** PC·모바일에서 같은 송장/Shipment 묶음을 계속 처리하기 위한 공용 선택값. */
+  selectedOutputGenerationId?: string;
+  /** Shipment 서류와 출력세트를 확인하고 통합피킹 단계로 넘긴 시각. */
+  shipmentDocumentsCompletedAt?: string;
+  /** 통합피킹을 마치고 Shipment별 출고작업으로 넘긴 시각. */
+  integratedPickingCompletedAt?: string;
 }
 
 export interface ShipmentOutputGeneration {
@@ -132,7 +154,11 @@ export interface ShipmentOutputGeneration {
   updatedAt: string;
   expectedShippingGroupCount: number;
   invoiceFileName: string;
+  invoiceGroups?: string[][];
+  supersededByGenerationId?: string;
   shipmentFileName?: string;
+  outputSetFileName?: string;
+  outputSetGeneratedAt?: string;
   status: "invoice_generated" | "shipment_generated";
 }
 

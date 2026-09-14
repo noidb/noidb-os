@@ -1,8 +1,7 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
-import JSZip from "jszip";
-import { SaxesParser, type SaxesTagPlain } from "saxes";
 import {
   downloadDriveFile,
   isDriveReaderConfigured,
@@ -18,6 +17,7 @@ import {
   type ParsedTrackingRow,
 } from "./hanjin-upload";
 import { normalizeSkuId } from "./sku-normalize";
+import type { PickingWaveStoreSnapshot } from "./picking-wave/shared-store-types";
 import type { PurchaseOrderSourceRecord } from "./purchase-order-source/types";
 
 /**
@@ -29,16 +29,23 @@ import type { PurchaseOrderSourceRecord } from "./purchase-order-source/types";
  *      필요한 A~H 컬럼의 진짜 출처)에서 SKU 단위 행을 가져온다.
  *   3) 현재 웨이브의 (발주번호+물류센터+입고예정일)과 정확히 일치할 때만 두 데이터를 합쳐
  *      buildShipmentCreationUploadFile(1·3단계와 완전히 같은, 기존 로직 그대로)에 넘긴다.
- * 두 원본 파일 모두 표준 OOXML이 아니라(첫 조사 시 확인) ExcelJS로 못 여는 것과 여는 것이
- * 섞여 있다 — 재출력 세부내역은 일반 OOXML(ExcelJS로 열림), 확정수량 파일은 `x:` 네임스페이스 +
- * inlineStr 형식(hanjin-upload.ts가 이미 처리해온 것과 같은 패턴)이라 jszip+saxes로 직접 읽는다.
+ * 재출력 세부내역과 앱이 다시 저장한 확정수량 파일은 ExcelJS로 읽고, 헤더명으로 실제 열을 찾는다.
+ * 파일 선택은 저장된 정확한 파일명으로만 하며 최신 파일을 임의로 고르지 않는다.
  */
 
 const REPRINT_DETAIL_ENV = "GOOGLE_DRIVE_HANJIN_SHIPMENT_FOLDER_ID";
 const REPRINT_DETAIL_LOCAL_DIR = process.env.WMS_HANJIN_SHIPMENT_DIR || "G:\\내 드라이브\\쿠팡데이터\\한진택배 송장파일";
-const CONFIRMED_QUANTITY_ENV = "GOOGLE_DRIVE_PO_CONFIRMED_QUANTITY_FOLDER_ID";
+// 기존 운영 배포에는 같은 발주확정 완료 폴더가 이전 이름으로 연결돼 있다. 한진 결과파일은
+// 위의 전용 폴더만 사용하고, 확정수량 원본만 두 이름 중 실제 연결된 쪽을 읽는다.
+const CONFIRMED_QUANTITY_ENV = process.env.GOOGLE_DRIVE_PO_CONFIRMED_QUANTITY_FOLDER_ID?.trim()
+  ? "GOOGLE_DRIVE_PO_CONFIRMED_QUANTITY_FOLDER_ID"
+  : "GOOGLE_DRIVE_CONFIRMED_ORDER_FOLDER_ID";
 const CONFIRMED_QUANTITY_LOCAL_DIR =
   process.env.WMS_PO_CONFIRMED_QUANTITY_DIR || "G:\\내 드라이브\\쿠팡데이터\\발주서업로드완성";
+
+function normalizedFileName(value: string): string {
+  return value.trim().normalize("NFC");
+}
 
 export interface ReprintDetailRow {
   trackingNumber: string;
@@ -49,20 +56,21 @@ export interface ReprintDetailRow {
 async function listMatchingDriveOrLocalFiles(
   envName: string,
   localDir: string,
-  namePattern: RegExp
-): Promise<{ name: string; buffer: Buffer }[]> {
+  namePattern: RegExp,
+  exactNames?: ReadonlySet<string>,
+): Promise<{ name: string; buffer: Buffer; modifiedTime: string }[]> {
   if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
     const files = (await listDriveFilesFromEnv(envName))
-      .filter(f => namePattern.test(f.name))
+      .filter(f => namePattern.test(f.name) && (!exactNames || exactNames.has(normalizedFileName(f.name))))
       .sort((a, b) => b.modifiedTime.localeCompare(a.modifiedTime));
-    const results: { name: string; buffer: Buffer }[] = [];
-    for (const file of files) results.push({ name: file.name, buffer: await downloadDriveFile(file.id) });
+    const results: { name: string; buffer: Buffer; modifiedTime: string }[] = [];
+    for (const file of files) results.push({ name: file.name, buffer: await downloadDriveFile(file.id), modifiedTime: file.modifiedTime });
     return results;
   }
 
   let fileNames: string[];
   try {
-    fileNames = (await readdir(localDir)).filter(name => namePattern.test(name));
+    fileNames = (await readdir(localDir)).filter(name => namePattern.test(name) && (!exactNames || exactNames.has(normalizedFileName(name))));
   } catch {
     return [];
   }
@@ -74,8 +82,8 @@ async function listMatchingDriveOrLocalFiles(
     })
   );
   withStat.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  const results: { name: string; buffer: Buffer }[] = [];
-  for (const file of withStat) results.push({ name: file.name, buffer: await readFile(file.filePath) });
+  const results: { name: string; buffer: Buffer; modifiedTime: string }[] = [];
+  for (const file of withStat) results.push({ name: file.name, buffer: await readFile(file.filePath), modifiedTime: new Date(file.mtimeMs).toISOString() });
   return results;
 }
 
@@ -122,17 +130,21 @@ async function parseReprintDetailRowsFromBuffer(buffer: Buffer): Promise<Reprint
   return rows;
 }
 
-async function loadReprintDetailRows(): Promise<{ rows: ReprintDetailRow[]; fileNames: string[] }> {
+interface ReprintDetailFile {
+  name: string;
+  modifiedTime: string;
+  rows: ReprintDetailRow[];
+}
+
+async function loadReprintDetailFiles(): Promise<ReprintDetailFile[]> {
   const files = await listMatchingDriveOrLocalFiles(REPRINT_DETAIL_ENV, REPRINT_DETAIL_LOCAL_DIR, /^재출력_세부내역_.*\.xlsx$/i);
-  const rows: ReprintDetailRow[] = [];
-  const fileNames: string[] = [];
+  const parsedFiles: ReprintDetailFile[] = [];
   for (const file of files) {
     const parsed = await parseReprintDetailRowsFromBuffer(file.buffer);
     if (!parsed) continue;
-    rows.push(...parsed);
-    fileNames.push(file.name);
+    parsedFiles.push({ name: file.name, modifiedTime: file.modifiedTime, rows: parsed });
   }
-  return { rows, fileNames };
+  return parsedFiles;
 }
 
 function indexReprintRowsByPurchaseOrder(rows: ReprintDetailRow[]) {
@@ -154,7 +166,20 @@ export interface AutoShipmentTrackingPreview {
   matchedPurchaseOrderCount: number;
   missingPurchaseOrderNumbers: string[];
   conflictPurchaseOrderNumbers: string[];
+  candidateFiles?: AutoShipmentTrackingCandidate[];
+  selectedReprintFileName?: string;
+  selectionRequired?: boolean;
   canGenerate: boolean;
+}
+
+export interface AutoShipmentTrackingCandidate {
+  fileName: string;
+  modifiedTime?: string;
+  matchedPurchaseOrderCount: number;
+  missingPurchaseOrderNumbers: string[];
+  conflictPurchaseOrderNumbers: string[];
+  unexpectedPurchaseOrderNumbers: string[];
+  exactMatch: boolean;
 }
 
 /** 현재 generation의 PO 집합만 운송장 원본과 대조한다. 웨이브의 다른 PO는 검사하지 않는다. */
@@ -187,9 +212,91 @@ export function inspectAutoShipmentTrackingRows(requests: HanjinShipmentRequest[
   };
 }
 
-export async function inspectAutoShipmentTracking(requests: HanjinShipmentRequest[]): Promise<AutoShipmentTrackingPreview> {
-  const reprint = await loadReprintDetailRows();
-  return inspectAutoShipmentTrackingRows(requests, reprint.rows);
+export function matchesInvoiceTrackingGroups(invoiceGroups: string[][] | undefined, rows: ReprintDetailRow[]): boolean {
+  if (!invoiceGroups) return true;
+  const index = indexReprintRowsByPurchaseOrder(rows), used = new Set<string>();
+  for (const group of invoiceGroups) {
+    const tracking = new Set(group.flatMap(po => (index.get(normalizeSkuId(po)) || []).map(row => row.trackingNumber)));
+    if (tracking.size !== 1 || ![...tracking][0] || group.some(po => !index.has(normalizeSkuId(po)))) return false;
+    const number = [...tracking][0]; if (used.has(number)) return false; used.add(number);
+  }
+  return true;
+}
+
+export async function inspectAutoShipmentTracking(requests: HanjinShipmentRequest[], invoiceGroups?: string[][]): Promise<AutoShipmentTrackingPreview> {
+  const files = await loadReprintDetailFiles();
+  const candidates = files.map(file => inspectAutoShipmentTrackingCandidate(requests, file.name, file.rows, file.modifiedTime, invoiceGroups));
+  const exactCandidates = candidates.filter(candidate => candidate.exactMatch);
+  const selected = exactCandidates.length === 1 ? exactCandidates[0] : undefined;
+  const best = selected ?? [...candidates].sort((a, b) =>
+    b.matchedPurchaseOrderCount - a.matchedPurchaseOrderCount
+    || a.missingPurchaseOrderNumbers.length - b.missingPurchaseOrderNumbers.length
+    || a.unexpectedPurchaseOrderNumbers.length - b.unexpectedPurchaseOrderNumbers.length
+  )[0];
+
+  return {
+    requestedPurchaseOrderCount: new Set(requests.map(request => normalizeSkuId(request.purchaseOrderNumber))).size,
+    matchedPurchaseOrderCount: best?.matchedPurchaseOrderCount ?? 0,
+    missingPurchaseOrderNumbers: best?.missingPurchaseOrderNumbers ?? requests.map(request => normalizeSkuId(request.purchaseOrderNumber)),
+    conflictPurchaseOrderNumbers: best?.conflictPurchaseOrderNumbers ?? [],
+    candidateFiles: candidates,
+    selectedReprintFileName: selected?.fileName,
+    selectionRequired: exactCandidates.length > 1,
+    canGenerate: Boolean(selected),
+  };
+}
+
+export function inspectAutoShipmentTrackingCandidate(
+  requests: HanjinShipmentRequest[],
+  fileName: string,
+  rows: ReprintDetailRow[],
+  modifiedTime?: string,
+  invoiceGroups?: string[][]
+): AutoShipmentTrackingCandidate {
+  const preview = inspectAutoShipmentTrackingRows(requests, rows);
+  const requestedPoSet = new Set(requests.map(request => normalizeSkuId(request.purchaseOrderNumber)));
+  const filePoSet = new Set<string>();
+  for (const row of rows) {
+    const parsed = parseShipmentLabel(row.kLabel);
+    for (const po of parsed?.purchaseOrderNumbers ?? []) filePoSet.add(normalizeSkuId(po));
+  }
+  const unexpectedPurchaseOrderNumbers = [...filePoSet].filter(po => !requestedPoSet.has(po)).sort();
+  return {
+    fileName,
+    modifiedTime,
+    matchedPurchaseOrderCount: preview.matchedPurchaseOrderCount,
+    missingPurchaseOrderNumbers: preview.missingPurchaseOrderNumbers,
+    conflictPurchaseOrderNumbers: preview.conflictPurchaseOrderNumbers,
+    unexpectedPurchaseOrderNumbers,
+    exactMatch: matchesInvoiceTrackingGroups(invoiceGroups, rows) && preview.canGenerate && unexpectedPurchaseOrderNumbers.length === 0 && filePoSet.size === requestedPoSet.size,
+  };
+}
+
+function selectExactReprintFile(
+  requests: HanjinShipmentRequest[],
+  files: ReprintDetailFile[],
+  selectedFileName?: string,
+  invoiceGroups?: string[][]
+): ReprintDetailFile {
+  const candidates = files.map(file => ({ file, preview: inspectAutoShipmentTrackingCandidate(requests, file.name, file.rows, file.modifiedTime, invoiceGroups) }));
+  const exact = candidates.filter(candidate => candidate.preview.exactMatch);
+  if (selectedFileName) {
+    const selected = candidates.find(candidate => candidate.file.name === selectedFileName);
+    if (!selected) throw new AutoShipmentBlockedError([`선택한 한진 결과파일을 찾지 못했습니다: ${selectedFileName}`]);
+    if (!selected.preview.exactMatch) {
+      throw new AutoShipmentBlockedError([`선택한 한진 결과파일의 발주번호 집합이 현재 묶음과 정확히 일치하지 않습니다: ${selectedFileName}`]);
+    }
+    return selected.file;
+  }
+  if (exact.length === 1) return exact[0].file;
+  if (exact.length > 1) {
+    throw new AutoShipmentBlockedError([`정확히 일치하는 한진 결과파일이 ${exact.length}개입니다. 화면에서 사용할 파일을 선택해 주세요.`]);
+  }
+  const best = [...candidates].sort((a, b) => b.preview.matchedPurchaseOrderCount - a.preview.matchedPurchaseOrderCount)[0]?.preview;
+  const detail = best
+    ? `${best.fileName} (일치 ${best.matchedPurchaseOrderCount}, 누락 ${best.missingPurchaseOrderNumbers.length}, 다른 발주 ${best.unexpectedPurchaseOrderNumbers.length})`
+    : "후보 없음";
+  throw new AutoShipmentBlockedError([`현재 묶음의 발주번호 집합과 정확히 일치하는 한진 결과파일이 없습니다. 가장 가까운 후보: ${detail}`]);
 }
 
 /** 우리가 1단계에서 buildShipmentLabel로 만든 K열 문구를 되읽어 물류센터/입고예정일 표시문구/
@@ -219,100 +326,70 @@ function parseShipmentLabel(kLabel: string): { fulfillmentCenter: string; monthD
   return { fulfillmentCenter: fulfillmentCenter.trim(), monthDayText, purchaseOrderNumbers };
 }
 
-/** "발주서업로드완성" 폴더의 확정수량 입력 완료 파일(`x:` 네임스페이스 + inlineStr, ExcelJS로
- *  못 여는 형식 — hanjin-upload.ts가 다뤄온 것과 같은 패턴)을 헤더명 기준으로 읽는다. 열 번호를
- *  하드코딩하지 않고, 1행에서 "발주번호/물류센터/입고유형/상품번호/상품바코드/상품이름/확정수량/
- *  입고예정일" 텍스트를 찾아 실제 열을 가려낸다 — 하나라도 없으면 null. "납품수량"은 별도
- *  컬럼이 없어, 확정수량 값을 그대로 쓴다("최종 출고수량" = 확정수량 규칙, 실제 한진 결과
- *  샘플에서도 두 값이 항상 같았다). */
-async function parseConfirmedQuantityRowsFromBuffer(buffer: Buffer): Promise<ParsedTrackingRow[] | null> {
-  let zip: JSZip;
+export interface ConfirmedQuantitySourceRow extends ParsedTrackingRow {
+  orderedQuantity: string;
+}
+
+export interface ConfirmedQuantitySourceFile {
+  name: string;
+  modifiedTime?: string;
+  contentHash?: string;
+  rows: ConfirmedQuantitySourceRow[] | null;
+}
+
+const CONFIRMED_QUANTITY_HEADERS = {
+  purchaseOrderNumber: "발주번호",
+  fulfillmentCenter: "물류센터",
+  transportType: "입고유형",
+  skuId: "상품번호",
+  barcode: "상품바코드",
+  productName: "상품이름",
+  orderedQuantity: "발주수량",
+  confirmedQuantity: "확정수량",
+  expectedDate: "입고예정일",
+} as const;
+
+/** 앱이 만든 PO_FOR_CONFIRM 확정파일을 헤더명으로 다시 읽는다. 파일의 SKU/수량은 아래의
+ *  발주서리스트다운 원본 대조를 통과하기 전까지 신뢰하지 않는다. */
+export async function parseConfirmedQuantityRowsFromBuffer(buffer: Buffer): Promise<ConfirmedQuantitySourceRow[] | null> {
+  const workbook = new ExcelJS.Workbook();
   try {
-    zip = await JSZip.loadAsync(buffer);
+    await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
   } catch {
     return null;
   }
-  const sheetEntry = zip.file("xl/worksheets/sheet1.xml");
-  if (!sheetEntry) return null;
-  const sheetXml = await sheetEntry.async("string");
+  const sheet = workbook.getWorksheet("상품목록") ?? workbook.worksheets[0];
+  if (!sheet) return null;
 
-  const rowsByIndex = new Map<number, Record<string, string>>();
-  const parser = new SaxesParser();
-  let currentRowCells: Record<string, string> = {};
-  let currentRowIndex = 0;
-  let currentCellRef: string | null = null;
-  let insideValue = false;
-  let insideInline = false;
-  let currentText = "";
-
-  parser.on("opentag", (node: SaxesTagPlain) => {
-    if (node.name === "x:row") {
-      currentRowCells = {};
-      currentRowIndex = Number(node.attributes.r as string);
-    } else if (node.name === "x:c") {
-      currentCellRef = (node.attributes.r as string) || null;
-      currentText = "";
-    } else if (node.name === "x:v") {
-      insideValue = true;
-      currentText = "";
-    } else if (node.name === "x:t") {
-      insideInline = true;
-      currentText = "";
+  const requiredHeaders = Object.values(CONFIRMED_QUANTITY_HEADERS);
+  let headerRowNumber = 0;
+  let columns = new Map<string, number>();
+  for (let rowNumber = 1; rowNumber <= Math.min(10, sheet.rowCount); rowNumber += 1) {
+    const candidate = new Map<string, number>();
+    sheet.getRow(rowNumber).eachCell((cell, column) => candidate.set(cell.text.trim(), column));
+    if (requiredHeaders.every(header => candidate.has(header))) {
+      headerRowNumber = rowNumber;
+      columns = candidate;
+      break;
     }
-  });
-  parser.on("text", (text: string) => {
-    if (insideValue || insideInline) currentText += text;
-  });
-  parser.on("closetag", (node: SaxesTagPlain) => {
-    if (node.name === "x:v") {
-      insideValue = false;
-      if (currentCellRef) currentRowCells[currentCellRef] = currentText;
-    } else if (node.name === "x:t") {
-      insideInline = false;
-      if (currentCellRef) currentRowCells[currentCellRef] = (currentRowCells[currentCellRef] || "") + currentText;
-    } else if (node.name === "x:row") {
-      rowsByIndex.set(currentRowIndex, { ...currentRowCells });
-    }
-  });
-  parser.write(sheetXml).close();
+  }
+  if (!headerRowNumber) return null;
 
-  const header = rowsByIndex.get(1);
-  if (!header) return null;
-  const colOf = (name: string): string | null => {
-    for (const [ref, value] of Object.entries(header)) {
-      if (value === name) {
-        const match = ref.match(/^([A-Z]+)\d+$/);
-        return match ? match[1] : null;
-      }
-    }
-    return null;
-  };
-  const colPo = colOf("발주번호");
-  const colFc = colOf("물류센터");
-  const colType = colOf("입고유형");
-  const colSku = colOf("상품번호");
-  const colBarcode = colOf("상품바코드");
-  const colName = colOf("상품이름");
-  const colQty = colOf("확정수량");
-  const colDate = colOf("입고예정일");
-  if (!colPo || !colFc || !colType || !colSku || !colBarcode || !colName || !colQty || !colDate) return null;
-
-  const rows: ParsedTrackingRow[] = [];
-  const maxRow = Math.max(0, ...rowsByIndex.keys());
-  for (let r = 2; r <= maxRow; r++) {
-    const row = rowsByIndex.get(r);
-    if (!row) continue;
-    const purchaseOrderNumber = row[colPo + r] || "";
+  const textAt = (rowNumber: number, header: string) => sheet.getCell(rowNumber, columns.get(header)!).text.trim();
+  const rows: ConfirmedQuantitySourceRow[] = [];
+  for (let rowNumber = headerRowNumber + 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
+    const purchaseOrderNumber = textAt(rowNumber, CONFIRMED_QUANTITY_HEADERS.purchaseOrderNumber);
     if (!purchaseOrderNumber) continue;
-    const confirmedQuantity = row[colQty + r] || "";
+    const confirmedQuantity = textAt(rowNumber, CONFIRMED_QUANTITY_HEADERS.confirmedQuantity);
     rows.push({
       purchaseOrderNumber,
-      fulfillmentCenter: row[colFc + r] || "",
-      transportType: row[colType + r] || "",
-      expectedDate: row[colDate + r] || "",
-      skuId: row[colSku + r] || "",
-      barcode: row[colBarcode + r] || "",
-      productName: row[colName + r] || "",
+      fulfillmentCenter: textAt(rowNumber, CONFIRMED_QUANTITY_HEADERS.fulfillmentCenter),
+      transportType: textAt(rowNumber, CONFIRMED_QUANTITY_HEADERS.transportType),
+      expectedDate: textAt(rowNumber, CONFIRMED_QUANTITY_HEADERS.expectedDate),
+      skuId: textAt(rowNumber, CONFIRMED_QUANTITY_HEADERS.skuId),
+      barcode: textAt(rowNumber, CONFIRMED_QUANTITY_HEADERS.barcode),
+      productName: textAt(rowNumber, CONFIRMED_QUANTITY_HEADERS.productName),
+      orderedQuantity: textAt(rowNumber, CONFIRMED_QUANTITY_HEADERS.orderedQuantity),
       confirmedQuantity,
       trackingNumber: "",
       shippedQuantity: confirmedQuantity,
@@ -321,17 +398,20 @@ async function parseConfirmedQuantityRowsFromBuffer(buffer: Buffer): Promise<Par
   return rows;
 }
 
-async function loadConfirmedQuantityRows(): Promise<{ rows: ParsedTrackingRow[]; fileNames: string[] }> {
-  const files = await listMatchingDriveOrLocalFiles(CONFIRMED_QUANTITY_ENV, CONFIRMED_QUANTITY_LOCAL_DIR, /^PO_FOR_CONFIRM.*\.xlsx$/i);
-  const rows: ParsedTrackingRow[] = [];
-  const fileNames: string[] = [];
-  for (const file of files) {
-    const parsed = await parseConfirmedQuantityRowsFromBuffer(file.buffer);
-    if (!parsed) continue;
-    rows.push(...parsed);
-    fileNames.push(file.name);
-  }
-  return { rows, fileNames };
+export async function loadConfirmedQuantityFiles(expectedFileNames?: readonly string[]): Promise<ConfirmedQuantitySourceFile[]> {
+  const exactNames = expectedFileNames ? new Set(expectedFileNames.map(normalizedFileName).filter(Boolean)) : undefined;
+  const files = await listMatchingDriveOrLocalFiles(
+    CONFIRMED_QUANTITY_ENV,
+    CONFIRMED_QUANTITY_LOCAL_DIR,
+    /^PO_FOR_CONFIRM.*\.xlsx$/i,
+    exactNames,
+  );
+  return Promise.all(files.map(async file => ({
+    name: file.name,
+    modifiedTime: file.modifiedTime,
+    contentHash: createHash("sha256").update(file.buffer).digest("hex"),
+    rows: await parseConfirmedQuantityRowsFromBuffer(file.buffer),
+  })));
 }
 
 export class AutoShipmentBlockedError extends Error {
@@ -341,6 +421,214 @@ export class AutoShipmentBlockedError extends Error {
     this.name = "AutoShipmentBlockedError";
     this.reasons = reasons;
   }
+}
+
+export function resolveStoredAutoShipmentGeneration(
+  snapshot: Pick<PickingWaveStoreSnapshot, "waves" | "shipments" | "poConfirmationRecords">,
+  ownerId: string,
+  generationId: string,
+  requestedPurchaseOrderNumbers: readonly string[],
+): { purchaseOrderNumbers: string[]; invoiceGroups?: string[][]; confirmedQuantityFileNameByPo: Record<string, string>; confirmedQuantityFileHashByName: Record<string, string> } {
+  const normalizedOwnerId = ownerId.trim();
+  const normalizedGenerationId = generationId.trim();
+  const requested = requestedPurchaseOrderNumbers.map(normalizeSkuId).filter(Boolean);
+  const requestedSet = new Set(requested);
+  const candidates = [
+    snapshot.waves.find(wave => wave.id === normalizedOwnerId)?.outputGenerations?.find(generation => generation.generationId === normalizedGenerationId),
+    snapshot.shipments.find(shipment => shipment.id === normalizedOwnerId && shipment.outputGeneration?.generationId === normalizedGenerationId)?.outputGeneration,
+  ].filter((generation): generation is NonNullable<typeof generation> => Boolean(generation));
+
+  const reasons: string[] = [];
+  if (!normalizedOwnerId || !normalizedGenerationId) reasons.push("Shipment 묶음 식별값이 없습니다.");
+  if (requested.length === 0 || requestedSet.size !== requested.length) reasons.push("요청 발주번호가 비어 있거나 중복됐습니다.");
+  if (candidates.length !== 1) {
+    reasons.push(candidates.length === 0
+      ? "공용 저장소에서 현재 Shipment 묶음을 찾지 못했습니다. 화면을 새로고침해 주세요."
+      : "같은 Shipment 묶음 식별값이 중복되어 생성을 차단했습니다.");
+  }
+  const generation = candidates[0];
+  if (generation?.supersededByGenerationId) reasons.push("새 송장파일로 대체된 이전 대상입니다. 작업센터에서 현재 대상을 열어 주세요.");
+  const stored = generation?.purchaseOrderNumbers.map(normalizeSkuId).filter(Boolean) || [];
+  const storedSet = new Set(stored);
+  if (generation && (stored.length === 0 || storedSet.size !== stored.length)) reasons.push("저장된 Shipment 묶음의 발주번호가 비어 있거나 중복됐습니다.");
+  if (generation && (storedSet.size !== requestedSet.size || [...storedSet].some(po => !requestedSet.has(po)))) {
+    reasons.push("공용 저장소의 Shipment 묶음과 요청 발주번호 집합이 정확히 일치하지 않습니다.");
+  }
+
+  const confirmedQuantityFileNameByPo: Record<string, string> = {};
+  const confirmedQuantityFileHashByName: Record<string, string> = {};
+  for (const po of stored) {
+    const records = snapshot.poConfirmationRecords.filter(record => normalizeSkuId(record.poNumber) === po);
+    if (records.length !== 1) {
+      reasons.push(records.length === 0
+        ? `발주번호 ${po}: 발주확정 파일 연결 기록이 없습니다.`
+        : `발주번호 ${po}: 발주확정 파일 연결 기록이 중복됐습니다.`);
+      continue;
+    }
+    const record = records[0];
+    // stage는 쿠팡에서 실제 승인됐는지의 별도 상태다. 여기서는 수량 원본을 특정하는
+    // generatedFileName과 원본 검사 메타데이터만 사용하고, stage를 생성 완료로 바꾸지 않는다.
+    const fileName = normalizedFileName(record.generatedFileName || "");
+    if (!fileName) reasons.push(`발주번호 ${po}: 생성한 발주확정 파일명이 저장되어 있지 않습니다.`);
+    if (!record.sourceFileHash || record.selectedRowCount <= 0) reasons.push(`발주번호 ${po}: 발주확정 원본 검사 정보가 없어 생성을 차단했습니다.`);
+    if (fileName) confirmedQuantityFileNameByPo[po] = fileName;
+    if (fileName && record.generatedFileHash) {
+      if (confirmedQuantityFileHashByName[fileName] && confirmedQuantityFileHashByName[fileName] !== record.generatedFileHash) reasons.push(`발주번호 ${po}: 확정파일 연결 내용이 충돌합니다.`);
+      confirmedQuantityFileHashByName[fileName] = record.generatedFileHash;
+    }
+  }
+
+  if (reasons.length > 0) throw new AutoShipmentBlockedError([...new Set(reasons)]);
+  return { purchaseOrderNumbers: generation!.purchaseOrderNumbers, invoiceGroups: generation!.invoiceGroups, confirmedQuantityFileNameByPo, confirmedQuantityFileHashByName };
+}
+
+function nonNegativeInteger(value: string): number | null {
+  const normalized = value.trim();
+  if (!/^\d+$/.test(normalized)) return null;
+  const parsed = Number(normalized);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function comparableDate(value: string): string {
+  return value.replace(/\D/g, "");
+}
+
+/** 각 발주가 저장 상태에 기록한 정확한 확정파일만 사용하고, 그 파일의 모든 PO+SKU를 현재
+ *  발주서리스트다운 인덱스와 대조한다. 파일명이 없거나 같은 이름이 둘이거나 SKU/원수량이
+ *  조금이라도 다르면 임의 선택·보정 없이 전체를 차단한다. */
+export function resolveConfirmedQuantityRowsForShipment(
+  requests: readonly HanjinShipmentRequest[],
+  sourceRecords: readonly PurchaseOrderSourceRecord[],
+  confirmedFiles: readonly ConfirmedQuantitySourceFile[],
+  confirmedQuantityFileNameByPo: Readonly<Record<string, string>>,
+): { rows: ParsedTrackingRow[]; fileNames: string[] } {
+  const expectedPoNumbers = [...new Set(requests.map(request => normalizeSkuId(request.purchaseOrderNumber)).filter(Boolean))];
+  const expectedPoSet = new Set(expectedPoNumbers);
+  const blockingReasons: string[] = [];
+
+  const linkedFileNameByPo = new Map<string, string>();
+  for (const [rawPo, rawFileName] of Object.entries(confirmedQuantityFileNameByPo)) {
+    const po = normalizeSkuId(rawPo);
+    const fileName = normalizedFileName(rawFileName);
+    if (!po || !fileName) continue;
+    if (linkedFileNameByPo.has(po) && linkedFileNameByPo.get(po) !== fileName) {
+      blockingReasons.push(`발주번호 ${po}의 확정수량 파일 연결이 중복됐습니다.`);
+    } else {
+      linkedFileNameByPo.set(po, fileName);
+    }
+  }
+
+  const filesByName = new Map<string, ConfirmedQuantitySourceFile[]>();
+  for (const file of confirmedFiles) {
+    const name = normalizedFileName(file.name);
+    const sameName = filesByName.get(name) || [];
+    sameName.push(file);
+    filesByName.set(name, sameName);
+  }
+
+  const sourceRowsByPo = new Map<string, PurchaseOrderSourceRecord[]>();
+  for (const source of sourceRecords) {
+    const po = normalizeSkuId(source.purchaseOrderNumber);
+    if (!expectedPoSet.has(po)) continue;
+    const rows = sourceRowsByPo.get(po) || [];
+    rows.push(source);
+    sourceRowsByPo.set(po, rows);
+  }
+
+  const resolvedRows: ParsedTrackingRow[] = [];
+  const usedFileNames = new Set<string>();
+  for (const po of expectedPoNumbers) {
+    const linkedFileName = linkedFileNameByPo.get(po);
+    if (!linkedFileName) {
+      blockingReasons.push(`발주번호 ${po}: 확정 완료된 수량 파일명이 저장되어 있지 않습니다.`);
+      continue;
+    }
+    const matchingFiles = filesByName.get(linkedFileName) || [];
+    if (matchingFiles.length !== 1) {
+      blockingReasons.push(matchingFiles.length === 0
+        ? `발주번호 ${po}: 연결된 확정수량 파일을 찾지 못했습니다 — ${linkedFileName}`
+        : `발주번호 ${po}: 같은 이름의 확정수량 파일이 ${matchingFiles.length}개여서 하나로 확정할 수 없습니다 — ${linkedFileName}`);
+      continue;
+    }
+    const confirmedFile = matchingFiles[0];
+    if (!confirmedFile.rows) {
+      blockingReasons.push(`발주번호 ${po}: 연결된 확정수량 파일 구조를 읽지 못했습니다 — ${linkedFileName}`);
+      continue;
+    }
+    usedFileNames.add(confirmedFile.name);
+
+    const sourceRows = sourceRowsByPo.get(po) || [];
+    if (sourceRows.length === 0) {
+      blockingReasons.push(`현재 선택 발주번호가 발주서 원본에 없습니다: ${po}`);
+      continue;
+    }
+    const sourceBySku = new Map<string, PurchaseOrderSourceRecord>();
+    for (const source of sourceRows) {
+      const sku = normalizeSkuId(source.skuId);
+      if (!sku) blockingReasons.push(`발주번호 ${po}: 발주서 원본에 상품번호가 빈 행이 있습니다.`);
+      else if (sourceBySku.has(sku)) blockingReasons.push(`발주번호 ${po}: 발주서 원본에 상품번호 ${sku}가 중복됐습니다.`);
+      else sourceBySku.set(sku, source);
+    }
+
+    const fileRows = confirmedFile.rows.filter(row => normalizeSkuId(row.purchaseOrderNumber) === po);
+    const confirmedBySku = new Map<string, ConfirmedQuantitySourceRow>();
+    for (const row of fileRows) {
+      const sku = normalizeSkuId(row.skuId);
+      if (!sku) blockingReasons.push(`발주번호 ${po}: 확정수량 파일에 상품번호가 빈 행이 있습니다.`);
+      else if (confirmedBySku.has(sku)) blockingReasons.push(`발주번호 ${po}: 확정수량 파일에 상품번호 ${sku}가 중복됐습니다.`);
+      else confirmedBySku.set(sku, row);
+    }
+
+    for (const [sku, source] of sourceBySku) {
+      const confirmed = confirmedBySku.get(sku);
+      if (!confirmed) {
+        blockingReasons.push(`발주번호 ${po}: 확정수량 파일에 상품번호 ${sku}가 없습니다.`);
+        continue;
+      }
+      const orderedQuantity = nonNegativeInteger(confirmed.orderedQuantity);
+      const confirmedQuantity = nonNegativeInteger(confirmed.confirmedQuantity);
+      let valid = true;
+      if (orderedQuantity !== source.orderedQuantity) {
+        blockingReasons.push(`발주번호 ${po} 상품번호 ${sku}: 확정수량 파일의 발주수량 ${confirmed.orderedQuantity || "빈 값"}이 현재 원본 ${source.orderedQuantity}과 다릅니다.`);
+        valid = false;
+      }
+      if (confirmedQuantity === null || confirmedQuantity > source.orderedQuantity) {
+        blockingReasons.push(`발주번호 ${po} 상품번호 ${sku}: 확정수량은 0 이상 ${source.orderedQuantity} 이하의 정수여야 합니다.`);
+        valid = false;
+      }
+      if (normalizeSkuId(confirmed.barcode) !== normalizeSkuId(source.barcode)) {
+        blockingReasons.push(`발주번호 ${po} 상품번호 ${sku}: 확정수량 파일과 발주서 원본의 바코드가 다릅니다.`);
+        valid = false;
+      }
+      if (normalizeCenterName(confirmed.fulfillmentCenter) !== normalizeCenterName(source.fulfillmentCenterName)) {
+        blockingReasons.push(`발주번호 ${po} 상품번호 ${sku}: 확정수량 파일과 발주서 원본의 물류센터가 다릅니다.`);
+        valid = false;
+      }
+      if (comparableDate(confirmed.expectedDate) !== comparableDate(source.expectedArrivalDate)) {
+        blockingReasons.push(`발주번호 ${po} 상품번호 ${sku}: 확정수량 파일과 발주서 원본의 입고예정일이 다릅니다.`);
+        valid = false;
+      }
+      if (!valid || confirmedQuantity === null) continue;
+      resolvedRows.push({
+        purchaseOrderNumber: source.purchaseOrderNumber,
+        fulfillmentCenter: source.fulfillmentCenterName,
+        transportType: "쉽먼트",
+        expectedDate: source.expectedArrivalDate,
+        skuId: source.skuId,
+        barcode: source.barcode,
+        productName: source.optionName ? `${source.productName}, ${source.optionName}` : source.productName,
+        confirmedQuantity: String(confirmedQuantity),
+        trackingNumber: "",
+        shippedQuantity: String(confirmedQuantity),
+      });
+    }
+    for (const sku of confirmedBySku.keys()) {
+      if (!sourceBySku.has(sku)) blockingReasons.push(`발주번호 ${po}: 확정수량 파일에 현재 발주서 원본에 없는 상품번호 ${sku}가 있습니다.`);
+    }
+  }
+
+  if (blockingReasons.length > 0) throw new AutoShipmentBlockedError([...new Set(blockingReasons)]);
+  return { rows: resolvedRows, fileNames: [...usedFileNames] };
 }
 
 export interface AutoShipmentResult {
@@ -373,29 +661,30 @@ export function findTrackingNumbersReusedAcrossShippingGroups(rows: readonly Par
 export async function buildAutoShipmentFile(
   requests: HanjinShipmentRequest[],
   sourceRecords: PurchaseOrderSourceRecord[],
-  templateBuffer?: Buffer
+  templateBuffer?: Buffer,
+  options: { invoiceGroups?: string[][]; selectedReprintFileName?: string; confirmedQuantityFileNameByPo?: Record<string, string>; confirmedQuantityFileHashByName?: Record<string, string> } = {}
 ): Promise<AutoShipmentResult> {
   const groups = groupRequestsByCenterAndDate(requests);
 
-  const reprint = await loadReprintDetailRows();
-  if (reprint.rows.length === 0) {
+  const confirmedQuantityFileNameByPo = options.confirmedQuantityFileNameByPo || {};
+  const expectedConfirmedFileNames = [...new Set(Object.values(confirmedQuantityFileNameByPo).map(normalizedFileName).filter(Boolean))];
+  const confirmedFiles = await loadConfirmedQuantityFiles(expectedConfirmedFileNames);
+  for (const file of confirmedFiles) {
+    const expectedHash = options.confirmedQuantityFileHashByName?.[normalizedFileName(file.name)];
+    if (expectedHash && expectedHash !== file.contentHash) throw new AutoShipmentBlockedError(["연결 후 확정파일의 내용이 변경되었습니다. 발주확정 수량을 다시 확인해 주세요."]);
+  }
+  const confirmed = resolveConfirmedQuantityRowsForShipment(requests, sourceRecords, confirmedFiles, confirmedQuantityFileNameByPo);
+
+  const reprintFiles = await loadReprintDetailFiles();
+  if (reprintFiles.length === 0) {
     throw new AutoShipmentBlockedError(["현재 웨이브와 일치하는 재출력 파일을 찾지 못했습니다."]);
   }
+  const selectedReprintFile = selectExactReprintFile(requests, reprintFiles, options.selectedReprintFileName, options.invoiceGroups);
+  if (!matchesInvoiceTrackingGroups(options.invoiceGroups, selectedReprintFile.rows)) throw new AutoShipmentBlockedError(["이번 송장파일의 분할과 한진 재출력 결과가 다릅니다. 새 송장 업로드 결과를 확인해 주세요."]);
+  const reprint = { rows: selectedReprintFile.rows, fileNames: [selectedReprintFile.name] };
 
   const confirmedByPo = new Map<string, ParsedTrackingRow[]>();
-  for (const source of sourceRecords) {
-    const row: ParsedTrackingRow = {
-      purchaseOrderNumber: source.purchaseOrderNumber,
-      fulfillmentCenter: source.fulfillmentCenterName,
-      transportType: "쉽먼트",
-      expectedDate: source.expectedArrivalDate,
-      skuId: source.skuId,
-      barcode: source.barcode,
-      productName: source.optionName ? `${source.productName}, ${source.optionName}` : source.productName,
-      confirmedQuantity: String(source.orderedQuantity),
-      trackingNumber: "",
-      shippedQuantity: String(source.orderedQuantity),
-    };
+  for (const row of confirmed.rows) {
     const key = normalizeSkuId(row.purchaseOrderNumber);
     if (!confirmedByPo.has(key)) confirmedByPo.set(key, []);
     confirmedByPo.get(key)!.push(row);
@@ -410,7 +699,6 @@ export async function buildAutoShipmentFile(
   for (const group of groups) {
     const expectedMonthDay = formatMonthDay(group.expectedDate);
     const expectedDateDigits = group.expectedDate.replace(/[^\d]/g, "");
-    const groupTrackingNumbers = new Set<string>();
 
     for (const po of group.purchaseOrderNumbers) {
       const key = normalizeSkuId(po);
@@ -471,16 +759,12 @@ export async function buildAutoShipmentFile(
         continue;
       }
 
-      groupTrackingNumbers.add(trackingNumber);
       trackingNumbersUsed.add(trackingNumber);
       for (const row of confirmedRows) resolvedRows.push({ ...row, trackingNumber });
     }
 
-    if (groupTrackingNumbers.size > 1) {
-      blockingReasons.push(
-        `같은 운송장으로 합배송된 발주번호끼리 운송장번호가 다릅니다: ${group.fulfillmentCenter} ${group.purchaseOrderNumbers.join(", ")} → ${[...groupTrackingNumbers].join(", ")}`
-      );
-    }
+    // 같은 센터·날짜라도 한진 송장파일은 총수량 250개 기준으로 발주서 단위 분할될 수 있다.
+    // 각 발주번호가 정확히 한 운송장에만 연결되면 여러 운송장번호를 정상으로 인정한다.
   }
 
   if (blockingReasons.length > 0) {
@@ -509,6 +793,6 @@ export async function buildAutoShipmentFile(
     includedPurchaseOrderNumbers: [...resolvedPoSet].sort(),
     trackingNumbersUsed: [...trackingNumbersUsed],
     reprintFileNames: reprint.fileNames,
-    confirmedQuantityFileNames: [...new Set(sourceRecords.map(record => record.sourceContainerFile))],
+    confirmedQuantityFileNames: confirmed.fileNames,
   };
 }

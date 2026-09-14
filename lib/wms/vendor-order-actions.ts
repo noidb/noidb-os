@@ -122,6 +122,31 @@ export async function listStatusRequests(): Promise<StatusRequestRecord[]> {
   });
 }
 
+export interface StatusFileGenerationRecord {
+  id: string;
+  kind: "단종" | "단종해제";
+  skuIds: string[];
+  requestIds: string[];
+  generatedAt: string;
+  xlsxFileName: string;
+  pdfFileName: string;
+  operator: string;
+}
+
+export async function listStatusFileGenerations(): Promise<StatusFileGenerationRecord[]> {
+  const rows = await fetchSheetRows("_WMS단종파일생성이력");
+  return rows.slice(1).filter(row => row.some(Boolean)).map(row => ({
+    id: String(row[0] || "").trim(),
+    kind: String(row[1] || "").trim() as "단종" | "단종해제",
+    skuIds: String(row[2] || "").split(",").map(value => value.trim()).filter(Boolean),
+    requestIds: String(row[3] || "").split(",").map(value => value.trim()).filter(Boolean),
+    generatedAt: String(row[4] || "").trim(),
+    xlsxFileName: String(row[5] || "").trim(),
+    pdfFileName: String(row[6] || "").trim(),
+    operator: String(row[7] || "").trim(),
+  }));
+}
+
 export async function createStatusRequest(input: {
   skuId: string; requestType: "단종" | "단종해제"; operator: string; purchaseOrderNumber?: string;
 }): Promise<StatusRequestRecord> {

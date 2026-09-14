@@ -1,14 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildHanjinUploadFile, HanjinTemplateNotFoundError, type HanjinShipmentRequest } from "@/lib/wms/hanjin-upload";
 import { ShipmentOutputValidationError } from "@/lib/wms/shipment-output-context";
+import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
 
 /**
  * 운송장 출력용(한진택배 고정형) 업로드파일 생성 API. 원본 서식은 절대 수정하지 않고
- * 새 행만 추가한 사본을 반환한다. 외부 Supplier Hub/한진 시스템에는 아무것도 업로드하지 않는다.
+ * 새 행만 추가한 사본을 반환하고 지정 Drive 폴더에도 덮어쓰기 없이 저장한다.
+ * 외부 Supplier Hub/한진 시스템에는 자동 제출하지 않는다.
  */
 export const runtime = "nodejs";
 
 interface RequestBody {
+  waveId?: string;
+  invoiceGroups?: unknown;
   requests?: HanjinShipmentRequest[];
   purchaseOrderNumbers?: string[];
 }
@@ -23,7 +27,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "생성할 발주서/물류센터 목록이 없습니다." }, { status: 400 });
     }
 
-    const result = await buildHanjinUploadFile(purchaseOrderNumbers);
+    if (body.waveId) {
+      try { const { verifyActivePurchaseOrderSelection } = await import("@/lib/wms/active-purchase-order-selection"); await verifyActivePurchaseOrderSelection(String(body.waveId), purchaseOrderNumbers); }
+      catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "출고완료 상태를 확인하지 못했습니다." }, { status: 409 }); }
+    }
+
+    const result = await buildHanjinUploadFile(purchaseOrderNumbers, body.invoiceGroups);
     if (result.addedPurchaseOrderNumbers.length === 0) {
       return NextResponse.json(
         {
@@ -37,9 +46,16 @@ export async function POST(request: NextRequest) {
 
     const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
     const fileName = `한진택배_업로드_${timestamp}.xlsx`;
+    const driveHeaders = await generatedDriveSaveHeaders(
+      result.buffer,
+      fileName,
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ["쿠팡데이터", "한진택배 송장파일"],
+    );
 
     return new NextResponse(result.buffer, {
       headers: {
+        ...driveHeaders,
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
         "X-Added-Po-Numbers": encodeURIComponent(result.addedPurchaseOrderNumbers.join(",")),

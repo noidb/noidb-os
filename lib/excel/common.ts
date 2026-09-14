@@ -41,7 +41,10 @@ export function splitList(value: string) {
     .filter(Boolean);
 }
 
-export function buildSkuRows(payload: ExportPayload): SkuRow[] {
+export function buildSkuRows(payload: {
+  model: string;
+  product: Pick<ExportPayload["product"], "category" | "colors" | "sizes">;
+}): SkuRow[] {
   const { product, model } = payload;
   const colors = [...new Set(splitList(product.colors))];
   const sizes = [...new Set(splitList(product.sizes))];

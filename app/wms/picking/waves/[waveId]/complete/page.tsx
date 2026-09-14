@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
+import { useActivePickingWaveRepository, usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import { recalculateAutoVendorOrderLines } from "@/lib/wms/vendor-order/recalculate";
 import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraft, type VendorOrderDraftLine } from "@/lib/wms/vendor-order/types";
@@ -19,7 +19,8 @@ import RefreshCatalogButton from "../../RefreshCatalogButton";
 import WaveIdentityEditor from "../../WaveIdentityEditor";
 
 export default function WmsPickingWaveCompletePage({ params }: { params: { waveId: string } }) {
-  const waveRepository = usePickingWaveRepository();
+  const waveRepository = useActivePickingWaveRepository();
+  const rawWaveRepository = usePickingWaveRepository();
   const vendorOrderRepository = useVendorOrderRepository();
 
   const [wave, setWave] = useState<PickingWave | null>(null);
@@ -82,7 +83,7 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   useEffect(() => {
     reload();
     refreshCatalog();
-    fetch("/api/wms/supplier-hub-orders", { cache: "no-store" })
+    fetch("/api/wms/supplier-hub-orders?includePast=1", { cache: "no-store" })
       .then(response => response.json())
       .then(data => setOrderLogisticsByPo(Object.fromEntries((data.orders || []).map((order: { purchaseOrderNumber: string; fulfillmentCenter?: string; expectedDate?: string }) => [
         order.purchaseOrderNumber,
@@ -106,6 +107,43 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   useEffect(() => {
     if (loading || restoredScrollRef.current) return;
     restoredScrollRef.current = true;
+    const hash = window.location.hash.slice(1);
+    if (hash) {
+      let targetId = hash;
+      try { targetId = decodeURIComponent(hash); } catch { /* 원문 hash로 탐색 */ }
+      let frame = 0;
+      let observer: ResizeObserver | undefined;
+      let stopped = false;
+      const alignTarget = () => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => {
+          if (!stopped) document.getElementById(targetId)?.scrollIntoView({ block: "start", behavior: "auto" });
+        });
+      };
+      const stop = () => {
+        if (stopped) return;
+        stopped = true;
+        cancelAnimationFrame(frame);
+        observer?.disconnect();
+        clearTimeout(timeout);
+        window.removeEventListener("wheel", stop);
+        window.removeEventListener("touchstart", stop);
+        window.removeEventListener("pointerdown", stop);
+        window.removeEventListener("keydown", stop);
+      };
+      const timeout = window.setTimeout(stop, 8_000);
+      if (typeof ResizeObserver !== "undefined") {
+        observer = new ResizeObserver(alignTarget);
+        observer.observe(document.documentElement);
+        observer.observe(document.body);
+      }
+      window.addEventListener("wheel", stop, { passive: true });
+      window.addEventListener("touchstart", stop, { passive: true });
+      window.addEventListener("pointerdown", stop, { passive: true });
+      window.addEventListener("keydown", stop);
+      requestAnimationFrame(alignTarget);
+      return stop;
+    }
     const savedPosition = Number(sessionStorage.getItem(pagePositionKey) || "0");
     if (savedPosition > 0) requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo({ top: savedPosition })));
   }, [loading, pagePositionKey]);
@@ -113,7 +151,8 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   /** 부족수량 기준 자동 부족분 라인만 다시 계산해 저장한다 — 수동 추가 라인은 그대로 둔다. */
   async function recalcVendorLines(currentItems: PickingWaveItem[]) {
     const now = new Date().toISOString();
-    const recalculated = recalculateAutoVendorOrderLines(params.waveId, currentItems, vendorLines, now);
+    const sourceItems = wave?.workScope?.excludedPurchaseOrderNumbers.length ? await rawWaveRepository.listItems(params.waveId) : currentItems;
+    const recalculated = recalculateAutoVendorOrderLines(params.waveId, sourceItems, vendorLines, now);
     await Promise.all(recalculated.removedLineIds.map(id => vendorOrderRepository.deleteLine(id)));
     await Promise.all(recalculated.lines.map(line => vendorOrderRepository.saveLine(line)));
     setVendorLines(recalculated.lines);
@@ -140,6 +179,16 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
     }
   }
 
+  async function setShipmentWorkflowStage(stage: "documents-complete" | "edit-documents") {
+    if (!wave) return;
+    const now = new Date().toISOString();
+    const updatedWave: PickingWave = stage === "documents-complete"
+      ? { ...wave, shipmentDocumentsCompletedAt: now, updatedAt: now }
+      : { ...wave, shipmentDocumentsCompletedAt: undefined, updatedAt: now };
+    await waveRepository.saveWave(updatedWave);
+    setWave(updatedWave);
+  }
+
   if (loading) {
     return (
       <main style={pageStyle}>
@@ -157,6 +206,8 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
       </main>
     );
   }
+
+  if (wave.workScope?.excludedPurchaseOrderNumbers.length && !wave.sourcePurchaseOrderNumbers.length) return <main style={pageStyle}><WmsExitNav /><h1>출고 작업이 모두 완료됐습니다.</h1><p>이 웨이브의 발주서는 다른 작업에서 출고완료되어 남은 작업이 없습니다.</p><a href="/wms/work-center">작업센터로 돌아가기</a></main>;
 
   const totalQuantity = items.reduce((sum, item) => sum + item.totalQuantity, 0);
   const pickedQuantity = items.reduce((sum, item) => sum + item.pickedQuantity, 0);
@@ -186,6 +237,25 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   const canEdit = wave.status === "completed" || wave.status === "result_confirmed";
   const reachedResultConfirm = wave.status === "result_confirmed" || wave.status === "order_confirmed";
 
+  const mixedOutputNeedsReplacement = Boolean(wave.workScope?.excludedPurchaseOrderNumbers.length && wave.outputGenerations?.some(g => !g.supersededByGenerationId && g.purchaseOrderNumbers.some(po => wave.workScope!.excludedPurchaseOrderNumbers.includes(po)) && g.purchaseOrderNumbers.some(po => wave.sourcePurchaseOrderNumbers.includes(po))));
+  if (wave.shipmentDocumentsCompletedAt && !mixedOutputNeedsReplacement) {
+    const integratedDone = Boolean(wave.integratedPickingCompletedAt);
+    return <main style={pageStyle}>
+      <WmsExitNav />
+      <h1 style={{ fontSize: "22px" }}>출고작업</h1>
+      <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "16px", background: wmsColors.greenSoft }}>
+        <strong>Shipment 서류작업 완료{integratedDone ? " · 통합피킹 완료" : ""}</strong>
+        <p style={{ fontSize: "13px", lineHeight: 1.6 }}>물량과 센터 상황에 맞춰 통합피킹 또는 Shipment별 출고작업을 선택하세요. 순서와 관계없이 진행할 수 있습니다.</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px" }}>
+          <a href={`/wms/picking/waves/${encodeURIComponent(wave.id)}`} style={{ textDecoration: "none" }}><button style={{ ...wmsPrimaryButton, width: "100%" }}>통합피킹 {integratedDone ? "다시 열기" : "시작·계속하기"}</button></a>
+          <a href={`/wms/picking/waves/${encodeURIComponent(wave.id)}/packing`} style={{ textDecoration: "none" }}><button style={{ ...wmsPrimaryButton, width: "100%" }}>Shipment별 출고작업</button></a>
+        </div>
+      </div>
+      <button type="button" onClick={() => void setShipmentWorkflowStage("edit-documents")} style={{ ...wmsGhostButton, width: "100%", marginTop: "14px" }}>Shipment 서류 수정</button>
+      <a href="/wms/work-center" style={{ display: "block", textDecoration: "none", marginTop: "10px" }}><button style={{ ...wmsGhostButton, width: "100%" }}>작업센터로</button></a>
+    </main>;
+  }
+
   if (wave.status === "order_confirmed") {
     return (
       <main style={pageStyle}>
@@ -198,9 +268,10 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
         </div>
 
         <ShipmentWorkflowStepCard
+          id="po-confirm"
           step={1}
-          title="발주확정 파일 생성"
-          subtitle="선택한 발주만 쿠팡 업로드용 XLSX 한 개로 생성"
+          title="발주확정 통합파일"
+          subtitle="발주수량을 기본 확정수량으로 사용하며 상태와 관계없이 다시 생성할 수 있습니다."
           status="done"
         >
           <GenerateAllPoConfirmButton
@@ -212,6 +283,8 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
         </ShipmentWorkflowStepCard>
 
         <HanjinStepSequence waveId={wave.id} baskets={baskets} items={items} />
+        <button type="button" onClick={() => { if (window.confirm("Shipment 관련 서류와 출력세트 작업을 모두 마쳤습니까? 완료하면 서류 단계는 수정할 때까지 숨겨집니다.")) void setShipmentWorkflowStage("documents-complete"); }} style={{ ...wmsPrimaryButton, width: "100%", marginTop: "16px" }}>Shipment 서류작업 완료</button>
+        {(wave.outputGenerations || []).some(generation => generation.status === "shipment_generated") && <a href={`/wms/picking/waves/${encodeURIComponent(wave.id)}/packing`} style={{ display: "block", textDecoration: "none", marginTop: "10px" }}><button type="button" style={{ ...wmsPrimaryButton, width: "100%" }}>Shipment별 출고작업 바로가기</button></a>}
 
         <details style={{ marginTop: "16px", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: wmsColors.surfaceBeige }}>
           <summary style={{ cursor: "pointer", padding: "13px", fontSize: "13px", fontWeight: 800 }}>피킹 결과 보기</summary>
@@ -251,9 +324,6 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
   return (
     <main style={pageStyle}>
       <WmsExitNav />
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <RefreshCatalogButton onClick={refreshCatalog} loading={catalogRefreshing} />
-      </div>
       <div style={{ textAlign: "center", padding: "16px 0" }}>
         <div style={{ fontSize: "40px" }}>✅</div>
         <WaveIdentityEditor wave={wave} onSave={async updated => { await waveRepository.saveWave(updated); setWave(updated); }} />
@@ -271,7 +341,7 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
 
       <details style={{ marginTop: "20px", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: "#fff" }}>
         <summary style={{ cursor: "pointer", padding: "12px", fontSize: "14px", fontWeight: 800 }}>
-          발주서별 완료 상태 · {basketStatuses.filter(item => item.done).length}/{basketStatuses.length}
+          발주서별 완료상태 · {basketStatuses.filter(item => item.done).length}/{basketStatuses.length}
         </summary>
         <div style={{ display: "flex", flexDirection: "column", gap: "6px", padding: "0 10px 10px" }}>
           {basketStatuses.map(basket => (
@@ -318,41 +388,31 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
       </div>
 
       {/* 4~6단계: 부족분 유무에 따른 다음 단계 */}
-      {reachedResultConfirm && (
+      {reachedResultConfirm && shortageQuantity > 0 && (
         <div style={{ marginTop: "16px" }}>
-          {shortageQuantity > 0 ? (
-            <div style={{ border: `2px solid ${wmsColors.warn}`, borderRadius: "12px", padding: "14px", background: wmsColors.warnSoft }}>
-              <div style={{ fontSize: "12px", color: wmsColors.warn, fontWeight: 700, marginBottom: "6px" }}>{vendorOrderStatusText}</div>
-              <div style={{ fontSize: "12px", color: wmsColors.ink, marginBottom: "10px" }}>
-                부족분 거래처 발주서 {shortageVendorCount}건
-                <br />
-                부족 SKU {shortageItems.length}개 · 총 부족수량 {shortageQuantity}개
-              </div>
-              <a href={`/wms/picking/waves/${wave.id}/vendor-orders`} style={{ display: "block", textDecoration: "none" }}>
-                <button style={{ ...wmsPrimaryButton, width: "100%" }}>
-                  {vendorLines.length === 0 ? "부족분 거래처 발주서 생성" : "부족분 거래처 발주서 확인"}
-                </button>
-              </a>
+          <div style={{ border: `2px solid ${wmsColors.warn}`, borderRadius: "12px", padding: "14px", background: wmsColors.warnSoft }}>
+            <div style={{ fontSize: "12px", color: wmsColors.warn, fontWeight: 700, marginBottom: "6px" }}>{vendorOrderStatusText}</div>
+            <div style={{ fontSize: "12px", color: wmsColors.ink, marginBottom: "10px" }}>
+              부족분 거래처 발주서 {shortageVendorCount}건
+              <br />
+              부족 SKU {shortageItems.length}개 · 총 부족수량 {shortageQuantity}개
             </div>
-          ) : (
-            <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "14px", background: wmsColors.greenSoft }}>
-              <div style={{ fontSize: "12px", color: wmsColors.greenDark, fontWeight: 700, marginBottom: "6px" }}>현재 부족분이 없습니다.</div>
-              <p style={{ fontSize: "12px", color: wmsColors.ink, margin: "0 0 10px" }}>부족분이 없습니다. 발주확정을 진행할 수 있습니다.</p>
-              <a href={`/wms/picking/waves/${wave.id}/vendor-orders`} style={{ fontSize: "12px", color: wmsColors.muted }}>
-                필요하면 수동으로 거래처 발주서 만들기 →
-              </a>
-            </div>
-          )}
+            <a href={`/wms/picking/waves/${wave.id}/vendor-orders`} style={{ display: "block", textDecoration: "none" }}>
+              <button style={{ ...wmsPrimaryButton, width: "100%" }}>
+                {vendorLines.length === 0 ? "부족분 거래처 발주서 생성" : "부족분 거래처 발주서 확인"}
+              </button>
+            </a>
+          </div>
         </div>
       )}
 
-      {reachedResultConfirm && (
-        <div style={{ marginTop: "20px" }}>
+      <div style={{ marginTop: "20px" }}>
           <ShipmentWorkflowStepCard
+            id="po-confirm"
             step={1}
-            title="발주확정 파일 생성"
-            subtitle="선택한 발주만 쿠팡 업로드용 XLSX 한 개로 생성"
-            status="current"
+            title="발주확정 통합파일"
+            subtitle="발주수량을 기본 확정수량으로 사용하고 예외만 수정합니다. 실제 피킹과 독립적으로 다시 생성할 수 있습니다."
+            status={wave.orderConfirmedAt ? "done" : "current"}
           >
             <GenerateAllPoConfirmButton
               wave={wave}
@@ -366,8 +426,7 @@ export default function WmsPickingWaveCompletePage({ params }: { params: { waveI
           </ShipmentWorkflowStepCard>
 
           <HanjinStepSequence waveId={wave.id} baskets={baskets} items={items} />
-        </div>
-      )}
+      </div>
 
       <a href="/wms/picking/waves" style={{ display: "block", textDecoration: "none", marginTop: "20px" }}>
         <button style={{ ...wmsGhostButton, width: "100%" }}>목록으로</button>

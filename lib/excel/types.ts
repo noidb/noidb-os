@@ -26,6 +26,8 @@ export type ExportPayload = {
   sourcingUrl?: string;
   /** 색상 옵션명 → 실제 썸네일 data URL */
   optionImages?: Record<string, string>;
+  /** 모델SKU → 실제 썸네일. 명시된 경우 색상 이미지로 대체하지 않습니다. */
+  skuImages?: Record<string, string>;
 };
 
 export type SkuRow = {

@@ -12,6 +12,7 @@ import { UnavailableStockLevelProvider } from "./stock-level";
  */
 interface PickingWaveContextValue {
   repository: PickingWaveRepository;
+  activeRepository: PickingWaveRepository;
   stockLevelProvider: StockLevelProvider;
 }
 
@@ -21,6 +22,7 @@ export function PickingWaveRepositoryProvider({ children }: { children: ReactNod
   const value = useMemo<PickingWaveContextValue>(
     () => ({
       repository: new SharedPickingWaveRepository(),
+      activeRepository: new SharedPickingWaveRepository(true),
       stockLevelProvider: new UnavailableStockLevelProvider(),
     }),
     []
@@ -38,4 +40,11 @@ export function useStockLevelProvider(): StockLevelProvider {
   const ctx = useContext(PickingWaveContext);
   if (!ctx) throw new Error("useStockLevelProvider must be used within PickingWaveRepositoryProvider");
   return ctx.stockLevelProvider;
+}
+
+/** Operational views exclude matching POs already dispatched in another wave. */
+export function useActivePickingWaveRepository(): PickingWaveRepository {
+  const ctx = useContext(PickingWaveContext);
+  if (!ctx) throw new Error("useActivePickingWaveRepository must be used within PickingWaveRepositoryProvider");
+  return ctx.activeRepository;
 }

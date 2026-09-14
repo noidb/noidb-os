@@ -59,6 +59,7 @@ export interface WeeklyRun {
 export interface WeeklyWorkspace {
   materialSnapshot?: WeeklySnapshot;
   statusCompletionIds?: string[];
+  statusListSnapshot?: { requests: import("./vendor-order-actions").StatusRequestRecord[]; generations: import("./vendor-order-actions").StatusFileGenerationRecord[]; at: string };
   workTransfers?: Record<string, { source: "status" | "vendor"; sourceId: string; sourceUpdatedAt?: string; target: "order" | "reorder"; runId: string; completed: boolean; at: string }>;
   schemaVersion: 1; revision: number; runs: WeeklyRun[];
   /** Append-only observations of the latest coupon end date for an exact SKU. */

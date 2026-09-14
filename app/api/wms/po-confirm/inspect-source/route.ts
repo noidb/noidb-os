@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     const uploadedFileBase64 = String(body.uploadedFileBase64 || "");
     const uploadedBuffer = uploadedFileBase64 ? decodeBase64(uploadedFileBase64) : undefined;
     if (uploadedFileBase64 && (!uploadedBuffer || uploadedBuffer.length === 0)) {
-      return NextResponse.json({ error: "업로드한 파일 내용이 비어 있습니다." }, { status: 400 });
+      return NextResponse.json({ code: "SOURCE_INVALID", error: "업로드한 파일 내용이 비어 있습니다." }, { status: 400 });
     }
 
     const source = await inspectPoConfirmSource({
@@ -48,16 +48,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ source });
   } catch (error) {
     if (error instanceof PoConfirmSourceNotFoundError) {
-      return NextResponse.json({ error: error.message, targetPoNumbers: error.targetPoNumbers }, { status: 404 });
+      if (error.detail) return NextResponse.json({ code: "SOURCE_INVALID", error: error.detail }, { status: 422 });
+      return NextResponse.json({ code: "SOURCE_NOT_FOUND", error: error.message, targetPoNumbers: error.targetPoNumbers }, { status: 404 });
     }
     if (error instanceof PoConfirmSourceConflictError) {
-      return NextResponse.json({ error: error.message, candidates: error.candidates }, { status: 409 });
+      return NextResponse.json({ code: "SOURCE_CONFLICT", error: error.message, candidates: error.candidates }, { status: 409 });
     }
     if (error instanceof PoConfirmSourceInspectionError) {
-      return NextResponse.json({ error: error.message }, { status: 422 });
+      return NextResponse.json({ code: "SOURCE_INVALID", error: error.message }, { status: 422 });
     }
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "발주확정 원본을 확인하는 중 오류가 발생했습니다." },
+      { code: "SOURCE_CHECK_FAILED", error: error instanceof Error ? error.message : "발주확정 원본을 확인하는 중 오류가 발생했습니다." },
       { status: 500 }
     );
   }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
 import {
   buildSelectedPoConfirmWorkbook,
   type ConfirmedQuantitiesByPoInput,
@@ -13,6 +14,7 @@ import {
 export const runtime = "nodejs";
 
 interface RequestBody {
+  waveId?: string;
   selectedPoNumbers?: unknown[];
   confirmedQuantitiesByPo?: unknown;
   expectedSourceHash?: unknown;
@@ -33,6 +35,11 @@ export async function POST(request: NextRequest) {
     const selectedPoNumbers = Array.isArray(body.selectedPoNumbers)
       ? body.selectedPoNumbers.map(value => String(value || "").trim()).filter(Boolean)
       : [];
+    if (body.waveId) {
+      try { const { verifyActivePurchaseOrderSelection } = await import("@/lib/wms/active-purchase-order-selection"); await verifyActivePurchaseOrderSelection(String(body.waveId), selectedPoNumbers); }
+      catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "출고완료 상태를 확인하지 못했습니다." }, { status: 409 }); }
+    }
+
     const confirmedQuantitiesByPo = Array.isArray(body.confirmedQuantitiesByPo)
       ? (body.confirmedQuantitiesByPo as ConfirmedQuantitiesByPoInput[])
       : [];
@@ -52,8 +59,10 @@ export async function POST(request: NextRequest) {
 
     const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
     const fileName = `PO_FOR_CONFIRM_선택발주_${result.selectedPoNumbers.length}건_${timestamp}.xlsx`;
+    const driveHeaders = await generatedDriveSaveHeaders(result.buffer, fileName, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ["쿠팡데이터", "발주서업로드완성"]);
     return new NextResponse(result.buffer, {
       headers: {
+        ...driveHeaders,
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
         "Cache-Control": "no-store",

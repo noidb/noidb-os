@@ -2,33 +2,20 @@
 
 import { useMemo, useState } from "react";
 import type { PickingWaveItem, ShipmentOutputGeneration } from "@/lib/wms/picking-wave/types";
-import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
+import { loadShipmentPrintGroups } from "@/lib/wms/load-shipment-print-groups";
 import {
   buildBarTenderWorkbook,
   buildFourUpLabelPdf,
   buildMergedManifestPdf,
   buildShipmentPrintZip,
-  inspectShipmentPdf,
-  matchShipmentPrintGroups,
-  parseBarcodeWorkbook,
+  buildTransactionStatementPdf,
 } from "@/lib/wms/shipment-print-client";
 import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
 
-interface EncodedSource { name: string; base64: string }
-interface Props { waveId: string; items: PickingWaveItem[]; generation?: ShipmentOutputGeneration; generationLabel?: string }
+interface Props { waveId: string; items: PickingWaveItem[]; generation?: ShipmentOutputGeneration; generationLabel?: string; packingHref?: string; onGenerated?: (generationId: string, fileName: string) => Promise<void> | void }
 
-function decodeFile(source: EncodedSource, type: string): File {
-  const binary = atob(source.base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return new File([bytes], source.name, { type });
-}
-function sameSet(left: Set<string>, right: Set<string>): boolean {
-  return left.size === right.size && [...left].every(value => right.has(value));
-}
-
-export default function ShipmentOutputSetSection({ waveId, items, generation, generationLabel }: Props) {
+export default function ShipmentOutputSetSection({ waveId, items, generation, generationLabel, packingHref, onGenerated }: Props) {
   const [generating, setGenerating] = useState<"all" | "barcode" | "label" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -39,74 +26,34 @@ export default function ShipmentOutputSetSection({ waveId, items, generation, ge
   }
   const activeGeneration = generation;
 
+  const loadPrintGroups = () => loadShipmentPrintGroups(waveId, items, activeGeneration);
+
   async function generateFullSet(downloadTarget: ReturnType<typeof reserveDownloadTarget>) {
-    const expected = new Set(activeGeneration.purchaseOrderNumbers.map(String));
-    const expectedDateTokens = [...new Set(items.flatMap(item => item.sources)
-      .filter(source => expected.has(source.purchaseOrderNumber))
-      .map(source => String(source.shippingGroupKey || "").split("\u0000")[0].replace(/\D/g, ""))
-      .filter(value => /^20\d{6}$/.test(value)))];
-    if (expectedDateTokens.length === 0) throw new Error("현재 묶음의 입고예정일을 확인할 수 없습니다.");
-    const sourceResponse = await fetch("/api/wms/shipment-print/auto-source", {
+    const { groups } = await loadPrintGroups();
+    const centerLabelResponse = await fetch("/api/wms/fulfillment-center-labels", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        waveId,
-        dateTokens: expectedDateTokens,
-        expectedPurchaseOrderNumbers: [...expected],
-        expectedWorkbookName: activeGeneration.shipmentFileName,
-      }),
+      body: JSON.stringify({ purchaseOrderNumbers: activeGeneration.purchaseOrderNumbers }),
     });
-    const source = await sourceResponse.json();
-    if (!sourceResponse.ok || source.error) throw new Error(source.error || "출력세트 원본을 불러오지 못했습니다.");
-
-    const labelFiles = (source.labels as EncodedSource[]).map(value => decodeFile(value, "application/pdf"));
-    const manifestFiles = (source.manifests as EncodedSource[]).map(value => decodeFile(value, "application/pdf"));
-    const workbook = decodeFile(source.workbook as EncodedSource, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    const [labels, manifests, barcodeRows] = await Promise.all([
-      Promise.all(labelFiles.map(file => inspectShipmentPdf(file, "label"))),
-      Promise.all(manifestFiles.map(file => inspectShipmentPdf(file, "manifest"))),
-      parseBarcodeWorkbook(workbook),
-    ]);
-    let catalog: ProductCatalogItem[];
-    try {
-      catalog = await fetch("/api/wms/product-catalog", { cache: "no-store" }).then(async response => {
-        const data = await response.json();
-        if (!response.ok || data.error || !data.configured) throw new Error(data.error || "제품DB를 불러오지 못했습니다.");
-        return data.items as ProductCatalogItem[];
-      });
-    } catch (catalogError) {
-      if (window.location.hostname !== "localhost") throw catalogError;
-      catalog = barcodeRows.map(row => ({
-        skuId: row.skuId, modelSku: "", modelName: row.embeddedModelName, category: "", gender: "",
-        productName: "", optionLabel: "", imageUrl: "", warehouseNumber: "", boxNumber: "",
-        currentStock: "", currentStatus: "", costVatIncluded: "", vendorName: "", barcode: "",
-        countryOfOrigin: row.embeddedCountryOfOrigin, productLink: "",
-      }));
+    if (!centerLabelResponse.ok) {
+      const data = await centerLabelResponse.json().catch(() => ({}));
+      throw new Error(data.error || "물류센터 라벨을 생성하지 못했습니다.");
     }
-
-    const generationRows = barcodeRows.filter(row => expected.has(row.purchaseOrderNumber));
-    const workbookPoSet = new Set(generationRows.map(row => row.purchaseOrderNumber));
-    if (!sameSet(expected, workbookPoSet)) throw new Error(`현재 묶음 발주 ${expected.size}건과 출력 원본 발주 ${workbookPoSet.size}건이 정확히 일치하지 않습니다.`);
-    const relevantLabels = labels.filter(label => label.purchaseOrderNumbers.some(po => expected.has(po)));
-    const shipmentNumbers = new Set(relevantLabels.map(label => label.shipmentNumber));
-    const relevantManifests = manifests.filter(manifest => shipmentNumbers.has(manifest.shipmentNumber));
-    const groups = matchShipmentPrintGroups(relevantLabels, relevantManifests, generationRows, catalog, items);
-    const matchedPos = groups.flatMap(group => group.purchaseOrderNumbers);
-    const matchedSet = new Set(matchedPos);
-    if (!sameSet(expected, matchedSet) || matchedPos.length !== matchedSet.size) {
-      const missing = [...expected].filter(po => !matchedSet.has(po));
-      const extra = [...matchedSet].filter(po => !expected.has(po));
-      throw new Error(`출력세트 발주 완전성 검증 실패 (누락 ${missing.length} · 예상 외 ${extra.length} · 중복 ${matchedPos.length - matchedSet.size})`);
-    }
-
-    const [labelsPdf, manifestsPdf, barcodeXlsx] = await Promise.all([
-      buildFourUpLabelPdf(groups), buildMergedManifestPdf(groups), buildBarTenderWorkbook(groups),
+    const [labelsPdf, manifestsPdf, barcodeXlsx, transactionPdf, centerLabelXlsx] = await Promise.all([
+      buildFourUpLabelPdf(groups), buildMergedManifestPdf(groups), buildBarTenderWorkbook(groups), buildTransactionStatementPdf(groups),
+      centerLabelResponse.arrayBuffer().then(buffer => new Uint8Array(buffer)),
     ]);
-    const zip = await buildShipmentPrintZip([
+    const outputFiles = [
       { name: "01_부착문서_4분할.pdf", bytes: labelsPdf },
       { name: "02_동봉내역서_통합.pdf", bytes: manifestsPdf },
-      { name: `바코드출력_${outputDateToken}_최종.xlsx`, bytes: barcodeXlsx },
-    ]);
-    downloadBlobPreservingPage(zip, `Shipment_출력세트_${outputDateToken}_${activeGeneration.generationId}.zip`, downloadTarget);
+      { name: `03_바코드출력_${outputDateToken}_최종.xlsx`, bytes: barcodeXlsx },
+      { name: "04_물류센터_라벨.xlsx", bytes: centerLabelXlsx },
+      { name: "05_거래명세서.pdf", bytes: transactionPdf },
+    ];
+    const fileList = new TextEncoder().encode(["Shipment 출력세트 생성 파일", ...outputFiles.map(file => file.name), "06_생성파일목록.txt"].join("\r\n"));
+    const zip = await buildShipmentPrintZip([...outputFiles, { name: "06_생성파일목록.txt", bytes: fileList }]);
+    const fileName = `Shipment_출력세트_${outputDateToken}_${activeGeneration.generationId}.zip`;
+    downloadBlobPreservingPage(zip, fileName, downloadTarget);
+    await onGenerated?.(activeGeneration.generationId, fileName);
   }
 
   async function generate(kind: "all" | "barcode" | "label") {
@@ -115,10 +62,23 @@ export default function ShipmentOutputSetSection({ waveId, items, generation, ge
     try {
       if (kind === "all") await generateFullSet(downloadTarget);
       else {
+        const printSource = kind === "barcode" ? await loadPrintGroups() : undefined;
+        const manifestGroups = printSource?.groups.map(group => ({
+          shipmentNumber: group.shipmentNumber,
+          fulfillmentCenter: group.fulfillmentCenter,
+          expectedDate: group.expectedDate,
+          purchaseOrderNumbers: group.purchaseOrderNumbers,
+          items: group.barcodeRows.map(row => ({
+            purchaseOrderNumber: row.purchaseOrderNumber,
+            skuId: row.skuId,
+            barcode: row.barcode,
+            quantity: row.quantity,
+          })),
+        }));
         const endpoint = kind === "barcode" ? "/api/wms/generation-barcode-output" : "/api/wms/fulfillment-center-labels";
         const response = await fetch(endpoint, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ purchaseOrderNumbers: activeGeneration.purchaseOrderNumbers }),
+          body: JSON.stringify({ purchaseOrderNumbers: activeGeneration.purchaseOrderNumbers, manifestGroups, expectedWorkbookName: printSource?.workbookName }),
         });
         if (!response.ok) {
           const data = await response.json().catch(() => ({}));
@@ -127,10 +87,14 @@ export default function ShipmentOutputSetSection({ waveId, items, generation, ge
         const disposition = response.headers.get("Content-Disposition") || "";
         const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/)?.[1];
         const fileName = encoded ? decodeURIComponent(encoded) : kind === "barcode" ? "바코드출력_최종.xlsx" : "물류센터_라벨.xlsx";
+        const driveSaved = response.headers.get("X-NOIDB-Drive-Saved") === "true";
+        const driveWarning = decodeURIComponent(response.headers.get("X-NOIDB-Drive-Save-Warning") || "");
         downloadBlobPreservingPage(await response.blob(), fileName, downloadTarget);
+        if (driveSaved) setMessage(`${kind === "barcode" ? "바코드" : "물류센터 라벨"} 파일 생성 및 Drive 자동저장을 완료했습니다.`);
+        else if (driveWarning) setMessage(driveWarning);
       }
       const label = kind === "all" ? "Shipment 출력세트" : kind === "barcode" ? "바코드" : "물류센터 라벨";
-      setMessage(`묶음 발주 ${activeGeneration.purchaseOrderNumbers.length}건 기준 ${label} 파일을 생성했습니다. 언제든 다시 생성할 수 있습니다.`);
+      if (kind === "all") setMessage(`묶음 발주 ${activeGeneration.purchaseOrderNumbers.length}건 기준 ${label} 파일을 생성했습니다. 언제든 다시 생성할 수 있습니다.`);
     } catch (cause) {
       closeReservedDownloadTarget(downloadTarget);
       setError(cause instanceof Error ? cause.message : "Shipment 출력세트 생성 중 오류가 발생했습니다.");
@@ -139,10 +103,24 @@ export default function ShipmentOutputSetSection({ waveId, items, generation, ge
 
   return <div>
     <div style={{ marginBottom: "8px", padding: "9px", borderRadius: "8px", background: wmsColors.surfaceBeige, fontSize: "12px", fontWeight: 800 }}>
-      현재 출력세트: {generationLabel || "현재 묶음"} · 발주 {generation.purchaseOrderNumbers.length}건 · 4분할 라벨 PDF + 통합 거래명세서 PDF + 바코드 XLSX
+      현재 출력세트: {generationLabel || "현재 묶음"} · 발주 {generation.purchaseOrderNumbers.length}건 · 부착문서 + 동봉내역서 + 바코드 + 물류센터 라벨 + 거래명세서
     </div>
     {error && <p style={{ margin: "0 0 8px", color: "#c0392b", fontSize: "11px", whiteSpace: "pre-wrap" }}>{error}</p>}
     {message && <p style={{ margin: "0 0 8px", color: wmsColors.greenDark, fontSize: "11px" }}>{message}</p>}
+    {packingHref && <><a
+      href={`${packingHref}?generation=${encodeURIComponent(activeGeneration.generationId)}`}
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box",
+        width: "100%", minHeight: "52px", marginBottom: "8px", borderRadius: "10px",
+        border: `2px solid ${wmsColors.slateDark}`, background: "#fff", color: wmsColors.slateDark,
+        fontSize: "15px", fontWeight: 900, textDecoration: "none",
+      }}
+    >
+      상품 이미지로 확인
+    </a>
+    <p style={{ margin: "-2px 0 10px", color: wmsColors.muted, fontSize: "11px", lineHeight: 1.5 }}>
+      현재 묶음의 동봉내역서 순서대로 이미지·SKU·바코드·수량을 확인하고 상품링크를 열 수 있습니다.
+    </p></>}
     <button type="button" onClick={() => void generate("all")} disabled={generating !== null} style={{ ...wmsPrimaryButton, width: "100%", minHeight: "52px", marginBottom: "8px", opacity: generating ? 0.6 : 1 }}>
       {generating === "all" ? "Shipment 출력세트 생성 중..." : "Shipment 출력세트 생성"}
     </button>

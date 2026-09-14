@@ -1,14 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
+import { useSearchParams } from "next/navigation";
+import { useActivePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import type { BasketAssignment, PickingWaveItem, ShipmentOutputGeneration } from "@/lib/wms/picking-wave/types";
-import { wmsColors } from "@/lib/wms/ui-tokens";
+import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
 import HanjinUploadSection from "./HanjinUploadSection";
 import HanjinAutoShipmentSection from "./HanjinAutoShipmentSection";
 import type { HanjinGenerationResult } from "./HanjinUploadSection";
 import ShipmentOutputSetSection from "./ShipmentOutputSetSection";
 import ShipmentWorkflowStepCard from "./ShipmentWorkflowStepCard";
+import { connectInvoiceGeneration } from "@/lib/wms/invoice-generation";
+import { chooseOutputGenerationId } from "@/lib/wms/output-generation-progress";
 
 interface Props {
   waveId: string;
@@ -31,24 +34,37 @@ interface Props {
  * 없고, 이 화면에 다시 연결해야 할 경우를 대비한 것뿐이다.
  */
 export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
-  const repository = usePickingWaveRepository();
+  const repository = useActivePickingWaveRepository();
+  const searchParams = useSearchParams();
+  const requestedGenerationId = searchParams.get("generation")?.trim() || null;
+  const requestedGenerationKey = requestedGenerationId ? `${waveId}::${requestedGenerationId}` : null;
   const [step1Done, setStep1Done] = useState(false);
   const [generations, setGenerations] = useState<ShipmentOutputGeneration[]>([]);
+  const [generationsLoaded, setGenerationsLoaded] = useState(false);
   const [activeGenerationId, setActiveGenerationId] = useState<string | null>(null);
+  const [releasedGenerationKey, setReleasedGenerationKey] = useState<string | null>(null);
   const activeGenerationStorageKey = `noidb:wms:active-output-generation:${waveId}`;
+  const queryControlsSelection = Boolean(requestedGenerationKey && releasedGenerationKey !== requestedGenerationKey);
 
   useEffect(() => {
+    setGenerationsLoaded(false);
     repository.getWave(waveId).then(wave => {
-      const stored = wave?.outputGenerations || [];
+      const allowed = new Set(wave?.sourcePurchaseOrderNumbers || []);
+      const stored = (wave?.outputGenerations || []).filter(g => g.purchaseOrderNumbers.every(po => allowed.has(po)));
       setGenerations(stored);
       setActiveGenerationId(current => {
-        if (current) return current;
+        if (queryControlsSelection && requestedGenerationId) {
+          const requested = stored.find(generation => generation.generationId === requestedGenerationId);
+          return requested?.generationId || null;
+        }
+        if (current && stored.some(generation => generation.generationId === current)) return current;
         const saved = sessionStorage.getItem(activeGenerationStorageKey);
-        return stored.some(item => item.generationId === saved) ? saved : stored.at(-1)?.generationId || null;
+        const shared = wave?.selectedOutputGenerationId;
+        return chooseOutputGenerationId(stored, shared, saved);
       });
       setStep1Done(stored.length > 0);
-    }).catch(() => undefined);
-  }, [activeGenerationStorageKey, repository, waveId]);
+    }).catch(() => undefined).finally(() => setGenerationsLoaded(true));
+  }, [activeGenerationStorageKey, queryControlsSelection, repository, requestedGenerationId, waveId]);
 
   useEffect(() => {
     if (activeGenerationId) sessionStorage.setItem(activeGenerationStorageKey, activeGenerationId);
@@ -58,20 +74,23 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
     const wave = await repository.getWave(waveId);
     if (!wave) throw new Error("웨이브를 찾을 수 없어 출력 묶음을 저장하지 못했습니다.");
     const now = new Date().toISOString();
-    const existing = (wave.outputGenerations || []).find(generation => {
-      if (generation.purchaseOrderNumbers.length !== result.purchaseOrderNumbers.length) return false;
-      const selected = new Set(result.purchaseOrderNumbers);
-      return generation.purchaseOrderNumbers.every(po => selected.has(po));
+    const allowed = new Set(wave.sourcePurchaseOrderNumbers);
+    const originalGenerations = wave.outputGenerations || [];
+    const usableGenerations = originalGenerations.filter(g => g.purchaseOrderNumbers.every(po => allowed.has(po)));
+    const { generation, outputGenerations: connectedGenerations } = connectInvoiceGeneration(usableGenerations, {
+      generationId: crypto.randomUUID(), waveId, purchaseOrderNumbers: [...result.purchaseOrderNumbers], createdAt: now, updatedAt: now,
+      expectedShippingGroupCount: result.preview.shippingGroupCount, invoiceFileName: result.fileName,
+      invoiceGroups: result.preview.shippingGroups.map(group => [...group.purchaseOrderNumbers]), status: "invoice_generated",
     });
-    const generation: ShipmentOutputGeneration = existing
-      ? { ...existing, updatedAt: now, expectedShippingGroupCount: result.preview.shippingGroupCount, invoiceFileName: result.fileName }
-      : { generationId: crypto.randomUUID(), waveId, purchaseOrderNumbers: [...result.purchaseOrderNumbers], createdAt: now, updatedAt: now, expectedShippingGroupCount: result.preview.shippingGroupCount, invoiceFileName: result.fileName, status: "invoice_generated" };
-    const outputGenerations = existing
-      ? (wave.outputGenerations || []).map(item => item.generationId === existing.generationId ? generation : item)
-      : [...(wave.outputGenerations || []), generation];
-    await repository.saveWave({ ...wave, outputGenerations, updatedAt: now });
-    setGenerations(outputGenerations);
+    const selected = new Set(result.purchaseOrderNumbers);
+    const retainedGenerations = originalGenerations.filter(g => !g.purchaseOrderNumbers.every(po => allowed.has(po))).map(g => !g.supersededByGenerationId && g.purchaseOrderNumbers.some(po => selected.has(po)) ? { ...g, supersededByGenerationId: generation.generationId, updatedAt: now } : g);
+    const outputGenerations = [...retainedGenerations, ...connectedGenerations];
+    await repository.saveWave({ ...wave, outputGenerations, selectedOutputGenerationId: generation.generationId, updatedAt: now });
+    setGenerations(outputGenerations.filter(g => g.purchaseOrderNumbers.every(po => wave.sourcePurchaseOrderNumbers.includes(po))));
+    if (requestedGenerationKey) setReleasedGenerationKey(requestedGenerationKey);
     setActiveGenerationId(generation.generationId);
+    const nextUrl = new URL(window.location.href); nextUrl.searchParams.set("generation", generation.generationId);
+    window.history.replaceState(null, "", nextUrl.toString());
     setStep1Done(true);
   }
 
@@ -80,45 +99,64 @@ export default function HanjinStepSequence({ waveId, baskets, items }: Props) {
     if (!wave) return;
     const now = new Date().toISOString();
     const outputGenerations = (wave.outputGenerations || []).map(generation => generation.generationId === generationId ? { ...generation, shipmentFileName: fileName, status: "shipment_generated" as const, updatedAt: now } : generation);
-    await repository.saveWave({ ...wave, outputGenerations, updatedAt: now });
-    setGenerations(outputGenerations);
+    await repository.saveWave({ ...wave, outputGenerations, selectedOutputGenerationId: generationId, updatedAt: now });
+    setGenerations(outputGenerations.filter(g => g.purchaseOrderNumbers.every(po => wave.sourcePurchaseOrderNumbers.includes(po))));
   }
 
-  const activeGeneration = generations.find(generation => generation.generationId === activeGenerationId) || generations.at(-1);
+  async function markOutputSetGenerated(generationId: string, fileName: string) {
+    const wave = await repository.getWave(waveId);
+    if (!wave) return;
+    const now = new Date().toISOString();
+    const outputGenerations = (wave.outputGenerations || []).map(generation => generation.generationId === generationId
+      ? { ...generation, outputSetFileName: fileName, outputSetGeneratedAt: now, updatedAt: now }
+      : generation);
+    const selectedOutputGenerationId = generationId;
+    await repository.saveWave({ ...wave, outputGenerations, selectedOutputGenerationId, updatedAt: now });
+    setGenerations(outputGenerations.filter(g => g.purchaseOrderNumbers.every(po => wave.sourcePurchaseOrderNumbers.includes(po))));
+    if (requestedGenerationKey) setReleasedGenerationKey(requestedGenerationKey);
+    setActiveGenerationId(selectedOutputGenerationId);
+  }
 
+  const requestedGenerationMissing = Boolean(queryControlsSelection && generationsLoaded && requestedGenerationId && !generations.some(generation => generation.generationId === requestedGenerationId));
+  const activeGeneration = queryControlsSelection && requestedGenerationId
+    ? generations.find(generation => generation.generationId === requestedGenerationId)
+    : generations.find(generation => generation.generationId === activeGenerationId) || generations.at(-1);
   const step1Status = step1Done ? "done" as const : "current" as const;
 
   return (
     <div>
-      <ShipmentWorkflowStepCard step={2} title="송장출력용 업로드파일 생성" subtitle="한진택배 업로드용 — 로켓입고 요청" status={step1Status}>
+      {requestedGenerationMissing && <p role="alert" style={{ margin: "0 0 10px", padding: "10px", borderRadius: "8px", background: wmsColors.warnSoft, color: wmsColors.warn, fontSize: "12px", fontWeight: 700 }}>
+        연결된 Shipment 묶음을 찾지 못했습니다. 작업센터에서 최신 상태를 다시 열어 주세요.
+      </p>}
+      <ShipmentWorkflowStepCard id="hanjin-step-1" step={2} title="송장출력용 업로드파일" subtitle="발주서 단위로 묶음을 자동 제안하고 선택한 발주 집합을 다음 단계까지 고정합니다." status={step1Status}>
         <HanjinUploadSection baskets={baskets} items={items} generations={generations} onGenerated={saveGeneration} />
       </ShipmentWorkflowStepCard>
 
-      {generations.length > 0 && <div style={{ marginBottom: "10px", fontSize: "11px" }}>
-        <strong>저장된 출력 묶음</strong>
-        <div style={{ display: "flex", gap: "6px", overflowX: "auto", paddingTop: "6px" }}>
-          {generations.map((generation, index) => <button key={generation.generationId} type="button" onClick={() => setActiveGenerationId(generation.generationId)} style={{ border: `1px solid ${generation.generationId === activeGeneration?.generationId ? wmsColors.slate : wmsColors.border}`, borderRadius: "999px", background: generation.generationId === activeGeneration?.generationId ? "rgba(83,109,120,0.12)" : "#fff", padding: "7px 10px", whiteSpace: "nowrap" }}>
-            묶음 {index + 1} · 발주 {generation.purchaseOrderNumbers.length}건
-          </button>)}
-        </div>
-      </div>}
-
-      <ShipmentWorkflowStepCard step={3} title="Shipment 파일 생성" subtitle="현재 generation의 운송장 자동 확인 + 발주서 원본 SKU·바코드·수량 사용" status="current">
+      {activeGeneration && <p style={{fontSize:11,overflowWrap:"anywhere",color:wmsColors.muted}}>연결된 송장파일: {activeGeneration.invoiceFileName}</p>}
+      <ShipmentWorkflowStepCard id="hanjin-step-3" step={3} title="Shipment 업로드파일" subtitle="현재 묶음의 한진 결과를 자동 확인하고 발주서 원본 SKU·바코드·수량만 사용합니다." status={activeGeneration?.status === "shipment_generated" ? "done" : "current"}>
         <HanjinAutoShipmentSection
           generation={activeGeneration}
-          generationLabel={activeGeneration ? `묶음 ${generations.findIndex(item => item.generationId === activeGeneration.generationId) + 1}` : undefined}
+          generationLabel={activeGeneration ? "송장파일 생성 대상" : undefined}
           blockedByGeneration={activeGeneration ? (() => {
             const poSet = new Set(activeGeneration.purchaseOrderNumbers);
-            const overlap = generations.find(item => item.generationId !== activeGeneration.generationId && item.status === "shipment_generated" && item.purchaseOrderNumbers.some(po => poSet.has(po)));
+            const overlap = generations.find(item => !item.supersededByGenerationId && item.generationId !== activeGeneration.generationId && item.status === "shipment_generated" && item.purchaseOrderNumbers.some(po => poSet.has(po)));
             return overlap ? "이미 다른 Shipment 묶음에 포함된 발주번호가 있어 신규 생성을 차단했습니다. 동일 generation 재생성만 허용됩니다." : undefined;
           })() : undefined}
           onGenerated={markShipmentGenerated}
         />
       </ShipmentWorkflowStepCard>
 
-      <ShipmentWorkflowStepCard step={4} title="Shipment 출력세트 생성" subtitle="현재 generation 발주만 표시한 물류센터 라벨 포함" status="current">
-        <ShipmentOutputSetSection waveId={waveId} items={items} generation={activeGeneration} generationLabel={activeGeneration ? `묶음 ${generations.findIndex(item => item.generationId === activeGeneration.generationId) + 1}` : undefined} />
+      <ShipmentWorkflowStepCard id="shipment-output-set" step={4} title="Shipment 출력세트" subtitle="현재 묶음의 발주만 포함하며 상태와 관계없이 언제든 다시 생성할 수 있습니다." status={activeGeneration?.outputSetGeneratedAt ? "done" : "current"}>
+        <ShipmentOutputSetSection waveId={waveId} items={items} generation={activeGeneration} generationLabel={activeGeneration ? "송장파일 생성 대상" : undefined} packingHref={`/wms/picking/waves/${encodeURIComponent(waveId)}/packing`} onGenerated={markOutputSetGenerated} />
       </ShipmentWorkflowStepCard>
+      <div style={{ marginTop: "16px" }}>
+        <a href={`/wms/picking/waves/${encodeURIComponent(waveId)}`} style={{ ...wmsPrimaryButton, display: "flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box", width: "100%", minHeight: "56px", textDecoration: "none" }}>
+          실제 피킹 시작하기 →
+        </a>
+        <p style={{ margin: "8px 0 0", color: wmsColors.muted, fontSize: "12px", textAlign: "center" }}>
+          출력물을 준비한 뒤 눌러 주세요. 같은 작업의 피킹 화면으로 이동하며, 기존 피킹 기록은 유지됩니다.
+        </p>
+      </div>
     </div>
   );
 }

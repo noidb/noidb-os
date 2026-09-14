@@ -112,10 +112,17 @@ function doPost(e) {
     if (data.action === 'supplierList') return listSuppliers_();
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (data.action === 'undoReplacementLink') {
+      const blockedReason = replacementUndoBlockedReason_(ss, String(data.model || ''), String(data.replacementSku || ''));
+      if (blockedReason) return json_({ ok: false, error: blockedReason });
+    }
     const db = getOrCreateSheet_(ss, '제품DB');
-    removeObsoleteProductInputSheet_(ss);
-    syncProductDbHeaders_(db);
-    normalizeCurrentStatusLabels_(db);
+    const registrationUsesCurrentLayout = data.action === 'checkModel' || data.syncMode === 'reregisterStopped';
+    if (!registrationUsesCurrentLayout) {
+      removeObsoleteProductInputSheet_(ss);
+      syncProductDbHeaders_(db);
+      normalizeCurrentStatusLabels_(db);
+    }
 
     if (data.action === 'linkReplacementExisting') {
       return linkExistingReplacement_(ss, db, String(data.model || ''), String(data.replacementSku || ''), Boolean(data.forceLegacyOptions), data.productDbRows || []);
@@ -147,41 +154,78 @@ function doPost(e) {
     if (data.action === 'importPurchaseOrders') return importPurchaseOrders_(ss, db, data.items || []);
 
     if (data.action === 'checkModel') {
-      return json_({ ok: true, duplicate: modelExists_(db, String(data.model || '')) });
+      return json_(Object.assign({ ok: true }, reregistrationEligibility_(db, String(data.model || '').trim())));
     }
 
     const model = Array.isArray(data.productInputRow) ? String(data.productInputRow[4] || '').trim() : '';
-    const duplicate = model && modelExists_(db, model);
-    if (duplicate && data.syncMode === 'skipDuplicate') {
-      return json_({ ok: true, duplicate: true, skipped: true });
+    const operationId = String(data.operationId || '').trim();
+    if (!/^[A-Za-z0-9_-]{12,120}$/.test(operationId)) {
+      return json_({ ok: false, error: '등록 작업번호가 올바르지 않습니다.' });
     }
+    const operationKey = 'product-registration:' + operationId;
+    const operationCache = CacheService.getScriptCache();
+    const registrationLock = LockService.getScriptLock();
+    registrationLock.waitLock(30000);
+    try {
+      const cached = operationCache.get(operationKey);
+      if (cached) return json_(JSON.parse(cached));
 
-    if (String(data.replacementSku || '').trim()) {
-      return json_({ ok: false, error: '재등록 상품은 먼저 [기존 등록행에 연결]을 눌러 이관 내용을 확인해주세요. 일반 저장만으로는 기존행을 교체하지 않습니다.' });
+      const duplicate = model && (registrationUsesCurrentLayout ? reregistrationEligibility_(db, model).duplicate : modelExists_(db, model));
+      if (duplicate && data.syncMode !== 'reregisterStopped') {
+        const duplicateResult = { ok: true, duplicate: true, skipped: true };
+        operationCache.put(operationKey, JSON.stringify(duplicateResult), 21600);
+        return json_(duplicateResult);
+      }
+
+      if (String(data.replacementSku || '').trim()) {
+        return json_({ ok: false, error: '재등록 상품은 먼저 [기존 등록행에 연결]을 눌러 이관 내용을 확인해주세요. 일반 저장만으로는 기존행을 교체하지 않습니다.' });
+      }
+
+      if (duplicate) planReregistration_(db, model, data.productDbRows || []);
+      const imageFormulas = saveProductImages_(data.productImages || [], Boolean(duplicate));
+      let rows = Array.isArray(data.productDbRows) ? data.productDbRows.map(row => {
+        const next = row.slice(0, PRODUCT_DB_HEADERS.length);
+        const imageColumn = dbColumn_('이미지');
+        const filename = String(next[imageColumn] || '');
+        if (imageFormulas[filename]) next[imageColumn] = imageFormulas[filename];
+        // This is the incoming array copy, not the stored row. Blank input is
+        // ignored by planReregistration_, leaving the existing IMAGE cell intact.
+        else if (duplicate) next[imageColumn] = '';
+        return next;
+      }) : [];
+
+      if (duplicate) {
+        const registrationStage = reregisterModel_(ss, db, model, rows, operationId);
+        if (data.quoteRecord) saveQuoteQueue_(ss, data.quoteRecord);
+        const result = { ok: true, duplicate: false, updated: true, reregistered: true, registrationStage: registrationStage, quoteQueued: Boolean(data.quoteRecord) };
+        operationCache.put(operationKey, JSON.stringify(result), 21600);
+        return json_(result);
+      }
+
+      // New models retain the existing new-product writer; existing models keep their layout.
+      if (registrationUsesCurrentLayout) {
+        removeObsoleteProductInputSheet_(ss);
+        syncProductDbHeaders_(db);
+        normalizeCurrentStatusLabels_(db);
+      }
+      const replacementSku = String(data.replacementSku || '').trim();
+      if (replacementSku) rows = prepareReplacementRows_(ss, db, replacementSku, model, rows);
+      else rows.forEach(row => {
+        if (!String(row[dbColumn_('SKU ID')] || '').trim()) row[dbColumn_('현재상태')] = '신상승인대기';
+      });
+
+      const replacementSummary = rows && rows.replacementSummary ? rows.replacementSummary : null;
+      backupProductDbSheet_(ss, db, '상품저장');
+      upsertProduct_(db, data.productInputRow, rows);
+      if (data.quoteRecord) saveQuoteQueue_(ss, data.quoteRecord);
+      const result = { ok: true, duplicate: false, updated: Boolean(duplicate), quoteQueued: Boolean(data.quoteRecord),
+        cleanupAvailable: Boolean(replacementSummary && replacementSummary.activeOldRows),
+        oldRows: replacementSummary ? Number(replacementSummary.totalOld || 0) : 0 };
+      operationCache.put(operationKey, JSON.stringify(result), 21600);
+      return json_(result);
+    } finally {
+      registrationLock.releaseLock();
     }
-
-    const imageFormulas = saveProductImages_(data.productImages || []);
-    let rows = Array.isArray(data.productDbRows) ? data.productDbRows.map(row => {
-      const next = row.slice(0, PRODUCT_DB_HEADERS.length);
-      const imageColumn = dbColumn_('이미지');
-      const filename = String(next[imageColumn] || '');
-      if (imageFormulas[filename]) next[imageColumn] = imageFormulas[filename];
-      return next;
-    }) : [];
-
-    const replacementSku = String(data.replacementSku || '').trim();
-    if (replacementSku) rows = prepareReplacementRows_(ss, db, replacementSku, model, rows);
-    else rows.forEach(row => {
-      if (!String(row[dbColumn_('SKU ID')] || '').trim()) row[dbColumn_('현재상태')] = '신상승인대기';
-    });
-
-  const replacementSummary = rows && rows.replacementSummary ? rows.replacementSummary : null;
-  backupProductDbSheet_(ss, db, '상품저장');
-  upsertProduct_(db, data.productInputRow, rows);
-    if (data.quoteRecord) saveQuoteQueue_(ss, data.quoteRecord);
-    return json_({ ok: true, duplicate: false, updated: Boolean(duplicate), quoteQueued: Boolean(data.quoteRecord),
-      cleanupAvailable: Boolean(replacementSummary && replacementSummary.activeOldRows),
-      oldRows: replacementSummary ? Number(replacementSummary.totalOld || 0) : 0 });
   } catch (error) {
     return json_({ ok: false, error: String(error) });
   }
@@ -612,6 +656,8 @@ function undoReplacementLink_(ss, db, model, legacySku) {
   const wantedModel = String(model || '').trim();
   const wantedSku = normalizeSkuId_(legacySku);
   if (!wantedModel) return json_({ ok: false, error: '복원할 모델명이 필요합니다.' });
+  const blockedReason = replacementUndoBlockedReason_(ss, wantedModel, wantedSku);
+  if (blockedReason) return json_({ ok: false, error: blockedReason });
   const history = ss.getSheetByName(SKU_REPLACEMENT_SHEET);
   if (!history || history.getLastRow() < 2) return json_({ ok: false, error: 'SKU 교체이력이 없습니다.' });
   const values = history.getRange(2, 1, history.getLastRow() - 1, SKU_REPLACEMENT_HEADERS.length).getValues();
@@ -664,6 +710,7 @@ function markReplacementHistoryStatus_(ss, legacySku, newModel, status) {
   const values = history.getRange(2, 1, history.getLastRow() - 1, SKU_REPLACEMENT_HEADERS.length).getDisplayValues();
   let batchId = '';
   for (let index = values.length - 1; index >= 0; index--) {
+    if (['동일모델재등록','재등록중복정리'].includes(String(values[index][6] || '').trim())) continue;
     if (normalizeSkuId_(values[index][3]) === normalizeSkuId_(legacySku) && String(values[index][2] || '').trim() === String(newModel || '').trim()) {
       batchId = String(values[index][7] || '').trim();
       break;
@@ -671,6 +718,7 @@ function markReplacementHistoryStatus_(ss, legacySku, newModel, status) {
   }
   if (!batchId) return;
   values.forEach((row, index) => {
+    if (['동일모델재등록','재등록중복정리'].includes(String(row[6] || '').trim())) return;
     if (String(row[7] || '').trim() === batchId) history.getRange(index + 2, 7).setValue(status);
   });
 }
@@ -720,7 +768,7 @@ function buildDbRowsFromInput_(inputRow) {
   return rows;
 }
 
-function saveProductImages_(items) {
+function saveProductImages_(items, preserveExisting) {
   const formulas = {};
   if (!Array.isArray(items) || !items.length) return formulas;
   const folder = getImageFolder_();
@@ -729,8 +777,10 @@ function saveProductImages_(items) {
     const dataUrl = String(item.dataUrl || '');
     const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
     if (!filename || !match) return;
-    const existing = folder.getFilesByName(filename);
-    while (existing.hasNext()) existing.next().setTrashed(true);
+    if (!preserveExisting) {
+      const existing = folder.getFilesByName(filename);
+      while (existing.hasNext()) existing.next().setTrashed(true);
+    }
     const blob = Utilities.newBlob(Utilities.base64Decode(match[2]), match[1], filename);
     const file = folder.createFile(blob);
     file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
@@ -1266,6 +1316,7 @@ function repairReplacementDataFromHistory_(ss, db) {
   const historyValues = history.getRange(2, 1, history.getLastRow() - 1, Math.min(history.getLastColumn(), SKU_REPLACEMENT_HEADERS.length)).getValues();
   const batches = {};
   historyValues.forEach((historyRow, index) => {
+    if (['동일모델재등록','재등록중복정리'].includes(String(historyRow[6] || '').trim())) return;
     const batchId = String(historyRow[7] || '').trim() || ('legacy:' + String(historyRow[1] || '') + '>' + String(historyRow[2] || ''));
     if (!batches[batchId]) batches[batchId] = { id: batchId, oldModel: String(historyRow[1] || ''), newModel: String(historyRow[2] || ''), lastIndex: index, rows: [] };
     batches[batchId].lastIndex = index;
@@ -2116,7 +2167,8 @@ function purchaseTrackingTotals_(ss, inboundTotals) {
     if (!sku) return;
     const status = String(row[4] || '').trim();
     if (/취소|반려|무효/.test(status)) return;
-    const orderQty = number_(row[10]) || number_(row[9]);
+    // 확정수량 0을 원래 발주수량으로 되살리지 않는다. 미확정 빈 셀만 발주수량을 사용한다.
+    const orderQty = String(row[10] == null ? '' : row[10]).trim() === '' ? number_(row[9]) : number_(row[10]);
     if (orderQty <= 0) return;
     const item = grouped[sku] || { entries: [], recentOrderDate: '' };
     const orderDate = dateOnlyText_(row[8]);
@@ -2551,4 +2603,384 @@ function json_(value) {
 
 function getOrCreateSheet_(ss, name) {
   return ss.getSheetByName(name) || ss.insertSheet(name);
+}
+
+// Re-registration uses exact model/option identity and never creates product rows.
+function reregistrationEligibility_(db, model) {
+  const data = readReregistrationDb_(db, model);
+  const items = data.items;
+  const columns = data.columns;
+  if (!items.length) return { duplicate: false, reregisterable: false, rowCount: 0, reason: '' };
+  const emptyIds = row => ['SKU ID','바코드','발주가능상태','제품링크','노출상품ID','옵션ID'].every(name => !String(row[columns[name]] == null ? '' : row[columns[name]]).trim());
+  const stopped = items.every(item => String(item.values[columns['현재상태']] || '').trim() === '판매중지');
+  const retry = items.every(item => String(item.values[columns['현재상태']] || '').trim() === '재등록파일생성' && emptyIds(item.values));
+  const keys = items.map(item => String(item.values[columns['모델SKU']] || '').trim().toUpperCase());
+  const uniqueOptions = keys.every((key, index) => key && keys.indexOf(key) === index);
+  const eligible = !data.casingMismatch && uniqueOptions && (stopped || retry) && items.every(item => !isReregistrationPackage_(item.values, columns));
+  return { duplicate: true, reregisterable: eligible, rowCount: items.length,
+    reason: eligible ? (retry ? '재등록 파일 다시 저장 가능' : '판매중지 상품 재등록 가능')
+      : data.casingMismatch ? '기존 모델명과 대소문자까지 정확히 같아야 재등록할 수 있습니다.'
+      : !uniqueOptions ? '기존 모델SKU가 비어 있거나 중복되어 있습니다. 정확한 옵션 행을 먼저 확인해주세요.'
+      : '판매중지 기본 옵션만 재등록할 수 있습니다. 기존 상태와 패키지 행을 확인해주세요.' };
+}
+
+function reregistrationColorToken_(value) {
+  const text = String(value == null ? '' : value).trim().replace(/\s+/g, ' ').toUpperCase();
+  if (!text) return '';
+  const aliases = { '실버':'SI', 'SILVER':'SI', 'SI':'SI', '골드':'GO', 'GOLD':'GO', 'GO':'GO',
+    '로즈골드':'RG', '로즈 골드':'RG', 'ROSE GOLD':'RG', 'ROSEGOLD':'RG', 'RG':'RG',
+    '블랙':'BK', 'BLACK':'BK', 'BK':'BK', '화이트':'WH', 'WHITE':'WH', 'WH':'WH' };
+  // S and SS are not general color aliases. They are checked only in a model SKU below.
+  return aliases[text] || 'TEXT:' + text;
+}
+
+function reregistrationSizeToken_(value, category) {
+  const text = String(value == null ? '' : value).trim().replace(/\s+/g, ' ').toUpperCase();
+  if (!text) return '';
+  if (/^(FREE|FREE SIZE|프리|프리사이즈|프리 사이즈|ONE SIZE|ONESIZE)$/.test(text)) return 'FREE';
+  if (String(category || '').trim() === '반지' && /^\d+(?:\.\d+)?\s*호?$/.test(text)) return 'RING:' + Number(text.replace(/\s*호$/, ''));
+  const length = text.match(/^(\d+(?:\.\d+)?)\s*(CM|MM)$/);
+  if (length) return 'LENGTH:' + Number(length[1]) + length[2];
+  return 'TEXT:' + text;
+}
+
+function reregistrationOptionEvidence_(model, values, columns) {
+  const text = name => String(values[columns[name]] == null ? '' : values[columns[name]]).trim();
+  const sku = text('모델SKU');
+  const key = sku.toUpperCase();
+  const modelKey = String(model).trim().toUpperCase();
+  const category = text('카테고리');
+  let rawColor = text('색상');
+  const rawSize = text('주얼리사이즈');
+  const originalColor = rawColor;
+  let conflict = '';
+  const pipe = rawColor.indexOf('|');
+  if (pipe >= 0) {
+    if (rawColor.slice(0, pipe).trim().toUpperCase() !== key || rawColor.slice(pipe + 1).includes('|')) conflict = '색상 칸의 SKU 접두가 해당 행의 모델SKU와 다릅니다.';
+    else rawColor = rawColor.slice(pipe + 1).trim();
+  } else if (rawColor.toUpperCase() === key) rawColor = '';
+  else if (key && rawColor.toUpperCase().endsWith(key)) {
+    const start = rawColor.length - key.length;
+    if (start > 0 && /\s/.test(rawColor.charAt(start - 1))) rawColor = rawColor.slice(0, start).trim();
+  }
+  const color = reregistrationColorToken_(rawColor);
+  const size = reregistrationSizeToken_(rawSize, category);
+  const title = text('상품명');
+  // Only a complete trailing option segment can supply a title hint, never material/body text.
+  const segments = title.split(/[,，|]/).map(part => part.trim());
+  const parenthesized = title.match(/\(([^()]*)\)\s*$/);
+  const segment = segments.length > 1 ? segments[segments.length - 1] : parenthesized ? parenthesized[1].trim() : '';
+  const colorWords = '(실버|SILVER|골드|GOLD|로즈\\s*골드|ROSE\\s*GOLD|블랙|BLACK|화이트|WHITE)';
+  const sizeWords = '(FREE(?:\\s*SIZE)?|프리(?:\\s*사이즈)?|S|M|L|XL|XXL|\\d+(?:\\.\\d+)?\\s*호)';
+  const colorFirst = segment.toUpperCase().match(new RegExp('^' + colorWords + '(?:\\s*' + sizeWords + ')?$'));
+  const sizeFirst = segment.toUpperCase().match(new RegExp('^' + sizeWords + '\\s*' + colorWords + '$'));
+  let titleColor = colorFirst ? reregistrationColorToken_(colorFirst[1]) : sizeFirst ? reregistrationColorToken_(sizeFirst[2]) : '';
+  let titleSize = colorFirst ? reregistrationSizeToken_(colorFirst[2] || '', category) : sizeFirst ? reregistrationSizeToken_(sizeFirst[1], category) : '';
+  let optionStart = segments.length - 1;
+  if (!titleColor && segments.length >= 3 && /^(?:\d+(?:\.\d+)?\s*(?:CM|MM|호)|S|M|L|XL|XXL|FREE|프리)$/i.test(segment)) {
+    const preceding = reregistrationColorToken_(segments[segments.length - 2]);
+    if (preceding && !preceding.startsWith('TEXT:')) {
+      titleColor = preceding;
+      titleSize = reregistrationSizeToken_(segment, category);
+      optionStart--;
+    }
+  }
+  if (titleColor && optionStart > 1) {
+    const priorColor = reregistrationColorToken_(segments[optionStart - 1]);
+    if (priorColor && !priorColor.startsWith('TEXT:')) conflict = '상품명 끝에 여러 색상 옵션이 함께 적혀 있습니다.';
+  }
+  if (color && titleColor && color !== titleColor) conflict = '색상 칸과 상품명 끝의 색상이 서로 다릅니다.';
+  if (size && titleSize && size !== titleSize) conflict = '사이즈 칸과 상품명 끝의 사이즈가 서로 다릅니다.';
+  let tail = null;
+  if (key.indexOf(modelKey) === 0) {
+    const boundary = key.slice(modelKey.length);
+    const candidate = boundary.charAt(0) === '-' ? boundary.slice(1) : boundary;
+    if (candidate && candidate.charAt(0) !== '-') tail = candidate;
+  }
+  return { sku: sku, key: key, rawColor: originalColor, rawSize: rawSize, category: category,
+    color: color, size: size, titleColor: titleColor, titleSize: titleSize, tail: tail, conflict: conflict };
+}
+
+function reregistrationSemanticOption_(source, old, hasOtherSizes) {
+  if (source.conflict || old.conflict || source.tail === null) return false;
+  if (source.color && old.color && source.color !== old.color) return false;
+  if (source.size && old.size && source.size !== old.size) return false;
+  if (source.color && old.titleColor && source.color !== old.titleColor) return false;
+  if (source.size && old.titleSize && source.size !== old.titleSize) return false;
+  // Two explicit metadata fields outrank opaque historical SKU codes (e.g. US 5 -> KR 9호).
+  if (source.color && source.size && old.color === source.color && old.size === source.size) return true;
+  if (source.color !== 'SI' || !source.size || old.tail === null || !source.tail.startsWith('SI')) return false;
+  if (old.color && old.color !== 'SI') return false;
+  const sourceSizeCode = source.tail.slice(2);
+  const explicitSize = old.size || old.titleSize;
+  const aliases = ['SI', 'SS', 'S'];
+  const parses = aliases.filter(alias => old.tail.indexOf(alias) === 0).map(alias => ({ alias: alias, sizeCode: old.tail.slice(alias.length) }));
+  if (source.size === 'FREE') {
+    // A missing legacy size is supported only for a known color-only spelling with no size evidence.
+    return sourceSizeCode === '' && parses.some(item => item.sizeCode === '')
+      && (!explicitSize || explicitSize === 'FREE') && !hasOtherSizes
+      && (old.color === 'SI' || old.titleColor === 'SI');
+  }
+  const sourceLiteralSize = source.size.startsWith('TEXT:') ? source.size.slice(5).replace(/\s/g, '') : '';
+  const letterSize = /^(S|M|L|XL|XXL)$/.test(sourceLiteralSize);
+  const expectedSizeCode = sourceSizeCode || (letterSize ? sourceLiteralSize : '');
+  if (!expectedSizeCode || (explicitSize && explicitSize !== source.size)) return false;
+  // Numeric codes lose units/decimals and may use foreign sizing. Never infer a size from digits alone.
+  if (!explicitSize && !letterSize) return false;
+  // A complete trailing title option can confirm a legacy color-only code with an explicit length/size.
+  if (old.titleColor === 'SI' && old.titleSize === source.size && parses.some(item => item.sizeCode === '')) return true;
+  const matching = parses.filter(item => item.sizeCode === expectedSizeCode);
+  if (matching.length !== 1) return false;
+  // SS could mean silver SS with no size, or silver S + size S. Metadata must settle that case.
+  if (!explicitSize && parses.some(item => item.sizeCode === '')) return false;
+  // A matching size alone cannot distinguish silver SS/S from stainless/small codes.
+  return Boolean(old.color === 'SI' || old.titleColor === 'SI');
+}
+
+function reregistrationOptionMatches_(model, existing, columns, newRows, sourceColumns) {
+  const oldEvidence = existing.map(item => reregistrationOptionEvidence_(model, item.values, columns));
+  const sourceEvidence = newRows.map(source => reregistrationOptionEvidence_(model, source, sourceColumns));
+  const byKey = {};
+  oldEvidence.forEach((item, index) => { (byKey[item.key] || (byKey[item.key] = [])).push(index); });
+  const matches = new Array(newRows.length).fill(null);
+  const reserved = {};
+  const modelKey = String(model).trim().toUpperCase();
+  const describe = item => item.sku + ' [색상: ' + (item.rawColor || '공란') + ', 사이즈: ' + (item.rawSize || '공란') + ']';
+  const fail = (index, reason, candidates) => {
+    const indices = candidates || existing.map((_, i) => i);
+    const details = indices.slice(0, 8).map(i => existing[i].sheetRow + '행 ' + describe(oldEvidence[i])).join('; ');
+    throw new Error(model + ': ' + reason + ' 새 옵션 ' + describe(sourceEvidence[index]) + ' / 기존 ' + details
+      + (indices.length > 8 ? '; 외 ' + (indices.length - 8) + '행' : '') + '. 기존 색상·사이즈 또는 새 입력을 확인해주세요. 기존 행은 변경하지 않았습니다.');
+  };
+  const reserve = (sourceIndex, oldIndex, method) => {
+    if (reserved[oldIndex] !== undefined) fail(sourceIndex, '같은 기존 행에 두 옵션이 중복 매칭됐습니다.', [oldIndex]);
+    reserved[oldIndex] = sourceIndex;
+    matches[sourceIndex] = { old: existing[oldIndex], rename: sourceEvidence[sourceIndex].key !== oldEvidence[oldIndex].key, method: method };
+  };
+  // Pass 1: reserve all exact identities before any separator or semantic fallback.
+  sourceEvidence.forEach((item, index) => {
+    if (String(newRows[index][sourceColumns['모델명/품번']] || '').trim() !== model || isReregistrationPackage_(newRows[index], sourceColumns)) throw new Error(model + ': 다른 모델 또는 패키지 옵션은 재등록할 수 없습니다.');
+    if (!item.key) throw new Error(model + ': 새 모델SKU가 비어 있습니다. 기존 행은 변경하지 않았습니다.');
+    const exact = byKey[item.key] || [];
+    if (exact.length === 1) reserve(index, exact[0], 'exact');
+  });
+  // Pass 2: preserve the existing single-boundary-hyphen rule, also before semantic matching.
+  sourceEvidence.forEach((item, index) => {
+    if (matches[index] || item.tail === null) return;
+    const separated = item.key.slice(modelKey.length).charAt(0) === '-';
+    const alternate = byKey[modelKey + (separated ? '' : '-') + item.tail] || [];
+    if (alternate.length === 1) reserve(index, alternate[0], 'separator');
+  });
+  const hasOtherSizes = sourceEvidence.concat(oldEvidence).some(item => (item.size && item.size !== 'FREE') || (item.titleSize && item.titleSize !== 'FREE'));
+  sourceEvidence.forEach((item, index) => {
+    if (matches[index]) return;
+    // Check all same-model rows first. Removing reserved rows must not conceal ambiguity.
+    const candidates = oldEvidence.map((old, i) => reregistrationSemanticOption_(item, old, hasOtherSizes) ? i : -1).filter(i => i >= 0);
+    if (candidates.length > 1) fail(index, '색상·사이즈가 같은 기존 옵션이 여러 행에 있어 자동 연결할 수 없습니다.', candidates);
+    if (candidates.length === 1) { reserve(index, candidates[0], 'semantic'); return; }
+    if (existing.length === 1 && newRows.length === 1) {
+      const old = oldEvidence[0];
+      const knownTail = old.tail && /^(SI|SS|S|GO|RG|BK|WH)(?:S|M|L|XL|XXL|\d+)?$/.test(old.tail);
+      if (!item.conflict && !old.conflict && !old.color && !old.size && !old.titleColor && !old.titleSize && !knownTail) {
+        reserve(index, 0, 'single-unknown'); return;
+      }
+    }
+    fail(index, item.conflict || oldEvidence.find(old => old.conflict)?.conflict || '모델SKU가 정확히 한 행에 대응하지 않습니다. 색상·사이즈 근거가 부족하거나 서로 다릅니다.');
+  });
+  return matches;
+}
+
+function planReregistration_(db, model, newRows) {
+  const eligibility = reregistrationEligibility_(db, model);
+  if (!eligibility.reregisterable) throw new Error(model + ': ' + (eligibility.reason || '재등록할 기존 행이 없습니다.'));
+  assertUniqueProductKeys_(newRows, '재등록 옵션');
+  const data = readReregistrationDb_(db, model);
+  const existing = data.items;
+  const columns = data.columns;
+  if (!Array.isArray(newRows) || !newRows.length || newRows.length !== existing.length) throw new Error(model + ': 기존 옵션 수와 새 옵션 수가 다릅니다. 기존 행은 변경하지 않았습니다.');
+  const sourceColumns = {};
+  PRODUCT_DB_HEADERS.forEach((name, index) => { sourceColumns[name] = index; });
+  // Incoming arrays use the app schema; target coordinates use actual Sheet headers.
+  const editable = ['거래처','성별','카테고리','창고번호','이미지','상품명','색상','주얼리사이즈','치수',
+    '원가(부가세포함)','쿠팡 판매가','공급가','마진','제조국명'];
+  const maxOrder = Math.max(0, ...db.getRange(2, columns['기본순서'] + 1, db.getLastRow() - 1, 1).getValues().map(row => Number(row[0]) || 0));
+  if (!Number.isSafeInteger(maxOrder + 1)) throw new Error('제품DB 기본순서 값이 안전한 숫자 범위를 벗어났습니다. 기존 행은 변경하지 않았습니다.');
+  const targets = {};
+  // Resolve all option identities before planning any edits. Production passes its existing 34-column sourceColumns.
+  const optionMatches = reregistrationOptionMatches_(model, existing, columns, newRows, sourceColumns);
+  const allKeys = db.getRange(2, columns['모델SKU'] + 1, db.getLastRow() - 1, 1).getDisplayValues();
+  const items = newRows.map((source, index) => {
+    if (String(source[dbColumn_('모델명/품번')] || '').trim() !== model || isPackageProductDbRow_(source)) throw new Error(model + ': 다른 모델 또는 패키지 옵션은 재등록할 수 없습니다.');
+    const sourceKey = String(source[dbColumn_('모델SKU')] || '').trim().toUpperCase();
+    if (!sourceKey) throw new Error(model + ': 새 모델SKU가 비어 있습니다. 기존 행은 변경하지 않았습니다.');
+    const old = optionMatches[index].old;
+    if (allKeys.some((entry, index) => index + 2 !== old.sheetRow && String(entry[0] || '').trim().toUpperCase() === sourceKey)) {
+      throw new Error(model + ': 새 모델SKU가 다른 기존 행과 중복됩니다. 기존 행은 변경하지 않았습니다.');
+    }
+    if (targets[old.sheetRow]) throw new Error(model + ': 같은 기존 행에 두 옵션이 중복 매칭됐습니다. 기존 행은 변경하지 않았습니다.');
+    targets[old.sheetRow] = true;
+    const changes = [];
+    const change = (name, after) => {
+      const column = columns[name];
+      if (column === undefined) return;
+      const before = old.formulas[column] || old.values[column];
+      if (String(before == null ? '' : before) !== String(after)) changes.push({ column: column + 1, before: before, after: after });
+    };
+    editable.forEach(name => {
+      const value = source[dbColumn_(name)];
+      if (value !== undefined && value !== null && String(value).trim() !== '') change(name, value);
+    });
+    if (optionMatches[index].rename) change('모델SKU', source[dbColumn_('모델SKU')]);
+    ['SKU ID','바코드','발주가능상태','제품링크','노출상품ID','옵션ID'].forEach(name => change(name, ''));
+    change('현재상태', '재등록파일생성');
+    change('기본순서', maxOrder + 1);
+    return { sheetRow: old.sheetRow, values: old.values, formulas: old.formulas, changes: changes };
+  });
+  return { items: items, headers: data.headers, columns: columns,
+    retry: existing.every(item => String(item.values[columns['현재상태']]).trim() === '재등록파일생성') };
+}
+
+function registrationCellData_(value) {
+  if (value === '' || value == null) return {};
+  if (typeof value === 'number') return { userEnteredValue: { numberValue: value } };
+  if (typeof value === 'boolean') return { userEnteredValue: { boolValue: value } };
+  return { userEnteredValue: String(value).startsWith('=') ? { formulaValue: String(value) } : { stringValue: String(value) } };
+}
+
+function reregisterModel_(ss, db, model, newRows, operationId) {
+  const plan = planReregistration_(db, model, newRows);
+  // Confirm the Sheets service and permission before creating any backup.
+  Sheets.Spreadsheets.get(ss.getId(), { fields: 'spreadsheetId' });
+  backupProductDbSheet_(ss, db, '동일모델재등록');
+  const rechecked = planReregistration_(db, model, newRows);
+  if (JSON.stringify(plan) !== JSON.stringify(rechecked)) throw new Error('제품DB가 확인 중 변경되었습니다. 다시 저장해주세요.');
+  const requests = [];
+  const sheetId = db.getSheetId();
+  plan.items.forEach(item => item.changes.forEach(change => requests.push({ updateCells: {
+    range: { sheetId: sheetId, startRowIndex: item.sheetRow - 1, endRowIndex: item.sheetRow,
+      startColumnIndex: change.column - 1, endColumnIndex: change.column },
+    rows: [{ values: [registrationCellData_(change.after)] }], fields: 'userEnteredValue'
+  } })));
+  // Move the entire row, including custom columns, formulas, formatting and row height.
+  const rowOrder = Array.from({ length: db.getLastRow() }, (_, index) => index + 1);
+  plan.items.forEach((item, index) => {
+    const sourceIndex = rowOrder.indexOf(item.sheetRow);
+    const targetIndex = index + 1;
+    if (sourceIndex === targetIndex) return;
+    requests.push({ moveDimension: { source: { sheetId: sheetId, dimension: 'ROWS', startIndex: sourceIndex, endIndex: sourceIndex + 1 }, destinationIndex: targetIndex } });
+    rowOrder.splice(sourceIndex, 1);
+    rowOrder.splice(targetIndex, 0, item.sheetRow);
+  });
+  if (!plan.retry) {
+    const history = getOrCreateSheet_(ss, SKU_REPLACEMENT_SHEET);
+    if (history.getLastRow() === 0) {
+      ensureSheetSize_(history, 1, SKU_REPLACEMENT_HEADERS.length);
+      history.getRange(1, 1, 1, SKU_REPLACEMENT_HEADERS.length).setValues([SKU_REPLACEMENT_HEADERS]);
+    } else {
+      const currentHistoryHeaders = history.getRange(1, 1, 1, SKU_REPLACEMENT_HEADERS.length).getDisplayValues()[0];
+      if (!SKU_REPLACEMENT_HEADERS.every((name, index) => currentHistoryHeaders[index] === name)) {
+        throw new Error('SKU 교체이력 열 순서가 예상과 다릅니다. 기존 데이터는 변경하지 않았습니다.');
+      }
+    }
+    const recordedAt = new Date().toISOString();
+    const historyRows = plan.items.map(item => [recordedAt, model, model, String(item.values[plan.columns['SKU ID']] || ''),
+      String(item.values[plan.columns['바코드']] || ''), item.values[plan.columns['창고번호']] || '', '동일모델재등록', operationId,
+      JSON.stringify({ headers: plan.headers, values: item.values.map((value, i) => item.formulas[i] || value) }), '']);
+    requests.push({ appendCells: { sheetId: history.getSheetId(), rows: historyRows.map(row => ({ values: row.map(registrationCellData_) })), fields: 'userEnteredValue' } });
+  }
+  SpreadsheetApp.flush();
+  // All edits, row moves and retired-SKU history are committed together or rejected together.
+  try {
+    Sheets.Spreadsheets.batchUpdate({ requests: requests }, ss.getId());
+  } catch (error) {
+    throw new Error('재등록 일괄 반영 실패: ' + String(error.message || error).slice(0, 300));
+  }
+  SpreadsheetApp.flush();
+  const afterRange = db.getRange(2, 1, plan.items.length, plan.headers.length);
+  const after = afterRange.getValues();
+  const formulas = afterRange.getFormulas();
+  after.forEach((row, index) => {
+    const source = newRows[index];
+    const item = plan.items[index];
+    if (String(row[plan.columns['모델SKU']]).trim().toUpperCase() !== String(source[dbColumn_('모델SKU')]).trim().toUpperCase()
+      || row[plan.columns['현재상태']] !== '재등록파일생성'
+      || ['SKU ID','바코드','발주가능상태','제품링크','노출상품ID','옵션ID'].some(name => String(row[plan.columns[name]] == null ? '' : row[plan.columns[name]]).trim())) {
+      throw new Error('재등록 반영 결과 확인에 실패했습니다. 백업과 제품DB를 확인해주세요.');
+    }
+    const changed = {};
+    item.changes.forEach(change => {
+      const column = change.column - 1;
+      changed[column] = true;
+      const actual = typeof change.after === 'string' && change.after.startsWith('=') ? formulas[index][column] : row[column];
+      if (String(actual == null ? '' : actual) !== String(change.after)) throw new Error('재등록 입력값 확인 실패: ' + plan.headers[column]);
+    });
+    item.values.forEach((before, column) => {
+      // Sheets adjusts native formula references when rows move.
+      if (changed[column] || item.formulas[column]) return;
+      if (String(row[column] == null ? '' : row[column]) !== String(before == null ? '' : before)) {
+        throw new Error('재등록 보존값 확인 실패: ' + (plan.headers[column] || ('열 ' + (column + 1))));
+      }
+    });
+  });
+  return { updatedRows: plan.items.length, status: '재등록파일생성' };
+}
+
+// Read the current header layout without migrating or rewriting the product DB.
+function readReregistrationDb_(db, model) {
+  const width = db.getLastColumn();
+  if (db.getLastRow() < 2) return { headers: [], columns: {}, width: width, items: [], casingMismatch: false };
+  const headers = db.getRange(1, 1, 1, width).getDisplayValues()[0].map(value => String(value || '').trim());
+  const columns = {};
+  headers.forEach((header, index) => {
+    if (!header) return;
+    if (columns[header] !== undefined) throw new Error('제품DB에 같은 이름의 열이 중복됩니다: ' + header);
+    columns[header] = index;
+  });
+  // These display labels are established product DB aliases. Keep the Sheet's
+  // original headers and resolve only the application field-to-column mapping.
+  const aliases = {
+    '원가(부가세포함)': ['원가'],
+    '쿠팡 판매가': ['판매가'],
+    '현재상태': ['SKU매칭상태']
+  };
+  Object.keys(aliases).forEach(canonical => {
+    const present = [canonical].concat(aliases[canonical]).filter(name => columns[name] !== undefined);
+    if (present.length > 1) throw new Error('제품DB에 같은 의미의 열이 중복됩니다: ' + present.join(', '));
+    if (present.length === 1) columns[canonical] = columns[present[0]];
+  });
+  ['현재상태','모델명/품번','모델SKU','SKU ID','바코드','발주가능상태','제품링크','노출상품ID','옵션ID','기본순서'].forEach(name => {
+    if (columns[name] === undefined) throw new Error('제품DB 열을 찾을 수 없습니다: ' + name);
+  });
+  const wanted = String(model || '').trim();
+  const range = db.getRange(2, 1, db.getLastRow() - 1, width);
+  const values = range.getValues();
+  const formulas = range.getFormulas();
+  const items = values.map((row, index) => ({ sheetRow: index + 2, values: row, formulas: formulas[index] }))
+    .filter(item => wanted && String(item.values[columns['모델명/품번']] || '').trim().toLowerCase() === wanted.toLowerCase());
+  return { headers: headers, columns: columns, width: width, items: items,
+    casingMismatch: items.some(item => String(item.values[columns['모델명/품번']] || '').trim() !== wanted) };
+}
+
+function isReregistrationPackage_(values, columns) {
+  return Boolean(String(values[columns['패키지']] || '').trim()) || /패키지|랜덤발송|세트/.test(String(values[columns['상품명']] || ''));
+}
+/** New re-registration history cannot be reversed through the legacy SKU-link undo. */
+function replacementUndoBlockedReason_(ss, model, legacySku) {
+  const wantedModel = String(model || '').trim();
+  if (!wantedModel) return '';
+  const wantedSku = normalizeSkuId_(legacySku);
+  const history = ss.getSheetByName(SKU_REPLACEMENT_SHEET);
+  if (!history || history.getLastRow() < 2) return '';
+  const values = history.getRange(2, 1, history.getLastRow() - 1, SKU_REPLACEMENT_HEADERS.length).getValues();
+  const selectedNewModels = [];
+  values.forEach(row => {
+    const oldModel = String(row[1] || '').trim();
+    const newModel = String(row[2] || '').trim();
+    const oldSku = normalizeSkuId_(row[3]);
+    if ((oldModel === wantedModel || newModel === wantedModel) && (!wantedSku || oldSku === wantedSku)
+      && newModel && selectedNewModels.indexOf(newModel) < 0) selectedNewModels.push(newModel);
+  });
+  const protectedHistory = values.some(row => ['동일모델재등록','재등록중복정리'].includes(String(row[6] || '').trim())
+    && selectedNewModels.indexOf(String(row[2] || '').trim()) >= 0);
+  return protectedHistory ? '동일 모델 재등록 또는 재등록 중복 정리 이력이 있는 상품은 일반 SKU 연결취소로 복원할 수 없습니다. 기존 제품DB와 재등록 이력은 변경하지 않았습니다.' : '';
 }

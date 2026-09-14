@@ -10,14 +10,14 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const purchaseOrderNumbers = Array.isArray(body.purchaseOrderNumbers) ? body.purchaseOrderNumbers.map(String) : [];
     if (!purchaseOrderNumbers.length) return NextResponse.json({ error: "Shipment 대상 generation이 없습니다." }, { status: 400 });
-    const context = await buildShipmentOutputContext(purchaseOrderNumbers, { requireDestination: false });
+    const context = await buildShipmentOutputContext(purchaseOrderNumbers, { requireDestination: false, invoiceGroups: body.invoiceGroups });
     if (!context.preview.canGenerate) throw new ShipmentOutputValidationError(context.preview);
     const requests = context.documents.map(document => ({
       purchaseOrderNumber: document.purchaseOrderNumber,
       fulfillmentCenter: document.fulfillmentCenterName,
       expectedDate: document.expectedArrivalDate,
     }));
-    const preview = await inspectAutoShipmentTracking(requests);
+    const preview = await inspectAutoShipmentTracking(requests, body.invoiceGroups === undefined ? undefined : context.groups.map(group => group.purchaseOrderNumbers));
     return NextResponse.json({ preview });
   } catch (error) {
     if (error instanceof ShipmentOutputValidationError) return NextResponse.json({ error: error.message, preview: error.preview }, { status: 409 });

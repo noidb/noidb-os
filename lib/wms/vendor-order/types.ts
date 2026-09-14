@@ -39,11 +39,13 @@ export interface VendorOrderDraft {
   updatedAt: string;
   approvedAt?: string;
   sentAt?: string;
+  archivedAt?: string;
   /** sent 토글 해제 시 정확히 복원할 상태. */
   statusBeforeSent?: Exclude<VendorOrderDraftStatus, "sent">;
 }
 
 export interface VendorOrderDraftLine {
+  orderExclusion?: import("./completion").VendorOrderExclusion;
   /** 자동 생성 라인: `${draftId}::${skuId}`, 수동 추가 라인: `${draftId}::manual-${timestamp}` */
   id: string;
   draftId: string;
@@ -73,6 +75,8 @@ export interface VendorOrderDraftLine {
   memo: string;
   /** 자동 집계가 아니라 사용자가 화면에서 직접 추가한 라인인지 */
   isManuallyAdded: boolean;
+  isStockReplenishment?: boolean;
+  manualListGroup?: string;
   /** 계산·처리 출처. 실제 Supplier Hub 미납은 수량을 그대로 사용한다. */
   sourceType?: "picking-shortage" | "actual-inbound-shortage";
   coupangConfirmedQuantity?: number;
@@ -81,6 +85,13 @@ export interface VendorOrderDraftLine {
    *  없으면 0으로 취급한다. 이 값을 저장해도 제품DB(구글시트) 현재고는 자동으로 바뀌지 않는다 —
    *  재고 자동 반영은 별도 사용자 지시가 있을 때까지 구현하지 않는다. */
   receivedQuantity?: number;
+  receivingCompletedAt?: string;
+  receivingCompletionToken?: string;
+  vendorTransfer?: { operationId: string; targetDraftId: string; targetLineId: string; vendorName: string; quantity: number; at: string; sourceUpdatedAt: string };
+  vendorTransferSourceLineId?: string;
+  sentResolution?: { kind: "reorder" | "discontinue"; destinationId: string; at: string };
+  receivedUsedImmediatelyAt?: string;
+  receivingHistory?: Array<{ savedAt: string; record: Omit<VendorOrderDraftLine, "receivingHistory"> }>;
   /** 거래처발주 입고처리에서 입력한 부가세 별도 개당 단가. */
   receivedUnitPrice?: number;
   /** receivedUnitPrice의 10% 부가세(기존 원가 정수 처리와 같은 반올림). */
@@ -91,12 +102,14 @@ export interface VendorOrderDraftLine {
   receivedCostAppliedAt?: string;
   /** 미입고분이 거래처 사유로 지연 중일 때의 표시·저장 시각. 값이 없으면 지연 해제 상태다. */
   receivingDelayedAt?: string;
+  receivingDelayMemo?: string;
   /** 입고지연을 해제한 시각. 과거 receivingDelayedAt은 이력으로 남긴다. */
   receivingDelayReleasedAt?: string;
   /** 입고되지 않은 수량 중 다음 거래처 발주 초안에서 다시 주문하도록 보관한 수량. */
   reorderPendingQuantity?: number;
   /** 미입고 재발주 대기열에 등록한 시각. */
   reorderRequestedAt?: string;
+  receivingConfirmedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -6,7 +6,7 @@ import { sortWarehouseProducts } from "../category-order";
 /** 거래처 자동 발주의 SKU별 최소 주문 단위(한 타스). */
 export const MIN_AUTO_VENDOR_ORDER_QUANTITY = 12;
 
-export function toVendorOrderQuantity(shortageQuantity: number): number {
+export function toVendorOrderQuantity(shortageQuantity: number, _productContext = ""): number {
   const safeShortage = Math.max(0, Math.ceil(shortageQuantity));
   if (safeShortage === 0) return 0;
   return Math.ceil(safeShortage / MIN_AUTO_VENDOR_ORDER_QUANTITY) * MIN_AUTO_VENDOR_ORDER_QUANTITY;

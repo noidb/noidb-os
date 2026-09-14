@@ -75,6 +75,7 @@ async function pdfTextPages(file: File): Promise<{ width: number; height: number
   }
   const document = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
   const pages: { width: number; height: number; items: PdfTextItem[] }[] = [];
+  try {
   for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
     const page = await document.getPage(pageNumber);
     const viewport = page.getViewport({ scale: 1 });
@@ -89,6 +90,7 @@ async function pdfTextPages(file: File): Promise<{ width: number; height: number
     });
   }
   return pages;
+  } finally { await document.destroy(); }
 }
 
 function findFirst(items: PdfTextItem[], pattern: RegExp): string {
@@ -237,7 +239,8 @@ export function matchShipmentPrintGroups(
   manifests: ShipmentPdfFile[],
   barcodeRows: BarcodeSourceRow[],
   catalogItems: ProductCatalogItem[],
-  _waveItems: PickingWaveItem[] = []
+  _waveItems: PickingWaveItem[] = [],
+  options: { requireBarcodeMetadata?: boolean } = {}
 ): ShipmentPrintGroup[] {
   const errors: string[] = [];
   const duplicateNumbers = (files: ShipmentPdfFile[]) => unique(files.map(file => file.shipmentNumber).filter((number, index, all) => all.indexOf(number) !== index));
@@ -280,14 +283,14 @@ export function matchShipmentPrintGroups(
       if (source.quantity !== item.quantity) errors.push(`${shipmentNumber} SKU ${item.skuId}: 최종 납품수량 불일치 (${source.quantity}/${item.quantity})`);
       if (source.expectedDate !== manifest.expectedDate || source.fulfillmentCenter !== manifest.fulfillmentCenter) errors.push(`${shipmentNumber} SKU ${item.skuId}: 입고예정일 또는 물류센터 불일치`);
       const catalog = catalogBySku.get(item.skuId) ?? [];
-      if (catalog.length !== 1) {
+      if (catalog.length > 1 || (catalog.length !== 1 && options.requireBarcodeMetadata !== false)) {
         errors.push(`${shipmentNumber} SKU ${item.skuId}: 제품DB ${catalog.length}건 (정확히 1건 필요)`);
         continue;
       }
       // SKU/바코드/상품명/옵션/수량은 발주서 기반 source를 유일한 기준으로 사용한다.
       // 제조국과 모델명만 SKU ID로 조회한 제품DB(구글시트) 값을 보강한다.
-      const resolvedModelName = resolveBarcodeModelIdentifier(catalog[0]);
-      if (!catalog[0].countryOfOrigin || !resolvedModelName) errors.push(`${shipmentNumber} SKU ${item.skuId}: 제품DB 제조국 또는 영문·숫자 모델SKU/모델명 누락`);
+      const resolvedModelName = resolveBarcodeModelIdentifier(catalog[0] || { modelName: "", modelSku: "" });
+      if (options.requireBarcodeMetadata !== false && (!catalog[0]?.countryOfOrigin || !resolvedModelName)) errors.push(`${shipmentNumber} SKU ${item.skuId}: 제품DB 제조국 또는 영문·숫자 모델SKU/모델명 누락`);
       const display = resolveDisplayNameAndOption(
         source.productName,
         source.optionLabel
@@ -297,7 +300,7 @@ export function matchShipmentPrintGroups(
         productName: display.name,
         optionLabel: display.option,
         modelName: resolvedModelName,
-        countryOfOrigin: catalog[0].countryOfOrigin,
+        countryOfOrigin: catalog[0]?.countryOfOrigin || "",
       });
     }
     const purchaseOrderNumbers = unique(matchedRows.map(row => row.purchaseOrderNumber));
@@ -357,15 +360,20 @@ export async function buildFourUpLabelPdf(groups: ShipmentPrintGroup[]): Promise
  * 각 쉽먼트 첫 행은 상품 바코드를 비워 구분표로 출력하고, 다음 행부터 최종 납품수량만큼
  * 상품행을 반복한다. 동봉내역서의 상품 순서는 matchShipmentPrintGroups에서 이미 보존된다.
  */
-export async function buildBarTenderWorkbook(groups: ShipmentPrintGroup[]): Promise<Uint8Array> {
+export type BarTenderPrintGroup = Pick<ShipmentPrintGroup, "shipmentNumber" | "purchaseOrderNumbers" | "fulfillmentCenter" | "expectedDate" | "barcodeRows">;
+
+export async function buildBarTenderWorkbook(groups: readonly BarTenderPrintGroup[]): Promise<Uint8Array> {
+  for (const group of groups) for (const row of group.barcodeRows) {
+    if (!row.countryOfOrigin || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(row.modelName)) throw new Error(`${row.skuId}: 바코드 재발행에 필요한 제조국 또는 영문·숫자 모델 정보가 없습니다. 상품정보를 확인해 주세요.`);
+  }
   const ExcelJS = (await import("exceljs")).default;
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("템플릿1");
   const headers = ["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"];
-  sheet.addRow(headers);
   const outputRows: (string | number)[][] = [];
 
   for (const group of groups) {
+    let sequenceNumber = 1;
     const skuCount = group.barcodeRows.length;
     const totalQuantity = group.barcodeRows.reduce((sum, row) => sum + row.quantity, 0);
     outputRows.push([
@@ -382,7 +390,7 @@ export async function buildBarTenderWorkbook(groups: ShipmentPrintGroup[]): Prom
       for (let count = 0; count < row.quantity; count += 1) {
         outputRows.push([
           row.skuId,
-          row.warehouseNumber,
+          sequenceNumber,
           row.barcode,
           row.productName,
           row.optionLabel,
@@ -390,12 +398,21 @@ export async function buildBarTenderWorkbook(groups: ShipmentPrintGroup[]): Prom
           row.modelName,
           "상품",
         ]);
+        sequenceNumber += 1;
       }
     }
   }
   // 라벨 프린터는 먼저 출력한 라벨이 묶음의 아래쪽에 쌓인다. 전체 레코드를 역순으로
   // 전송해야 최종 묶음을 위에서 볼 때 구분표 → 해당 상품 순서가 된다.
-  for (const row of outputRows.reverse()) sheet.addRow(row);
+  sheet.addTable({
+    name: "BarTenderData",
+    ref: "A1",
+    headerRow: true,
+    totalsRow: false,
+    style: { theme: "TableStyleLight1", showRowStripes: false },
+    columns: headers.map(name => ({ name })),
+    rows: outputRows.reverse(),
+  });
   sheet.getRow(1).font = { bold: true };
   sheet.columns = [12, 8, 18, 48, 36, 18, 24, 14].map(width => ({ width }));
   const buffer = await workbook.xlsx.writeBuffer();
@@ -495,6 +512,71 @@ export async function buildSkuBarcodePdf(groups: ShipmentPrintGroup[], onProgres
         page.drawImage(image, { x: 0, y: 0, width: LABEL_PAGE[0], height: LABEL_PAGE[1] });
         onProgress?.(++done, totalPages);
       }
+    }
+  }
+  return output.save();
+}
+
+function transactionStatementCanvas(group: ShipmentPrintGroup, rows: ShipmentPrintGroup["barcodeRows"], pageNumber: number, pageCount: number): HTMLCanvasElement {
+  const element = canvas(1240, 1754);
+  const ctx = element.getContext("2d")!;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, element.width, element.height);
+  ctx.fillStyle = "#111";
+  ctx.textAlign = "left";
+  ctx.font = '900 48px "Noto Sans KR", "Malgun Gothic", sans-serif';
+  ctx.fillText("거래명세서", 70, 90);
+  ctx.font = '700 24px "Noto Sans KR", "Malgun Gothic", sans-serif';
+  ctx.fillText(`물류센터  ${group.fulfillmentCenter}`, 70, 145);
+  ctx.fillText(`입고예정일  ${group.expectedDate}`, 70, 182);
+  ctx.fillText(`Shipment  ${group.shipmentNumber}`, 70, 219);
+  ctx.fillText(`발주번호  ${group.purchaseOrderNumbers.join(" / ")}`, 70, 256);
+  ctx.textAlign = "right";
+  ctx.fillText(`${pageNumber}/${pageCount}`, 1170, 90);
+  ctx.textAlign = "left";
+
+  const columns = [70, 250, 780, 1100];
+  const headerY = 320;
+  ctx.fillStyle = "#ece8e2";
+  ctx.fillRect(60, headerY - 36, 1120, 54);
+  ctx.fillStyle = "#111";
+  ctx.font = '800 22px "Noto Sans KR", "Malgun Gothic", sans-serif';
+  ctx.fillText("SKU ID", columns[0], headerY);
+  ctx.fillText("상품명 / 옵션", columns[1], headerY);
+  ctx.fillText("바코드", columns[2], headerY);
+  ctx.textAlign = "right";
+  ctx.fillText("수량", columns[3] + 60, headerY);
+  ctx.textAlign = "left";
+
+  rows.forEach((row, index) => {
+    const y = headerY + 65 + index * 58;
+    ctx.strokeStyle = "#ddd8d1";
+    ctx.beginPath(); ctx.moveTo(60, y + 18); ctx.lineTo(1180, y + 18); ctx.stroke();
+    ctx.fillStyle = "#111";
+    ctx.font = '600 19px "Noto Sans KR", "Malgun Gothic", sans-serif';
+    ctx.fillText(row.skuId, columns[0], y);
+    const name = `${row.productName}${row.optionLabel ? ` / ${row.optionLabel}` : ""}`;
+    ctx.font = `600 ${fitText(ctx, name, 500, 19, 10)}px "Noto Sans KR", "Malgun Gothic", sans-serif`;
+    ctx.fillText(name, columns[1], y);
+    ctx.fillText(row.barcode, columns[2], y);
+    ctx.textAlign = "right";
+    ctx.font = '800 21px "Noto Sans KR", "Malgun Gothic", sans-serif';
+    ctx.fillText(String(row.quantity), columns[3] + 60, y);
+    ctx.textAlign = "left";
+  });
+  return element;
+}
+
+export async function buildTransactionStatementPdf(groups: ShipmentPrintGroup[]): Promise<Uint8Array> {
+  const output = await PDFDocument.create();
+  const rowsPerPage = 22;
+  for (const group of groups) {
+    const pageCount = Math.max(1, Math.ceil(group.barcodeRows.length / rowsPerPage));
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+      const rows = group.barcodeRows.slice(pageIndex * rowsPerPage, (pageIndex + 1) * rowsPerPage);
+      const image = await output.embedPng(await canvasPng(transactionStatementCanvas(group, rows, pageIndex + 1, pageCount)));
+      const page = output.addPage(A4);
+      page.drawImage(image, { x: 0, y: 0, width: A4[0], height: A4[1] });
     }
   }
   return output.save();
