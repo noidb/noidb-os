@@ -16,6 +16,10 @@ import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsPrimaryButton, wmsGhostButton } from "@/lib/wms/ui-tokens";
 import { useWmsUndo } from "@/lib/wms/undo-context";
 import type { ReceivingDelaySummary } from "@/lib/wms/vendor-order-actions";
+import { isActiveVendorOrderLine } from "@/lib/wms/vendor-order/line-disposition";
+import WeeklyWork from "@/app/wms/inbound/WeeklyWork";
+import ActualInboundShortagePage from "@/app/wms/vendor-orders/actual-inbound-shortage/page";
+import { planVendorReassignment } from "@/lib/wms/vendor-order/reassign-vendor";
 
 /**
  * 발주 입고처리 화면 (2026-08-19 4차 실사용 테스트 신규).
@@ -62,6 +66,8 @@ export default function VendorOrderReceivingPage() {
   const [lastReceiveAllSnapshot, setLastReceiveAllSnapshot] = useState<VendorOrderDraftLine[] | null>(null);
   const [operator, setOperator] = useState("");
   const [delaySummaries, setDelaySummaries] = useState<Map<string, ReceivingDelaySummary>>(new Map());
+  const [viewMode, setViewMode] = useState<"pending" | "confirmed">("pending");
+  const [vendorTargets, setVendorTargets] = useState<Record<string, string>>({});
 
   async function reload() {
     setLoading(true);
@@ -118,13 +124,14 @@ export default function VendorOrderReceivingPage() {
     return drafts
       .map(draft => {
         const draftLines = lines.filter(line => line.draftId === draft.id);
-        const totalQuantity = draftLines.reduce((sum, line) => sum + line.shortageQuantity, 0);
+        const activeDraftLines = draftLines.filter(line => isActiveVendorOrderLine(line, liveCatalog.get(line.skuId)?.currentStatus));
+        const totalQuantity = activeDraftLines.reduce((sum, line) => sum + line.shortageQuantity, 0);
         const wave = draft.waveId === MANUAL_VENDOR_WORKSPACE_ID ? null : waveById.get(draft.waveId);
-        return { draft, draftLines, lineCount: draftLines.length, totalQuantity, wave, receivingStatus: computeReceivingStatus(draftLines) };
+        return { draft, draftLines, activeDraftLines, lineCount: activeDraftLines.length, totalQuantity, wave, receivingStatus: computeReceivingStatus(activeDraftLines) };
       })
       .filter(row => row.lineCount > 0)
       .sort((a, b) => (b.draft.approvedAt || b.draft.updatedAt).localeCompare(a.draft.approvedAt || a.draft.updatedAt));
-  }, [drafts, lines, waveById]);
+  }, [drafts, lines, waveById, liveCatalog]);
 
   const openRow = rows.find(row => row.draft.id === openDraftId) || null;
 
@@ -149,7 +156,7 @@ export default function VendorOrderReceivingPage() {
     setSaveMessage(null);
     try {
       const now = new Date().toISOString();
-      const updatedLines = openRow.draftLines.map(line => {
+      const updatedLines = openRow.activeDraftLines.map(line => {
         const receivedQuantity = editValues[line.id] ?? line.receivedQuantity ?? 0;
         const receivedUnitPrice = Math.max(0, Math.round(unitPriceValues[line.id] ?? line.receivedUnitPrice ?? 0));
         const receivedVat = Math.round(receivedUnitPrice * 0.1);
@@ -227,7 +234,7 @@ export default function VendorOrderReceivingPage() {
 
   async function releaseWholeReceive() {
     if (!lastReceiveAllSnapshot) return;
-    const current = openRow?.draftLines.map(line => ({ ...line, receivedQuantity: editValues[line.id] ?? line.receivedQuantity ?? 0 })) || [];
+    const current = openRow?.activeDraftLines.map(line => ({ ...line, receivedQuantity: editValues[line.id] ?? line.receivedQuantity ?? 0 })) || [];
     await restoreLines(lastReceiveAllSnapshot);
     pushUndo("전량입고 해제", () => restoreLines(current));
     setLastReceiveAllSnapshot(null);
@@ -353,6 +360,40 @@ export default function VendorOrderReceivingPage() {
     setSelectedLineIds(new Set());
   }
 
+  async function queueSelectedReordersForLines(targets: VendorOrderDraftLine[]) {
+    if (!openRow || !targets.length) return;
+    const now = new Date().toISOString();
+    const updated = targets.map(line => ({
+      ...line,
+      reorderPendingQuantity: Math.max(0, line.shortageQuantity - (editValues[line.id] ?? line.receivedQuantity ?? 0)),
+      reorderRequestedAt: now,
+      updatedAt: now,
+    })).filter(line => (line.reorderPendingQuantity || 0) > 0);
+    if (!updated.length) return;
+    await saveUpdatedLines(updated, `${updated.length}개 상품을 미납분 재발주 대기로 이동했습니다.`);
+    await reload();
+  }
+
+  async function moveSentLine(line: VendorOrderDraftLine) {
+    const vendorName = (vendorTargets[line.id] || "").trim();
+    if (!vendorName || vendorName === line.vendorName) { setSaveError("이동할 다른 거래처를 입력해 주세요."); return; }
+    setSaving(true); setSaveError(null); setSaveMessage(null);
+    try {
+      const response = await fetch("/api/wms/picking-waves", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || !data.ok || !data.snapshot) throw new Error(data.error || "최신 거래처 발주서를 확인하지 못했습니다.");
+      const snapshot = data.snapshot;
+      const plan = planVendorReassignment({ snapshot, line, vendorName, baseline: line, localLines: lines, operationId: `receiving-transfer-${Date.now()}`, now: new Date().toISOString() });
+      const saved = await fetch("/api/wms/picking-waves", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(plan.mutation) });
+      const result = await saved.json();
+      if (!saved.ok || !result.ok) throw new Error(result.error || "거래처 수정 저장에 실패했습니다.");
+      setSaveMessage(`${line.skuId}를 ${vendorName} 거래처 발주서로 이동했습니다.`);
+      setVendorTargets(previous => { const next = { ...previous }; delete next[line.id]; return next; });
+      await reload();
+    } catch (error) { setSaveError(error instanceof Error ? error.message : "거래처 수정에 실패했습니다."); }
+    finally { setSaving(false); }
+  }
+
   async function deleteDrafts(draftIds: string[]) {
     if (draftIds.length === 0 || deleting) return;
     const targetNames = rows.filter(row => draftIds.includes(row.draft.id)).map(row => row.draft.vendorName);
@@ -413,7 +454,7 @@ export default function VendorOrderReceivingPage() {
         </button>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
-          {openRow.draftLines.map(line => {
+          {openRow.activeDraftLines.map(line => {
             const { name, option } = resolveDisplayNameAndOption(line.productName, line.optionLabel);
             const received = editValues[line.id] ?? 0;
             const remaining = Math.max(0, line.shortageQuantity - received);
@@ -498,6 +539,19 @@ export default function VendorOrderReceivingPage() {
                 <button onClick={() => setReceivingDelay([line], !delayActive)} disabled={saving || remaining === 0} style={{ ...wmsGhostButton, width: "100%", minHeight: "34px", marginTop: "6px", color: delayActive ? wmsColors.greenDark : wmsColors.warn, opacity: remaining === 0 ? 0.5 : 1 }}>
                   {delayActive ? "입고지연 해제" : "거래처 입고지연"}
                 </button>
+                {openRow.draft.status === "sent" ? <div style={{ marginTop: "8px", paddingTop: "8px", borderTop: `1px dashed ${wmsColors.border}` }}>
+                  <div style={{ fontSize: "11px", fontWeight: 800, marginBottom: "6px" }}>발주결과</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+                    <button onClick={() => updateSelectedCatalog("단종", [line])} disabled={saving} style={{ ...wmsGhostButton, minHeight: "34px", background: "#f4dfd9", color: "#934633", fontSize: "11px" }}>단종</button>
+                    <button onClick={() => setReceivingDelay([line], true)} disabled={saving || delayActive} style={{ ...wmsGhostButton, minHeight: "34px", color: wmsColors.warn, fontSize: "11px" }}>입고지연</button>
+                    <button onClick={() => queueSelectedReordersForLines([line])} disabled={saving || remaining === 0} style={{ ...wmsGhostButton, minHeight: "34px", color: wmsColors.greenDark, fontSize: "11px" }}>미납분 재발주</button>
+                    <button onClick={() => setVendorTargets(previous => ({ ...previous, [line.id]: line.vendorName }))} disabled={saving} style={{ ...wmsGhostButton, minHeight: "34px", fontSize: "11px" }}>거래처 수정</button>
+                  </div>
+                  {Object.hasOwn(vendorTargets, line.id) ? <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
+                    <input value={vendorTargets[line.id]} placeholder="올바른 거래처" onChange={event => setVendorTargets(previous => ({ ...previous, [line.id]: event.target.value }))} style={{ flex: 1, minWidth: 0, border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "8px", padding: "6px 8px" }} />
+                    <button onClick={() => void moveSentLine(line)} disabled={saving} style={{ ...wmsPrimaryButton, minHeight: "34px", padding: "0 8px", fontSize: "11px" }}>이동</button>
+                  </div> : null}
+                </div> : null}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginTop: "6px" }}>
                   <button onClick={() => updateSelectedCatalog("단종", [line])} disabled={saving} style={{ ...wmsGhostButton, minHeight: "34px", background: "#f4dfd9", color: "#934633", fontSize: "12px" }}>단종처리</button>
                   <button onClick={() => updateSelectedCatalog("단종해제", [line])} disabled={saving} style={{ ...wmsGhostButton, minHeight: "34px", color: wmsColors.greenDark, fontSize: "12px" }}>단종해제</button>
@@ -531,9 +585,9 @@ export default function VendorOrderReceivingPage() {
 
   return (
     <main style={pageStyle}>
-      <h1 style={{ fontSize: "20px", margin: "0 0 4px" }}>거래처 발주서 입고</h1>
+      <h1 style={{ fontSize: "20px", margin: "0 0 4px" }}>입고결과 처리</h1>
       <p style={{ fontSize: "12px", color: wmsColors.muted, margin: "0 0 16px" }}>
-        승인·전송완료된 거래처 발주서의 입고수량을 기록합니다. 제품DB 현재고는 자동으로 바뀌지 않습니다.
+        승인·전송완료된 거래처 발주서의 미처리 SKU를 거래처 답변에 따라 처리합니다. 처리완료 SKU는 목록에서 빠지고 입고지연만 남습니다.
       </p>
 
       {rows.length === 0 ? (
@@ -578,6 +632,22 @@ export default function VendorOrderReceivingPage() {
           </div>
         </>
       )}
+
+      <section style={{ marginTop: "24px", borderTop: `2px solid ${wmsColors.border}`, paddingTop: "16px" }}>
+        <h2 style={{ fontSize: "16px", margin: "0 0 4px" }}>1개입고 · 쿠폰/광고 처리</h2>
+        <p style={{ fontSize: "12px", color: wmsColors.muted, margin: "0 0 10px" }}>
+          기존 주간업무의 전체 1개입고 목록과 쿠폰·광고 파일 생성, 처리완료 이력을 이 화면에서 이어서 처리합니다.
+        </p>
+        <WeeklyWork />
+      </section>
+
+      <section style={{ marginTop: "24px", borderTop: `2px solid ${wmsColors.border}`, paddingTop: "16px" }}>
+        <h2 style={{ fontSize: "16px", margin: "0 0 4px" }}>실제미납 검토</h2>
+        <p style={{ fontSize: "12px", color: wmsColors.muted, margin: "0 0 10px" }}>
+          기존 actual-inbound-shortage 계산과 단종·미납분 재발주·거래처발주 3분류를 그대로 사용합니다.
+        </p>
+        <ActualInboundShortagePage />
+      </section>
     </main>
   );
 }

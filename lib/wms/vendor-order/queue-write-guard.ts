@@ -12,7 +12,7 @@ const fail = (): never => { throw new VendorOrderWriteConflictError("이 화면�
 const sent = (store: PickingWaveStoreSnapshot, line?: VendorOrderDraftLine) => Boolean(line && store.vendorOrderDrafts.some(draft => draft.id === line.draftId && draft.status === "sent"));
 // A historical receiving screen may update receipt fields, but cannot change the
 // original order identity, quantities or product data through an old queue.
-const receiptFields = new Set(["updatedAt", "receivedQuantity", "receivedUsedImmediatelyAt", "receivingHistory", "receivedUnitPrice", "receivedVat", "receivedCostVatIncluded", "receivedCostAppliedAt", "receivingDelayedAt", "receivingDelayReleasedAt", "reorderPendingQuantity", "reorderRequestedAt"]);
+const receiptFields = new Set(["updatedAt", "receivedQuantity", "receivedUsedImmediatelyAt", "receivingHistory", "receivedUnitPrice", "receivedVat", "receivedCostVatIncluded", "receivedCostAppliedAt", "receivingDelayedAt", "receivingDelayReleasedAt", "reorderPendingQuantity", "reorderRequestedAt", "receivingConfirmedAt"]);
 function onlyReceiptChanged(before: VendorOrderDraftLine, after: VendorOrderDraftLine) {
   return [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(key => !receiptFields.has(key))
     .every(key => JSON.stringify(before[key as keyof VendorOrderDraftLine]) === JSON.stringify(after[key as keyof VendorOrderDraftLine]));

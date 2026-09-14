@@ -515,7 +515,6 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                     status={status}
                     productLinksBySku={Object.fromEntries(group.lines.map(line => [line.skuId, liveCatalogByProductCode.get(line.skuId)?.productLink || ""]))}
                     onMarkSent={() => toggleSent(group.vendorName)}
-                    onReviseAgain={() => persistAll({ vendorName: group.vendorName, status: "resend_needed" })}
                   />
                 )}
               </div>
