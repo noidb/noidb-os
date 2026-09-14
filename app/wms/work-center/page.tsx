@@ -12,7 +12,6 @@ import { TruckIcon } from "../icons";
 import WorkCenterMenuButton from "./WorkCenterMenuButton";
 import SupplyStatusUpdateButton from "./SupplyStatusUpdateButton";
 import NewPurchaseOrdersUpdateButton from "./NewPurchaseOrdersUpdateButton";
-import UpcomingInboundSummary from "./UpcomingInboundSummary";
 
 /**
  * 작업센터 첫 화면의 "부족분 거래처별 발주서" 진입 배너 (2026-08-19 신규).
@@ -117,8 +116,6 @@ export default function WmsWorkCenterPage() {
       </div>
 
       <ShortageVendorOrdersBanner />
-
-      <UpcomingInboundSummary />
 
       <Link className="wms-work-center-picking-link" href="/wms/picking/waves">
         <button className="wms-work-center-picking-button" style={{ ...wmsPrimaryButton, width: "100%" }}>통합 피킹 시작 (실제 발주 기준)</button>
