@@ -26,7 +26,7 @@ export default function SupplyStatusUpdateButton() {
   const [result, setResult] = useState<ApplyResult | null>(null);
   const [showDetail, setShowDetail] = useState(false);
 
-  const label = state === "loading" ? "업데이트 중..." : state === "success" ? "업데이트 완료" : state === "error" ? "업데이트 실패 · 다시 시도" : "상품공급상태 업데이트";
+  const label = state === "loading" ? "업데이트 중..." : state === "success" ? "업데이트 완료" : state === "error" ? "업데이트 실패 · 다시 시도" : "상품공급상태";
 
   async function handleClick() {
     if (state === "loading") return;
