@@ -11,13 +11,14 @@ import styles from "./weekly-work.module.css";
 import { weeklyFreshVendorItem, weeklyReviewCompletion, weeklyReviewIsActive } from "@/lib/wms/weekly-work-progress";
 import { weeklyCouponCompletion } from "@/lib/wms/weekly-coupon-completion";
 import { weeklyReorderQueueRuns } from "@/lib/wms/weekly-reorder-queue-view";
+import { historicalShortagePairKey, type HistoricalShortageEvidence, type HistoricalShortageStatus } from "@/lib/wms/historical-shortage-clearance";
 
 const LegacyInbound = dynamic(() => import("./LegacyInbound"), { loading: () => <p>이전 입고기록을 불러오는 중입니다.</p> });
 import WeeklyCouponHistory from "./WeeklyCouponHistory";
 type OutputKind = "all" | "coupon" | "vendors" | "discontinue" | "reorder" | "marketing";
 type AdvertisingPreview = { resolved: Array<{ skuId: string; optionId: string }>; optionIds: string[]; missingSkuIds: string[]; conflictingSkuIds: string[] };
 type SaveState = "saved" | "pending" | "saving" | "error";
-type ApiResult = { success?: boolean; run?: WeeklyRun; error?: string; code?: string };
+type ApiResult = { success?: boolean; run?: WeeklyRun; error?: string; code?: string; shortageClearanceEvidence?: HistoricalShortageEvidence[] };
 const samePeriod = (left: WeeklyPeriod, right: WeeklyPeriod) => left.startDate === right.startDate && left.endDate === right.endDate;
 const formatTime = (value?: string) => value ? new Date(value).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
 const shortagePairKey = (orderNo: string, skuId: string) => JSON.stringify([orderNo, skuId]);
@@ -82,13 +83,15 @@ function ProductReviewCard({ item, review, vendors, disabled, sent, requested, p
   </article>;
 }
 
-export default function WeeklyWork({ processingOnly = false }: { processingOnly?: boolean }) {
+export default function WeeklyWork({ processingOnly = false, clearanceMode = false }: { processingOnly?: boolean; clearanceMode?: boolean }) {
   const routing = useRef(false);
   const [period, setPeriod] = useState<WeeklyPeriod>(recentMonthPeriod);
   const [preset, setPreset] = useState("month");
   const [runs, setRuns] = useState<WeeklyRun[]>([]);
   const [run, setRun] = useState<WeeklyRun | null>(null);
+  const [clearancePrepared, setClearancePrepared] = useState(false);
   const [expectedDates, setExpectedDates] = useState<Record<string, string>>({});
+  const [shortageClearanceEvidence, setShortageClearanceEvidence] = useState<HistoricalShortageEvidence[]>([]);
   const [reviews, setReviews] = useState<Record<string, WeeklyReview>>({});
   const [knownVendors, setKnownVendors] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -218,14 +221,15 @@ export default function WeeklyWork({ processingOnly = false }: { processingOnly?
     let cancelled = false;
     void (async () => {
       try {
-        const response = await fetch("/api/wms/weekly-work", { cache: "no-store" });
+        const response = await fetch(clearanceMode ? "/api/wms/weekly-work/clearance" : "/api/wms/weekly-work", { cache: "no-store" });
         const data = await response.json() as WeeklyWorkspace & ApiResult;
         if (!response.ok || !data.success) throw new Error(data.error || "주간 업무를 불러오지 못했습니다.");
         if (cancelled) return;
         const saved = (data.runs || []).sort((a, b) => b.snapshot.createdAt.localeCompare(a.snapshot.createdAt) || b.updatedAt.localeCompare(a.updatedAt));
         setRuns(saved);
+        setShortageClearanceEvidence(data.shortageClearanceEvidence || []);
         setKnownVendors(Array.from(new Set(Object.values(data.productOverrides || {}).map(item => item.vendorName).filter(Boolean))).sort());
-        const initial = processingOnly ? weeklyReorderQueueRuns(saved)[0] : saved.find(item=>!item.id.startsWith("TRANSFER-"));
+        const initial = clearanceMode ? data.run : processingOnly ? weeklyReorderQueueRuns(saved)[0] : saved.find(item=>!item.id.startsWith("TRANSFER-") && !item.id.startsWith("CLEARANCE-"));
         if (initial) { installRun(initial); setPeriod(initial.snapshot.period); setPreset("custom"); }
         else if (saved.length) { setPeriod(recentPeriod(7)); setPreset("week"); }
       } catch (failure) { if (!cancelled) setError(failure instanceof Error ? failure.message : "주간 업무를 불러오지 못했습니다."); }
@@ -293,7 +297,7 @@ export default function WeeklyWork({ processingOnly = false }: { processingOnly?
   }, [analyze]);
 
   const staleRules = !!run && run.snapshot.rulesVersion !== WEEKLY_RULES_VERSION;
-  const readyRun = run && !staleRules && samePeriod(period, run.snapshot.period) ? run : null;
+  const readyRun = run && !staleRules && (clearanceMode || samePeriod(period, run.snapshot.period)) ? run : null;
   const couponExcluded = new Set(readyRun?.couponExcludedSkuIds || []);
   const couponCompletion = readyRun ? weeklyCouponCompletion(readyRun, runs) : undefined;
   const selectedCoupons = readyRun && !couponCompletion && !readyRun.completedAt ? readyRun.snapshot.couponItems.filter(item => !couponExcluded.has(item.skuId)) : [];
@@ -301,7 +305,7 @@ export default function WeeklyWork({ processingOnly = false }: { processingOnly?
   const couponCompleted = couponCompletion ? Math.max(0, couponTotal - couponExcluded.size) : 0;
   const couponPending = couponCompletion ? 0 : selectedCoupons.length;
   const completedCoupons = readyRun?.couponUploadedAt ? readyRun.snapshot.couponItems.filter(item => !couponExcluded.has(item.skuId)) : [];
-  const advertisingSelectionKey = readyRun ? JSON.stringify([readyRun.id, selectedCoupons.map(item => item.skuId)]) : "";
+  const advertisingSelectionKey = readyRun && (!clearanceMode || clearancePrepared) ? JSON.stringify([readyRun.id, selectedCoupons.map(item => item.skuId)]) : "";
   const advertisingReady = !selectedCoupons.length || advertising?.key === advertisingSelectionKey && !!advertising.data && !advertising.data.missingSkuIds.length && !advertising.data.conflictingSkuIds.length;
   const advertisingLoading = !!selectedCoupons.length && advertising?.key !== advertisingSelectionKey;
   useEffect(() => {
@@ -362,6 +366,17 @@ export default function WeeklyWork({ processingOnly = false }: { processingOnly?
     }), [completedSupplierHubPairs, expectedDates, supplierHubShortageDetails]);
   const completedSupplierHubShortageCount = supplierHubShortageDetails.length - activeSupplierHubShortageDetails.length;
   const activeSupplierHubShortageTotal = activeSupplierHubShortageDetails.reduce((sum, row) => sum + row.detail.shortageQuantity, 0);
+  const clearanceEvidenceByPair = useMemo(() => new Map(shortageClearanceEvidence.map(row => [historicalShortagePairKey(row.purchaseOrderNumber, row.skuId), row])), [shortageClearanceEvidence]);
+  const classifiedSupplierHubShortages = useMemo(() => activeSupplierHubShortageDetails.map(row => {
+    const evidence = clearanceEvidenceByPair.get(historicalShortagePairKey(row.detail.purchaseOrderNumber, row.item.skuId));
+    const discontinued = row.item.discontinued || runs.some(saved => saved.discontinueQueueRequestIds?.[row.item.skuId]?.length || saved.discontinueSubmittedSkuIds?.includes(row.item.skuId));
+    const status: HistoricalShortageStatus = evidence?.status || (discontinued ? "discontinued" : "needs_review");
+    return { ...row, status, reason: evidence?.reason || (discontinued ? "기존 단종 처리 또는 승인대기 기록" : "기존 기록만으로 처리 상태를 확정할 수 없음") };
+  }), [activeSupplierHubShortageDetails, clearanceEvidenceByPair, runs]);
+  const clearanceCounts = useMemo(() => classifiedSupplierHubShortages.reduce<Record<HistoricalShortageStatus, { rows: number; quantity: number }>>((counts, row) => {
+    counts[row.status].rows += 1; counts[row.status].quantity += row.detail.shortageQuantity; return counts;
+  }, { already_resolved: { rows: 0, quantity: 0 }, shipping_today: { rows: 0, quantity: 0 }, delayed: { rows: 0, quantity: 0 }, discontinued: { rows: 0, quantity: 0 }, vendor_correction: { rows: 0, quantity: 0 }, needs_review: { rows: 0, quantity: 0 } }), [classifiedSupplierHubShortages]);
+  const clearanceLabel: Record<HistoricalShortageStatus, string> = { already_resolved: "이미 해결됨", shipping_today: "오늘 출고", delayed: "입고지연", discontinued: "단종 승인대상", vendor_correction: "거래처수정", needs_review: "확인필요" };
   const entries = allEntries.filter(({ item, review }) => {
     if (!readyRun || !weeklyReviewIsActive(readyRun, review, processingOnly)) return false;
     if (processingOnly || readyRun.itemRoutes?.[review.skuId] && !readyRun.itemRoutes[review.skuId].completed) return true;
@@ -434,6 +449,7 @@ export default function WeeklyWork({ processingOnly = false }: { processingOnly?
       const data = await response.json() as ApiResult;
       if (!response.ok || !data.success || !data.run) throw new Error(data.error || "이동하지 못했습니다. 같은 처리 방법으로 다시 시도해 주세요.");
       installRun(data.run); clearDownloads();
+      window.dispatchEvent(new Event("noidb-inbound-updated"));
       setMessage(`SKU ${skuId} · ${decision === "order" ? "거래처 발주관리" : decision === "discontinue" ? "단종·해제 관리" : "재발주요청 대기"}로 이동했습니다.`);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "이동하지 못했습니다. 다시 시도해 주세요.");
@@ -559,6 +575,7 @@ export default function WeeklyWork({ processingOnly = false }: { processingOnly?
       const data = await response.json() as ApiResult;
       if (!response.ok || !data.success || !data.run) throw new Error(data.error || "처리 상태를 기록하지 못했습니다.");
       installRun(data.run); clearDownloads();
+      window.dispatchEvent(new Event("noidb-inbound-updated"));
       if (kind === "coupon") requestAnimationFrame(() => document.getElementById("weekly-review-title")?.scrollIntoView({ behavior: "smooth", block: "start" }));
       setMessage(kind === "complete" ? "이번 주간 업무를 완료로 기록했습니다. 다음에는 최근 일주일로 시작합니다." : "처리 완료를 저장했습니다. 완료한 항목은 목록에서 제외하고 아래 완료 이력에 보관했습니다.");
     } catch (failure) {
@@ -567,6 +584,59 @@ export default function WeeklyWork({ processingOnly = false }: { processingOnly?
     }
     finally { setBusy(""); }
   }
+
+  const couponPanel = readyRun && !couponCompletion && !readyRun.completedAt && readyRun.snapshot.couponItems.length > 0 ? <section className={styles.panel} aria-labelledby="weekly-coupon-title">
+        <div className={styles.sectionHeading}><div><span className={styles.stepNumber}>02</span><h2 id="weekly-coupon-title">쿠폰 적용 상품을 선택하세요</h2></div><span className={styles.saveState} role="status">{couponSaving.current ? "쿠폰 선택 저장 중…" : readyRun.couponUploadedAt ? "쿠팡 등록 완료 · 선택 고정" : "✓ 쿠폰 선택 저장됨"}</span></div>
+        <p className={styles.help}>{clearanceMode ? "저장된 입고 집계에서 실제 입고된 수량을 SKU별로 합쳐" : "선택 기간에 실제 입고된 수량을 SKU별로 합쳐"} <strong>정확히 1개인 상품</strong>만 표시합니다. 곧 단종되거나 생산 계획이 없는 상품은 체크를 해제하세요. <strong>체크한 SKU만 30% 쿠폰 엑셀에 들어갑니다.</strong></p>
+        <div className={styles.couponControls}><strong>쿠폰 적용 {selectedCoupons.length}개 <span>· 제외 {readyRun.snapshot.couponItems.length - selectedCoupons.length}개</span></strong><div className={styles.inlineActions}><button type="button" className={styles.secondary} disabled={disabled || imageWork > 0 || !!readyRun.couponUploadedAt || !couponExcluded.size} onClick={() => void selectCoupons([])}>전체 선택</button><button type="button" className={styles.secondary} disabled={disabled || imageWork > 0 || !!readyRun.couponUploadedAt || !selectedCoupons.length} onClick={() => void selectCoupons(readyRun.snapshot.couponItems.map(item => item.skuId))}>전체 해제</button></div><input className={styles.search} type="search" aria-label="쿠폰 SKU 또는 상품명 검색" placeholder="SKU, 상품명 검색" value={couponSearch} onChange={event => setCouponSearch(event.target.value)} /></div>
+        {visibleCoupons.length ? <div className={styles.couponTable}><table><thead><tr><th scope="col">쿠폰 적용</th><th scope="col">SKU</th><th scope="col">상품명</th><th scope="col">기간 입고</th></tr></thead><tbody>{visibleCoupons.map(item => <tr key={item.skuId} className={couponExcluded.has(item.skuId) ? styles.couponExcluded : ""}><td><label className={styles.couponChoice}><input type="checkbox" aria-label={"SKU " + item.skuId + " 쿠폰 적용"} checked={!couponExcluded.has(item.skuId)} disabled={disabled || imageWork > 0 || !!readyRun.couponUploadedAt} onChange={event => void selectCoupons(event.target.checked ? [...couponExcluded].filter(skuId => skuId !== item.skuId) : [...couponExcluded, item.skuId])} /><span>{couponExcluded.has(item.skuId) ? "제외" : "적용"}</span></label></td><td>{item.skuId}</td><td>{item.productName}{item.productLink ? <> <a href={item.productLink} target="_blank" rel="noreferrer" aria-label={item.productName + " 제품 정보 확인"}>↗</a></> : null}</td><td>1개</td></tr>)}</tbody></table></div> : <p className={styles.help}>{couponSearch.trim() ? "검색한 상품이 없습니다." : "선택 기간에 입고수량 합계가 1개인 미등록 쿠폰 대상이 없습니다."}</p>}
+        <p className={styles.help}>체크 해제는 이번 작업의 쿠폰 대상에서만 제외합니다. 입고 기록이나 상품의 단종 상태는 변경하지 않습니다. 이 업무를 완료하면 제외한 상품도 같은 입고 건으로 다시 나오지 않습니다.</p>
+        <div className={styles.advertisingSummary} aria-live="polite">
+          <strong>선택한 쿠폰 SKU의 광고등록 파일</strong>
+          <p>옵션ID만 500개씩 나눠 <b>3-1_광고등록.xlsx, 3-2_광고등록.xlsx…</b>로 함께 만듭니다. 같은 옵션ID는 한 번만 넣습니다.</p>
+          {advertisingLoading ? <p>광고 옵션ID를 확인하고 있습니다…</p> : advertising?.key === advertisingSelectionKey && advertising.error ? <p className={styles.inlineError}>{advertising.error}</p> : advertising?.key === advertisingSelectionKey && advertising.data ? <>
+            <p>옵션ID 연결 {advertising.data.resolved.length}개 SKU · 광고 대상 {advertising.data.optionIds.length}개 · 광고파일 {Math.ceil(advertising.data.optionIds.length / 500)}개</p>
+            {advertising.data.missingSkuIds.length || advertising.data.conflictingSkuIds.length ? <details className={styles.warnings}><summary>옵션ID 확인 필요 {advertising.data.missingSkuIds.length + advertising.data.conflictingSkuIds.length}개 SKU</summary><p>모든 선택 SKU의 옵션ID가 확인되어야 쿠폰·광고 파일을 함께 만들 수 있습니다. 쿠폰만 먼저 받을 수도 있습니다.</p>{advertising.data.missingSkuIds.map(skuId => <p key={skuId}>SKU {skuId} · 옵션ID 없음 · {selectedCoupons.find(item => item.skuId === skuId)?.productName}</p>)}{advertising.data.conflictingSkuIds.map(skuId => <p key={skuId}>SKU {skuId} · 옵션ID 불일치 · {selectedCoupons.find(item => item.skuId === skuId)?.productName}</p>)}</details> : null}
+          </> : null}
+          <div className={styles.inlineActions}><button type="button" className={styles.secondary} disabled={outputDisabled || !selectedCoupons.length || !advertisingReady} onClick={() => void generate("marketing")}>쿠폰·광고 파일 함께 받기</button><button type="button" className={styles.secondary} disabled={outputDisabled || !selectedCoupons.length} onClick={() => void generate("coupon")}>쿠폰만 받기</button><button type="button" className={styles.secondary} disabled={advertisingLoading || disabled || !selectedCoupons.length} onClick={() => setAdvertisingRefresh(value => value + 1)}>광고 옵션ID 다시 확인</button></div>
+          <div className={styles.couponCompletion}>
+            <strong>쿠팡 등록 후 여기에서 완료하세요</strong>
+            <label className={styles.field}><span>쿠폰 시작일</span><input type="date" aria-label="쿠팡 쿠폰 시작일" value={couponStartsOn} max={couponExpiresOn || undefined} disabled={disabled} onChange={event => setCouponStartsOn(event.target.value)} /></label>
+            <label className={styles.field}><span>쿠폰 종료일</span><input type="date" aria-label="쿠팡 쿠폰 종료일" value={couponExpiresOn} min={couponStartsOn || undefined} disabled={disabled} onChange={event => setCouponExpiresOn(event.target.value)} /></label>
+            <small>쿠팡에 등록한 쿠폰 기간을 입력하세요. 쿠폰 등록·계약과 광고 등록을 마친 뒤 처리완료를 누르면 아래 미입고 검토 단계로 이동합니다.</small>
+            <button type="button" className={styles.primary} disabled={disabled || imageWork > 0 || !readyRun.generated?.couponCount || !couponStartsOn || !couponExpiresOn || couponStartsOn > couponExpiresOn} onClick={() => void markStatus("coupon")}>{readyRun.generated?.advertisingCount ? "쿠폰·광고 처리완료 → 다음 단계" : "쿠폰 처리완료 → 다음 단계"}</button>
+          </div>
+        </div>
+      </section> : null;
+
+  async function connectClearance() {
+    if (!run || busy) return;
+    setBusy("과거청산 집계를 연결하는 중입니다."); setError("");
+    try {
+      const response = await fetch("/api/wms/weekly-work/clearance", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourceToken: run.snapshot.sourceToken }) });
+      const data = await response.json() as ApiResult;
+      if (!response.ok || !data.success || !data.run) throw new Error(data.error || "집계를 연결하지 못했습니다.");
+      installRun(data.run); setClearancePrepared(true);
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "집계를 연결하지 못했습니다."); }
+    finally { setBusy(""); }
+  }
+
+  if (clearanceMode) return <main className={styles.page}>
+    <header className={styles.header}><div><h1>입고결과 · 과거청산</h1><p className={styles.lead}>처리할 기간을 다시 선택하지 않고 저장된 집계의 미처리 업무를 진행합니다.</p></div></header>
+    {error ? <p role="alert" className={styles.error}>{error}</p> : null}
+    {message ? <p role="status" className={styles.message}>{message}</p> : null}
+    {busy ? <p role="status">{busy}</p> : null}
+    {loading ? <p role="status">저장된 입고 집계를 불러오는 중입니다.</p> : staleRules ? <p role="alert">저장 집계의 기준이 달라 쿠폰 파일 생성을 보류했습니다. <a href="/wms/inbound/weekly">원본 집계 확인</a></p> : <>
+      {readyRun?.snapshot.blockers.length ? <div role="alert" className={styles.error}>{readyRun.snapshot.blockers.map((item,index)=><p key={index}>{item}</p>)}</div> : null}
+      <p>저장된 전체 입고: {readyRun?.snapshot.source.firstActualDate} ~ {readyRun?.snapshot.source.latestActualDate} · {readyRun?.snapshot.source.eventCount || 0}행</p>
+      {readyRun?.snapshot.warnings.map((warning, index) => <p key={index}>{warning}</p>)}
+      {!clearancePrepared && couponPending > 0 ? <button type="button" className={styles.primary} disabled={disabled || !!readyRun?.snapshot.blockers.length} onClick={() => void connectClearance()}>미처리 {couponPending}개 SKU로 쿠폰·광고 작업 시작</button> : null}
+      <fieldset disabled={!clearancePrepared} style={{ border: 0, margin: 0, padding: 0 }}>{couponPanel || <p role="status">저장된 전체 입고 집계에서 처리할 쿠폰·광고 대상이 없습니다.</p>}</fieldset>
+      {outputProgress ? <p role="status">{outputProgress}</p> : null}
+      {outputError ? <p role="alert">{outputError}</p> : null}
+      {downloads.map(file=><a key={file.name} href={file.url} download={file.name}>{file.name} 다운로드</a>)}
+    </>}
+  </main>;
 
   if (processingOnly) return <main className={styles.page}>
     <div className={styles.topLinks}><a href="/wms/inbound">← 새 미입고 검토</a><a href="/wms/vendor-orders/manage">거래처 발주관리</a><a href={STATUS_MANAGEMENT_PATH}>단종관리</a></div>
@@ -618,33 +688,11 @@ export default function WeeklyWork({ processingOnly = false }: { processingOnly?
       <div className={styles.overview}><div className={styles.couponSummary}><span>30% 쿠폰 · 현재 미처리</span><strong>{couponPending.toLocaleString()}<small>개 SKU</small></strong><small>총 {couponTotal.toLocaleString()}개 · 완료 {couponCompleted.toLocaleString()}개 · 제외 {couponExcluded.size.toLocaleString()}개</small></div><div><span>거래처 발주 후보</span><strong>{orders.length.toLocaleString()}<small>개 SKU · {orderedVendors.length}개 거래처</small></strong></div><div><span>확인할 상품</span><strong className={needs.length ? styles.warningNumber : ""}>{needs.length.toLocaleString()}<small>개 SKU</small></strong></div><div><span>재발주요청 · 재고 있음</span><strong>{reorders.length.toLocaleString()}<small>개 SKU</small></strong></div><div><span>단종 신청</span><strong>{discontinued.length.toLocaleString()}<small>개 SKU</small></strong></div></div>
 
       {couponCompletion ? <p role="status" className={styles.help}>쿠폰·광고 업무 완료 · {couponCompletion.couponStartsOn} ~ {couponCompletion.couponExpiresOn}</p> : null}
-      {!couponCompletion && !readyRun.completedAt && readyRun.snapshot.couponItems.length > 0 ? <section className={styles.panel} aria-labelledby="weekly-coupon-title">
-        <div className={styles.sectionHeading}><div><span className={styles.stepNumber}>02</span><h2 id="weekly-coupon-title">쿠폰 적용 상품을 선택하세요</h2></div><span className={styles.saveState} role="status">{couponSaving.current ? "쿠폰 선택 저장 중…" : readyRun.couponUploadedAt ? "쿠팡 등록 완료 · 선택 고정" : "✓ 쿠폰 선택 저장됨"}</span></div>
-        <p className={styles.help}>선택 기간에 실제 입고된 수량을 SKU별로 합쳐 <strong>정확히 1개인 상품</strong>만 표시합니다. 곧 단종되거나 생산 계획이 없는 상품은 체크를 해제하세요. <strong>체크한 SKU만 30% 쿠폰 엑셀에 들어갑니다.</strong></p>
-        <div className={styles.couponControls}><strong>쿠폰 적용 {selectedCoupons.length}개 <span>· 제외 {readyRun.snapshot.couponItems.length - selectedCoupons.length}개</span></strong><div className={styles.inlineActions}><button type="button" className={styles.secondary} disabled={disabled || imageWork > 0 || !!readyRun.couponUploadedAt || !couponExcluded.size} onClick={() => void selectCoupons([])}>전체 선택</button><button type="button" className={styles.secondary} disabled={disabled || imageWork > 0 || !!readyRun.couponUploadedAt || !selectedCoupons.length} onClick={() => void selectCoupons(readyRun.snapshot.couponItems.map(item => item.skuId))}>전체 해제</button></div><input className={styles.search} type="search" aria-label="쿠폰 SKU 또는 상품명 검색" placeholder="SKU, 상품명 검색" value={couponSearch} onChange={event => setCouponSearch(event.target.value)} /></div>
-        {visibleCoupons.length ? <div className={styles.couponTable}><table><thead><tr><th scope="col">쿠폰 적용</th><th scope="col">SKU</th><th scope="col">상품명</th><th scope="col">기간 입고</th></tr></thead><tbody>{visibleCoupons.map(item => <tr key={item.skuId} className={couponExcluded.has(item.skuId) ? styles.couponExcluded : ""}><td><label className={styles.couponChoice}><input type="checkbox" aria-label={"SKU " + item.skuId + " 쿠폰 적용"} checked={!couponExcluded.has(item.skuId)} disabled={disabled || imageWork > 0 || !!readyRun.couponUploadedAt} onChange={event => void selectCoupons(event.target.checked ? [...couponExcluded].filter(skuId => skuId !== item.skuId) : [...couponExcluded, item.skuId])} /><span>{couponExcluded.has(item.skuId) ? "제외" : "적용"}</span></label></td><td>{item.skuId}</td><td>{item.productName}{item.productLink ? <> <a href={item.productLink} target="_blank" rel="noreferrer" aria-label={item.productName + " 제품 정보 확인"}>↗</a></> : null}</td><td>1개</td></tr>)}</tbody></table></div> : <p className={styles.help}>{couponSearch.trim() ? "검색한 상품이 없습니다." : "선택 기간에 입고수량 합계가 1개인 미등록 쿠폰 대상이 없습니다."}</p>}
-        <p className={styles.help}>체크 해제는 이번 작업의 쿠폰 대상에서만 제외합니다. 입고 기록이나 상품의 단종 상태는 변경하지 않습니다. 이 업무를 완료하면 제외한 상품도 같은 입고 건으로 다시 나오지 않습니다.</p>
-        <div className={styles.advertisingSummary} aria-live="polite">
-          <strong>선택한 쿠폰 SKU의 광고등록 파일</strong>
-          <p>옵션ID만 500개씩 나눠 <b>3-1_광고등록.xlsx, 3-2_광고등록.xlsx…</b>로 함께 만듭니다. 같은 옵션ID는 한 번만 넣습니다.</p>
-          {advertisingLoading ? <p>광고 옵션ID를 확인하고 있습니다…</p> : advertising?.key === advertisingSelectionKey && advertising.error ? <p className={styles.inlineError}>{advertising.error}</p> : advertising?.key === advertisingSelectionKey && advertising.data ? <>
-            <p>옵션ID 연결 {advertising.data.resolved.length}개 SKU · 광고 대상 {advertising.data.optionIds.length}개 · 광고파일 {Math.ceil(advertising.data.optionIds.length / 500)}개</p>
-            {advertising.data.missingSkuIds.length || advertising.data.conflictingSkuIds.length ? <details className={styles.warnings}><summary>옵션ID 확인 필요 {advertising.data.missingSkuIds.length + advertising.data.conflictingSkuIds.length}개 SKU</summary><p>모든 선택 SKU의 옵션ID가 확인되어야 쿠폰·광고 파일을 함께 만들 수 있습니다. 쿠폰만 먼저 받을 수도 있습니다.</p>{advertising.data.missingSkuIds.map(skuId => <p key={skuId}>SKU {skuId} · 옵션ID 없음 · {selectedCoupons.find(item => item.skuId === skuId)?.productName}</p>)}{advertising.data.conflictingSkuIds.map(skuId => <p key={skuId}>SKU {skuId} · 옵션ID 불일치 · {selectedCoupons.find(item => item.skuId === skuId)?.productName}</p>)}</details> : null}
-          </> : null}
-          <div className={styles.inlineActions}><button type="button" className={styles.secondary} disabled={outputDisabled || !selectedCoupons.length || !advertisingReady} onClick={() => void generate("marketing")}>쿠폰·광고 파일 함께 받기</button><button type="button" className={styles.secondary} disabled={outputDisabled || !selectedCoupons.length} onClick={() => void generate("coupon")}>쿠폰만 받기</button><button type="button" className={styles.secondary} disabled={advertisingLoading || disabled || !selectedCoupons.length} onClick={() => setAdvertisingRefresh(value => value + 1)}>광고 옵션ID 다시 확인</button></div>
-          <div className={styles.couponCompletion}>
-            <strong>쿠팡 등록 후 여기에서 완료하세요</strong>
-            <label className={styles.field}><span>쿠폰 시작일</span><input type="date" aria-label="쿠팡 쿠폰 시작일" value={couponStartsOn} max={couponExpiresOn || undefined} disabled={disabled} onChange={event => setCouponStartsOn(event.target.value)} /></label>
-            <label className={styles.field}><span>쿠폰 종료일</span><input type="date" aria-label="쿠팡 쿠폰 종료일" value={couponExpiresOn} min={couponStartsOn || undefined} disabled={disabled} onChange={event => setCouponExpiresOn(event.target.value)} /></label>
-            <small>쿠팡에 등록한 쿠폰 기간을 입력하세요. 쿠폰 등록·계약과 광고 등록을 마친 뒤 처리완료를 누르면 아래 미입고 검토 단계로 이동합니다.</small>
-            <button type="button" className={styles.primary} disabled={disabled || imageWork > 0 || !readyRun.generated?.couponCount || !couponStartsOn || !couponExpiresOn || couponStartsOn > couponExpiresOn} onClick={() => void markStatus("coupon")}>{readyRun.generated?.advertisingCount ? "쿠폰·광고 처리완료 → 다음 단계" : "쿠폰 처리완료 → 다음 단계"}</button>
-          </div>
-        </div>
-      </section> : null}
+      {couponPanel}
 
       <section className={styles.panel} aria-labelledby="weekly-review-title"><div className={styles.sectionHeading}><div><span className={styles.stepNumber}>02</span><h2 id="weekly-review-title">미입고 상품을 검토하세요</h2></div><span className={saveState === "error" ? styles.saveError : styles.saveState} role="status">{imageWork > 0 ? "사진 저장 중…" : saveState === "saved" ? "✓ 검토 내용 저장됨" : saveState === "pending" ? "변경 내용 저장 대기…" : saveState === "saving" ? "자동 저장 중…" : "저장 실패 · 다시 저장 필요"}</span></div><p className={styles.help}><strong>실제 입고가 확인된 발주서에서, 확정수량보다 입고가 적거나 0인 SKU</strong>만 대조합니다. 아직 입고가 전혀 잡히지 않은 발주서는 제외합니다. 확정수량과 실제 누적 입고를 정확히 대조하지 못한 상품은 별도 자료 확인 안내로 옮기며, 미납 목록과 발주 파일에서 제외합니다. 실제 미입고 수량을 확인하고 처리 방법을 선택하세요. 거래처 발주수량과 사진·거래처는 통합 발주대기에서 수정할 수 있습니다. 재고가 있지만 출고하지 못한 상품은 <strong>재발주요청 · 재고 있음</strong>으로 선택하세요. 생산이 끝난 상품은 처리 방법을 <strong>단종 · 생산 종료</strong>로 바꾸면 됩니다. 쿠폰 파일은 이 검토와 별도로 받을 수 있습니다.</p>
 
-        {supplierHubShortageDetails.length ? <div className={styles.reorderTable} aria-label="Supplier Hub 확정 실제미납 목록"><table><caption>실제미납 총 발생 {supplierHubShortageDetails.length.toLocaleString()}개 발주번호+SKU · 총 {supplierHubShortageTotal.toLocaleString()}개 · 재발주 처리완료 {completedSupplierHubShortageCount.toLocaleString()}개 · 현재 미처리 {activeSupplierHubShortageDetails.length.toLocaleString()}개 / {activeSupplierHubShortageTotal.toLocaleString()}개</caption><thead><tr><th scope="col">입고예정일</th><th scope="col">발주번호</th><th scope="col">SKU ID</th><th scope="col">상품명</th><th scope="col">확정 발주수량</th><th scope="col">실제 입고수량</th><th scope="col">실제미납수량</th><th scope="col">거래처</th><th scope="col">처리상태</th></tr></thead><tbody>{activeSupplierHubShortageDetails.map(({ item, detail }) => <tr key={JSON.stringify([detail.purchaseOrderNumber, item.skuId])}><td>{expectedDateValue(expectedDates[detail.purchaseOrderNumber]) || "미확인"}</td><td>{detail.purchaseOrderNumber}</td><td>{item.skuId}</td><td>{item.productName || "상품명 확인 필요"}</td><td>{detail.confirmedQuantity.toLocaleString()}개</td><td>{detail.receivedQuantity.toLocaleString()}개</td><td>{detail.shortageQuantity.toLocaleString()}개</td><td>{item.vendorName || "거래처 확인 필요"}</td><td>미처리</td></tr>)}</tbody></table>{!activeSupplierHubShortageDetails.length ? <p>실제미납 발생분은 모두 재발주 처리완료되었습니다. 완료 이력은 아래에 보존되어 있습니다.</p> : null}</div> : null}
+        {supplierHubShortageDetails.length ? <div className={styles.reorderTable} aria-label="Supplier Hub 확정 실제미납 목록"><table><caption>실제미납 총 발생 {supplierHubShortageDetails.length.toLocaleString()}건 / {supplierHubShortageTotal.toLocaleString()}개 · 처리완료 {completedSupplierHubShortageCount.toLocaleString()}건 / {(supplierHubShortageTotal - activeSupplierHubShortageTotal).toLocaleString()}개 · 현재 미처리 {activeSupplierHubShortageDetails.length.toLocaleString()}건 / {activeSupplierHubShortageTotal.toLocaleString()}개 · 이미 해결됨 {clearanceCounts.already_resolved.rows}건 · 오늘출고 {clearanceCounts.shipping_today.rows}건 · 입고지연 {clearanceCounts.delayed.rows}건 · 단종 {clearanceCounts.discontinued.rows}건 · 거래처수정 {clearanceCounts.vendor_correction.rows}건 · 확인필요 {clearanceCounts.needs_review.rows}건</caption><thead><tr><th scope="col">입고예정일</th><th scope="col">발주번호</th><th scope="col">SKU ID</th><th scope="col">상품명</th><th scope="col">원래 발주수량</th><th scope="col">실제 입고수량</th><th scope="col">실제미납수량</th><th scope="col">거래처</th><th scope="col">처리상태</th></tr></thead><tbody>{[...classifiedSupplierHubShortages].sort((a,b) => (a.item.vendorName || "거래처 확인 필요").localeCompare(b.item.vendorName || "거래처 확인 필요") || a.detail.purchaseOrderNumber.localeCompare(b.detail.purchaseOrderNumber) || a.item.skuId.localeCompare(b.item.skuId)).map(({ item, detail, status, reason }, index, rows) => <tr key={historicalShortagePairKey(detail.purchaseOrderNumber, item.skuId)}><td>{expectedDateValue(expectedDates[detail.purchaseOrderNumber]) || "미확인"}</td><td>{detail.purchaseOrderNumber}</td><td>{item.skuId}</td><td>{item.productName || "상품명 확인 필요"}</td><td>{detail.confirmedQuantity.toLocaleString()}개</td><td>{detail.receivedQuantity.toLocaleString()}개</td><td>{detail.shortageQuantity.toLocaleString()}개</td><td>{index === 0 || rows[index - 1].item.vendorName !== item.vendorName ? <strong>{item.vendorName || "거래처 확인 필요"}</strong> : item.vendorName || "거래처 확인 필요"}</td><td title={reason}>{clearanceLabel[status]}</td></tr>)}</tbody></table>{!activeSupplierHubShortageDetails.length ? <p>실제미납 발생분은 모두 재발주 처리완료되었습니다. 완료 이력은 아래에 보존되어 있습니다.</p> : null}</div> : null}
 
         <p className={styles.help}>처리 방법을 선택하면 해당 대기 목록에 바로 저장되고 여기에서는 사라집니다. 화면은 이동하지 않습니다. 재발주요청은 <a href="/wms/inbound/reorder">재발주요청 대기</a>에서 확인할 수 있습니다.</p><div className={styles.reviewToolbar}><div className={styles.filters} aria-label="상품 필터">{[["needs", "확인 필요", needs.length], ["all", "전체", reviewEntries.length], ["discontinue", "단종", discontinued.length], ["hold", "보류", held.length]].map(([key, label, count]) => <button key={key} type="button" className={filter === key ? styles.selected : ""} aria-pressed={filter === key} onClick={() => setFilter(String(key))}>{label} <span>{count}</span></button>)}</div><input type="search" className={styles.search} value={search} placeholder="SKU, 상품명, 거래처 검색" aria-label="검토 상품 검색" onChange={event => setSearch(event.target.value)} /></div>
         {!filtered.length ? <div className={styles.reviewEmpty}><strong>{filter === "needs" && !search ? "현재 목록에 검토할 미납 상품이 없습니다." : "해당하는 상품이 없습니다."}</strong><p>{filter === "needs" && entries.length ? "전체 탭에서 다시 확인하거나 아래에서 필요한 파일을 받으세요." : "선택한 기간과 자료를 확인해 주세요."}</p></div> : Array.from(groups, ([vendor, rows]) => <section key={vendor} className={styles.vendorGroup}><div className={styles.vendorHeading}><h3>{vendor}</h3><span>{rows.length}개 SKU</span></div>{rows.map(({ item, review }) => <ProductReviewCard key={item.skuId} item={item} review={review} vendors={vendorNames} disabled={disabled || Boolean(readyRun.pendingDiscontinueSubmission?.skuIds.includes(item.skuId)) || review.decision === "order" && Boolean(readyRun.pendingVendorSends?.[review.vendorName])} sent={review.decision === "order" && Boolean(readyRun.sentVendors[review.vendorName])} requested={review.decision === "reorder" && Boolean(readyRun.reorderRequestedAt)} previouslyRequested={new Set((readyRun.reorderPreviouslyRequestedLines || []).filter(row => row.skuId === item.skuId).map(row => row.purchaseOrderNumber))} onChange={changeReview} onRoute={(skuId, decision) => void routeItem(skuId, decision)} onImageWork={reviewImageWork} onImageFailure={reportImageFailure} />)}</section>)}

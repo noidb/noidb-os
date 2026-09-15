@@ -80,7 +80,7 @@ export async function fetchPurchaseOrderView(): Promise<PurchaseOrderSheetRow[]>
       vendorConfirmedQuantity: toNumber(row["업체납품가능수량"]),
       vendorName: row["거래처"] || enrichment?.["거래처"] || "",
       imageUrl: enrichment ? extractImageUrl(enrichment["이미지"]) : "",
-      productLink: enrichment?.["제품링크"] || "",
+      productLink: extractImageUrl(enrichment?.["제품링크"]),
       modelName: enrichment?.["모델명/품번"] || "",
       category: enrichment?.["카테고리"] || "",
     };

@@ -88,6 +88,7 @@ function normalizeSnapshot(value: unknown): PickingWaveStoreSnapshot {
     warehouseSkuExceptions: Array.isArray(raw.warehouseSkuExceptions) ? raw.warehouseSkuExceptions : [],
     warehouseMigrationMappings: Array.isArray(raw.warehouseMigrationMappings) ? raw.warehouseMigrationMappings : [],
     supplierHubInboundEvents: Array.isArray(raw.supplierHubInboundEvents) ? raw.supplierHubInboundEvents : [],
+    supplierHubOriginalOrderLines: Array.isArray(raw.supplierHubOriginalOrderLines) ? raw.supplierHubOriginalOrderLines : [],
     ...(Array.isArray(raw.supplierHubPurchaseOrders) ? { supplierHubPurchaseOrders: raw.supplierHubPurchaseOrders } : {}),
     shipments: Array.isArray(raw.shipments) ? raw.shipments : [],
     deletedWaveIds: raw.deletedWaveIds && typeof raw.deletedWaveIds === "object" ? raw.deletedWaveIds : {},
@@ -283,6 +284,17 @@ export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot,
     if (matches[0].vendorTransfer || matches[0].sentResolution) throw new Error("이미 이동한 상품입니다. 이동한 목록에서 처리해 주세요.");
     const saved = saveSimpleReceivingLine(matches[0], mutation.before, mutation.input, mutation.now);
     next.vendorOrderLines = next.vendorOrderLines.map(line => line.id === saved.id ? saved : line);
+  } else if (mutation.action === "appendSupplierHubInboundEvents") {
+    const existingKeys = new Set(next.supplierHubInboundEvents.map(event => event.eventKey));
+    for (const event of mutation.events) {
+      if (existingKeys.has(event.eventKey)) continue;
+      next.supplierHubInboundEvents.push(event);
+      existingKeys.add(event.eventKey);
+    }
+  } else if (mutation.action === "upsertSupplierHubOriginalOrderLines") {
+    const existing = new Map(next.supplierHubOriginalOrderLines.map(line => [JSON.stringify([line.orderNo, line.skuId]), line]));
+    for (const line of mutation.lines) existing.set(JSON.stringify([line.orderNo, line.skuId]), line);
+    next.supplierHubOriginalOrderLines = [...existing.values()];
   } else if (mutation.action === "upsertSupplierHubPurchaseOrders") {
     next.supplierHubPurchaseOrders = mergeStoredSupplierHubPurchaseOrders(next.supplierHubPurchaseOrders || [], mutation.orders).orders;
   } else if (mutation.action === "setOutboundWorkState") {

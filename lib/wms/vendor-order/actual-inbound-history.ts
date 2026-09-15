@@ -2,6 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import ExcelJS from "exceljs";
 import type { SupplierHubPurchaseOrder } from "../supplier-hub-orders";
+import { downloadOAuthDriveFile, listOAuthDriveFolderFiles, resolveDriveFolderPath, type OAuthDriveFileInfo } from "../google-drive-oauth-reader";
 
 /**
  * 쿠팡 서플라이허브 "입고상세내역"(Coupang_Stocked_Data_List_*.xlsx) 실적 파일 파서 (2026-09-12 신규).
@@ -138,6 +139,117 @@ export async function loadActualInboundHistoryFromLocalPath(dirPath: string): Pr
     rows.push(...parseSheetRows(sheet));
   }
   return rows;
+}
+
+export interface HistoricalInboundEvent {
+  orderNo: string;
+  skuId: string;
+  inboundDate: string;
+  quantity: string;
+  division: string;
+  skuName: string;
+  sourceFile: string;
+}
+
+export interface HistoricalInboundLoadResult {
+  events: HistoricalInboundEvent[];
+  fileCount: number;
+  sourceFiles: string[];
+  parseFailures: string[];
+}
+
+const HISTORICAL_INBOUND_DIR_ENV = "WMS_HISTORICAL_INBOUND_LOCAL_DIR";
+const HISTORICAL_INBOUND_DIR_DEFAULT = "G:\\내 드라이브\\쿠팡데이터\\쿠팡 과거데이터\\쿠팡2023~202608입고리스트";
+
+function normalizeInboundDate(value: string): string {
+  const match = value.trim().match(/^(\d{4})[\/-](\d{2})[\/-](\d{2})[ T](\d{2}:\d{2}:\d{2})/);
+  return match ? `${match[1]}-${match[2]}-${match[3]} ${match[4]}` : value.trim();
+}
+
+function toHistoricalEvents(rows: ActualInboundHistoryRow[], sourceFile: string): HistoricalInboundEvent[] {
+  return rows
+    .filter(row => row.type !== "반출" && row.purchaseOrderNumber && row.productCode && row.quantity > 0 && /^\d{4}-\d{2}-\d{2} /.test(normalizeInboundDate(row.transactedAt)))
+    .map(row => ({
+      orderNo: row.purchaseOrderNumber,
+      skuId: row.productCode,
+      inboundDate: normalizeInboundDate(row.transactedAt),
+      quantity: String(row.quantity),
+      division: row.type || "발주",
+      skuName: row.productName,
+      sourceFile,
+    }));
+}
+
+async function listLocalXlsxFiles(dirPath: string): Promise<string[]> {
+  const result: string[] = [];
+  async function visit(current: string): Promise<void> {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) await visit(fullPath);
+      else if (entry.name.toLowerCase().endsWith(".xlsx") && !entry.name.startsWith("~$")) result.push(fullPath);
+    }
+  }
+  await visit(dirPath);
+  return result;
+}
+
+async function loadHistoricalFromLocalPath(dirPath: string): Promise<HistoricalInboundLoadResult | null> {
+  let filePaths: string[];
+  try { filePaths = await listLocalXlsxFiles(dirPath); } catch { return null; }
+  const events: HistoricalInboundEvent[] = [], parseFailures: string[] = [];
+  for (const filePath of filePaths) {
+    try {
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(filePath);
+      const sheet = workbook.worksheets[0];
+      if (!sheet) throw new Error("시트 없음");
+      events.push(...toHistoricalEvents(parseSheetRows(sheet), filePath));
+    } catch {
+      parseFailures.push(filePath);
+    }
+  }
+  return { events, fileCount: filePaths.length, sourceFiles: filePaths, parseFailures };
+}
+
+const DRIVE_HISTORICAL_PATH = ["쿠팡데이터", "쿠팡 과거데이터", "쿠팡2023~202608입고리스트"];
+const DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
+
+async function listDriveXlsxFiles(folderId: string): Promise<OAuthDriveFileInfo[]> {
+  const result: OAuthDriveFileInfo[] = [];
+  const children = await listOAuthDriveFolderFiles(folderId);
+  for (const child of children) {
+    if (child.mimeType === DRIVE_FOLDER_MIME) result.push(...await listDriveXlsxFiles(child.id));
+    else if (child.name.toLowerCase().endsWith(".xlsx") && !child.name.startsWith("~$")) result.push(child);
+  }
+  return result;
+}
+
+async function loadHistoricalFromDrive(): Promise<HistoricalInboundLoadResult> {
+  const folderId = await resolveDriveFolderPath(DRIVE_HISTORICAL_PATH);
+  const files = await listDriveXlsxFiles(folderId);
+  const events: HistoricalInboundEvent[] = [], parseFailures: string[] = [];
+  // Keep Drive traffic bounded while avoiding one network round trip per file.
+  for (let index = 0; index < files.length; index += 5) {
+    const batch = files.slice(index, index + 5);
+    const results = await Promise.all(batch.map(async file => {
+      try {
+        const rows = await parseActualInboundHistoryBuffer(await downloadOAuthDriveFile(file.id));
+        return { file, events: toHistoricalEvents(rows, file.name) };
+      } catch { return { file, events: null }; }
+    }));
+    for (const result of results) {
+      if (result.events) events.push(...result.events);
+      else parseFailures.push(result.file.name);
+    }
+  }
+  return { events, fileCount: files.length, sourceFiles: files.map(file => file.name), parseFailures };
+}
+
+export async function loadHistoricalInboundEvents(): Promise<HistoricalInboundLoadResult> {
+  const localPath = process.env[HISTORICAL_INBOUND_DIR_ENV]?.trim() || HISTORICAL_INBOUND_DIR_DEFAULT;
+  const local = await loadHistoricalFromLocalPath(localPath);
+  if (local) return local;
+  return loadHistoricalFromDrive();
 }
 
 export interface LatestActualInboundHistoryFile {

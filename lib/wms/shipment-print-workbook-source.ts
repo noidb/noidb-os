@@ -89,7 +89,7 @@ export async function loadShipmentPrintWorkbookSources(expectedWorkbookName = ""
     return { name, modifiedTime: info.mtime.toISOString(), buffer: await readFile(fullPath) };
   }));
   return files
-    .filter((file): file is ShipmentPrintWorkbookSource => file !== null)
+    .filter((file) => file !== null)
     .sort((left, right) => right.modifiedTime.localeCompare(left.modifiedTime));
 }
 

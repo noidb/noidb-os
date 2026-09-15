@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { wmsColors, wmsGhostButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
 import { compareWarehouseProducts } from "@/lib/wms/category-order";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
+import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 
 interface CatalogItem {
   skuId: string;
@@ -22,8 +23,9 @@ interface CatalogItem {
 }
 
 interface Props {
+  existingSkuIds: string[];
   onClose: () => void;
-  onSelect: (item: CatalogItem) => void;
+  onSelect: (item: CatalogItem, isStockReplenishment: boolean) => void;
 }
 
 /**
@@ -31,11 +33,15 @@ interface Props {
  * 선택하면 SKU ID/상품명/옵션명/대표이미지/쿠팡바코드/거래처/현재고를 제품DB에서 그대로 불러온다
  * (2026-08-19 신규 — 부족분 이외에 추가로 발주할 상품이 생겼을 때 쓴다).
  */
-export default function ProductSearchAddSheet({ onClose, onSelect }: Props) {
+export default function ProductSearchAddSheet({ existingSkuIds, onClose, onSelect }: Props) {
   const [catalog, setCatalog] = useState<CatalogItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [isStockReplenishment, setIsStockReplenishment] = useState(false);
+  const composingRef = useRef(false);
+  const existingSkuSet = useMemo(() => new Set(existingSkuIds.map(normalizeSkuId).filter(Boolean)), [existingSkuIds]);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   /**
    * 다른 WMS 화면(작업센터/웨이브 상세/완료 화면)과 동일한 /api/wms/product-catalog를 그대로
@@ -75,6 +81,14 @@ export default function ProductSearchAddSheet({ onClose, onSelect }: Props) {
     loadCatalog();
   }, [loadCatalog]);
 
+  useEffect(() => {
+    const input = searchInputRef.current;
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    const end = input.value.length;
+    input.setSelectionRange(end, end);
+  }, [loading]);
+
   // 창고 동선 순서(카테고리 버킷)로 정렬 — 최신 제품DB 카테고리 기준, 계산 결과를 저장하지 않고
   // 검색할 때마다 새로 계산한다 (2026-08-19 사용자 확정).
   function byWarehouseOrder(a: CatalogItem, b: CatalogItem): number {
@@ -105,6 +119,9 @@ export default function ProductSearchAddSheet({ onClose, onSelect }: Props) {
     >
       <div
         onClick={e => e.stopPropagation()}
+        role="dialog"
+        aria-label="상품 검색 추가"
+        aria-modal="true"
         style={{
           background: "#ffffff",
           borderRadius: "16px 16px 0 0",
@@ -133,12 +150,26 @@ export default function ProductSearchAddSheet({ onClose, onSelect }: Props) {
           </button>
         </div>
         <input
+          ref={searchInputRef}
+          autoFocus
           className="wms-input"
-          value={query}
-          onChange={e => setQuery(e.target.value)}
+          lang="ko"
+          inputMode="text"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          onCompositionStart={() => { composingRef.current = true; }}
+          onCompositionEnd={event => { composingRef.current = false; setQuery(event.currentTarget.value); }}
+          onChange={event => { if (!composingRef.current) setQuery(event.currentTarget.value); }}
           placeholder="SKU ID, 상품명, 모델명, 옵션명, 거래처로 검색"
           style={{ width: "100%", minWidth: 0, boxSizing: "border-box", minHeight: "40px", fontSize: "16px", padding: "8px 10px", borderRadius: "8px", border: `1px solid ${wmsColors.borderStrong}`, marginBottom: "10px" }}
         />
+
+        <label style={{ display: "flex", alignItems: "center", gap: "8px", minHeight: "44px", fontSize: "14px", fontWeight: 700 }}>
+          <input type="checkbox" checked={isStockReplenishment} onChange={event => setIsStockReplenishment(event.target.checked)} style={{ width: "22px", height: "22px" }} />
+          재고보충
+        </label>
+        <p style={{ margin: "0 0 10px", fontSize: "12px", color: wmsColors.muted }}>여유 재고용 주문이면 체크하세요. 쿠팡 재발주요청에서 제외됩니다.</p>
 
         {error && (
           <div style={{ fontSize: "12px", color: "#c0392b", marginBottom: "8px" }}>
@@ -154,22 +185,24 @@ export default function ProductSearchAddSheet({ onClose, onSelect }: Props) {
           {catalog && results.length === 0 && <p style={{ fontSize: "12px", color: wmsColors.muted }}>검색 결과가 없습니다.</p>}
           {results.map(item => {
             const { name: displayName, option: displayOption } = resolveDisplayNameAndOption(item.productName, item.optionLabel);
+            const alreadyAdded = existingSkuSet.has(normalizeSkuId(item.skuId));
             return (
             <button
               key={item.skuId}
-              onClick={() => onSelect({ ...item, optionLabel: displayOption })}
+              disabled={alreadyAdded}
+              onClick={() => { if (!alreadyAdded) onSelect({ ...item, optionLabel: displayOption }, isStockReplenishment); }}
               style={{
                 display: "flex",
                 alignItems: "flex-start",
                 gap: "10px",
                 width: "100%",
                 textAlign: "left",
-                background: "#ffffff",
+                background: alreadyAdded ? wmsColors.surfaceBeige : "#ffffff",
                 border: `1px solid ${wmsColors.border}`,
                 borderRadius: "10px",
                 padding: "10px",
                 marginBottom: "6px",
-                cursor: "pointer",
+                cursor: alreadyAdded ? "default" : "pointer",
               }}
             >
               <SearchResultThumbnail imageUrl={item.imageUrl} />
@@ -177,6 +210,7 @@ export default function ProductSearchAddSheet({ onClose, onSelect }: Props) {
                 <div style={{ fontSize: "13px", fontWeight: 700, color: wmsColors.ink, whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.3 }}>{displayName}</div>
                 <div style={{ fontSize: "12px", fontWeight: 700, color: wmsColors.greenDark, whiteSpace: "normal", wordBreak: "keep-all", marginTop: "2px" }}>{displayOption || "옵션 없음"}</div>
                 <div style={{ fontSize: "10px", color: wmsColors.muted, marginTop: "3px" }}>SKU {item.skuId} · {item.vendorName || "거래처 미등록"}</div>
+                {alreadyAdded && <strong style={{ display: "block", fontSize: "12px", color: wmsColors.greenDark, marginTop: "4px" }}>이미 추가됨</strong>}
               </div>
             </button>
             );

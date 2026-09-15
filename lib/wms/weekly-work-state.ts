@@ -184,9 +184,16 @@ function weeklyCouponSelection(snapshot: Pick<WeeklySnapshot, "couponItems" | "c
   return snapshot.couponItems.map(item => [item.skuId, [...new Set(snapshot.couponReceiptKeys?.[item.skuId] || [])].sort()] as [string, string[]]).sort((a,b)=>a[0].localeCompare(b[0]));
 }
 /** Coupon eligibility follows completed receipt events, even for an already-open run. */
+function canonicalReceiptKey(key: string): string {
+  try {
+    const parts: unknown = JSON.parse(key);
+    if (Array.isArray(parts) && parts.length === 4 && parts.every(part => typeof part === "string")) return parts.join("|");
+  } catch { /* Current receipt keys already use the pipe format. */ }
+  return key;
+}
 export function eligibleWeeklyCoupons(workspace: WeeklyWorkspace, snapshot: WeeklySnapshot, ownRunId = snapshot.id, now = new Date()): Pick<WeeklySnapshot, "couponItems" | "couponReceiptKeys"> {
   const uploaded = workspace.runs.filter(run => run.id !== ownRunId && run.couponUploadedAt);
-  const usedReceiptKeys = new Set(uploaded.flatMap(run => run.snapshot.couponItems.flatMap(item => run.snapshot.couponReceiptKeys?.[item.skuId] || [])));
+  const usedReceiptKeys = new Set(uploaded.flatMap(run => run.snapshot.couponItems.flatMap(item => run.snapshot.couponReceiptKeys?.[item.skuId] || [])).map(canonicalReceiptKey));
   const couponItems: WeeklySnapshot["couponItems"] = [];
   const couponReceiptKeys: NonNullable<WeeklySnapshot["couponReceiptKeys"]> = {};
   const blockedSkus = new Set(weeklyCouponBlocks(workspace, ownRunId, now).map(item => item.skuId));
@@ -194,7 +201,7 @@ export function eligibleWeeklyCoupons(workspace: WeeklyWorkspace, snapshot: Week
     if (blockedSkus.has(item.skuId)) continue;
     const events = [...new Set(snapshot.couponReceiptKeys?.[item.skuId] || [])];
     if (events.length) {
-      const available = events.filter(key => !usedReceiptKeys.has(key));
+      const available = events.filter(key => !usedReceiptKeys.has(canonicalReceiptKey(key)));
       if (!available.length) continue;
       couponReceiptKeys[item.skuId] = available;
     } else if (uploaded.some(run => run.snapshot.period.startDate === snapshot.period.startDate && run.snapshot.period.endDate === snapshot.period.endDate && weeklySelectedCoupons(run).some(old => old.skuId === item.skuId))) continue;

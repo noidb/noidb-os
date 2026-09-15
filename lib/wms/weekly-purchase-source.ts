@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { readFile, readdir, stat } from "node:fs/promises";
+import path from "node:path";
 import { downloadOAuthDriveFile, listOAuthDriveFolderFiles, resolveDriveFolderPath, type OAuthDriveFileInfo } from "./google-drive-oauth-reader";
 import { createParsedFileCache } from "./parsed-file-cache";
 import { parseWeeklyPurchaseFile, resolveWeeklyPurchaseDocuments, type WeeklyPurchaseParseResult, type WeeklyPurchaseResolution } from "./weekly-purchase-files";
@@ -11,14 +13,33 @@ const cached = createParsedFileCache({ read: async () => null, write: async () =
 const valid = (value: unknown): value is WeeklyPurchaseParseResult => Boolean(value && typeof value === "object"
   && Array.isArray((value as WeeklyPurchaseParseResult).documents) && Array.isArray((value as WeeklyPurchaseParseResult).errors));
 
-export interface WeeklyPurchaseManifest { folderId: string; files: OAuthDriveFileInfo[]; token: string }
+interface WeeklyPurchaseSourceFile extends OAuthDriveFileInfo { filePath?: string }
+export interface WeeklyPurchaseManifest { folderId: string; files: WeeklyPurchaseSourceFile[]; token: string }
 export function weeklyPurchaseManifestToken(files: OAuthDriveFileInfo[]): string {
   return hash(files.map(file => [file.id, file.name, file.modifiedTime, file.size]).sort((a, b) => a[0].localeCompare(b[0])));
 }
 export async function readWeeklyPurchaseManifest(): Promise<WeeklyPurchaseManifest> {
-  const folderId = await resolveDriveFolderPath(["쿠팡데이터", "발주서리스트다운"]);
-  const files = (await listOAuthDriveFolderFiles(folderId)).filter(file => /\.(zip|xlsx)$/i.test(file.name) && !file.name.startsWith("~$"));
-  return { folderId, files, token: weeklyPurchaseManifestToken(files) };
+  try {
+    const folderId = await resolveDriveFolderPath(["쿠팡데이터", "발주서리스트다운"]);
+    const files = (await listOAuthDriveFolderFiles(folderId)).filter(file => /\.(zip|xlsx)$/i.test(file.name) && !file.name.startsWith("~$"));
+    return { folderId, files, token: weeklyPurchaseManifestToken(files) };
+  } catch (driveError) {
+    const folderId = process.env.WMS_WEEKLY_PURCHASE_SOURCE_DIR?.trim();
+    if (!folderId) throw driveError;
+    const files = await readLocalManifest(folderId);
+    return { folderId, files, token: weeklyPurchaseManifestToken(files) };
+  }
+}
+
+async function readLocalManifest(folderId: string): Promise<WeeklyPurchaseSourceFile[]> {
+  const names = (await readdir(folderId)).filter(name => /\.(zip|xlsx)$/i.test(name) && !name.startsWith("~$")).sort();
+  return Promise.all(names.map(async name => {
+    const filePath = path.join(folderId, name), info = await stat(filePath);
+    const mimeType = name.toLowerCase().endsWith(".zip")
+      ? "application/zip"
+      : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    return { id: filePath, filePath, name, mimeType, modifiedTime: info.mtime.toISOString(), size: String(info.size) };
+  }));
 }
 export function weeklyOperationsWithPurchaseFiles(operations: string, fileToken: string): string {
   return hash(["weekly-purchase-files-v1", operations, fileToken]);
@@ -31,7 +52,7 @@ export async function readWeeklyPurchaseFiles(manifest: WeeklyPurchaseManifest, 
       const file = manifest.files[next++];
       try {
         parsed.push(await cached("weekly-purchase-file-v1", [file.id, file.name, file.modifiedTime, file.size], async () => {
-          const buffer = await downloadOAuthDriveFile(file.id);
+          const buffer = file.filePath ? await readFile(file.filePath) : await downloadOAuthDriveFile(file.id);
           const value = await parseWeeklyPurchaseFile(buffer, file);
           return { value, contentHash: createHash("sha256").update(buffer).digest("hex"), purchaseOrders: value.documents.map(item => item.purchaseOrderNumber) };
         }, valid));
@@ -41,7 +62,9 @@ export async function readWeeklyPurchaseFiles(manifest: WeeklyPurchaseManifest, 
       }
     }
   }));
-  const after = (await listOAuthDriveFolderFiles(manifest.folderId)).filter(file => /\.(zip|xlsx)$/i.test(file.name) && !file.name.startsWith("~$"));
+  const after = manifest.files.some(file => file.filePath)
+    ? await readLocalManifest(manifest.folderId)
+    : (await listOAuthDriveFolderFiles(manifest.folderId)).filter(file => /\.(zip|xlsx)$/i.test(file.name) && !file.name.startsWith("~$"));
   if (weeklyPurchaseManifestToken(after) !== manifest.token) throw new Error("확인 중 발주서 파일이 변경됐습니다. 업로드가 끝난 뒤 다시 확인해 주세요.");
   return resolveWeeklyPurchaseDocuments(parsed, targetPos);
 }

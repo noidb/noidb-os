@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { WeeklyRun, WeeklyVendorItem, WeeklyWorkspace } from "../weekly-work-types";
 import type { ActualInboundShortageLine } from "./actual-inbound-shortage";
+import { WEEKLY_RULES_VERSION } from "../weekly-work-types";
 
 export function queueActualInboundReorder(workspace: WeeklyWorkspace, source: ActualInboundShortageLine, now = new Date().toISOString()) {
   const pair = JSON.stringify([source.purchaseOrderNumber, source.productCode]);
@@ -23,7 +24,7 @@ export function queueActualInboundReorder(workspace: WeeklyWorkspace, source: Ac
   const run: WeeklyRun = {
     id: runId,
     snapshot: {
-      id: runId, sourceToken: key, createdAt: now, period: { startDate: now.slice(0, 10), endDate: now.slice(0, 10) },
+      id: runId, rulesVersion: WEEKLY_RULES_VERSION, sourceToken: key, createdAt: now, period: { startDate: now.slice(0, 10), endDate: now.slice(0, 10) },
       source: { files: [], latestActualDate: now.slice(0, 10), firstActualDate: now.slice(0, 10), eventCount: 0, duplicateCount: 0, selectedEventCount: 0, mode: "drive" },
       couponItems: [], vendorItems: [item], warnings: [], blockers: [],
     },

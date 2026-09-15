@@ -1,83 +1,164 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { requestVendorJson } from "@/lib/wms/vendor-order/request-json";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
-import type { StatusRequestRecord } from "@/lib/wms/vendor-order-actions";
+import type { StatusFileGenerationRecord, StatusRequestRecord } from "@/lib/wms/vendor-order-actions";
+import { downloadBlobPreservingPage } from "@/lib/wms/download-client";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { normalizeSkuId } from "@/lib/wms/sku-normalize";
-import { WMS_MOBILE_WIDTH, wmsColors, wmsGhostButton, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
+import { WMS_MOBILE_WIDTH, wmsColors, wmsGhostButton, wmsSecondaryButton, wmsSageButton, wmsWarnButton } from "@/lib/wms/ui-tokens";
 
-type Filter = "전체" | "처리대기" | "단종" | "단종해제" | "Supply Hub 처리완료";
-const FILTERS: Filter[] = ["전체", "처리대기", "단종", "단종해제", "Supply Hub 처리완료"];
+type Filter = "전체" | "처리대기" | "단종" | "단종해제" | "외부 처리완료";
+const FILTERS: Filter[] = ["전체", "처리대기", "단종", "단종해제", "외부 처리완료"];
+const actionButtonSize = { minHeight: "48px", minWidth: 0, fontSize: "13px", lineHeight: 1.3, padding: "8px 6px" };
 
 export default function StatusRequestsPage() {
   const [requests, setRequests] = useState<StatusRequestRecord[]>([]);
+  const [generations, setGenerations] = useState<StatusFileGenerationRecord[]>([]);
   const [catalog, setCatalog] = useState<Map<string, ProductCatalogItem>>(new Map());
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<Filter>("전체");
-  const [operator, setOperator] = useState("");
+  const [filter, setFilter] = useState<Filter>("처리대기");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const loadingRequest = useRef<Promise<void> | null>(null);
 
-  async function reload() {
-    setLoading(true);
+  const reloadVersion = useRef(0);
+  async function reload(quiet = false) {
+    if (loadingRequest.current) return loadingRequest.current;
+    const task = loadList(quiet);
+    loadingRequest.current = task;
+    try { await task; } finally { loadingRequest.current = null; }
+  }
+  async function loadList(quiet = false) {
+    const version = ++reloadVersion.current;
+    if (!quiet) setLoading(true);
+    setLoadError("");
     try {
-      const [historyResponse, catalogResponse] = await Promise.all([
-        fetch("/api/wms/vendor-order-actions", { cache: "no-store" }),
-        fetch("/api/wms/product-catalog", { cache: "no-store" }),
-      ]);
-      const history = await historyResponse.json();
-      const products = await catalogResponse.json();
+      const { response: historyResponse, data: history } = await requestVendorJson<{ success: boolean; error?: string; statusRequests?: StatusRequestRecord[]; statusFileGenerations?: StatusFileGenerationRecord[]; catalogItems?: ProductCatalogItem[] }>("/api/wms/vendor-order-actions?scope=status", { cache: "no-store" });
       if (!historyResponse.ok || !history.success) throw new Error(history.error || "단종/해제 이력 조회에 실패했습니다.");
+      if (version !== reloadVersion.current) return;
       setRequests((history.statusRequests || []).reverse());
-      setCatalog(new Map(((products.items || []) as ProductCatalogItem[]).map(item => [normalizeSkuId(item.skuId), item])));
-    } catch (error) { setMessage(error instanceof Error ? error.message : "목록을 불러오지 못했습니다."); }
-    finally { setLoading(false); }
+      setGenerations((history.statusFileGenerations || []).reverse());
+      setSelected(previous => new Set([...previous].filter(id => history.statusRequests?.some(request => request.id === id && request.supplyHubStatus === "처리대기"))));
+      setCatalog(new Map((history.catalogItems || []).map(item=>[normalizeSkuId(item.skuId),item])));
+    } catch (error) { const detail = error instanceof Error ? error.message : "목록을 불러오지 못했습니다."; setLoadError(/quota|rate.?limit|429/i.test(detail) ? "조회 요청이 잠시 몰려 목록을 불러오지 못했습니다. 잠시 후 ‘목록 새로고침’을 눌러 주세요." : detail); }
+    finally { if (version === reloadVersion.current) setLoading(false); }
   }
 
   useEffect(() => {
-    setOperator(window.localStorage.getItem("noidb_wms_operator") || "");
     reload();
   }, []);
 
   const filtered = useMemo(() => requests.filter(request => {
     if (filter === "전체") return true;
     if (filter === "처리대기") return request.supplyHubStatus === "처리대기";
-    if (filter === "Supply Hub 처리완료") return request.supplyHubStatus === "처리완료";
+    if (filter === "외부 처리완료") return request.supplyHubStatus === "처리완료";
     return request.requestType === filter;
   }), [filter, requests]);
 
   async function post(body: Record<string, unknown>) {
-    if (!operator.trim()) throw new Error("처리자 이름을 먼저 입력해주세요.");
     const response = await fetch("/api/wms/vendor-order-actions", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, operator: operator.trim() }),
+      body: JSON.stringify({ ...body, operator: "자동" }),
     });
     const data = await response.json();
     if (!response.ok || !data.success) throw new Error(data.error || "처리에 실패했습니다.");
     return data;
   }
 
-  async function requestSelected(requestType: "단종" | "단종해제") {
-    const targetSkus = Array.from(new Set(requests.filter(request => selected.has(request.id)).map(request => request.skuId)));
-    if (!targetSkus.length || !window.confirm(`${targetSkus.length}개 SKU를 ${requestType} 처리할까요?`)) return;
+  const selectedPending = useMemo(() => requests.filter(request => selected.has(request.id) && request.supplyHubStatus === "처리대기"), [requests, selected]);
+  const selectedDiscontinue = useMemo(() => requests.filter(request => selected.has(request.id) && request.requestType === "단종"), [requests, selected]);
+  const selectedRelease = useMemo(() => requests.filter(request => selected.has(request.id) && request.requestType === "단종해제"), [requests, selected]);
+  const pendingDiscontinue = selectedPending.filter(request => request.requestType === "단종");
+  const pendingRelease = selectedPending.filter(request => request.requestType === "단종해제");
+
+  async function moveSelected(target: "order" | "reorder") {
+    if (saving || loading || !selectedDiscontinue.length) return;
+    const label = target === "order" ? "거래처발주" : "재발주요청";
+    if (!window.confirm(`선택한 ${selectedDiscontinue.length}개 상품을 ${label} 목록으로 이동할까요? 저장된 발주번호별 미납자료를 사용합니다.`)) return;
     setSaving(true); setMessage("");
     try {
-      for (const skuId of targetSkus) await post({ action: "status", skuId, requestType });
-      setMessage(`${targetSkus.length}개 SKU의 ${requestType} 요청을 저장했습니다.`);
-      setSelected(new Set()); await reload();
-    } catch (error) { setMessage(error instanceof Error ? error.message : `${requestType} 처리에 실패했습니다.`); }
+      const response = await fetch("/api/wms/work-list-routing", { method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:"status",target,ids:selectedDiscontinue.map(item=>item.id)}) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "이동하지 못했습니다.");
+      setMessage(`${data.moved?.length || 0}개 ${label} 이동 완료.${data.failed?.length ? " " + data.failed.map((item:{error:string})=>item.error).join(" / ") : ""}`);
+      await reload();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "이동하지 못했습니다."); }
     finally { setSaving(false); }
   }
 
-  async function completeSelected() {
-    const ids = requests.filter(request => selected.has(request.id) && request.supplyHubStatus === "처리대기").map(request => request.id);
-    if (!ids.length || !window.confirm(`${ids.length}개 요청을 Supply Hub 처리완료로 표시할까요?\n제품DB 현재상태는 바뀌지 않습니다.`)) return;
+  async function requestWorkbook(kind: "discontinue" | "release", targets: StatusRequestRecord[]) {
+    const unique = Array.from(new Map(targets.map(request => [normalizeSkuId(request.skuId), request])).values()).filter(request => request.skuId);
+    if (!unique.length) throw new Error(kind === "discontinue" ? "선택한 단종 SKU가 없습니다." : "선택한 단종해제 SKU가 없습니다.");
+    const response = await fetch("/api/wms/discontinue-files", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind, format: kind === "discontinue" ? "bundle" : "xlsx", items: unique.map(request => ({
+        skuId: normalizeSkuId(request.skuId),
+        productName: request.productName.includes(",") || !request.optionLabel ? request.productName : `${request.productName}, ${request.optionLabel}`,
+      })) }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || "파일을 만들지 못했습니다.");
+    }
+    if (response.headers.get("X-NOIDB-Preserved-Template") !== "true") throw new Error("원본 양식 보존 검증에 실패했습니다.");
+    if (Number(response.headers.get("X-NOIDB-Item-Count")) !== unique.length) throw new Error("선택 SKU와 생성 파일의 개수가 달라 다운로드를 중단했습니다.");
+    const pdfFileName = decodeURIComponent(response.headers.get("X-NOIDB-PDF-File-Name") || "");
+    if (kind === "discontinue" && !pdfFileName) throw new Error("단종 XLSX와 공문 PDF를 모두 만들지 못했습니다. 다시 시도해 주세요.");
+    const fallback = kind === "discontinue" ? "단종신청_엑셀_공문.zip" : "단종해제.xlsx";
+    return {
+      blob: await response.blob(),
+      fileName: decodeURIComponent(response.headers.get("X-NOIDB-File-Name") || fallback),
+      xlsxFileName: decodeURIComponent(response.headers.get("X-NOIDB-XLSX-File-Name") || response.headers.get("X-NOIDB-File-Name") || fallback),
+      pdfFileName,
+      driveSaved: response.headers.get("X-NOIDB-Drive-Saved") === "true",
+      driveWarning: decodeURIComponent(response.headers.get("X-NOIDB-Drive-Save-Warning") || ""),
+      date: response.headers.get("X-NOIDB-Document-Date") || new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" }),
+      unique,
+    };
+  }
+
+  async function generateDiscontinueFiles() {
+    setSaving(true); setMessage("");
+    try {
+      const workbook = await requestWorkbook("discontinue", selectedDiscontinue);
+      await post({
+        action: "record-status-files", kind: "단종", skuIds: workbook.unique.map(item => item.skuId),
+        requestIds: workbook.unique.map(item => item.id), xlsxFileName: workbook.xlsxFileName, pdfFileName: workbook.pdfFileName,
+      });
+      downloadBlobPreservingPage(workbook.blob, workbook.fileName);
+      setMessage(`생성완료 · 단종 SKU ${workbook.unique.length}개 · XLSX와 PDF의 SKU가 동일합니다.${workbook.driveSaved ? " XLSX·PDF Drive 자동저장 완료." : workbook.driveWarning ? ` ${workbook.driveWarning}` : ""} 기존 처리상태와 제품DB는 변경하지 않았습니다.`);
+      await reload();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "단종 파일을 만들지 못했습니다."); }
+    finally { setSaving(false); }
+  }
+
+  async function generateReleaseFile() {
+    setSaving(true); setMessage("");
+    try {
+      const workbook = await requestWorkbook("release", selectedRelease);
+      await post({
+        action: "record-status-files", kind: "단종해제", skuIds: workbook.unique.map(item => item.skuId),
+        requestIds: workbook.unique.map(item => item.id), xlsxFileName: workbook.fileName,
+      });
+      downloadBlobPreservingPage(workbook.blob, workbook.fileName);
+      setMessage(`생성완료 · 단종해제 SKU ${workbook.unique.length}개 · 원본의 기존 데이터행은 제거했습니다.${workbook.driveSaved ? " Drive 자동저장 완료." : workbook.driveWarning ? ` ${workbook.driveWarning}` : ""} 기존 처리상태와 제품DB는 변경하지 않았습니다. 이메일 발송 후 아래 완료 버튼을 눌러 주세요.`);
+      await reload();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "단종해제 파일을 만들지 못했습니다."); }
+    finally { setSaving(false); }
+  }
+
+  async function completeSelected(kind: "단종" | "단종해제") {
+    const ids = (kind === "단종" ? pendingDiscontinue : pendingRelease).map(request => request.id);
+    const label = kind === "단종" ? "서플라이허브 업로드 완료" : "이메일 발송 완료";
+    if (!ids.length || !window.confirm(`${ids.length}개 ${kind} 요청을 ${label}로 표시할까요?\n실제 외부 처리를 마친 경우에만 확인해 주세요. 제품DB 현재상태는 바뀌지 않습니다.`)) return;
     setSaving(true); setMessage("");
     try {
       const data = await post({ action: "complete-status", ids });
-      setMessage(`${data.completedCount}개 요청의 Supply Hub 상태만 처리완료로 변경했습니다.`);
+      setMessage(`${data.completedCount}개 ${kind} 요청을 ${label}로 표시했습니다. 제품DB는 변경하지 않았습니다.`);
       setSelected(new Set()); await reload();
     } catch (error) { setMessage(error instanceof Error ? error.message : "처리완료 저장에 실패했습니다."); }
     finally { setSaving(false); }
@@ -85,25 +166,40 @@ export default function StatusRequestsPage() {
 
   return (
     <main style={{ maxWidth: WMS_MOBILE_WIDTH, minHeight: "100vh", margin: "0 auto", padding: "12px 12px calc(20px + env(safe-area-inset-bottom))", background: wmsColors.background, color: wmsColors.ink, fontFamily: "sans-serif" }}>
-      <a href="/wms/vendor-orders" style={{ color: wmsColors.slateDark, fontSize: "13px" }}>← 거래처 발주관리</a>
-      <h1 style={{ margin: "12px 0 4px", fontSize: "20px" }}>단종/해제 SKU</h1>
-      <p style={{ margin: "0 0 10px", fontSize: "11px", color: wmsColors.muted }}>제품DB 현재상태와 Supply Hub 수동 처리대기 이력을 분리해 관리합니다.</p>
-      <label style={{ display: "block", marginBottom: "10px" }}>
-        <span style={{ display: "block", fontSize: "11px", color: wmsColors.muted, marginBottom: "3px" }}>처리자</span>
-        <input value={operator} onChange={event => { setOperator(event.target.value); window.localStorage.setItem("noidb_wms_operator", event.target.value); }} placeholder="처리자 이름" style={{ width: "100%", minHeight: "40px", boxSizing: "border-box", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "9px", padding: "8px 10px" }} />
-      </label>
+      <a href="/wms/vendor-orders/manage" style={{ color: wmsColors.slateDark, fontSize: "13px" }}>← 거래처 발주관리</a>
+      <h1 style={{ margin: "12px 0 4px", fontSize: "20px" }}>단종·해제 관리</h1>
+      <p style={{ margin: "0 0 10px", fontSize: "12px", color: wmsColors.muted }}>주간업무와 거래처 발주에서 보낸 단종·해제 요청을 여기서 함께 처리합니다. 완료한 요청은 ‘외부 처리완료’에서 확인하거나 재출력할 수 있습니다.</p>
+
       <div style={{ display: "flex", gap: "6px", overflowX: "auto", paddingBottom: "5px", marginBottom: "8px" }}>
         {FILTERS.map(value => <button key={value} type="button" onClick={() => setFilter(value)} style={{ ...wmsGhostButton, whiteSpace: "nowrap", minHeight: "36px", background: filter === value ? wmsColors.greenSoft : "#fff", color: filter === value ? wmsColors.greenDark : wmsColors.ink, fontSize: "11px" }}>{value}</button>)}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginBottom: "8px" }}>
-        <button type="button" onClick={() => setSelected(new Set(filtered.map(request => request.id)))} style={wmsGhostButton}>전체선택</button>
-        <button type="button" onClick={() => setSelected(new Set())} style={wmsGhostButton}>선택해제</button>
-        <button type="button" disabled={saving || !selected.size} onClick={() => requestSelected("단종")} style={{ ...wmsGhostButton, color: "#934633", opacity: selected.size ? 1 : .45 }}>선택 SKU 단종처리</button>
-        <button type="button" disabled={saving || !selected.size} onClick={() => requestSelected("단종해제")} style={{ ...wmsGhostButton, color: wmsColors.greenDark, opacity: selected.size ? 1 : .45 }}>선택 SKU 단종해제</button>
-        <button type="button" disabled={saving || !selected.size} onClick={completeSelected} style={{ ...wmsPrimaryButton, gridColumn: "1 / -1", opacity: selected.size ? 1 : .45 }}>선택 처리완료</button>
+        <button type="button" disabled={saving || loading} onClick={() => void reload()} style={{ ...wmsGhostButton, ...actionButtonSize, gridColumn: "1 / -1" }}>{loading ? "저장 목록 확인 중..." : "저장 목록 다시 보기"}</button>
+        <button type="button" disabled={saving || loading || !selectedDiscontinue.length} onClick={()=>void moveSelected("order")} style={{...wmsSageButton,...actionButtonSize}}>선택 거래처발주로 이동</button>
+        <button type="button" disabled={saving || loading || !selectedDiscontinue.length} onClick={()=>void moveSelected("reorder")} style={{...wmsSecondaryButton,...actionButtonSize}}>선택 재발주요청으로 이동</button>
+        <button type="button" onClick={() => setSelected(new Set(filtered.map(request => request.id)))} style={{ ...wmsGhostButton, ...actionButtonSize }}>전체선택</button>
+        <button type="button" onClick={() => setSelected(new Set())} style={{ ...wmsGhostButton, ...actionButtonSize }}>선택해제</button>
+        <button type="button" disabled={saving || !selectedDiscontinue.length} onClick={generateDiscontinueFiles} style={{ ...wmsWarnButton, ...actionButtonSize, opacity: selectedDiscontinue.length ? 1 : .45 }}>선택 단종파일 생성</button>
+        <button type="button" disabled={saving || !selectedRelease.length} onClick={generateReleaseFile} style={{ ...wmsSecondaryButton, ...actionButtonSize, opacity: selectedRelease.length ? 1 : .45 }}>선택 단종해제 파일 생성</button>
+        <button type="button" disabled={saving || !pendingDiscontinue.length} onClick={() => completeSelected("단종")} style={{ ...wmsSageButton, ...actionButtonSize, opacity: pendingDiscontinue.length ? 1 : .45 }}>단종 업로드 완료</button>
+        <button type="button" disabled={saving || !pendingRelease.length} onClick={() => completeSelected("단종해제")} style={{ ...wmsSageButton, ...actionButtonSize, opacity: pendingRelease.length ? 1 : .45 }}>해제 이메일 발송 완료</button>
       </div>
-      {message && <p style={{ fontSize: "12px", color: message.includes("변경했습니다") || message.includes("저장했습니다") ? wmsColors.greenDark : "#a33b2e" }}>{message}</p>}
-      {loading ? <p>불러오는 중...</p> : filtered.length === 0 ? <p style={{ fontSize: "12px", color: wmsColors.muted }}>조건에 맞는 요청이 없습니다.</p> : (
+      {message && <p style={{ fontSize: "12px", overflowWrap: "anywhere", color: message.includes("생성완료") || message.includes("표시했습니다") ? wmsColors.greenDark : wmsColors.warn }}>{message}</p>}
+      {loadError && <p role="alert" style={{ fontSize: "13px", color: wmsColors.warn }}>{loadError}</p>}
+      {generations.length > 0 ? (
+        <details style={{ margin: "8px 0 12px", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", background: "#fff", padding: "9px 10px" }}>
+          <summary style={{ cursor: "pointer", fontSize: "12px", fontWeight: 800 }}>최근 생성 이력 ({generations.length}건)</summary>
+          <div style={{ display: "grid", gap: "6px", marginTop: "8px" }}>
+            {generations.slice(0, 5).map(generation => (
+              <div key={generation.id} style={{ fontSize: "11px", color: wmsColors.muted, overflowWrap: "anywhere" }}>
+                <strong style={{ color: wmsColors.ink }}>{generation.kind} {generation.skuIds.length}개</strong> · {new Date(generation.generatedAt).toLocaleString("ko-KR")}<br />
+                {generation.xlsxFileName}{generation.pdfFileName ? ` · ${generation.pdfFileName}` : ""}
+              </div>
+            ))}
+          </div>
+        </details>
+      ) : null}
+      {loading ? <p>불러오는 중...</p> : filtered.length === 0 ? !loadError && <p style={{ fontSize: "12px", color: wmsColors.muted }}>조건에 맞는 요청이 없습니다.</p> : (
         <div style={{ display: "grid", gap: "8px" }}>
           {filtered.map(request => {
             const live = catalog.get(normalizeSkuId(request.skuId));
@@ -116,8 +212,8 @@ export default function StatusRequestsPage() {
                 <div style={{ fontSize: "11px", fontWeight: 700, color: wmsColors.muted }}>{request.optionLabel || "옵션 없음"}</div>
                 <div style={{ marginTop: "3px", fontSize: "10px", color: wmsColors.muted }}>SKU {request.skuId} · 모델SKU {request.modelSku || "미등록"}</div>
                 <div style={{ marginTop: "5px", fontSize: "11px" }}>현재상태 <strong>{live?.currentStatus || request.currentStatus || "빈값"}</strong> · 요청 <strong>{request.requestType}</strong></div>
-                <div style={{ fontSize: "11px", color: request.supplyHubStatus === "처리대기" ? "#934633" : wmsColors.greenDark }}>Supply Hub {request.supplyHubStatus} · {new Date(request.requestedAt).toLocaleString("ko-KR")}</div>
-                {request.completedAt ? <div style={{ fontSize: "10px", color: wmsColors.muted }}>완료 {new Date(request.completedAt).toLocaleString("ko-KR")} · {request.processor}</div> : null}
+                <div style={{ fontSize: "11px", color: request.supplyHubStatus === "처리대기" ? wmsColors.warnText : wmsColors.greenDark }}>{request.supplyHubStatus === "처리완료" ? request.requestType === "단종해제" ? "이메일 발송 완료" : "서플라이허브 업로드 완료" : `${request.requestType} 대기`} · {new Date(request.requestedAt).toLocaleString("ko-KR")}</div>
+                {request.completedAt ? <div style={{ fontSize: "10px", color: wmsColors.muted }}>완료 {new Date(request.completedAt).toLocaleString("ko-KR")}</div> : null}
                 {request.productLink ? <a href={request.productLink} target="_blank" rel="noopener noreferrer" style={{ fontSize: "11px", color: wmsColors.slateDark }}>제품링크 ↗</a> : <span style={{ fontSize: "10px", color: wmsColors.muted }}>제품링크 없음</span>}
               </div>
             </div>;

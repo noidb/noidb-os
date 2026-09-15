@@ -6,6 +6,7 @@ import { deriveVendorOrderDrafts } from "./vendor-order/derive-drafts";
 import { isPackingFullyDispatched, packingGenerationKey, packingShipmentPurchaseOrders, type PackingProgress } from "./packing-progress";
 import { projectActivePickingWork } from "./active-picking-work";
 import type { ShippingDateSummary } from "./picking-wave/wave-card-summary";
+import { shipmentDocumentsReady } from "./shipment-document-stage";
 
 export function kstWorkDate(now = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
@@ -19,6 +20,7 @@ export interface OutboundWorkSummary {
   updatedAt: string;
   state: OutboundWorkState | null;
   completedAt: string | null;
+  shipmentDocumentsCompletedAt?: string | null;
   purchaseOrderCount: number;
   skuCount: number;
   totalQuantity: number;
@@ -129,9 +131,9 @@ export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[
   if (hasMixedGeneration && remainingShipmentPoCount > 0) {
     nextLabel = "남은 발주 " + remainingShipmentPoCount + "건 · 송장 묶음 만들기";
     nextHref = base + "/complete#hanjin-step-1";
-  } else if (wave.shipmentDocumentsCompletedAt) {
-    nextLabel = "통합피킹 · Shipment별 출고작업 선택";
-    nextHref = `${base}/complete`;
+  } else if (wave.shipmentDocumentsCompletedAt && shipmentDocumentsReady(wave)) {
+    nextLabel = "통합피킹 또는 Shipment별 출고작업";
+    nextHref = base;
   } else if (packingIsActive && packingHref && packingLabel) {
     nextLabel = "Shipment 서류작업 확인";
     nextHref = `${base}/complete`;
@@ -161,6 +163,7 @@ export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[
     updatedAt: wave.updatedAt,
     state: visibleState || null,
     completedAt,
+    shipmentDocumentsCompletedAt: shipmentDocumentsReady(wave) ? wave.shipmentDocumentsCompletedAt || null : null,
     purchaseOrderCount: purchaseOrders.size,
     skuCount: items.length,
     totalQuantity: items.reduce((sum, item) => sum + item.totalQuantity, 0),
@@ -172,7 +175,7 @@ export function summarizeOutboundWork(wave: PickingWave, items: PickingWaveItem[
     remainingShipmentPoCount,
     remainingOutputPoCount,
     nextLabel, nextHref, packingLabel, packingHref, packingTargets,
-    documentHref: `${base}/complete`, pickingHref: base, vendorHref: `${base}/vendor-orders`,
+    documentHref: `${base}/complete`, pickingHref: base, vendorHref: "/wms/vendor-orders/manage",
     canComplete: purchaseOrders.size > 0 && remainingShipmentPoCount === 0 && remainingOutputPoCount === 0 && items.length > 0 && pickedSkuCount === items.length,
   };
 }

@@ -16,9 +16,16 @@ export default async function WmsInboundPage() {
     const [store, orders, catalog, completion] = await Promise.all([
       readPickingWaveStore(), loadSupplierHubPurchaseOrders(), fetchProductCatalog(), readWeeklyCompletionSummary(),
     ]);
-    const purchaseRows = [headers, ...orders.flatMap(order => order.items.map(item => [
+    const automaticLines = store.supplierHubOriginalOrderLines;
+    const automaticKeys = new Set(automaticLines.map(line => pairKey(line.orderNo.trim(), normalizeSkuId(line.skuId))));
+    const automaticRows = automaticLines.map(line => [
+      line.orderNo.trim(), normalizeSkuId(line.skuId), line.skuName,
+      line.confirmedOrderQuantity == null ? "" : String(line.confirmedOrderQuantity), line.sourceIssue || "",
+    ]);
+    const historicalRows = orders.flatMap(order => order.items.map(item => [
       order.purchaseOrderNumber, normalizeSkuId(item.productCode), item.productName, String(item.vendorConfirmedQuantity), "",
-    ]))];
+    ]).filter(row => !automaticKeys.has(pairKey(row[0], row[1]))));
+    const purchaseRows = [headers, ...automaticRows, ...historicalRows];
     const calculation = calculateSupplierHubShortages({
       statuses: store.supplierHubOrderStatuses,
       events: store.supplierHubInboundEvents,
@@ -26,6 +33,10 @@ export default async function WmsInboundPage() {
     });
     const catalogBySku = new Map(catalog.items.map(item => [normalizeSkuId(item.skuId), item]));
     const expectedDates = new Map(orders.map(order => [order.purchaseOrderNumber.trim(), expectedDate(order.expectedDate)]));
+    for (const line of automaticLines) {
+      const value = expectedDate(line.expectedDate);
+      if (value) expectedDates.set(line.orderNo.trim(), value);
+    }
     const totalShortage = calculation.shortagePairs.reduce((sum, item) => sum + item.shortageQuantity, 0);
     const completedKeys = new Set(completion.completedShortagePairs);
     const activeShortages = (completion.available ? calculation.shortagePairs.filter(item => !completedKeys.has(pairKey(item.orderNo, item.skuId))) : calculation.shortagePairs)

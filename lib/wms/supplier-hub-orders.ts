@@ -176,8 +176,9 @@ export async function loadSupplierHubPurchaseOrders(): Promise<SupplierHubPurcha
   return (await loadSupplierHubPurchaseOrderSnapshots()).orders;
 }
 
-async function loadSupplierHubPurchaseOrderSnapshots(): Promise<SupplierHubSnapshotSelection> {
+async function loadSupplierHubPurchaseOrderSnapshots(savedOnly = false): Promise<SupplierHubSnapshotSelection> {
   const stored = (await (await import("./picking-wave/server-store")).readPickingWaveStore()).supplierHubPurchaseOrders || [];
+  if (savedOnly) return selectLatestSupplierHubPurchaseOrderSnapshots(stored);
   let source: SupplierHubSnapshotSelection;
   if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
     try {
@@ -267,12 +268,12 @@ export function selectLatestSupplierHubPurchaseOrderSnapshots(candidates: Suppli
 
 /** 실제 입고 미납 API가 사용할 읽기 전용 호환 반환값. 기존 파서의 capturedAt을
  * 발주번호별 최신 확인 시각으로 노출하며, 기존 로딩 규칙과 파일 보존 동작은 그대로 둔다. */
-export async function loadSupplierHubPurchaseOrdersWithSnapshotTimes(): Promise<{
+export async function loadSupplierHubPurchaseOrdersWithSnapshotTimes(options: { savedOnly?: boolean } = {}): Promise<{
   orders: SupplierHubPurchaseOrder[];
   latestSnapshotTimeMsByPurchaseOrderNumber: Record<string, number>;
   snapshotConflicts: SupplierHubPurchaseOrderSnapshotConflict[];
 }> {
-  const { orders, conflicts: snapshotConflicts } = await loadSupplierHubPurchaseOrderSnapshots();
+  const { orders, conflicts: snapshotConflicts } = await loadSupplierHubPurchaseOrderSnapshots(Boolean(options.savedOnly));
   const latestSnapshotTimeMsByPurchaseOrderNumber = Object.fromEntries(
     orders.map(order => [order.purchaseOrderNumber, Date.parse(order.capturedAt)] as [string, number])
       .filter(([, time]) => Number.isFinite(time))

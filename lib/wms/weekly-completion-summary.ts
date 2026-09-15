@@ -27,7 +27,7 @@ async function readWorkspace(): Promise<{ runs: RawRun[] } | null> {
   }
 }
 
-function completedShortagePairs(runs: RawRun[]): string[] {
+export function completedShortagePairs(runs: RawRun[]): string[] {
   const completed = new Set<string>();
   for (const savedRun of runs) {
     const lines = Array.isArray(savedRun.reorderRequestedLines) ? savedRun.reorderRequestedLines : [];

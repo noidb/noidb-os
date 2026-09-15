@@ -31,6 +31,8 @@ export interface WeeklyReview {
   decision: "order" | "hold" | "discontinue" | "reorder"; quantityConfirmed: boolean;
 }
 export interface WeeklyRun {
+  /** Exact PO/SKU routing intent. Completion here means delivery to the next queue, not external upload. */
+  actualInboundRoute?: { decision: "vendor" | "discontinue" | "reorder" | "delay"; completed: boolean; at: string; memo?: string; resolvedAt?: string; initialShortageQuantity?: number; history?: Array<{ decision: string; at: string; memo?: string }> };
   itemRoutes?: Record<string, { decision: WeeklyReview["decision"]; at: string; completed: boolean }>;
   routedElsewhereSkuIds?: string[];
   discontinueQueueRequestIds?: Record<string, string[]>;

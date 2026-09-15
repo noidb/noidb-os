@@ -113,7 +113,7 @@ export async function fetchProductCatalog(): Promise<{ configured: boolean; item
       vendorName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.vendorName),
       barcode: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.barcode),
       countryOfOrigin: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.countryOfOrigin),
-      productLink: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productLink),
+      productLink: extractImageUrl(firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productLink)),
     }))
     .filter(item => item.skuId);
   return { configured: true, items };

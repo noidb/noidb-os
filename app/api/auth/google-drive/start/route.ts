@@ -34,10 +34,10 @@ export async function GET(request: NextRequest) {
 
   const env = getOAuthEnv()!;
   if (!isAllowedOrigin(request, env.redirectUri)) {
-    return NextResponse.json(
-      { error: "이 주소에서는 Google Drive 연결을 시작할 수 없습니다. localhost(집 PC 로컬 개발 서버)에서 연결해주세요." },
-      { status: 403 }
-    );
+    // Preview/staging URLs cannot be registered one by one at Google. Continue at the
+    // fixed callback origin instead of leaving the operator on a dead link.
+    const fixedOrigin = new URL(env.redirectUri).origin;
+    return NextResponse.redirect(new URL("/api/auth/google-drive/start", fixedOrigin));
   }
 
   const state = createOAuthState();

@@ -113,7 +113,7 @@ export default function NewPurchaseOrdersUpdateButton({ onImported }: NewPurchas
         tint={wmsColors.bronzeSoft}
         borderTint={wmsColors.bronzeSoftBorder}
         textColor={wmsColors.bronze}
-        onClick={handleClick}
+        onClick={async () => { if (importing) return; setOpen(true); setShowAllOrders(true); await loadOrders(); }}
         disabled={importing}
       />
 
@@ -134,6 +134,7 @@ export default function NewPurchaseOrdersUpdateButton({ onImported }: NewPurchas
             </button>
           </div>
 
+          <button type="button" disabled={importing} onClick={() => void handleClick()} style={wmsGhostButton}>최신 원본 가져오기</button>
           {importResult && (
             <div
               style={{

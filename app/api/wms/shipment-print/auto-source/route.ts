@@ -26,7 +26,7 @@ async function localFiles(directory: string): Promise<SourceFile[]> {
     if (!info.isFile()) return null;
     return { name, modifiedTime: info.mtime.toISOString(), buffer: await readFile(fullPath) };
   }));
-  return files.filter((file): file is SourceFile => file !== null);
+  return files.filter((file) => file !== null);
 }
 
 async function driveFiles(fragment: string, accept: (file: DriveFileInfo) => boolean = () => true): Promise<SourceFile[]> {

@@ -6,9 +6,9 @@ import { get, put } from "@vercel/blob";
  * 사용자 Google Drive OAuth의 refresh token / 업로드 폴더 ID를 저장하는 전용 모듈
  * (2026-08-20 신규). 아래 우선순위로 읽는다:
  *
- * 1순위: GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN 환경변수 (Vercel 등 배포 환경용 — 이 값이 있으면
- *        로컬 파일보다 항상 우선한다)
- * 2순위: 로컬 전용 비밀파일 .secrets/google-drive-oauth.json (집 PC 로컬 개발 서버용)
+ * Vercel에서는 재연결 콜백이 저장한 Blob 토큰을 먼저 사용하고, 없을 때만 환경변수를 쓴다.
+ * 환경변수의 만료 토큰이 재연결 결과를 계속 가리는 문제를 막는다. 로컬은 환경변수 다음
+ * `.secrets/google-drive-oauth.json` 순서다.
  *
  * 이 모듈이 다루는 값은 절대 클라이언트로 반환하거나 서버 로그에 출력하지 않는다 — 호출하는
  * 쪽(API 라우트)에서 반환값을 그대로 응답 JSON에 넣지 않도록 주의해야 한다.
@@ -77,6 +77,10 @@ export function hasEnvRefreshToken(): boolean {
 
 /** 실제 사용할 refresh token을 우선순위대로 가져온다. 없으면 null. */
 export async function getStoredRefreshToken(): Promise<string | null> {
+  if (process.env.VERCEL) {
+    const state = await readBlobSecret();
+    if (state.refreshToken?.trim()) return state.refreshToken.trim();
+  }
   const envToken = process.env.GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN?.trim();
   if (envToken) return envToken;
   const state = await readStoredState();

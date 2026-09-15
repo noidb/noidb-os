@@ -20,5 +20,14 @@
     }
   },
   "include": ["next-env.d.ts", ".next/types/**/*.ts", "**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    ".worktrees",
+    ".deploy-*",
+    "noidb-os-v1",
+    "outputs",
+    "output",
+    "tmp",
+    ".tmp"
+  ]
 }

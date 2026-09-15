@@ -45,3 +45,13 @@ env/
 automation/coupang-po/.state/
 automation/coupang-po/config.json
 automation/coupang-po/*.log
+
+# Local recovery copies and retired workspaces
+.worktrees/
+.deploy-*/
+/outputs/
+/output/
+tmp/
+.claude/
+
+/.audit/

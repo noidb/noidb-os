@@ -18,12 +18,16 @@ import { nextWeeklyReorderFriday } from "@/lib/wms/weekly-reorder-files";
 import { loadWeeklyAdvertisingSelection } from "@/lib/wms/weekly-advertising-source";
 import { assertWeeklyAdvertisingSelection, type WeeklyAdvertisingSelection } from "@/lib/wms/weekly-advertising";
 import { savedWeeklyOperationalToken } from "@/lib/wms/saved-weekly-material";
+import { historicalShortageEvidence } from "@/lib/wms/historical-shortage-clearance";
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
 export const maxDuration=300;
 const headers={"Cache-Control":"private, no-store"};
 export async function GET() {
-  try { const workspace=await readWeeklyWorkspace(); return NextResponse.json({success:true,...workspace,couponBlocks:weeklyCouponBlocks(workspace)},{headers}); }
+  try {
+    const [workspace, store] = await Promise.all([readWeeklyWorkspace(), import("@/lib/wms/picking-wave/server-store").then(module => module.readPickingWaveStore())]);
+    return NextResponse.json({success:true,...workspace,couponBlocks:weeklyCouponBlocks(workspace),shortageClearanceEvidence:historicalShortageEvidence(workspace,store)},{headers});
+  }
   catch(error){return failure(error);}
 }
 function failure(error:unknown) { return NextResponse.json({success:false,error:error instanceof Error?error.message:"주간 업무 처리 중 오류가 발생했습니다."},{status:409,headers}); }

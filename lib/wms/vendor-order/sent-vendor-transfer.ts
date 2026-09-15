@@ -42,6 +42,8 @@ export function transferSentVendorLine(store: PickingWaveStoreSnapshot, input: S
     actualShortageQuantity: Math.min(source.actualShortageQuantity ?? quantity, quantity), shortageQuantity: quantity,
     currentStock: source.currentStock, relatedPurchaseOrderNumbers: [...source.relatedPurchaseOrderNumbers],
     memo: source.memo, isManuallyAdded: true, isStockReplenishment: source.isStockReplenishment,
+    sourceType: source.sourceType, actualInboundDetails: source.actualInboundDetails,
+    coupangConfirmedQuantity: source.coupangConfirmedQuantity, coupangReceivedQuantity: source.coupangReceivedQuantity,
     vendorTransferSourceLineId: source.id, createdAt: input.now, updatedAt: input.now,
   };
   const original = { ...source, vendorTransfer: { operationId: input.operationId, targetDraftId: target.id, targetLineId: id, vendorName: name, quantity, at: input.now, sourceUpdatedAt: source.updatedAt }, updatedAt: input.now };

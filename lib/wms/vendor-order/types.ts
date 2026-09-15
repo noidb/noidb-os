@@ -79,6 +79,7 @@ export interface VendorOrderDraftLine {
   manualListGroup?: string;
   /** 계산·처리 출처. 실제 Supplier Hub 미납은 수량을 그대로 사용한다. */
   sourceType?: "picking-shortage" | "actual-inbound-shortage";
+  actualInboundDetails?: Array<{ purchaseOrderNumber: string; confirmedQuantity: number; receivedQuantity: number; shortageQuantity: number }>;
   coupangConfirmedQuantity?: number;
   coupangReceivedQuantity?: number;
   /** 발주 입고처리 화면에서 저장하는 실제 입고수량 (2026-08-19 4차 실사용 테스트 신규 필드).

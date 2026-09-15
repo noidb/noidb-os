@@ -8,7 +8,7 @@ import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import ActiveWaveList from "@/app/wms/picking/waves/ActiveWaveList";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import { UNASSIGNED_VENDOR_NAME } from "@/lib/wms/vendor-order/types";
-import { TruckIcon } from "../icons";
+import { TruckIcon, InboxIcon } from "../icons";
 import WorkCenterMenuButton from "./WorkCenterMenuButton";
 import SupplyStatusUpdateButton from "./SupplyStatusUpdateButton";
 import NewPurchaseOrdersUpdateButton from "./NewPurchaseOrdersUpdateButton";
@@ -112,6 +112,14 @@ export default function WmsWorkCenterPage() {
           tint="rgba(83,109,120,0.10)"
           borderTint="rgba(83,109,120,0.35)"
           textColor={wmsColors.slateDark}
+        />
+        <WorkCenterMenuButton
+          href="/wms/inbound/cumulative"
+          icon={<InboxIcon size={26} color={wmsColors.greenDark} />}
+          title="입고결과 누적"
+          tint={wmsColors.greenSoft}
+          borderTint={wmsColors.green}
+          textColor={wmsColors.greenDark}
         />
       </div>
 

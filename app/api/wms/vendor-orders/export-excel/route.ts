@@ -1,9 +1,13 @@
+import { assertVendorOrderCandidatesFresh, assertVendorQueueExport } from "@/lib/wms/vendor-order/queue-write-guard";
+import { readPickingWaveStore } from "@/lib/wms/picking-wave/server-store";
+import { loadVendorOrderCompletionScope } from "@/lib/wms/vendor-order-completion";
+import { vendorOrderLineExclusion } from "@/lib/wms/vendor-order/completion";
 import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 
 /**
  * 거래처별 부족분 발주서(승인된 것)를 엑셀 파일로 만들어 다운로드시키는 API.
- * 화면에서 보내준 라인 데이터를 그대로 표로만 옮긴다 — 저장소를 조회하지 않고, 어디에도 쓰지 않는다.
+ * 최신 단종·재발주 완료 상태로 미전송 품목을 다시 확인한 후 엑셀로 만든다. 저장소는 읽기만 한다.
  *
  * 상품 이미지는 제품DB URL에서 최선을 다해 내려받아 셀에 삽입한다(실패해도 나머지 행 처리는 계속됨,
  * 실패한 행은 이미지 칸이 비고 URL이 텍스트로 남는다). 쿠팡 바코드는 이번 파일에서는 숫자만
@@ -13,6 +17,9 @@ import ExcelJS from "exceljs";
 export const runtime = "nodejs";
 
 interface ExportLine {
+  id?: string;
+  draftId?: string;
+  createdAt?: string;
   modelName: string;
   skuId: string;
   optionLabel: string;
@@ -43,7 +50,21 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const vendorName: string = body.vendorName || "거래처 미등록";
   const waveId: string = body.waveId || "";
-  const lines: ExportLine[] = Array.isArray(body.lines) ? body.lines : [];
+  let lines: ExportLine[] = Array.isArray(body.lines) ? body.lines : [];
+  try {
+    const [store, scope] = await Promise.all([readPickingWaveStore(), loadVendorOrderCompletionScope()]);
+    assertVendorOrderCandidatesFresh(store, lines, body.expectedUpdatedAtByLineId);
+    lines = lines.filter(line => {
+      const saved = line.id ? store.vendorOrderLines.find(item => item.id === line.id)
+        : store.vendorOrderLines.find(item => item.waveId === waveId && item.vendorName === vendorName && item.skuId === line.skuId);
+      const status = store.vendorOrderDrafts.find(draft => draft.id === saved?.draftId)?.status;
+      return !vendorOrderLineExclusion({ ...saved, ...line, createdAt: saved?.createdAt || line.createdAt, orderExclusion: saved?.orderExclusion }, scope, status);
+    });
+    assertVendorQueueExport(store, waveId, lines.map(line => ({ ...line, vendorName })));
+    if (!lines.length) return NextResponse.json({ error: "이미 처리완료된 상품을 제외하면 출력할 발주가 없습니다. 발주대기를 새로 확인해 주세요." }, { status: 409 });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "완료된 상품을 확인하지 못했습니다. 다시 확인 후 출력해 주세요." }, { status: 409 });
+  }
 
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("발주서");
