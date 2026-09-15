@@ -16,6 +16,8 @@ import { UNASSIGNED_VENDOR_NAME } from "./types";
 export interface ActualInboundShortageLine {
   purchaseOrderNumber: string;
   productCode: string;
+  /** Supplier Hub 발주 원본의 입고예정일. 표시·정렬에만 사용한다. */
+  expectedDate?: string;
   productName: string;
   confirmedQuantity: number;
   receivedQuantity: number;

@@ -15,6 +15,11 @@ function keyOf(purchaseOrderNumber: string, productCode: string): string {
   return `${purchaseOrderNumber}::${productCode}`;
 }
 
+function expectedDateValue(value: string | undefined): string {
+  const text = value?.trim() || "";
+  return text || "미확인";
+}
+
 export default function ActualInboundShortage({ pendingOnly = false }: { pendingOnly?: boolean }) {
 
   const [lines, setLines] = useState<ShortageLine[]>([]);
@@ -68,7 +73,11 @@ export default function ActualInboundShortage({ pendingOnly = false }: { pending
 
   
   const rows = useMemo(
-    () => lines.filter(row => !existingKeys.has(keyOf(row.purchaseOrderNumber, row.productCode))).sort((a, b) => a.vendorName.localeCompare(b.vendorName, "ko") || a.productCode.localeCompare(b.productCode)),
+    () => lines.filter(row => !existingKeys.has(keyOf(row.purchaseOrderNumber, row.productCode))).sort((a, b) => {
+      const dateA = a.expectedDate?.trim() || "9999-99-99";
+      const dateB = b.expectedDate?.trim() || "9999-99-99";
+      return dateA.localeCompare(dateB) || a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber) || a.productCode.localeCompare(b.productCode);
+    }),
     [lines, existingKeys]
   );
 
@@ -98,7 +107,7 @@ export default function ActualInboundShortage({ pendingOnly = false }: { pending
   }
 
   async function routeRow(row: ShortageLine, action: Classification | "receive-delay") {
-    const response = await fetch("/api/wms/vendor-orders/actual-inbound-shortage", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, purchaseOrderNumber: row.purchaseOrderNumber, skuId: row.productCode, memo: delayMemo }) });
+    const response = await fetch("/api/wms/vendor-orders/actual-inbound-shortage", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, purchaseOrderNumber: row.purchaseOrderNumber, skuId: row.productCode, ...(action === "delay" ? { memo: delayMemo } : {}) }) });
     const data = await response.json();
     if (!response.ok || !data.success) throw new Error(data.error || "분류 저장에 실패했습니다.");
     if (action === "vendor") setJustCreated(true);
@@ -199,6 +208,7 @@ export default function ActualInboundShortage({ pendingOnly = false }: { pending
                     style={{ width: "20px", height: "20px", marginTop: "2px" }}
                   />
                   <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: "12px", color: wmsColors.slateDark, fontWeight: 700 }}>입고예정일 {expectedDateValue(row.expectedDate)}</div>
                     <div style={{ fontSize: "11px", color: wmsColors.muted }}>원발주번호 {row.purchaseOrderNumber} · SKU {row.productCode}</div>
                     <div style={{ fontSize: "13px", fontWeight: 700, marginTop: "2px" }}>{row.productName}{row.optionLabel ? ` · ${row.optionLabel}` : ""}</div>
                     <div style={{ fontSize: "12px", marginTop: "4px" }}>
