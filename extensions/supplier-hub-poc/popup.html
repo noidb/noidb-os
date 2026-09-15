@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>NOID-B Supplier Hub POC</title>
+    <style>
+      body {
+        font-family: -apple-system, "Segoe UI", sans-serif;
+        width: 340px;
+        padding: 12px;
+        font-size: 13px;
+      }
+      h3 {
+        margin: 0 0 8px;
+        font-size: 14px;
+      }
+      #status {
+        color: #444;
+        margin-bottom: 8px;
+      }
+      pre {
+        background: #f5f5f5;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 8px;
+        white-space: pre-wrap;
+        word-break: break-all;
+        max-height: 240px;
+        overflow: auto;
+      }
+      button {
+        margin-top: 8px;
+        padding: 4px 10px;
+      }
+      .note {
+        margin-top: 10px;
+        font-size: 11px;
+        color: #888;
+      }
+      hr {
+        margin: 14px 0;
+        border: none;
+        border-top: 1px solid #e0e0e0;
+      }
+      .summary {
+        white-space: pre-line;
+        line-height: 1.6;
+        background: #f5f5f5;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 8px;
+        margin-bottom: 4px;
+      }
+      details {
+        margin-top: 10px;
+      }
+      details > summary {
+        cursor: pointer;
+        color: #555;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h3>Supplier Hub POC (읽기 전용)</h3>
+    <div id="status">데이터 없음</div>
+    <pre id="data"></pre>
+    <button id="refresh">새로고침</button>
+
+    <hr />
+
+    <h3>입고상세내역 표 (2단계)</h3>
+    <div id="inboundSummary" class="summary">데이터 없음</div>
+    <button id="startInboundCollection">최근1달 전체수집 시작</button>
+    <button id="rescan">현재 화면 다시 읽기</button>
+    <button id="sendInboundToNoidb" disabled>입고상세 NOID-B로 전송</button>
+    <div id="inboundTransferStatus" class="summary" role="status" aria-live="polite"></div>
+    <details>
+      <summary>상세 진단 보기 (원본 데이터)</summary>
+      <div id="inboundStatus" style="margin-top: 8px;"></div>
+      <pre id="inboundData"></pre>
+    </details>
+
+    <h3>신규 발주 원본</h3>
+    <div id="purchaseOrderLinesSummary" class="summary">수집 전</div>
+    <button id="collectPurchaseOrderLines">신규 발주 원본 수집</button>
+    <button id="copyPurchaseOrderLinesDiagnostics">진단결과 복사</button>
+
+    <hr />
+
+    <h3>자동조회 필터 (발주일/오늘 기준 과거 30일, 6단계)</h3>
+    <div id="autoFilterSummary" class="summary">데이터 없음</div>
+    <button id="resetAutoFilter">1회 재시도 허용 (플래그 초기화)</button>
+    <details>
+      <summary>상세 진단 보기</summary>
+      <div id="autoFilterStatus" style="margin-top: 8px;"></div>
+      <pre id="autoFilterData"></pre>
+      <button id="copyAutoFilter">전체 복사</button>
+    </details>
+    <div class="note">
+      실제 확인된 DOM(기간검색 select, 어제/오늘/다음7일/다음30일 프리셋,
+      검색 버튼) 기준으로 "기간검색=발주일 / 오늘 기준 과거 30일"을 최초
+      1회만 자동 적용합니다. "다음 30일"은 절대 클릭하지 않으며, 날짜 입력칸을
+      클릭해 실제 달력을 연 뒤 시작일/종료일 날짜 셀을 직접 클릭해서 범위를
+      맞춥니다(입력값 강제대입 아님). 각 단계가 실제로 반영됐는지 스스로
+      검증하며, 확인되지 않으면 검색을 누르지 않고 플래그도 세우지 않습니다
+      (다음 진입 때 자동 재시도). 한 번 성공한 뒤에는 사용자가 과거 조회를
+      위해 직접 기간을 바꿔도 다시 건드리지 않습니다.
+    </div>
+
+    <hr />
+
+    <h3>발주리스트 필터바 DOM 진단 (7단계, 읽기 전용)</h3>
+    <div id="filterBarDiagStatus">데이터 없음</div>
+    <pre id="filterBarDiagData"></pre>
+    <button id="collectFilterBarDiag">필터바 진단 다시 수집</button>
+    <button id="copyFilterBarDiag">전체 복사</button>
+    <div class="note">
+      발주리스트 화면의 표(&lt;table&gt;) 바깥에 있는 버튼/탭/라디오/select/
+      라벨 등을 클릭 없이 텍스트와 속성만 읽어서 보여줍니다. "발주일",
+      "최근 30일", "검색"에 해당하는 실제 문구와 태그를 여기서 찾아 확인한 뒤
+      공유해주세요. 클릭·입력은 전혀 하지 않습니다.
+    </div>
+
+    <hr />
+
+    <h3>발주리스트 요약</h3>
+    <div id="orderListSummary" class="summary">데이터 없음</div>
+    <button id="rescanOrderList">발주리스트 다시 읽기</button>
+    <button id="sendToNoidb">NOID-B로 전송</button>
+    <div id="transferStatus" class="summary" role="status" aria-live="polite"></div>
+    <details>
+      <summary>상세 진단 보기 (원본 데이터/개발 진단)</summary>
+
+      <h4 style="margin: 10px 0 2px; font-size: 12px; color: #555;">매입용 판정 진단 (발주유형 기준, 가상스크롤 수집)</h4>
+      <div id="orderListStatus"></div>
+      <pre id="purchaseTypeDiag"></pre>
+      <button id="copyPurchaseTypeDiag">전체 복사</button>
+
+      <h4 style="margin: 10px 0 2px; font-size: 12px; color: #555;">현재 화면 원본 (1회분)</h4>
+      <pre id="orderListData"></pre>
+      <button id="copyOrderListData">전체 복사</button>
+
+      <h4 style="margin: 10px 0 2px; font-size: 12px; color: #555;">인식 실패 시 진단</h4>
+      <div id="diagStatus"></div>
+      <pre id="diagData"></pre>
+      <button id="collectDiag">진단 정보 다시 수집</button>
+      <button id="copyDiag">전체 복사</button>
+      <div class="note">
+        발주리스트 표를 찾지 못했을 때 자동으로 수집됩니다. table/ARIA grid/일반
+        div 구조 후보와, 발주번호처럼 보이는 숫자 텍스트 주변의 반복 행 패턴을
+        보여줍니다. 이 텍스트를 그대로 복사해서 공유하면 됩니다(개발자도구 불필요).
+      </div>
+
+      <h4 style="margin: 10px 0 2px; font-size: 12px; color: #555;">누적 결과 원본 (여러 페이지)</h4>
+      <div id="orderListAccStatus"></div>
+      <pre id="orderListAccData"></pre>
+      <button id="copyOrderListAcc">전체 복사</button>
+      <div class="note">
+        다른 페이지로 이동해 "발주리스트 다시 읽기"를 누르거나 페이지를
+        새로고침하면, 발주번호를 기준으로 이전 결과와 자동으로 합쳐집니다
+        (자동 페이지 넘김 없음 — 사용자가 직접 이동).
+      </div>
+    </details>
+
+    <div class="note">
+      이 팝업은 페이지 제목/URL/경로, 입고상세내역 표, 발주리스트 표의 화면 표시
+      값 외에는 아무것도 읽거나 저장하지 않습니다. 쿠키/토큰/세션값은 다루지
+      않습니다. 발주유형이 "매입용"인 행은 발주리스트 결과에서 제외됩니다.
+    </div>
+    <div>BUILD: CODEX-20260913-1832</div>
+    <script src="popup.js"></script>
+  </body>
+</html>

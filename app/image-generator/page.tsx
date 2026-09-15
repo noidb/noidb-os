@@ -229,7 +229,7 @@ export default function ImageGeneratorPage() {
         <h1>빠른 상세페이지</h1>
         <p>긴 상세이미지 한 장을 NOID-B 형식으로 간편하게 다시 구성합니다.</p>
       </div>
-      <div className={styles.headerButtons}><Link href="/">상품등록으로 돌아가기</Link></div>
+      <div className={styles.headerButtons}><Link href="/image-search">제품사진 통합검색</Link><Link href="/">상품등록으로 돌아가기</Link></div>
     </header>
     <QuickDetailComposer />
 

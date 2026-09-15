@@ -25,12 +25,13 @@ import type { PurchaseOrderSourceRecord } from "./purchase-order-source/types";
  * 입력 파일 불러오기)를 없애고, 버튼 하나로 다음을 자동으로 한다:
  *   1) 한진택배 "재출력 세부내역"(운송장번호별 1행, 내품명1에 우리가 1단계에서 쓴 K열 문구가
  *      그대로 찍혀 있음)에서 발주번호↔운송장번호를 알아낸다.
- *   2) "발주서업로드완성" 폴더의 확정수량 입력 완료 파일(발주번호별 SKU 행 — 상품목록 시트에
+ *   2) 연결된 확정수량 파일 또는 발주서업로드양식 원본(발주번호별 SKU 행 — 상품목록 시트에
  *      필요한 A~H 컬럼의 진짜 출처)에서 SKU 단위 행을 가져온다.
  *   3) 현재 웨이브의 (발주번호+물류센터+입고예정일)과 정확히 일치할 때만 두 데이터를 합쳐
  *      buildShipmentCreationUploadFile(1·3단계와 완전히 같은, 기존 로직 그대로)에 넘긴다.
  * 재출력 세부내역과 앱이 다시 저장한 확정수량 파일은 ExcelJS로 읽고, 헤더명으로 실제 열을 찾는다.
- * 파일 선택은 저장된 정확한 파일명으로만 하며 최신 파일을 임의로 고르지 않는다.
+ * 파일 선택은 저장된 정확한 파일명 또는 PO+SKU가 유일하게 일치하는 양식 원본으로만 하며
+ * 최신 파일을 임의로 고르지 않는다.
  */
 
 const REPRINT_DETAIL_ENV = "GOOGLE_DRIVE_HANJIN_SHIPMENT_FOLDER_ID";
@@ -42,6 +43,8 @@ const CONFIRMED_QUANTITY_ENV = process.env.GOOGLE_DRIVE_PO_CONFIRMED_QUANTITY_FO
   : "GOOGLE_DRIVE_CONFIRMED_ORDER_FOLDER_ID";
 const CONFIRMED_QUANTITY_LOCAL_DIR =
   process.env.WMS_PO_CONFIRMED_QUANTITY_DIR || "G:\\내 드라이브\\쿠팡데이터\\발주서업로드완성";
+const PO_UPLOAD_TEMPLATE_ENV = "GOOGLE_DRIVE_PO_FOR_CONFIRM_FOLDER_ID";
+const PO_UPLOAD_TEMPLATE_LOCAL_DIR = "G:\\내 드라이브\\쿠팡데이터\\발주서업로드양식";
 
 function normalizedFileName(value: string): string {
   return value.trim().normalize("NFC");
@@ -414,6 +417,34 @@ export async function loadConfirmedQuantityFiles(expectedFileNames?: readonly st
   })));
 }
 
+/** 발주확정서류 생성 단계를 건너뛴 경우, 사용자가 그대로 업로드한 양식을 읽는다. */
+async function loadPoUploadTemplateFiles(): Promise<ConfirmedQuantitySourceFile[]> {
+  const files = await listMatchingDriveOrLocalFiles(
+    PO_UPLOAD_TEMPLATE_ENV,
+    PO_UPLOAD_TEMPLATE_LOCAL_DIR,
+    /^PO_FOR_CONFIRM.*\.xlsx$/i,
+  );
+  return Promise.all(files.map(async file => ({
+    name: file.name,
+    modifiedTime: file.modifiedTime,
+    contentHash: createHash("sha256").update(file.buffer).digest("hex"),
+    rows: await parseConfirmedQuantityRowsFromBuffer(file.buffer),
+  })));
+}
+
+function inferTemplateFileNamesByPo(
+  purchaseOrderNumbers: readonly string[],
+  files: readonly ConfirmedQuantitySourceFile[],
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const rawPo of purchaseOrderNumbers) {
+    const po = normalizeSkuId(rawPo);
+    const candidates = files.filter(file => file.rows?.some(row => normalizeSkuId(row.purchaseOrderNumber) === po));
+    if (candidates.length === 1) result[po] = normalizedFileName(candidates[0].name);
+  }
+  return result;
+}
+
 export class AutoShipmentBlockedError extends Error {
   reasons: string[];
   constructor(reasons: string[]) {
@@ -459,12 +490,12 @@ export function resolveStoredAutoShipmentGeneration(
   const confirmedQuantityFileHashByName: Record<string, string> = {};
   for (const po of stored) {
     const records = snapshot.poConfirmationRecords.filter(record => normalizeSkuId(record.poNumber) === po);
-    if (records.length !== 1) {
-      reasons.push(records.length === 0
-        ? `발주번호 ${po}: 발주확정 파일 연결 기록이 없습니다.`
-        : `발주번호 ${po}: 발주확정 파일 연결 기록이 중복됐습니다.`);
+    if (records.length > 1) {
+      reasons.push(`발주번호 ${po}: 발주확정 파일 연결 기록이 중복됐습니다.`);
       continue;
     }
+    // 연결 기록이 없으면 발주서업로드양식에서 PO+SKU를 검증해 자동 선택한다.
+    if (records.length === 0) continue;
     const record = records[0];
     // stage는 쿠팡에서 실제 승인됐는지의 별도 상태다. 여기서는 수량 원본을 특정하는
     // generatedFileName과 원본 검사 메타데이터만 사용하고, stage를 생성 완료로 바꾸지 않는다.
@@ -666,9 +697,16 @@ export async function buildAutoShipmentFile(
 ): Promise<AutoShipmentResult> {
   const groups = groupRequestsByCenterAndDate(requests);
 
-  const confirmedQuantityFileNameByPo = options.confirmedQuantityFileNameByPo || {};
+  const confirmedQuantityFileNameByPo = { ...(options.confirmedQuantityFileNameByPo || {}) };
   const expectedConfirmedFileNames = [...new Set(Object.values(confirmedQuantityFileNameByPo).map(normalizedFileName).filter(Boolean))];
-  const confirmedFiles = await loadConfirmedQuantityFiles(expectedConfirmedFileNames);
+  const linkedFiles = await loadConfirmedQuantityFiles(expectedConfirmedFileNames);
+  const missingPurchaseOrders = requests
+    .map(request => normalizeSkuId(request.purchaseOrderNumber))
+    .filter(po => po && !confirmedQuantityFileNameByPo[po]);
+  const templateFiles = missingPurchaseOrders.length > 0 ? await loadPoUploadTemplateFiles() : [];
+  const inferred = inferTemplateFileNamesByPo(missingPurchaseOrders, templateFiles);
+  Object.assign(confirmedQuantityFileNameByPo, inferred);
+  const confirmedFiles = [...linkedFiles, ...templateFiles];
   for (const file of confirmedFiles) {
     const expectedHash = options.confirmedQuantityFileHashByName?.[normalizedFileName(file.name)];
     if (expectedHash && expectedHash !== file.contentHash) throw new AutoShipmentBlockedError(["연결 후 확정파일의 내용이 변경되었습니다. 발주확정 수량을 다시 확인해 주세요."]);

@@ -7,8 +7,8 @@
 .env*
 !.env.example
 node_modules
-/outputs/
-/output/
+outputs
+output
 tmp
 noidb-os-v1
 extensions
@@ -20,5 +20,3 @@ lib/wms/data/product-db-backups/*
 automation/coupang-po/.state
 automation/coupang-po/config.json
 *.log
-
-/.audit/

@@ -1,5 +1,3 @@
-import { projectInboundLifecycle } from "./inbound-lifecycle";
-import { emptyPickingWaveStoreSnapshot } from "./picking-wave/shared-store-types";
 import type { SupplierHubInboundEvent } from "./picking-wave/shared-store-types";
 import type { SupplierHubPurchaseOrder, SupplierHubPurchaseOrderSnapshotConflict } from "./supplier-hub-orders";
 import { selectLatestSupplierHubPurchaseOrderSnapshots } from "./supplier-hub-orders";
@@ -75,9 +73,47 @@ export function summarizeCombinedInboundByMonth(
 }
 
 export function projectActiveSupplierHubPurchaseOrders(input: {
-  orders: readonly SupplierHubPurchaseOrder[]; events: readonly SupplierHubInboundEvent[]; workspace: WeeklyWorkspace;
-  store?: import("./picking-wave/shared-store-types").PickingWaveStoreSnapshot;
-}) {
-  const store = { ...(input.store || emptyPickingWaveStoreSnapshot()), supplierHubInboundEvents: [...input.events] };
-  return projectInboundLifecycle({ orders: input.orders, store, workspace: input.workspace });
+  orders: readonly SupplierHubPurchaseOrder[];
+  events: readonly SupplierHubInboundEvent[];
+  workspace: WeeklyWorkspace;
+}): { activeOrders: SupplierHubPurchaseOrder[]; completedPurchaseOrderNumbers: string[] } {
+  const receivedByPair = new Map<string, number>();
+  for (const event of uniqueSupplierHubInboundEvents(input.events)) {
+    const key = pairKey(event.orderNo, event.skuId);
+    receivedByPair.set(key, (receivedByPair.get(key) || 0) + eventQuantity(event.quantity));
+  }
+
+  const reorderedByPair = new Map<string, number>();
+  for (const run of input.workspace.runs) {
+    if (!run.reorderRequestedAt && !run.reorderQueuePartialRequestedAt) continue;
+    for (const line of run.reorderRequestedLines || []) {
+      const key = pairKey(line.purchaseOrderNumber, line.skuId);
+      reorderedByPair.set(key, Math.max(reorderedByPair.get(key) || 0, line.shortageQuantity));
+    }
+  }
+
+  const discontinuedGlobal = new Set<string>(), discontinuedByPair = new Set<string>();
+  for (const request of input.workspace.statusListSnapshot?.requests || []) {
+    if (request.requestType !== "단종" || request.supplyHubStatus !== "처리완료") continue;
+    const skuId = clean(request.skuId);
+    const purchaseOrderNumbers = clean(request.purchaseOrderNumber).split(",").map(clean).filter(Boolean);
+    if (!purchaseOrderNumbers.length) discontinuedGlobal.add(skuId);
+    else for (const purchaseOrderNumber of purchaseOrderNumbers) discontinuedByPair.add(pairKey(purchaseOrderNumber, skuId));
+  }
+
+  const completedPurchaseOrderNumbers: string[] = [];
+  const activeOrders = input.orders.filter(order => {
+    const complete = order.items.every(item => {
+      const key = pairKey(order.purchaseOrderNumber, item.productCode);
+      const actualReceived = Math.max(item.receivedQuantity, receivedByPair.get(key) || 0);
+      const shortage = Math.max(0, item.vendorConfirmedQuantity - actualReceived);
+      if (shortage === 0) return true;
+      return (reorderedByPair.get(key) || 0) >= shortage
+        || discontinuedByPair.has(key)
+        || discontinuedGlobal.has(clean(item.productCode));
+    });
+    if (complete) completedPurchaseOrderNumbers.push(order.purchaseOrderNumber);
+    return !complete;
+  });
+  return { activeOrders, completedPurchaseOrderNumbers };
 }

@@ -449,7 +449,6 @@ export default function WeeklyWork({ processingOnly = false, clearanceMode = fal
       const data = await response.json() as ApiResult;
       if (!response.ok || !data.success || !data.run) throw new Error(data.error || "이동하지 못했습니다. 같은 처리 방법으로 다시 시도해 주세요.");
       installRun(data.run); clearDownloads();
-      window.dispatchEvent(new Event("noidb-inbound-updated"));
       setMessage(`SKU ${skuId} · ${decision === "order" ? "거래처 발주관리" : decision === "discontinue" ? "단종·해제 관리" : "재발주요청 대기"}로 이동했습니다.`);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "이동하지 못했습니다. 다시 시도해 주세요.");
@@ -575,7 +574,6 @@ export default function WeeklyWork({ processingOnly = false, clearanceMode = fal
       const data = await response.json() as ApiResult;
       if (!response.ok || !data.success || !data.run) throw new Error(data.error || "처리 상태를 기록하지 못했습니다.");
       installRun(data.run); clearDownloads();
-      window.dispatchEvent(new Event("noidb-inbound-updated"));
       if (kind === "coupon") requestAnimationFrame(() => document.getElementById("weekly-review-title")?.scrollIntoView({ behavior: "smooth", block: "start" }));
       setMessage(kind === "complete" ? "이번 주간 업무를 완료로 기록했습니다. 다음에는 최근 일주일로 시작합니다." : "처리 완료를 저장했습니다. 완료한 항목은 목록에서 제외하고 아래 완료 이력에 보관했습니다.");
     } catch (failure) {

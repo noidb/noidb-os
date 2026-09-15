@@ -78,20 +78,9 @@ export function consolidateVendorOrders(store: PickingWaveStoreSnapshot, operati
     const existing = result.get(key) || (!explicitVendor ? [...result.values()].find(line => line.skuId === skuId && Boolean(line.isStockReplenishment) === Boolean(source.isStockReplenishment)) : undefined);
     if (existing) {
       duplicates++;
-      const details = new Map((existing.actualInboundDetails || []).map(d => [d.purchaseOrderNumber, d]));
-      let addedQuantity = 0;
-      for (const detail of source.actualInboundDetails || []) {
-        const prior = details.get(detail.purchaseOrderNumber);
-        if (prior && JSON.stringify(prior) !== JSON.stringify(detail)) throw new Error("같은 원발주의 실제 미납 근거가 변경됐습니다. 수량을 확인해 주세요.");
-        if (!prior && !existing.relatedPurchaseOrderNumbers.includes(detail.purchaseOrderNumber)) addedQuantity += detail.shortageQuantity;
-        details.set(detail.purchaseOrderNumber, detail);
-      }
       const existingKey = JSON.stringify([skuId, existing.vendorName, Boolean(existing.isStockReplenishment)]);
       result.set(existingKey, withTimestampIfChanged(existing, { ...existing, imageUrl: existing.imageUrl || source.imageUrl,
-        ...(details.size ? { actualInboundDetails: [...details.values()], shortageQuantity: existing.shortageQuantity + addedQuantity } : {}),
-        actualShortageQuantity: details.size
-          ? (existing.actualShortageQuantity ?? existing.shortageQuantity) + addedQuantity
-          : incomingIds.has(source.id) && source.actualShortageQuantity !== undefined ? source.actualShortageQuantity : existing.actualShortageQuantity,
+        actualShortageQuantity: incomingIds.has(source.id) && source.actualShortageQuantity !== undefined ? source.actualShortageQuantity : existing.actualShortageQuantity,
         relatedPurchaseOrderNumbers: [...new Set([...existing.relatedPurchaseOrderNumbers, ...source.relatedPurchaseOrderNumbers])] }));
     } else {
       const vendorName = source.vendorName.trim() || UNASSIGNED_VENDOR_NAME;

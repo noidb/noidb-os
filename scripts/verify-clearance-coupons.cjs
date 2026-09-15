@@ -1,0 +1,37 @@
+require('./verify-clearance-pending.cjs');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const { buildClearanceCouponSnapshot } = require('../lib/wms/clearance-coupons.ts');
+const { addWeeklyRun, emptyWeeklyWorkspace } = require('../lib/wms/weekly-work-state.ts');
+const now = '2026-09-15T00:00:00.000Z';
+const event = (skuId, quantity = '1', orderNo = '100', inboundDate = '2025-01-02 10:00:00', division = '발주') => ({ skuId, quantity, orderNo, inboundDate, division, skuName: '상품', warehouse: 'A' });
+const source = [event('1'), event('1'), event('2'), event('2', '1', '101'), event('3', '2'), event('3', '1', '100', undefined, '반출'), event('4', '1', '104', '2026-09-10 10:00:00')];
+const snapshot = buildClearanceCouponSnapshot(source, [], now);
+assert.deepEqual(snapshot.couponItems.map(item => item.skuId), ['1', '4']);
+assert.equal(snapshot.source.duplicateCount, 1);
+assert.equal(snapshot.period.startDate, '2025-01-02');
+assert.equal(snapshot.period.endDate, '2026-09-10');
+assert.equal(snapshot.id, buildClearanceCouponSnapshot(source.slice().reverse(), [], now).id);
+assert(buildClearanceCouponSnapshot([event('1'), event('1', '2')], [], now).blockers.length);
+assert.equal(buildClearanceCouponSnapshot([event('1'), event('1', 'bad')], [], now).couponItems.length, 0);
+assert.equal(buildClearanceCouponSnapshot([event('1')], [{ skuId: '1', currentStatus: '단종' }], now).couponItems.length, 0);
+const workspace = emptyWeeklyWorkspace();
+const old = addWeeklyRun(workspace, buildClearanceCouponSnapshot([event('1')], [], now));
+old.id = 'OLD'; old.snapshot.id = 'OLD'; old.snapshot.rulesVersion = 4;
+old.snapshot.couponReceiptKeys['1'] = [JSON.stringify(['2025-01-02 10:00:00', '100', '1', 'inbound'])];
+old.couponUploadedAt = '2025-01-03'; old.couponExpiresOn = '2025-02-01';
+const before = JSON.stringify(workspace);
+const preview = addWeeklyRun(structuredClone(workspace), snapshot);
+assert.equal(JSON.stringify(workspace), before);
+assert.deepEqual(preview.snapshot.couponItems.map(item => item.skuId), ['4']);
+const saved = addWeeklyRun(workspace, snapshot);
+assert.equal(addWeeklyRun(workspace, snapshot).id, saved.id);
+assert.equal(workspace.runs.length, 2);
+if (process.argv.includes('--saved-data')) {
+  const events = JSON.parse(fs.readFileSync('.tmp/recovery-20260915/preview-inbound-events.json', 'utf8')).events;
+  const prior = JSON.parse(fs.readFileSync('.tmp/recovery-20260915/weekly-work-readonly.json', 'utf8'));
+  const result = buildClearanceCouponSnapshot(events, [], now);
+  const pending = addWeeklyRun(structuredClone(prior), result);
+  console.log(JSON.stringify({ savedEvents: events.length, uniqueEvents: result.source.eventCount, candidates: result.couponItems.length, pending: pending.snapshot.couponItems.length, blockers: result.blockers.length, period: result.period }));
+}
+console.log('PASS all-date receipts, duplicate events, conflicting quantities, gross inbound, legacy completion keys, read-only preview and idempotent preparation');

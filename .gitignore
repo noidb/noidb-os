@@ -49,9 +49,7 @@ automation/coupang-po/*.log
 # Local recovery copies and retired workspaces
 .worktrees/
 .deploy-*/
-/outputs/
-/output/
+outputs/
+output/
 tmp/
 .claude/
-
-/.audit/

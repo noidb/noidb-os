@@ -1762,7 +1762,7 @@ function VendorOrderLineCard({
           <div style={{ fontSize: "10px", color: wmsColors.muted }}>
             현재고 {line.currentStock || "미입력"} · 관련 발주서 {line.relatedPurchaseOrderNumbers.join(", ") || (line.isManuallyAdded ? "수동추가" : "-")}
           </div>
-          
+
         </div>
       )}
 
