@@ -55,13 +55,13 @@ export default async function WmsInboundPage() {
     const executionSummaries = Array.from(orders.reduce((groups, order) => {
       const date = expectedDate(order.expectedDate) || "입고예정일 미정";
       const center = order.fulfillmentCenter || "센터 미확인";
-      const key = `${date}\u0000${center}`;
-      const current = groups.get(key) || { expectedDate: date, center, purchaseOrders: new Set<string>(), skuIds: new Set<string>(), quantity: 0 };
+      const current = groups.get(date) || { expectedDate: date, centers: new Set<string>(), purchaseOrders: new Set<string>(), skuIds: new Set<string>(), quantity: 0 };
+      current.centers.add(center);
       current.purchaseOrders.add(order.purchaseOrderNumber.trim());
       for (const item of order.items) { current.skuIds.add(normalizeSkuId(item.productCode)); current.quantity += item.vendorConfirmedQuantity || 0; }
-      groups.set(key, current);
+      groups.set(date, current);
       return groups;
-    }, new Map<string, { expectedDate: string; center: string; purchaseOrders: Set<string>; skuIds: Set<string>; quantity: number }>()).values()).map(row => ({ expectedDate: row.expectedDate, center: row.center, purchaseOrderCount: row.purchaseOrders.size, skuCount: row.skuIds.size, quantity: row.quantity }));
+    }, new Map<string, { expectedDate: string; centers: Set<string>; purchaseOrders: Set<string>; skuIds: Set<string>; quantity: number }>()).values()).map(row => ({ expectedDate: row.expectedDate, centers: [...row.centers].sort().join(", "), purchaseOrderCount: row.purchaseOrders.size, skuCount: row.skuIds.size, quantity: row.quantity }));
     return <main style={{ maxWidth: 1280, margin: "0 auto", padding: "28px 18px", fontFamily: "sans-serif", color: "#29352f" }}>
       <h1 style={{ marginBottom: 8 }}>입고결과 · 실제미납</h1>
       <p style={{ color: "#66736a" }}>정산완료 발주서만 대상으로 발주번호+SKU별 확정수량과 Supplier Hub 실제 입고를 대조합니다.</p>
