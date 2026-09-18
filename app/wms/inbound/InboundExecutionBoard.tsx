@@ -7,7 +7,7 @@ type Step = { title: string; action: string; note: string; href?: string };
 
 const STORAGE_KEY = "noidb-inbound-execution-board-v1";
 const steps: Step[] = [
-  { title: "신규발주서 다운로드", action: "Supplier Hub 발주리스트 열기", note: "입고예정일(EDD) 기준 신규 발주서를 직접 내려받습니다. 원본 파일은 G:\\내 드라이브\\쿠팡데이터\\발주서리스트다운에 저장합니다.", href: "https://supplier.coupang.com" },
+  { title: "발주서 및 발주확정서류 다운로드", action: "Supplier Hub 발주리스트 열기", note: "입고예정일(EDD) 기준 신규발주서와 발주서 업로드 양식을 직접 내려받아 저장합니다. 두 파일 모두 G:\\내 드라이브\\쿠팡데이터\\발주서리스트다운에 저장합니다.", href: "https://supplier.coupang.com" },
   { title: "한진 송장파일 준비", action: "발주상세 입고 정보 확인", note: "NOID-B OS가 아닌 발주 상세의 실제 센터 주소·전화·우편번호로 1발주 1행 한진택배_업로드_YYYYMMDD_HHMMSS.xlsx를 만듭니다. 저장: G:\\내 드라이브\\쿠팡데이터\\한진택배 송장파일." },
   { title: "한진 n-Focus 등록·출력", action: "한진 n-Focus 열기", note: "먼저 재출력 및 출고관리에서 같은 발주의 기존 회차를 확인합니다. 있으면 재발번하지 말고 재출력합니다. 신규만 쿠팡 [고정형]·운임 S·오류체크 후 직접 출력합니다.", href: "https://focus.hanjin.com" },
   { title: "한진 세부내역 저장", action: "재출력 및 출고관리에서 다운로드", note: "보기 > 세부내역 다운로드 > 엑셀 다운로드로 재출력_세부내역_YYYYMMDD_HHMMSS.xlsx를 저장합니다. 위치: G:\\내 드라이브\\쿠팡데이터\\한진택배 송장파일.", href: "https://focus.hanjin.com" },
