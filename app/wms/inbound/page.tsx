@@ -3,6 +3,7 @@ import { readPickingWaveStore } from "@/lib/wms/picking-wave/server-store";
 import { fetchProductCatalog, normalizeSkuId } from "@/lib/wms/product-catalog";
 import { loadSupplierHubPurchaseOrders } from "@/lib/wms/supplier-hub-orders";
 import { readWeeklyCompletionSummary } from "@/lib/wms/weekly-completion-summary";
+import InboundExecutionBoard from "./InboundExecutionBoard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,9 +52,20 @@ export default async function WmsInboundPage() {
     const activeShortage = activeShortages.reduce((sum, item) => sum + item.shortageQuantity, 0);
     const completedShortageCount = completion.available ? calculation.shortagePairs.length - activeShortages.length : 0;
     const completedShortageQuantity = completion.available ? totalShortage - activeShortage : 0;
+    const executionSummaries = Array.from(orders.reduce((groups, order) => {
+      const date = expectedDate(order.expectedDate) || "입고예정일 미정";
+      const center = order.fulfillmentCenter || "센터 미확인";
+      const key = `${date}\u0000${center}`;
+      const current = groups.get(key) || { expectedDate: date, center, purchaseOrders: new Set<string>(), skuIds: new Set<string>(), quantity: 0 };
+      current.purchaseOrders.add(order.purchaseOrderNumber.trim());
+      for (const item of order.items) { current.skuIds.add(normalizeSkuId(item.productCode)); current.quantity += item.vendorConfirmedQuantity || 0; }
+      groups.set(key, current);
+      return groups;
+    }, new Map<string, { expectedDate: string; center: string; purchaseOrders: Set<string>; skuIds: Set<string>; quantity: number }>()).values()).map(row => ({ expectedDate: row.expectedDate, center: row.center, purchaseOrderCount: row.purchaseOrders.size, skuCount: row.skuIds.size, quantity: row.quantity }));
     return <main style={{ maxWidth: 1280, margin: "0 auto", padding: "28px 18px", fontFamily: "sans-serif", color: "#29352f" }}>
       <h1 style={{ marginBottom: 8 }}>입고결과 · 실제미납</h1>
       <p style={{ color: "#66736a" }}>정산완료 발주서만 대상으로 발주번호+SKU별 확정수량과 Supplier Hub 실제 입고를 대조합니다.</p>
+      <InboundExecutionBoard summaries={executionSummaries} />
       <section aria-label="실제미납 요약" style={{ margin: "22px 0", padding: 18, border: "1px solid #dfe6dc", borderRadius: 12, background: "#f7faf5" }}>
         <strong style={{ fontSize: 20 }}>실제미납 총 발생 {calculation.shortagePairs.length.toLocaleString()}건 · 총 {totalShortage.toLocaleString()}개</strong>
         <p style={{ margin: "8px 0 0", color: "#66736a" }}>{completion.available ? `재발주 처리완료 ${completedShortageCount.toLocaleString()}건 · ${completedShortageQuantity.toLocaleString()}개 · 현재 미처리 ${activeShortages.length.toLocaleString()}건 / ${activeShortage.toLocaleString()}개` : "완료이력을 확인할 수 없어 현재 미처리 수량은 보류했습니다."}</p>
