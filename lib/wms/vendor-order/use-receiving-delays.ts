@@ -41,10 +41,7 @@ export function useReceivingDelays() {
   }, []);
   useEffect(() => {
     void refresh();
-    const onVisible = () => { if (document.visibilityState === "visible") void refresh(); };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => { version.current += 1; window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", onVisible); };
+    return () => { version.current += 1; };
   }, [refresh]);
 
   const save = useCallback(async (input: ReceivingDelayInput) => {

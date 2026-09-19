@@ -197,17 +197,6 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
   }
 
   useEffect(() => {
-    if (loading) return;
-    const refresh = () => { if (document.visibilityState === "visible") { void checkCompletion().catch(() => {}); void refreshLiveCatalog(); } };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    const timer = window.setInterval(refresh, 60000);
-    return () => { window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); window.clearInterval(timer); };
-    // Current editable lines are read through linesRef, so refreshing never replaces unsaved fields.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, params.waveId]);
-
-  useEffect(() => {
     (async () => {
       try {
         const [loadedWave, waveItems, loadedDrafts, loadedLines, allVendorLines] = await Promise.all([

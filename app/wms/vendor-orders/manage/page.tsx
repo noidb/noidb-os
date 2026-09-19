@@ -25,6 +25,21 @@ export default function VendorOrderManageListPage() {
   const reportQueueEditing = useCallback((editing: boolean) => { editingRef.current = editing; setQueueEditing(editing); }, []);
   const [editorSnapshot, setEditorSnapshot] = useState<PickingWaveStoreSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [editorVersion, setEditorVersion] = useState(0);
+
+  async function refreshManually() {
+    if (editingRef.current || refreshing) return;
+    setRefreshing(true);
+    try {
+      await reload(true, true);
+      if (!editingRef.current) setEditorVersion(version => version + 1);
+    } catch (error) {
+      setRefreshError(error instanceof Error ? error.message : "최신 목록 확인 실패");
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   const reload = useCallback(async (prepareMissingQueue = false, forceReplaceEditor = false) => {
     const request = ++refreshRequest.current;
@@ -84,28 +99,6 @@ export default function VendorOrderManageListPage() {
     return () => { disposed = true; refreshRequest.current++; };
   }, [reload]);
 
-  useEffect(() => {
-    if (loading) return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const refresh = () => {
-      if (document.visibilityState !== "visible") return;
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => { void reload().catch(error => setRefreshError(error instanceof Error ? error.message : "최신 발주 목록을 읽지 못했습니다.")); }, 150);
-    };
-    const onStorage = (event: StorageEvent) => {
-      if (!event.key || event.key.startsWith("noidb_vendor_order") || event.key.startsWith("noidb_picking")) refresh();
-    };
-    const poll = window.setInterval(refresh, 10000);
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    window.addEventListener("storage", onStorage);
-    return () => { if (timer) clearTimeout(timer); window.clearInterval(poll); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); window.removeEventListener("storage", onStorage); };
-  }, [loading, reload]);
-
-  useEffect(() => {
-    if (refreshPending && !queueEditing) void reload().catch(error => setRefreshError(error instanceof Error ? error.message : "최신 발주 목록 확인 실패"));
-  }, [refreshPending, queueEditing, reload]);
-
 
   if (loading) {
     return (
@@ -122,8 +115,8 @@ export default function VendorOrderManageListPage() {
       <nav style={{ display: "flex", gap: "16px", marginBottom: "12px" }}><a href="/wms/vendor-orders/receiving">입고관리</a><a href="/wms/vendor-orders/status-requests">단종·해제 관리</a></nav>
       {refreshPending && <p role="alert" style={{ color: "#934633", fontSize: "13px", lineHeight: 1.6 }}>다른 화면에서 발주 목록이 변경되었습니다. 입력한 내용은 유지했습니다. 저장을 마친 뒤 최신 목록을 확인해 주세요.</p>}
       {refreshError && <p role="alert" style={{ color: "#934633", fontSize: "13px" }}>{refreshError}</p>}
-      {(refreshPending || refreshError) && <button type="button" disabled={queueEditing} onClick={() => void reload(true, true).catch(error => setRefreshError(error instanceof Error ? error.message : "최신 목록 확인 실패"))} style={{ ...wmsGhostButton, minHeight: "44px" }}>최신 목록 다시 확인</button>}
-      <VendorQueueEditingContext.Provider value={reportQueueEditing}>{queueId && <QueueEditor key={queueId} params={{ waveId: queueId }} sharedSnapshot={editorSnapshot} />}</VendorQueueEditingContext.Provider>
+      <button type="button" disabled={queueEditing || refreshing} onClick={() => void refreshManually()} style={{ ...wmsGhostButton, minHeight: "44px" }}>{refreshing ? "새로고침 중…" : "새로고침"}</button>
+      <VendorQueueEditingContext.Provider value={reportQueueEditing}>{queueId && <QueueEditor key={`${queueId}:${editorVersion}`} params={{ waveId: queueId }} sharedSnapshot={editorSnapshot} />}</VendorQueueEditingContext.Provider>
 
     </main>
   );
