@@ -7,7 +7,6 @@ import AppNavigation from "@/app/AppNavigation";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import { UNASSIGNED_VENDOR_NAME } from "@/lib/wms/vendor-order/types";
-import SupplyStatusUpdateButton from "./SupplyStatusUpdateButton";
 import { useInvoiceGroupRepository } from "@/lib/wms/invoice-group/context";
 import { INVOICE_GROUP_STAGE_LABEL, INVOICE_GROUP_STAGE_ORDER, type InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import styles from "./work-center.module.css";
@@ -185,9 +184,9 @@ export default function WmsWorkCenterPage() {
           <Link className={styles.taskButtonGrayWhite} href="/wms/inbound/cumulative">누적 조회</Link>
         </section>
         <section className={styles.task}>
-          <h2>상품공급상태</h2>
-          <p>쿠팡 승인완료 상품 정보를 제품DB에 반영합니다.</p>
-          <SupplyStatusUpdateButton />
+          <h2>거래처 발주</h2>
+          <p>주문수량을 확인하고 전송하거나, 거래처 답변을 처리합니다.</p>
+          <Link className={styles.taskButtonGrayWhite} href="/wms/vendor-orders/manage">거래처 발주 이어하기</Link>
         </section>
         <section className={styles.task}>
           <h2>발주서작업</h2>
