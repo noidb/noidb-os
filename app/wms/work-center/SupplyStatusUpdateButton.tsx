@@ -1,10 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import WorkCenterMenuButton from "./WorkCenterMenuButton";
-import { RefreshIcon } from "../icons";
 import { wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
 import type { SupplyStatusPreview, MatchedRow } from "@/lib/wms/supply-status-update";
+import styles from "./work-center.module.css";
 
 type ApplyResult = {
   applied: boolean;
@@ -26,7 +25,7 @@ export default function SupplyStatusUpdateButton() {
   const [result, setResult] = useState<ApplyResult | null>(null);
   const [showDetail, setShowDetail] = useState(false);
 
-  const label = state === "loading" ? "업데이트 중..." : state === "success" ? "업데이트 완료" : state === "error" ? "업데이트 실패 · 다시 시도" : "상품공급상태";
+  const label = state === "loading" ? "업데이트 중..." : state === "success" ? "업데이트 완료" : state === "error" ? "업데이트 실패 · 다시 시도" : "업데이트 확인";
 
   async function handleClick() {
     if (state === "loading") return;
@@ -93,16 +92,10 @@ export default function SupplyStatusUpdateButton() {
   }
 
   return (
-    <div>
-      <WorkCenterMenuButton
-        icon={<RefreshIcon size={26} color={wmsColors.greenDark} />}
-        title={label}
-        tint={wmsColors.greenSoft}
-        borderTint={wmsColors.green}
-        textColor={wmsColors.greenDark}
-        onClick={handleClick}
-        disabled={state === "loading"}
-      />
+    <>
+      <button type="button" className={styles.taskButtonSky} onClick={handleClick} disabled={state === "loading"}>
+        {label}
+      </button>
 
       {message && (
         <p style={{ fontSize: "11px", color: state === "error" ? "#c0392b" : wmsColors.muted, margin: "6px 2px 0" }}>{message}</p>
@@ -154,6 +147,6 @@ export default function SupplyStatusUpdateButton() {
           )}
         </div>
       )}
-    </div>
+    </>
   );
 }

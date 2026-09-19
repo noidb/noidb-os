@@ -4,7 +4,7 @@ import bwipjs from "bwip-js";
 import { resolveBarcodeModelIdentifier } from "./barcode-model-identifier";
 import type { ProductCatalogItem } from "./product-catalog";
 import type { PickingWaveItem } from "./picking-wave/types";
-import { resolveDisplayNameAndOption } from "./display-name";
+import { cleanDisplayProductName, resolveDisplayNameAndOption } from "./display-name";
 
 export interface PdfTextItem {
   text: string;
@@ -269,19 +269,23 @@ export function matchShipmentPrintGroups(
     }
     if (manifest.items.length === 0) errors.push(`${shipmentNumber}: 내역서에서 SKU/납품수량을 읽지 못했습니다 (${manifest.file.name})`);
     const matchedRows: ShipmentPrintGroup["barcodeRows"] = [];
+    const consumedSourceRows = new Set<string>();
     for (const item of manifest.items) {
       const allSourceCandidates = rowsBySku.get(item.skuId) ?? [];
-      const sourceCandidates = allSourceCandidates.some(row => row.trackingNumber)
+      const trackingCandidates = allSourceCandidates.some(row => row.trackingNumber)
         ? allSourceCandidates.filter(row => row.trackingNumber === manifest.trackingNumber)
         : allSourceCandidates;
-      if (sourceCandidates.length !== 1) {
-        errors.push(`${shipmentNumber} SKU ${item.skuId}: 바코드 출력 데이터 ${sourceCandidates.length}건 (정확히 1건 필요)`);
+      // 동봉내역서는 같은 SKU를 여러 PO에서 합산할 수 있다. Label의 PO 범위 안에서만
+      // 합산하고, 합계가 동봉내역서 수량과 정확히 같을 때만 개별 PO 수량을 유지한다.
+      const sourceCandidates = trackingCandidates.filter(row => label.purchaseOrderNumbers.includes(row.purchaseOrderNumber));
+      if (sourceCandidates.length === 0) {
+        errors.push(`${shipmentNumber} SKU ${item.skuId}: Label 발주 범위의 바코드 출력 데이터가 없습니다.`);
         continue;
       }
-      const source = sourceCandidates[0];
-      if (source.barcode !== item.barcode) errors.push(`${shipmentNumber} SKU ${item.skuId}: 상품바코드 불일치`);
-      if (source.quantity !== item.quantity) errors.push(`${shipmentNumber} SKU ${item.skuId}: 최종 납품수량 불일치 (${source.quantity}/${item.quantity})`);
-      if (source.expectedDate !== manifest.expectedDate || source.fulfillmentCenter !== manifest.fulfillmentCenter) errors.push(`${shipmentNumber} SKU ${item.skuId}: 입고예정일 또는 물류센터 불일치`);
+      const sourceQuantity = sourceCandidates.reduce((sum, row) => sum + row.quantity, 0);
+      if (sourceCandidates.some(row => row.barcode !== item.barcode)) errors.push(`${shipmentNumber} SKU ${item.skuId}: 상품바코드 불일치`);
+      if (sourceQuantity !== item.quantity) errors.push(`${shipmentNumber} SKU ${item.skuId}: 최종 납품수량 불일치 (${sourceQuantity}/${item.quantity})`);
+      if (sourceCandidates.some(row => row.expectedDate !== manifest.expectedDate || row.fulfillmentCenter !== manifest.fulfillmentCenter)) errors.push(`${shipmentNumber} SKU ${item.skuId}: 입고예정일 또는 물류센터 불일치`);
       const catalog = catalogBySku.get(item.skuId) ?? [];
       if (catalog.length > 1 || (catalog.length !== 1 && options.requireBarcodeMetadata !== false)) {
         errors.push(`${shipmentNumber} SKU ${item.skuId}: 제품DB ${catalog.length}건 (정확히 1건 필요)`);
@@ -291,17 +295,22 @@ export function matchShipmentPrintGroups(
       // 제조국과 모델명만 SKU ID로 조회한 제품DB(구글시트) 값을 보강한다.
       const resolvedModelName = resolveBarcodeModelIdentifier(catalog[0] || { modelName: "", modelSku: "" });
       if (options.requireBarcodeMetadata !== false && (!catalog[0]?.countryOfOrigin || !resolvedModelName)) errors.push(`${shipmentNumber} SKU ${item.skuId}: 제품DB 제조국 또는 영문·숫자 모델SKU/모델명 누락`);
-      const display = resolveDisplayNameAndOption(
-        source.productName,
-        source.optionLabel
-      );
-      matchedRows.push({
-        ...source,
-        productName: display.name,
-        optionLabel: display.option,
-        modelName: resolvedModelName,
-        countryOfOrigin: catalog[0]?.countryOfOrigin || "",
-      });
+      for (const source of sourceCandidates) {
+        const sourceKey = `${source.purchaseOrderNumber}\u0000${source.skuId}\u0000${source.sourceRowNumber}`;
+        if (consumedSourceRows.has(sourceKey)) {
+          errors.push(`${shipmentNumber} SKU ${item.skuId}: 동일한 쉽먼트 XLSX 행이 동봉내역서에 중복되었습니다.`);
+          continue;
+        }
+        consumedSourceRows.add(sourceKey);
+        const display = resolveDisplayNameAndOption(source.productName, source.optionLabel);
+        matchedRows.push({
+          ...source,
+          productName: display.name,
+          optionLabel: display.option,
+          modelName: resolvedModelName,
+          countryOfOrigin: catalog[0]?.countryOfOrigin || "",
+        });
+      }
     }
     const purchaseOrderNumbers = unique(matchedRows.map(row => row.purchaseOrderNumber));
     const labelPo = [...label.purchaseOrderNumbers].sort().join(",");
@@ -361,6 +370,65 @@ export async function buildFourUpLabelPdf(groups: ShipmentPrintGroup[]): Promise
  * 상품행을 반복한다. 동봉내역서의 상품 순서는 matchShipmentPrintGroups에서 이미 보존된다.
  */
 export type BarTenderPrintGroup = Pick<ShipmentPrintGroup, "shipmentNumber" | "purchaseOrderNumbers" | "fulfillmentCenter" | "expectedDate" | "barcodeRows">;
+
+const LOGISTICS_BARTENDER_HEADERS = ["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "출력유형"] as const;
+
+/**
+ * 날짜별 물류 출력세트 전용. 동봉내역서에서 검증된 상품 순서와 실제 납품수량만 사용한다.
+ * 모델명/제품DB는 이 최종 7열 양식의 입력값이 아니다.
+ */
+export async function buildLogisticsBarTenderWorkbook(groups: readonly BarTenderPrintGroup[]): Promise<Uint8Array> {
+  const ExcelJS = (await import("exceljs")).default;
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("템플릿1");
+  const outputRows: (string | number)[][] = [];
+
+  for (const group of groups) {
+    if (!/^\d{8}$/.test(group.shipmentNumber)) throw new Error("쉽먼트번호가 올바르지 않아 바코드 생성을 차단했습니다.");
+    let sequenceNumber = 1;
+    const skuCount = new Set(group.barcodeRows.map(row => row.skuId)).size;
+    const totalQuantity = group.barcodeRows.reduce((sum, row) => sum + row.quantity, 0);
+    // 역순 저장 뒤에도 구분행이 해당 쉽먼트의 마지막 레코드가 되도록 먼저 쌓는다.
+    outputRows.push([
+      "쉽먼트 구분",
+      "",
+      "",
+      group.fulfillmentCenter,
+      `${group.expectedDate}\n쉽먼트번호 ${group.shipmentNumber}`,
+      `발주번호 ${group.purchaseOrderNumbers.join(" / ")}\n${formatShipmentQuantitySummary(skuCount, totalQuantity)}`,
+      "쉽먼트구분",
+    ]);
+    for (const row of group.barcodeRows) {
+      if (!Number.isSafeInteger(row.quantity) || row.quantity < 1 || !row.skuId || !row.barcode) {
+        throw new Error(`${row.skuId || "미확인 SKU"}: 실제 납품수량 또는 바코드가 없어 바코드 생성을 차단했습니다.`);
+      }
+      const cleaned = cleanDisplayProductName(row.productName);
+      const commaIndex = cleaned.indexOf(",");
+      const name = (commaIndex < 0 ? cleaned : cleaned.slice(0, commaIndex)).trim() || cleaned;
+      const optionSource = commaIndex < 0 ? row.optionLabel : cleaned.slice(commaIndex + 1);
+      const pipeIndex = optionSource.lastIndexOf("|");
+      const option = (pipeIndex < 0 ? optionSource : optionSource.slice(pipeIndex + 1)).trim();
+      for (let copy = 0; copy < row.quantity; copy += 1) {
+        outputRows.push([row.skuId, sequenceNumber, row.barcode, name, option, "중국", "상품"]);
+        sequenceNumber += 1;
+      }
+    }
+  }
+
+  // 프린터 적재 순서가 동봉내역서의 상품 순서가 되도록 저장 레코드를 반대로 쓴다.
+  sheet.addTable({
+    name: "BarTenderData",
+    ref: "A1",
+    headerRow: true,
+    totalsRow: false,
+    style: { theme: "TableStyleLight1", showRowStripes: false },
+    columns: LOGISTICS_BARTENDER_HEADERS.map(name => ({ name })),
+    rows: outputRows.reverse(),
+  });
+  sheet.getRow(1).font = { bold: true };
+  sheet.columns = [12, 8, 18, 48, 36, 18, 14].map(width => ({ width }));
+  return new Uint8Array(await workbook.xlsx.writeBuffer() as ArrayBuffer);
+}
 
 export async function buildBarTenderWorkbook(groups: readonly BarTenderPrintGroup[]): Promise<Uint8Array> {
   for (const group of groups) for (const row of group.barcodeRows) {

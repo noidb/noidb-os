@@ -39,7 +39,7 @@ export default function WorkCenterMenuButton({ icon, title, tint, borderTint, te
   const content = (
     <>
       <div className="wms-work-center-menu-icon" style={{ width: "32px", height: "32px", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{icon}</div>
-      <div className="wms-work-center-menu-title" style={{ fontSize: "14px", fontWeight: 800, color: textColor, textAlign: "center", lineHeight: 1.3 }}>{title}</div>
+      <div className="wms-work-center-menu-title" style={{ fontSize: "17px", fontWeight: 800, color: textColor, textAlign: "center", lineHeight: 1.3 }}>{title}</div>
     </>
   );
 

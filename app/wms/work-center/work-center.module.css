@@ -9,6 +9,7 @@
 .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .row h2, .row h3 { margin: 0; font-size: 17px; line-height: 1.5; }
 .row h3 { font-size: 16px; }
+.row h2 { font-size: 15px; padding-left: 4px; }
 .workGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
 .work, .task { min-width: 0; padding: 16px; border: 1px solid #e5dace; border-radius: 14px; background: #faf8f4; }
 .work.nextWork { border-color: #b7c8bb; background: #e3ece6; }
@@ -17,9 +18,24 @@
 .metrics, .muted { font-size: 12px; line-height: 1.6; margin: 8px 0; overflow-wrap: anywhere; }
 .muted { color: #77716a; }
 .warning { color: #a6614e; font-size: 12px; line-height: 1.6; }
-.primary, .secondary, .actions > a, .actions > button, .smallButton { display: flex; align-items: center; justify-content: center; text-align: center; box-sizing: border-box; text-decoration: none; min-height: 48px; border: 1px solid #cfc0b0; border-radius: 10px; padding: 10px 12px; font-size: 14px; line-height: 1.4; font-weight: 700; cursor: pointer; color: #302d29; background: #f4f1ec; }
+.primary, .secondary, .actions > a, .actions > button, .smallButton, .primaryPink, .taskButtonSky, .taskButtonBeige, .taskButtonGrayWhite { display: flex; align-items: center; justify-content: center; text-align: center; box-sizing: border-box; text-decoration: none; min-height: 48px; border: 1px solid #cfc0b0; border-radius: 10px; padding: 10px 12px; font-size: 14px; line-height: 1.4; font-weight: 700; cursor: pointer; color: #302d29; background: #f4f1ec; }
 .primary { color: white; background: #60766a; border-color: #60766a; }
 .work > .primary { width: 100%; margin-top: 12px; }
+/* 2026-09-18 신규 — 핑크 CTA. 예전 "오늘 할 일" 화면 스크린샷 실측 기준으로 연한 파스텔 핑크
+   배경 + 진한 글자색(소프트 틴트, wmsColors.pinkSoft/pinkText/pinkBorder와 같은 값)으로 고쳤다
+   — 처음엔 흰 글자의 진한 핑크로 잘못 만들었었다. 박스 모델(min-height/padding/font-size)은
+   .primary와 완전히 동일하게 두고 색만 다르게 해서, 옆에 놓일 보조 버튼과 크기가 어긋나지
+   않게 한다. */
+.primaryPink { color: #6b3341; background: #f6e2e6; border-color: #e3c0c8; }
+.work > .primaryPink { width: 100%; margin-top: 12px; }
+/* 2026-09-18 신규 — 아래 메뉴 4개 카드(상품공급상태/발주서작업/입고결과처리/입고결과누적) 버튼
+   색상. 처음엔 슬레이트/세이지/브론즈를 흰 글자의 진한 솔리드로 썼는데, 브론즈가 "노란색"으로
+   보여 반려됐다(사용자 확정: 이 프로젝트에서 노란 계열은 아예 안 쓴다). .primaryPink와 같은
+   "연한 배경 + 진한 글자" 소프트 틴트 패턴으로 다시 맞추고, 색도 연하늘/연베이지/연그레이화이트
+   3가지로만 한정한다. */
+.taskButtonSky { color: #3b5568; background: #e3edf3; border-color: #c9dbe6; }
+.taskButtonBeige { color: #6b5a3f; background: #f3ece1; border-color: #ddceb4; }
+.taskButtonGrayWhite { color: #4b5157; background: #f1efe9; border-color: #ddd8cd; }
 .packingShortcut { margin-top: 10px; padding: 12px; border: 1px solid #b7c8bb; border-radius: 10px; background: #f3f7f4; }
 .packingShortcut p { margin: 0 0 8px; font-size: 12px; line-height: 1.5; font-weight: 700; }
 .packingShortcut a { display: flex; align-items: center; justify-content: center; min-height: 44px; border-radius: 8px; color: #fff; background: #60766a; text-decoration: none; font-size: 13px; font-weight: 700; text-align: center; }
@@ -37,8 +53,7 @@
 .tasks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .task h2 { margin: 0 0 8px; font-size: 17px; }
 .task > p { font-size: 12px; color: #77716a; line-height: 1.6; }
-.task > a { margin-top: 12px; }
-.task:first-child { grid-column: 1 / -1; }
+.task > a, .task > button { margin-top: 12px; }
 .reprint { grid-column: 1 / -1; background: #e3ece6; border-color: #b7c8bb; }
 .footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; border-top: 1px solid #e5dace; padding-top: 16px; }
 .footer a { color: #77716a; font-size: 12px; text-decoration: none; padding: 8px 0; }
@@ -50,5 +65,5 @@
 .dialog p { font-size: 13px; line-height: 1.6; }
 @media (max-width: 760px) { .workGrid, .tasks { grid-template-columns: minmax(0, 1fr); } .heading { margin: 12px 0; } .heading h1 { font-size: 25px; } .work, .task { padding: 14px; } }
 
-.completeButton { display: flex; width: 100%; justify-content: center; align-items: center; min-height: 48px; margin-top: 10px; border: 1px solid #60766a; border-radius: 10px; background: #fff; color: #365f4e; font-size: 14px; font-weight: 800; cursor: pointer; }
+.completeButton { display: flex; width: 100%; justify-content: center; align-items: center; min-height: 48px; margin-top: 10px; border: 1px solid transparent; border-radius: 10px; background: #e3ece6; color: #4d6358; font-size: 14px; font-weight: 800; cursor: pointer; }
 .completeButton:disabled { opacity: .5; cursor: not-allowed; }

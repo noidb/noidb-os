@@ -447,7 +447,7 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
    언어로 통일). 새 클래스만 추가했고, 기존 AI 상품등록 화면 선택자(.field input 등)는 전혀
    건드리지 않았다 — 값은 .field input:focus(333행)가 실제로 쓰는 값을 그대로 재사용했다. */
 .wms-input:focus{outline:0;border-color:var(--brand-slate);box-shadow:0 0 0 3px rgba(83,109,120,.12)}
-.wms-work-center-menu{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.wms-work-center-menu{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
 .wms-work-center-menu-control{border:1px solid var(--wms-work-center-menu-border)!important;background:var(--wms-work-center-menu-background)!important}
 .wms-work-center-shell{max-width:1120px;padding-top:28px;padding-bottom:calc(36px + env(safe-area-inset-bottom))}
 .wms-global-header{display:flex;align-items:center;justify-content:space-between;gap:18px;padding-bottom:14px;border-bottom:1px solid #ddd8d1}
@@ -508,7 +508,7 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 .wms-active-wave-empty,.wms-active-wave-error{margin:0;padding:16px;border:1px solid #d8d3cc;border-radius:12px;background:#f8f6f2;color:#716d67;font-size:13px}
 .wms-active-wave-error{margin-bottom:8px;border-color:#dfbdb2;background:#f2dfd8;color:#7f4032}
 @media(min-width:761px){
-  .wms-work-center-menu{grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;width:100%;max-width:1080px;margin-inline:auto;gap:12px}
+  .wms-work-center-menu{grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch;width:100%;max-width:720px;margin-inline:auto;gap:12px}
   .wms-work-center-menu>*{min-width:0;width:100%}
   .wms-work-center-menu-control{display:flex!important;width:100%!important;height:98px!important;min-height:98px!important;padding:16px!important;margin:0!important;box-sizing:border-box!important;border-radius:14px!important;align-items:center!important;justify-content:center!important;gap:6px!important}
   .wms-work-center-menu-icon{width:32px!important;height:32px!important;min-height:32px!important}
@@ -522,10 +522,9 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
   .wms-global-header-actions button{min-height:40px!important;padding-inline:10px!important;font-size:12px!important}
   .wms-work-center-shell{padding-top:calc(16px + env(safe-area-inset-top));padding-bottom:calc(24px + env(safe-area-inset-bottom))}
   .wms-work-center-menu{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-  .wms-work-center-menu> :last-child{grid-column:1/-1}
   .wms-work-center-menu-control{min-height:76px!important;padding:10px 6px!important;gap:4px!important}
   .wms-work-center-menu-icon{width:25px!important;height:25px!important}
-  .wms-work-center-menu-title{font-size:12px!important}
+  .wms-work-center-menu-title{font-size:14px!important}
   .wms-workflow-nav{grid-template-columns:repeat(2,minmax(0,1fr));padding:8px;gap:6px}
   .wms-workflow-nav a{padding:9px 8px}
   .wms-section-heading{align-items:flex-start;flex-direction:column;gap:2px;margin-top:20px}.wms-section-heading h2{font-size:18px}.wms-section-heading p{text-align:left}
@@ -570,3 +569,16 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 
 #product-draft-save .draftListShortcut{display:flex;align-items:center;justify-content:center;width:max-content;max-width:100%;min-height:48px;margin:16px 0 0 auto;padding:12px 22px;border:1px solid #ded3c6;border-radius:14px;font-size:14px;font-weight:700;line-height:1.4;cursor:pointer}
 #product-draft-save .draftListShortcut:focus-visible,.imageGeneratorLink:focus-visible{outline:3px solid #60766a;outline-offset:3px}
+
+/* app/wms/layout.tsx의 둥근 페이지 셸 — 2026-09-18: <style jsx global>에서 이곳으로 이동
+   (styled-jsx가 클라이언트 하이드레이션 이후에야 적용돼 새로고침마다 좁은 레이아웃이 잠깐
+   보이는 깜빡임이 있었다. globals.css는 렌더 전에 로드되므로 이 문제가 없다). */
+.wms-rounded-page-shell main{width:100% !important;max-width:none !important;margin-left:0 !important;margin-right:0 !important;box-sizing:border-box;border:1px solid #ddd7cd;border-radius:18px;overflow:hidden;box-shadow:0 4px 16px rgba(30,28,25,.045)}
+.wms-rounded-page-shell{width:100%;max-width:1120px;margin:28px auto 0;box-sizing:border-box}
+@media (min-width:761px){
+  .wms-rounded-page-shell{padding:0 24px 32px}
+  .wms-rounded-page-shell main{min-height:0 !important;height:auto !important}
+}
+@media (max-width:760px){
+  .wms-rounded-page-shell{margin-top:18px;padding:0;overflow-x:clip}
+}

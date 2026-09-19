@@ -1,6 +1,6 @@
 import ExcelJS from "exceljs";
 import { resolveBarcodeModelIdentifier } from "./barcode-model-identifier";
-import { resolveDisplayNameAndOption } from "./display-name";
+import { cleanDisplayProductName, resolveDisplayNameAndOption } from "./display-name";
 import { summarizeFulfillmentCenterLabels } from "./fulfillment-center-label-summary";
 import { normalizeSkuId } from "./sku-normalize";
 import type { ProductCatalogItem } from "./product-catalog";
@@ -10,6 +10,26 @@ import type { BarTenderPrintGroup } from "./shipment-print-client";
 import type { ParsedTrackingRow } from "./hanjin-upload";
 
 const BARTENDER_HEADERS = ["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"] as const;
+/** 2026-09-18 확정 최종 양식 — 모델명 열 없음(07_오늘작업기록_2026-09-17.md 실사용 확정).
+ *  제조국명은 제품DB 조회 없이 "중국" 고정값을 쓴다 — 이 양식은 제품DB(구글시트) 연결이
+ *  전혀 필요 없다. */
+const LOGISTICS_BARCODE_HEADERS = ["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "출력유형"] as const;
+const LOGISTICS_BARCODE_COUNTRY_OF_ORIGIN = "중국";
+
+/** 발주묶음(입고예정일+물류센터) 바코드 파일 전용 옵션명 분리 — 일반 표시용
+ *  resolveDisplayNameAndOption과 다르게, 쉼표 뒤에 남은 모델코드(`|` 앞부분)를 버리고 `|` 뒤
+ *  부분만 옵션으로 쓴다(2026-09-17 실사용 확정 예: "…, wn00266-BKS | 블랙, S" → 옵션명
+ *  "블랙, S"). `|`가 없으면 쉼표 뒷부분 전체를 그대로 쓴다. */
+export function resolveLogisticsBarcodeNameAndOption(productName: string): { name: string; option: string } {
+  const cleaned = cleanDisplayProductName(productName);
+  const commaIndex = cleaned.indexOf(",");
+  if (commaIndex < 0) return { name: cleaned, option: "" };
+  const name = cleaned.slice(0, commaIndex).trim();
+  const rest = cleaned.slice(commaIndex + 1);
+  const pipeIndex = rest.lastIndexOf("|");
+  const option = (pipeIndex >= 0 ? rest.slice(pipeIndex + 1) : rest).trim();
+  return { name: name || cleaned, option };
+}
 
 export interface ManifestBarcodeGroup {
   shipmentNumber: string;
@@ -144,6 +164,24 @@ function addBarTenderDataSheet(workbook: ExcelJS.Workbook, rows: (string | numbe
   return sheet;
 }
 
+/** 2026-09-18 신규 — buildGenerationBarcodeWorkbook 전용 7열(모델명 없음) 시트. 같은 시트명
+ *  `템플릿1`을 쓴다(BarTender 양식이 이 시트명으로 연결돼 있다). */
+function addLogisticsBarcodeDataSheet(workbook: ExcelJS.Workbook, rows: (string | number)[][]): ExcelJS.Worksheet {
+  const sheet = workbook.addWorksheet("템플릿1");
+  sheet.addTable({
+    name: "BarTenderData",
+    ref: "A1",
+    headerRow: true,
+    totalsRow: false,
+    style: { theme: "TableStyleLight1", showRowStripes: false },
+    columns: LOGISTICS_BARCODE_HEADERS.map(name => ({ name })),
+    rows,
+  });
+  sheet.getRow(1).font = { bold: true };
+  sheet.columns = [12, 14, 18, 48, 36, 18, 14].map(width => ({ width }));
+  return sheet;
+}
+
 export async function buildFulfillmentCenterLabelWorkbook(records: readonly PurchaseOrderSourceRecord[]): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("물류센터라벨");
@@ -173,67 +211,60 @@ export async function buildFulfillmentCenterLabelWorkbook(records: readonly Purc
   return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
 }
 
+/** shipmentNumbersByGroupKey를 채울 때 쓰는 키 — 물류센터+입고예정일 조합. */
+export function logisticsBarcodeGroupKey(fulfillmentCenter: string, expectedDate: string): string {
+  return `${fulfillmentCenter} ${expectedDate}`;
+}
+
+/**
+ * 발주묶음(입고예정일+물류센터) 전용 바코드 파일 생성 (2026-09-18 재작성 — 07_오늘작업기록의
+ * 2026-09-17 실사용 확정 최종 규칙 그대로).
+ *
+ * 제품DB(구글시트) 조회가 전혀 필요 없다 — 모델명 열이 아예 없고, 제조국명은 "중국" 고정값이라
+ * SKU ID·바코드·상품명은 발주서 원본(group.records, purchase-order-source)만으로 충분하다.
+ * 그래서 이 함수는 catalogItems 파라미터를 받지 않는다(예전에는 받았지만 그 값 자체가
+ * 필요 없었다) — Google 연결이 끊겨도 이 파일은 항상 만들 수 있다.
+ *
+ * 번호는 그 물류센터+입고예정일 블록의 총수량에서 1까지 내림차순(위에서부터 큰 번호)이고,
+ * 각 블록 끝(마지막 SKU 행 다음)에 "쉽먼트 구분" 행을 넣는다. 쉽먼트번호는 Supplier Hub에
+ * 쉽먼트를 등록해야만 발급되는 값이라 이 함수가 스스로 알 수 없다 — 알고 있으면
+ * shipmentNumbersByGroupKey(logisticsBarcodeGroupKey로 키를 만든다)로 넘겨주고, 없으면
+ * "미입력"으로 남긴다.
+ */
 export async function buildGenerationBarcodeWorkbook(
   groups: readonly ShipmentOutputGroup[],
-  catalogItems: readonly ProductCatalogItem[]
+  shipmentNumbersByGroupKey: Readonly<Record<string, string>> = {}
 ): Promise<Buffer> {
-  const catalogBySku = new Map<string, ProductCatalogItem[]>();
-  for (const item of catalogItems) {
-    const skuId = normalizeSkuId(item.skuId);
-    catalogBySku.set(skuId, [...(catalogBySku.get(skuId) || []), item]);
-  }
-
-  const errors: string[] = [];
   const outputRows: (string | number)[][] = [];
   for (const group of groups) {
-    let sequenceNumber = 1;
     const purchaseOrderNumbers = [...new Set(group.records.map(record => record.purchaseOrderNumber))].sort();
     const skuCount = new Set(group.records.map(record => normalizeSkuId(record.skuId))).size;
     const totalQuantity = group.records.reduce((sum, record) => sum + record.orderedQuantity, 0);
+
+    let remaining = totalQuantity;
+    for (const record of group.records) {
+      const skuId = normalizeSkuId(record.skuId);
+      const { name, option } = resolveLogisticsBarcodeNameAndOption(record.productName);
+      for (let count = 0; count < record.orderedQuantity; count += 1) {
+        outputRows.push([skuId, remaining, record.barcode, name, option, LOGISTICS_BARCODE_COUNTRY_OF_ORIGIN, "상품"]);
+        remaining -= 1;
+      }
+    }
+
+    const shipmentNumber = shipmentNumbersByGroupKey[logisticsBarcodeGroupKey(group.fulfillmentCenterName, group.expectedArrivalDate)] || "미입력";
     outputRows.push([
-      "물류센터 구분",
+      "쉽먼트 구분",
       "",
       "",
       group.fulfillmentCenterName,
-      `입고예정일 ${group.expectedArrivalDate}`,
-      `발주번호 ${purchaseOrderNumbers.join(" / ")}`,
-      `SKU ${skuCount}종 / 총 ${totalQuantity}개`,
+      `입고예정일 ${group.expectedArrivalDate}\n쉽먼트번호 ${shipmentNumber}`,
+      `발주번호 ${purchaseOrderNumbers.join(" / ")}\nSKU ${skuCount}종 / 총 ${totalQuantity}개`,
       "쉽먼트구분",
     ]);
-
-    for (const record of group.records) {
-      const skuId = normalizeSkuId(record.skuId);
-      const matches = catalogBySku.get(skuId) || [];
-      if (matches.length !== 1) {
-        errors.push(`SKU ${skuId}: 제품DB 매칭 ${matches.length}건(정확히 1건 필요)`);
-        continue;
-      }
-      const catalog = matches[0];
-      const modelName = resolveBarcodeModelIdentifier(catalog);
-      if (!modelName || !catalog.countryOfOrigin) {
-        errors.push(`SKU ${skuId}: 영문·숫자 모델SKU/모델명 또는 제조국명 누락`);
-        continue;
-      }
-      const display = resolveDisplayNameAndOption(record.productName, record.optionName);
-      for (let count = 0; count < record.orderedQuantity; count += 1) {
-        outputRows.push([
-          skuId,
-          sequenceNumber,
-          record.barcode,
-          display.name,
-          display.option,
-          catalog.countryOfOrigin,
-          modelName,
-          "상품",
-        ]);
-        sequenceNumber += 1;
-      }
-    }
   }
-  if (errors.length > 0) throw new Error(`바코드 파일 생성을 차단했습니다. ${errors.join(" | ")}`);
 
   const workbook = new ExcelJS.Workbook();
-  addBarTenderDataSheet(workbook, outputRows.reverse());
+  addLogisticsBarcodeDataSheet(workbook, outputRows);
   return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
 }
 

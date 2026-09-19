@@ -2,16 +2,15 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { wmsColors, wmsPrimaryButton } from "@/lib/wms/ui-tokens";
+import { wmsColors } from "@/lib/wms/ui-tokens";
 import AppNavigation from "@/app/AppNavigation";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
-import ActiveWaveList from "@/app/wms/picking/waves/ActiveWaveList";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import { UNASSIGNED_VENDOR_NAME } from "@/lib/wms/vendor-order/types";
-import { TruckIcon, InboxIcon } from "../icons";
-import WorkCenterMenuButton from "./WorkCenterMenuButton";
 import SupplyStatusUpdateButton from "./SupplyStatusUpdateButton";
-import NewPurchaseOrdersUpdateButton from "./NewPurchaseOrdersUpdateButton";
+import { useInvoiceGroupRepository } from "@/lib/wms/invoice-group/context";
+import { INVOICE_GROUP_STAGE_LABEL, INVOICE_GROUP_STAGE_ORDER, type InvoiceGroup } from "@/lib/wms/invoice-group/types";
+import styles from "./work-center.module.css";
 
 /**
  * 작업센터 첫 화면의 "부족분 거래처별 발주서" 진입 배너 (2026-08-19 신규).
@@ -76,60 +75,104 @@ function ShortageVendorOrdersBanner() {
   );
 }
 
+/**
+ * "진행 중 발주" 섹션 (2026-09-18 신규 — 사용자 요청).
+ *
+ * 데이터/그룹핑 로직은 app/wms/logistics/new-orders/page.tsx의 "진행 중인 발주묶음"(입고예정일별
+ * 그룹핑)과 완전히 동일하게 재사용한다 — 새 계산식을 만들지 않았다. 스타일은 예전 "오늘 할 일"
+ * 화면(work-center/OutboundWorkCenter.tsx, 지금은 안 쓰는 화면이지만 CSS 모듈은 그대로 남아있는
+ * work-center.module.css)의 "작업 중 · N개" 섹션과 동일한 클래스(section/row/workGrid/work/
+ * badge/metrics/muted)를 그대로 쓴다. 카드를 누르면 신규발주서 검색 화면을 거치지 않고 바로
+ * 그 날짜의 처리 화면(/wms/logistics/dates/[expectedDate])으로 이동한다 — "바로 이어서" 요구사항.
+ */
+/** "9월 14일입고" 같은 친숙한 표기 — 예전 "오늘 할 일" 화면 실측 기준(2026-09-18). 형식이
+ *  안 맞으면 원본 날짜 문자열을 그대로 돌려준다(추측 변환 금지). */
+function formatInboundDateTitle(expectedDate: string): string {
+  const match = expectedDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return expectedDate;
+  return `${Number(match[2])}월 ${Number(match[3])}일입고`;
+}
+
+function InProgressOrdersSection() {
+  const invoiceGroupRepository = useInvoiceGroupRepository();
+  const [groupsByDate, setGroupsByDate] = useState<Array<[string, InvoiceGroup[]]> | null>(null);
+
+  async function load() {
+    const all = await invoiceGroupRepository.list();
+    const inProgress = all.filter(group => !group.supersededByGroupId && group.stage !== "shipment_closed" && group.stage !== "dispatched");
+    const map = new Map<string, InvoiceGroup[]>();
+    for (const group of inProgress) map.set(group.expectedDate, [...(map.get(group.expectedDate) || []), group]);
+    setGroupsByDate([...map.entries()].sort(([a], [b]) => a.localeCompare(b)));
+  }
+
+  if (!groupsByDate) return (
+    <section className={styles.section} aria-labelledby="in-progress-orders-title">
+      <h2 id="in-progress-orders-title">진행 중 발주</h2>
+      <button type="button" className={styles.primaryPink} onClick={() => void load()}>진행 중 발주 조회</button>
+    </section>
+  );
+  if (groupsByDate.length === 0) return null;
+
+  return (
+    <section className={styles.section} aria-labelledby="in-progress-orders-title">
+      <h2 id="in-progress-orders-title">진행 중 발주 · {groupsByDate.length}개</h2>
+      <div className={styles.workGrid}>
+        {groupsByDate.map(([expectedDate, groups]) => {
+          const poCount = groups.reduce((sum, group) => sum + group.purchaseOrderNumbers.length, 0);
+          const skuCount = groups.reduce((sum, group) => sum + group.skuCount, 0);
+          const totalQuantity = groups.reduce((sum, group) => sum + group.totalQuantity, 0);
+          const centers = [...new Set(groups.map(group => group.fulfillmentCenter))];
+          const currentStage = groups.map(group => group.stage).sort((a, b) => INVOICE_GROUP_STAGE_ORDER.indexOf(a) - INVOICE_GROUP_STAGE_ORDER.indexOf(b))[0];
+          return (
+            <div key={expectedDate} className={styles.work}>
+              <div className={styles.row}>
+                <h3>{formatInboundDateTitle(expectedDate)}</h3>
+                <span className={styles.badge}>● {INVOICE_GROUP_STAGE_LABEL[currentStage]}</span>
+              </div>
+              <p className={styles.metrics}>발주 {poCount}건 · SKU {skuCount}종 · 총수량 {totalQuantity}개 · 센터 {centers.length}곳</p>
+              <p className={styles.muted}>입고예정일 {expectedDate}</p>
+              <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}`} className={styles.primaryPink}>
+                발주확정 및 쉽먼트생성 →
+              </Link>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export default function WmsWorkCenterPage() {
   return (
-    <main
-      className="shell wms-work-center-shell"
-      style={{
-        fontFamily: "sans-serif",
-        color: wmsColors.ink,
-      }}
-    >
+    <main className={`shell wms-work-center-shell ${styles.shell}`} style={{ fontFamily: "sans-serif" }}>
       <AppNavigation active="work-center" />
-      {/* AI 상품등록 도우미(app/page.tsx)의 .hero/.hero h1을 그대로 재사용 — 제목을 흰색 박스에
-       *  가두지 않고 페이지 기본 배경 위에 직접 표시(2026-08-20 실기기 추가 확인 1번). main도
-       *  더 이상 자체 흰색 배경을 칠하지 않아 "각진 흰색 외곽 패널" 인상이 사라진다. */}
-      <div className="hero wms-work-center-hero">
-        <h1>작업센터</h1>
-      </div>
-
-      {/* 상단 메뉴 3개 — 전부 WorkCenterMenuButton 하나만 재사용해 크기·아이콘 위치·글자
-       *  위치를 완전히 통일한다(2026-08-20 신규). 모바일은 1열 세로, 760px 이상은 3열
-       *  (app/globals.css .wms-work-center-menu). 나머지 두 버튼은 각자 상태(로딩중/완료 등)와
-       *  결과 표시를 스스로 관리하는 자체완결 컴포넌트라 여기서는 배치만 한다.
-       *  2026-09-11: 순서/명칭을 ①상품공급상태 ②신규발주서 ③입고결과 처리로 확정("업데이트"
-       *  글자는 화면 명칭에서 뺌, 로딩/완료/실패 진행상태 문구는 그대로 유지) — "거래처
-       *  발주관리"라는 이름은 상단에서 없애고, 그 자리(라우트는 그대로 /wms/vendor-orders)를
-       *  "입고결과 처리"로 부른다. 내부 4개 핵심 업무(단종 처리/거래처 발주/미납분 재발주/거래처
-       *  입고)는 기존 그대로 그 허브 화면 안에 있다. */}
-      <div className="wms-work-center-menu" style={{ marginBottom: "18px" }}>
-        <SupplyStatusUpdateButton />
-        <NewPurchaseOrdersUpdateButton />
-        <WorkCenterMenuButton
-          href="/wms/vendor-orders"
-          icon={<TruckIcon size={26} color={wmsColors.slateDark} />}
-          title="입고결과 처리"
-          tint="rgba(83,109,120,0.10)"
-          borderTint="rgba(83,109,120,0.35)"
-          textColor={wmsColors.slateDark}
-        />
-        <WorkCenterMenuButton
-          href="/wms/inbound/cumulative"
-          icon={<InboxIcon size={26} color={wmsColors.greenDark} />}
-          title="입고결과 누적"
-          tint={wmsColors.greenSoft}
-          borderTint={wmsColors.green}
-          textColor={wmsColors.greenDark}
-        />
+      <InProgressOrdersSection />
+      {/* 상단 메뉴 4개 — 예전 "오늘 할 일" 화면의 .tasks(태스크 카드) 패턴 재사용. 첫 카드는
+       *  .task:first-child 규칙으로 자동으로 전체폭이 된다(기존 CSS 그대로, 새로 안 건드림). */}
+      <div className={styles.tasks}>
+        <section className={styles.task}>
+          <h2>입고결과 누적</h2>
+          <p>SKU별 누적 입고 수량을 월별로 조회합니다.</p>
+          <Link className={styles.taskButtonGrayWhite} href="/wms/inbound/cumulative">누적 조회</Link>
+        </section>
+        <section className={styles.task}>
+          <h2>상품공급상태</h2>
+          <p>쿠팡 승인완료 상품 정보를 제품DB에 반영합니다.</p>
+          <SupplyStatusUpdateButton />
+        </section>
+        <section className={styles.task}>
+          <h2>발주서작업</h2>
+          <p>입고예정일이 가까운 발주서부터 확인하고 발주묶음을 만듭니다.</p>
+          <Link className={styles.primaryPink} href="/wms/logistics/new-orders">발주서 검색·처리 시작</Link>
+        </section>
+        <section className={styles.task}>
+          <h2>입고결과 처리</h2>
+          <p>거래처 발주·단종 처리·미납분 재발주를 한곳에서 진행합니다.</p>
+          <Link className={styles.taskButtonBeige} href="/wms/vendor-orders">입고결과 확인</Link>
+        </section>
       </div>
 
       <ShortageVendorOrdersBanner />
-
-      <Link className="wms-work-center-picking-link" href="/wms/picking/waves">
-        <button className="wms-work-center-picking-button" style={{ ...wmsPrimaryButton, width: "100%" }}>통합 피킹 시작 (실제 발주 기준)</button>
-      </Link>
-
-      <ActiveWaveList className="wms-work-center-active-waves" />
     </main>
   );
 }

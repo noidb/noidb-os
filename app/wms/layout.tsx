@@ -8,6 +8,7 @@ import { VendorOrderRepositoryProvider } from "@/lib/wms/vendor-order/context";
 import WmsHomeHeader from "./WmsHomeHeader";
 import { WmsUndoProvider } from "@/lib/wms/undo-context";
 import { ShipmentRepositoryProvider } from "@/lib/wms/shipment/context";
+import { InvoiceGroupRepositoryProvider } from "@/lib/wms/invoice-group/context";
 
 /**
  * /wms/* 전용 레이아웃. 기존 app/layout.tsx(루트)는 건드리지 않는다.
@@ -19,6 +20,16 @@ import { ShipmentRepositoryProvider } from "@/lib/wms/shipment/context";
  * 하위가 아닌 곳에서도 같은 저장소에 접근해야 하기 때문이다(기존 lib/wms/picking-wave,
  * lib/wms/vendor-order 저장소를 그대로 재사용 — 새로 만들지 않음). app/wms/picking/waves/layout.tsx
  * 는 그대로 두었다(중첩 프로바이더라 안전하지만, 그 라우트에서는 사실상 중복이다).
+ *
+ * 2026-09-18 추가: InvoiceGroupRepositoryProvider — 발주확정~출력세트 파이프라인 전용 저장소.
+ * 웨이브 시스템과 완전히 독립된 저장소라 다른 Provider에 의존하지 않는다(어느 위치에 둬도 무방).
+ *
+ * 2026-09-18 수정: .wms-rounded-page-shell 스타일을 <style jsx global>에서 app/globals.css로
+ * 옮겼다 — 이 레이아웃이 "use client"라서 styled-jsx 스타일이 SSR HTML에 바로 포함되지 않고
+ * 하이드레이션 이후에야 주입돼, 새로고침할 때마다 좁은 기본 레이아웃이 잠깐 보였다가 넓은
+ * 레이아웃으로 바뀌는 깜빡임이 있었다. globals.css는 <head>에서 렌더 전에 로드되는 일반
+ * 스타일시트라 이 문제가 없다(이미 .wms-work-center-menu 등 다른 /wms 전용 클래스들도
+ * globals.css에 있다 — 이번에 그 관례를 따랐을 뿐).
  */
 export default function WmsLayout({ children }: { children: ReactNode }) {
   return (
@@ -27,44 +38,12 @@ export default function WmsLayout({ children }: { children: ReactNode }) {
         <PickingWaveRepositoryProvider>
           <ShipmentRepositoryProvider>
             <VendorOrderRepositoryProvider>
-              <WmsUndoProvider>
-                <WmsHomeHeader />
-                <div className="wms-rounded-page-shell">{children}</div>
-              </WmsUndoProvider>
-            <style jsx global>{`
-              .wms-rounded-page-shell main {
-                width: 100% !important;
-                max-width: none !important;
-                margin-left: 0 !important;
-                margin-right: 0 !important;
-                box-sizing: border-box;
-                border: 1px solid #ddd7cd;
-                border-radius: 18px;
-                overflow: hidden;
-                box-shadow: 0 4px 16px rgba(30, 28, 25, 0.045);
-              }
-              .wms-rounded-page-shell {
-                width: 100%;
-                max-width: 1120px;
-                margin: 0 auto;
-                box-sizing: border-box;
-              }
-              @media (min-width: 761px) {
-                .wms-rounded-page-shell {
-                  padding: 0 24px 32px;
-                }
-                .wms-rounded-page-shell main {
-                  min-height: 0 !important;
-                  height: auto !important;
-                }
-              }
-              @media (max-width: 760px) {
-                .wms-rounded-page-shell {
-                  padding: 0;
-                  overflow-x: clip;
-                }
-              }
-            `}</style>
+              <InvoiceGroupRepositoryProvider>
+                <WmsUndoProvider>
+                  <WmsHomeHeader />
+                  <div className="wms-rounded-page-shell">{children}</div>
+                </WmsUndoProvider>
+              </InvoiceGroupRepositoryProvider>
             </VendorOrderRepositoryProvider>
           </ShipmentRepositoryProvider>
         </PickingWaveRepositoryProvider>

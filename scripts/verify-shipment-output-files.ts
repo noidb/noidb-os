@@ -5,8 +5,7 @@ import ExcelJS from "exceljs";
 import { resolveBarcodeModelIdentifier } from "../lib/wms/barcode-model-identifier";
 import { buildShipmentCreationUploadFile, type ParsedTrackingRow } from "../lib/wms/hanjin-upload";
 import { findTrackingNumbersReusedAcrossShippingGroups } from "../lib/wms/hanjin-shipment-auto";
-import { buildFulfillmentCenterLabelWorkbook, buildGenerationBarcodeWorkbook } from "../lib/wms/shipment-output-files";
-import type { ProductCatalogItem } from "../lib/wms/product-catalog";
+import { buildFulfillmentCenterLabelWorkbook, buildGenerationBarcodeWorkbook, logisticsBarcodeGroupKey } from "../lib/wms/shipment-output-files";
 import type { PurchaseOrderSourceRecord } from "../lib/wms/purchase-order-source/types";
 import type { ShipmentOutputGroup } from "../lib/wms/shipment-output-context";
 
@@ -19,15 +18,21 @@ const records: PurchaseOrderSourceRecord[] = [
   { purchaseOrderNumber: "140000002", sourceContainerFile: "fixture", sourceEntryFile: "b.xlsx", sourceSheet: "상품목록", sourceRow: 2, fulfillmentCenterName: "호법", expectedArrivalDate: "2026-09-04", recipientName: "호법", phone: "01000000000", postalCode: "00000", address: "호법", skuId: "1002", barcode: "R1002", productName: "테스트 반지, 실버", optionName: "실버", orderedQuantity: 1 },
 ];
 const groups: ShipmentOutputGroup[] = records.map(record => ({ key: record.purchaseOrderNumber, fulfillmentCenterName: record.fulfillmentCenterName, expectedArrivalDate: record.expectedArrivalDate, recipientName: record.recipientName, phone: record.phone, postalCode: record.postalCode, postalCodeSource: "fixture", address: record.address, purchaseOrderNumbers: [record.purchaseOrderNumber], records: [record] }));
-const catalog = records.map((record, index) => ({ skuId: record.skuId, modelSku: `model-${index}`, modelName: `model-${index}`, category: "", gender: "", productName: record.productName, optionLabel: record.optionName, imageUrl: "", warehouseNumber: `귀걸이A-${index + 1}`, boxNumber: "", currentStock: "", currentStatus: "", costVatIncluded: "", vendorName: "", barcode: "제품DB값은사용하지않음", countryOfOrigin: "중국", productLink: "" })) satisfies ProductCatalogItem[];
 
-const barcodeBuffer = await buildGenerationBarcodeWorkbook(groups, catalog);
+// 2026-09-18: 제품DB 없이도 생성돼야 한다(07_오늘작업기록_2026-09-17.md 실사용 확정 — 모델명
+// 열 삭제, 제조국명 "중국" 고정) — shipmentNumbersByGroupKey만 선택적으로 넘긴다.
+const barcodeBuffer = await buildGenerationBarcodeWorkbook(groups, { [logisticsBarcodeGroupKey("서울", "2026-09-04")]: "50640740" });
 const barcodeBook = new ExcelJS.Workbook();
 await barcodeBook.xlsx.load(barcodeBuffer as unknown as ExcelJS.Buffer);
 const barcodeSheet = barcodeBook.getWorksheet("템플릿1")!;
-assert.deepEqual((barcodeSheet.getRow(1).values as unknown[]).slice(1), ["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "모델명", "출력유형"]);
+assert.deepEqual((barcodeSheet.getRow(1).values as unknown[]).slice(1), ["SKU ID", "번호", "바코드", "상품명", "옵션명", "제조국명", "출력유형"]);
 assert.equal(barcodeSheet.rowCount, 6);
-assert.equal([...barcodeSheet.getColumn(3).values].includes("제품DB값은사용하지않음"), false);
+// row2·3 = 서울 품목행(수량2, 번호 내림차순 2→1), row4 = 서울 쉽먼트구분행, row5 = 호법 품목행(수량1), row6 = 호법 쉽먼트구분행
+assert.deepEqual((barcodeSheet.getRow(2).values as unknown[]).slice(1), ["1001", 2, "R1001", "테스트 목걸이", "골드", "중국", "상품"]);
+assert.deepEqual((barcodeSheet.getRow(3).values as unknown[]).slice(1), ["1001", 1, "R1001", "테스트 목걸이", "골드", "중국", "상품"]);
+assert.equal(String((barcodeSheet.getRow(4).values as unknown[])[5]).includes("쉽먼트번호 50640740"), true);
+assert.equal((barcodeSheet.getRow(5).values as unknown[])[6], "중국");
+assert.equal(String((barcodeSheet.getRow(6).values as unknown[])[5]).includes("쉽먼트번호 미입력"), true);
 
 const labelBuffer = await buildFulfillmentCenterLabelWorkbook(records);
 const labelBook = new ExcelJS.Workbook();

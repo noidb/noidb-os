@@ -39,6 +39,14 @@ export const wmsColors = {
   warnSoft: "#f2dfd8", // --brand-clay-soft
   warnText: "#7f4032", // AI 등록화면 .resetAllButton/.removeButton 글자색
   warnSoftBorder: "#dfbdb2",
+  // --brand-pink — 2026-09-18 신규. 예전 "오늘 할 일" 화면 스크린샷 실측 기준(연한 파스텔 핑크
+  // 배경 + 진한 글자색 — warnSoft/warnText와 같은 "소프트 틴트" 패턴이며, 흰 글자의 진한 핑크가
+  // 아니다). 입고센터 "진행 중 발주" 카드의 주요 액션 버튼(발주확정·송장·쉽먼트·바코드
+  // 처리하기)에만 쓴다.
+  pink: "#a8586f",
+  pinkSoft: "#f6e2e6",
+  pinkText: "#6b3341",
+  pinkBorder: "#e3c0c8",
 };
 
 export const wmsButtonBase = {

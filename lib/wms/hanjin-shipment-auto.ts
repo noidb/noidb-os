@@ -669,6 +669,53 @@ export interface AutoShipmentResult {
   trackingNumbersUsed: string[];
   reprintFileNames: string[];
   confirmedQuantityFileNames: string[];
+  /** 날짜별 물류 화면이 검증 완료 후 송장번호를 채울 때 쓰는 PO별 한진 송장번호. */
+  invoiceNumbersByPurchaseOrder: Record<string, string>;
+}
+
+/** 최종 검증된 쉽먼트 행에서만 PO별 송장번호를 만든다. PO가 다른 센터/날짜에 중복되거나
+ * 한 PO의 행에 서로 다른 송장번호가 있으면 파일을 만들기 전에 차단한다. */
+export function buildInvoiceNumbersByPurchaseOrder(
+  requests: readonly HanjinShipmentRequest[],
+  resolvedRows: readonly ParsedTrackingRow[],
+): Record<string, string> {
+  const expectedShippingKeyByPo = new Map<string, string>();
+  for (const request of requests) {
+    const po = normalizeSkuId(request.purchaseOrderNumber);
+    if (!po) continue;
+    const shippingKey = `${normalizeCenterName(request.fulfillmentCenter)}::${request.expectedDate.replace(/\D/g, "")}`;
+    const previous = expectedShippingKeyByPo.get(po);
+    if (previous && previous !== shippingKey) {
+      throw new AutoShipmentBlockedError([`발주번호 ${po}가 서로 다른 물류센터/입고예정일 묶음에 중복되어 송장번호를 확정할 수 없습니다.`]);
+    }
+    expectedShippingKeyByPo.set(po, shippingKey);
+  }
+
+  const trackingByPo = new Map<string, Set<string>>();
+  for (const row of resolvedRows) {
+    const po = normalizeSkuId(row.purchaseOrderNumber);
+    const expectedShippingKey = expectedShippingKeyByPo.get(po);
+    const actualShippingKey = `${normalizeCenterName(row.fulfillmentCenter)}::${row.expectedDate.replace(/\D/g, "")}`;
+    if (!expectedShippingKey || expectedShippingKey !== actualShippingKey) {
+      throw new AutoShipmentBlockedError([`발주번호 ${po || "미확인"}의 최종 쉽먼트 행이 현재 물류센터/입고예정일 묶음과 다릅니다.`]);
+    }
+    if (!row.trackingNumber) {
+      throw new AutoShipmentBlockedError([`발주번호 ${po}: 검증된 송장번호가 없어 송장번호를 확정할 수 없습니다.`]);
+    }
+    const values = trackingByPo.get(po) || new Set<string>();
+    values.add(row.trackingNumber);
+    trackingByPo.set(po, values);
+  }
+
+  const result: Record<string, string> = {};
+  for (const po of [...expectedShippingKeyByPo.keys()].sort()) {
+    const trackingNumbers = trackingByPo.get(po) || new Set<string>();
+    if (trackingNumbers.size !== 1) {
+      throw new AutoShipmentBlockedError([`발주번호 ${po}의 최종 송장번호가 ${trackingNumbers.size === 0 ? "없거나" : "여러 개여서"} 확정할 수 없습니다.`]);
+    }
+    result[po] = [...trackingNumbers][0];
+  }
+  return result;
 }
 
 export function findTrackingNumbersReusedAcrossShippingGroups(rows: readonly ParsedTrackingRow[]): string[] {
@@ -821,6 +868,7 @@ export async function buildAutoShipmentFile(
   if (expectedPoSet.size !== resolvedPoSet.size || [...expectedPoSet].some(po => !resolvedPoSet.has(po))) {
     throw new AutoShipmentBlockedError(["generation 발주번호 집합과 Shipment 출력 발주번호 집합이 일치하지 않습니다."]);
   }
+  const invoiceNumbersByPurchaseOrder = buildInvoiceNumbersByPurchaseOrder(requests, resolvedRows);
 
   const targets = requests.map(r => ({ purchaseOrderNumber: r.purchaseOrderNumber, fulfillmentCenter: r.fulfillmentCenter }));
   const result = await buildShipmentCreationUploadFile(resolvedRows, targets, templateBuffer);
@@ -832,5 +880,6 @@ export async function buildAutoShipmentFile(
     trackingNumbersUsed: [...trackingNumbersUsed],
     reprintFileNames: reprint.fileNames,
     confirmedQuantityFileNames: confirmed.fileNames,
+    invoiceNumbersByPurchaseOrder,
   };
 }
