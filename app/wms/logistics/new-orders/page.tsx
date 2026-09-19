@@ -211,12 +211,9 @@ export default function WmsNewOrdersPage() {
       </header>
       {fixtureMode && <p style={{ margin: "0 0 16px", padding: "12px", borderRadius: "10px", background: "#fff4d8", color: "#7a4d00", fontSize: "12px", fontWeight: 800 }}>개발용 테스트 데이터 20건 · 메모리 저장소만 사용하며 실제 API·파일·운영 기록을 변경하지 않습니다.</p>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: "8px", marginBottom: "10px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: "8px", marginBottom: "10px" }}>
         <button type="button" disabled={importing} onClick={() => void handleImportLatest()} className={styles.secondary}>
-          {importing ? "불러오는 중..." : "1. 발주서리스트 파일 불러오기"}
-        </button>
-        <button type="button" disabled={loadingWorkspace} onClick={() => void handleLoadWorkspace()} style={{ ...wmsGhostButton, opacity: loadingWorkspace ? 0.5 : 1 }}>
-          {loadingWorkspace ? "조회 중..." : "현재 목록 조회"}
+          {importing ? "불러오는 중..." : "발주서리스트 파일 불러오기"}
         </button>
       </div>
       {importError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{importError}</p>}
@@ -228,7 +225,7 @@ export default function WmsNewOrdersPage() {
       )}
 
       {loadError && <p style={{ color: "#c0392b", fontSize: "13px" }}>{loadError}</p>}
-      {!loadError && orders === null && <p style={{ color: wmsColors.muted, fontSize: "13px" }}>발주서리스트 파일을 불러오거나 현재 목록 조회를 누르면 표시합니다.</p>}
+      {!loadError && orders === null && <p style={{ color: wmsColors.muted, fontSize: "13px" }}>발주서리스트 파일을 불러오면 목록이 표시됩니다.</p>}
 
       {inProgressGroupsByDate.length > 0 && (
         <section style={{ marginBottom: "18px" }}>
