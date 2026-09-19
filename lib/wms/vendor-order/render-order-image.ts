@@ -1,5 +1,6 @@
 import type { VendorOrderDraftLine } from "./types";
 import { resolveDisplayNameAndOption } from "../display-name";
+import { displayVendorOrderMemo } from "./display-memo";
 
 /**
  * 초안과 전송에 함께 사용하는 거래처 발주서 PNG 이미지를 그린다.
@@ -140,7 +141,7 @@ export async function renderVendorOrderImage(
   const cards: CardLayout[] = lines.map(line => {
     const { name, option } = resolveDisplayNameAndOption(line.productName, line.optionLabel);
     const category = (line.category || "").trim();
-    const topInfoLines = buildTopInfoLines(category, option.trim(), line.shortageQuantity, line.memo.trim()).map(info => {
+    const topInfoLines = buildTopInfoLines(category, option.trim(), line.shortageQuantity, displayVendorOrderMemo(line.memo).trim()).map(info => {
       measureCtx.font = info.font;
       return { ...info, wrappedLines: wrapText(measureCtx, info.text, TEXT_MAX_WIDTH) };
     });

@@ -14,6 +14,7 @@ import VendorNameSelect from "./VendorNameSelect";
 import ProductVariantAddSheet from "./ProductVariantAddSheet";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { resolveVendorOrderCatalog } from "@/lib/wms/vendor-order/resolve-catalog";
+import { displayVendorOrderMemo } from "@/lib/wms/vendor-order/display-memo";
 
 import { useContext, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
@@ -1604,7 +1605,7 @@ function VendorOrderLineCard({
             <button type="button" onClick={() => { setVendorDraft(line.vendorName); setEditingVendor(false); }} style={{ ...wmsSecondaryButton, minHeight: "32px", padding: "0 8px", fontSize: "10px" }}>취소</button>
           </div>}
           {vendorSaveError && <p style={{ fontSize: "10px", color: "#c0392b", margin: 0 }}>{vendorSaveError}</p>}
-          <input className="wms-input" value={line.memo} placeholder="메모" onChange={e => onChange({ memo: e.target.value })} style={inputStyle} />
+          <input className="wms-input" value={displayVendorOrderMemo(line.memo)} placeholder="메모" onChange={e => onChange({ memo: e.target.value })} style={inputStyle} />
           {statusMessage && <div style={{ fontSize: "10px", color: statusMessage.includes("완료") ? wmsColors.greenDark : "#c0392b" }}>{statusMessage}</div>}
         </div>
       )}
