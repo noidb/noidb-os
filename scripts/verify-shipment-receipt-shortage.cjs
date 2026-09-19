@@ -1,0 +1,15 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const ts = require("typescript");
+require.extensions[".ts"] = (module, file) => module._compile(ts.transpileModule(fs.readFileSync(file, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, file);
+const resolve = require("node:module")._resolveFilename;
+require("node:module")._resolveFilename = function(request, ...args) { return resolve.call(this, request.startsWith("@/") ? path.join(process.cwd(), request.slice(2)) : request, ...args); };
+const { calculateShipmentReceiptShortages } = require("../lib/wms/shipment-receipt-shortage.ts");
+const order = { purchaseOrderNumber: "142186780", items: [{ productCode: "38249239", productName: "A", vendorConfirmedQuantity: 5 }, { productCode: "38256621", productName: "B", vendorConfirmedQuantity: 3 }] };
+const closed = { "142186780": { purchaseOrderNumber: "142186780", collectedAt: "2026-09-20T00:00:00.000Z", shipments: [{ shipmentNumber: "50570817", status: "마감", totalDelivered: 7, totalReceived: 6, lines: [{ boxId: "box", purchaseOrderNumber: "142186780", skuId: "38249239", productName: "A", barcode: "x", deliveredQuantity: 4, receivedQuantity: 4 }, { boxId: "box", purchaseOrderNumber: "142186780", skuId: "38256621", productName: "B", barcode: "y", deliveredQuantity: 3, receivedQuantity: 2 }] }] } };
+const ready = calculateShipmentReceiptShortages([order], closed)[0];
+assert.equal(ready.status, "ready"); assert.deepEqual(ready.lines.map(x => [x.skuId, x.shortageQuantity]), [["38249239", 1], ["38256621", 1]]);
+const waiting = calculateShipmentReceiptShortages([order], { "142186780": { ...closed["142186780"], shipments: [{ ...closed["142186780"].shipments[0], status: "발송 완료", totalDelivered: null, totalReceived: null, lines: [] }] } })[0];
+assert.equal(waiting.status, "waiting"); assert.equal(waiting.lines.length, 0);
+console.log("PASS shipment closed-only shortage preview, partial closure blocker, SKU quantity reconciliation");

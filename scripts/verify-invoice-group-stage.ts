@@ -18,7 +18,9 @@ function group(id = "G-1", purchaseOrderNumbers = ["140000001"], stage: InvoiceG
 }
 const save = (snapshot: ReturnType<typeof emptyInvoiceGroupStoreSnapshot>, value: InvoiceGroup) => applyInvoiceGroupStoreMutation(snapshot, { action: "save", group: value });
 
+
 let store = emptyInvoiceGroupStoreSnapshot();
+assert.throws(() => save(store, group("ASIDE-CLOSED", ["142638543"])), /Aside에서 출고완료/);
 store = save(store, group());
 assert.throws(() => save(store, group("G-2", ["140000001"])), /이미 다른 발주묶음/);
 assert.throws(() => save(store, { ...group(), stage: "dispatched", updatedAt: "2026-09-20T00:01:00.000Z" }), /한 단계씩/);
@@ -56,4 +58,4 @@ assert.throws(() => save(legacy, { ...oldFinished, notes: "change", updatedAt: "
 const tombstoned = applyInvoiceGroupStoreMutation(emptyInvoiceGroupStoreSnapshot(), { action: "delete", id: "DELETED", deletedAt: at });
 assert.throws(() => save(tombstoned, group("DELETED")), /삭제된 발주묶음 ID/);
 
-console.log(JSON.stringify({ duplicatePoBlocked: true, skipStageBlocked: true, missingPrerequisiteBlocked: true, shipmentRegistrationRequired: true, outputSetRequired: true, preparationSaveIsNotDispatch: true, readyNewGroupSequentiallySaved: true, staleOutputSetBlocked: true, regeneratedOutputSetAllowed: true, validFullCycle: true, closedAndDispatchedFrozen: true, staleDowngradeBlocked: true, tombstoneResurrectionBlocked: true }, null, 2));
+console.log(JSON.stringify({ asideCompletedDispatchBlocked: true, duplicatePoBlocked: true, skipStageBlocked: true, missingPrerequisiteBlocked: true, shipmentRegistrationRequired: true, outputSetRequired: true, preparationSaveIsNotDispatch: true, readyNewGroupSequentiallySaved: true, staleOutputSetBlocked: true, regeneratedOutputSetAllowed: true, validFullCycle: true, closedAndDispatchedFrozen: true, staleDowngradeBlocked: true, tombstoneResurrectionBlocked: true }, null, 2));

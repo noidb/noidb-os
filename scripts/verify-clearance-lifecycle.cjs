@@ -13,6 +13,7 @@ const { targetVendorVersion } = require('../lib/wms/vendor-order/sent-vendor-tra
 const { vendorReorderMaterial } = require('../lib/wms/vendor-order/reorder-material.ts');
 const { moveWorkListItem } = require('../lib/wms/work-list-routing.ts');
 const { buildClearanceStatus } = require('../lib/wms/clearance-status.ts');
+const { nextWeeklyReorderFriday } = require('../lib/wms/weekly-reorder-files.ts');
 const now = '2026-09-15T04:00:00.000Z';
 const order = (po,sku,confirmed,received=99) => ({ purchaseOrderNumber:po, orderType:'리오더', fulfillmentCenter:'센터',fulfillmentAddress:'주소',fulfillmentContactPhone:'',expectedDate:'2026-09-12',accountName:'NOID-B',sourceFileName:po+'.xlsx',capturedAt:now,items:[{ lineNo:1,productCode:sku,productName:'테스트 '+sku,barcode:'',purchaseType:'직매입',taxType:'과세',orderedQuantity:confirmed,vendorConfirmedQuantity:confirmed,receivedQuantity:received }] });
 const event = (po,sku,qty,date='2026-09-12') => ({ id:[po,sku,date,qty].join(':'),eventKey:[po,sku,date,qty].join(':'),collectedAt:now,source:'supplier-hub-extension',orderNo:po,skuId:sku,inboundDate:date,quantity:String(qty),division:'발주',warehouse:'센터',skuName:'테스트 '+sku });
@@ -29,6 +30,17 @@ async function route(f,decision,po='100',sku='200',memo='거래처 확인: 3주 
 function completeReorder(f) { const queue=pendingReorderQueue(f.workspace);for(const src of queue.sources){const r=f.workspace.runs.find(r=>r.id===src.id);r.reorderRequestedAt=now;r.reorderRequestedLines=queue.rows.filter(row=>src.pairs.includes(inboundPairKey(row.purchaseOrderNumber,row.skuId)));} }
 function send(f) { f.store.vendorOrderDrafts=f.store.vendorOrderDrafts.map(d=>({...d,status:'sent',sentAt:now})); }
 (async()=>{
+  // Reorder dates use the next Monday-based calendar week in KST, then skip official Friday holidays.
+  assert.equal(nextWeeklyReorderFriday(new Date('2026-09-17T00:00:00.000Z')), '2026-10-02');
+  assert.equal(nextWeeklyReorderFriday(new Date('2026-09-13T03:00:00.000Z')), '2026-09-18');
+  assert.equal(nextWeeklyReorderFriday(new Date('2026-09-14T03:00:00.000Z')), '2026-10-02');
+  assert.equal(nextWeeklyReorderFriday(new Date('2026-09-18T03:00:00.000Z')), '2026-10-02');
+  assert.equal(nextWeeklyReorderFriday(new Date('2026-12-18T03:00:00.000Z')), '2027-01-08');
+  assert.equal(nextWeeklyReorderFriday(new Date('2026-12-29T03:00:00.000Z')), '2027-01-08');
+  assert.equal(nextWeeklyReorderFriday(new Date('2026-09-13T14:59:59.999Z')), '2026-09-18');
+  assert.equal(nextWeeklyReorderFriday(new Date('2026-09-13T15:00:00.000Z')), '2026-10-02');
+  assert.throws(() => nextWeeklyReorderFriday(new Date('2027-12-31T03:00:00.000Z')), /해당 연도의 공휴일 자료를 먼저 확인해야 합니다/);
+  console.log('PASS reorder request date: KST next calendar week, holiday skips, year boundary');
   // Event reconciliation, duplicate rows, snapshots must not close work, same SKU/different PO.
   let f=fixture([order('100','200',4),order('101','200',5)],[event('100','200',1),event('100','200',1),event('100','200',1,'2026-09-13'),event('101','200',2)]);
   assert.deepEqual(f.project().calculation.shortagePairs.map(p=>p.shortageQuantity),[2,3]);assert.equal(f.project().completedPurchaseOrderNumbers.length,0);

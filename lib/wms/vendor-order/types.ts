@@ -45,6 +45,12 @@ export interface VendorOrderDraft {
 }
 
 export interface VendorOrderDraftLine {
+  /** Exact closed-shipment sources; kept when draft quantities or vendors are edited. */
+  shipmentReceiptDetails?: Array<{ lineKey: string; shipmentNumber: string; boxId: string; purchaseOrderNumber: string;
+    skuId: string; deliveredQuantity: number; receivedQuantity: number; shortageQuantity: number; handledQuantity?: number }>;
+  /** Imported Aside19 sent-vendor shortage evidence. This is not shipment or box evidence. */
+  importedVendorSource?: { kind: "aside-vendor-pending"; batchId: string; fileName: string; sheetName: string; rowNumber: number; recordedAt: string; skuId: string;
+    details: Array<{ purchaseOrderNumber: string; confirmedQuantity: number; receivedQuantity: number; shortageQuantity: number }> };
   orderExclusion?: import("./completion").VendorOrderExclusion;
   /** 자동 생성 라인: `${draftId}::${skuId}`, 수동 추가 라인: `${draftId}::manual-${timestamp}` */
   id: string;

@@ -532,6 +532,13 @@ export function resolveConfirmedQuantityRowsForShipment(
   sourceRecords: readonly PurchaseOrderSourceRecord[],
   confirmedFiles: readonly ConfirmedQuantitySourceFile[],
   confirmedQuantityFileNameByPo: Readonly<Record<string, string>>,
+  /** 2026-09-18 신규, 기본 false(기존 동작 그대로 유지) — true면 연결된 확정수량 파일을 못 찾은
+   *  발주번호도 막지 않고 발주서 원본의 발주수량을 그대로 확정수량으로 쓴다. 실사용 확인
+   *  (07_오늘작업기록_2026-09-17.md): Supplier Hub 쉽먼트 일괄등록 양식은 다운로드 시점에
+   *  이미 확정수량이 프리필되어 있어, 별도 확정파일과의 대조 없이도 정확하다. 이 옵션을 켠
+   *  호출부(발주묶음 전용 /api/wms/logistics/build-shipment)만 이 완화된 동작을 쓰고, 기존
+   *  웨이브 기반 호출부(build-shipment-auto)는 옵션을 안 켜서 예전과 완전히 동일하게 동작한다. */
+  allowUnconfirmedQuantityFallback = false,
 ): { rows: ParsedTrackingRow[]; fileNames: string[] } {
   const expectedPoNumbers = [...new Set(requests.map(request => normalizeSkuId(request.purchaseOrderNumber)).filter(Boolean))];
   const expectedPoSet = new Set(expectedPoNumbers);
@@ -571,7 +578,34 @@ export function resolveConfirmedQuantityRowsForShipment(
   for (const po of expectedPoNumbers) {
     const linkedFileName = linkedFileNameByPo.get(po);
     if (!linkedFileName) {
-      blockingReasons.push(`발주번호 ${po}: 확정 완료된 수량 파일명이 저장되어 있지 않습니다.`);
+      if (!allowUnconfirmedQuantityFallback) {
+        blockingReasons.push(`발주번호 ${po}: 확정 완료된 수량 파일명이 저장되어 있지 않습니다.`);
+        continue;
+      }
+      const fallbackSourceRows = sourceRowsByPo.get(po) || [];
+      if (fallbackSourceRows.length === 0) {
+        blockingReasons.push(`현재 선택 발주번호가 발주서 원본에 없습니다: ${po}`);
+        continue;
+      }
+      const seenSku = new Set<string>();
+      for (const source of fallbackSourceRows) {
+        const sku = normalizeSkuId(source.skuId);
+        if (!sku) { blockingReasons.push(`발주번호 ${po}: 발주서 원본에 상품번호가 빈 행이 있습니다.`); continue; }
+        if (seenSku.has(sku)) { blockingReasons.push(`발주번호 ${po}: 발주서 원본에 상품번호 ${sku}가 중복됐습니다.`); continue; }
+        seenSku.add(sku);
+        resolvedRows.push({
+          purchaseOrderNumber: source.purchaseOrderNumber,
+          fulfillmentCenter: source.fulfillmentCenterName,
+          transportType: "쉽먼트",
+          expectedDate: source.expectedArrivalDate,
+          skuId: source.skuId,
+          barcode: source.barcode,
+          productName: source.optionName ? `${source.productName}, ${source.optionName}` : source.productName,
+          confirmedQuantity: String(source.orderedQuantity),
+          trackingNumber: "",
+          shippedQuantity: String(source.orderedQuantity),
+        });
+      }
       continue;
     }
     const matchingFiles = filesByName.get(linkedFileName) || [];
@@ -740,7 +774,7 @@ export async function buildAutoShipmentFile(
   requests: HanjinShipmentRequest[],
   sourceRecords: PurchaseOrderSourceRecord[],
   templateBuffer?: Buffer,
-  options: { invoiceGroups?: string[][]; selectedReprintFileName?: string; confirmedQuantityFileNameByPo?: Record<string, string>; confirmedQuantityFileHashByName?: Record<string, string> } = {}
+  options: { invoiceGroups?: string[][]; selectedReprintFileName?: string; confirmedQuantityFileNameByPo?: Record<string, string>; confirmedQuantityFileHashByName?: Record<string, string>; allowUnconfirmedQuantityFallback?: boolean } = {}
 ): Promise<AutoShipmentResult> {
   const groups = groupRequestsByCenterAndDate(requests);
 
@@ -758,7 +792,7 @@ export async function buildAutoShipmentFile(
     const expectedHash = options.confirmedQuantityFileHashByName?.[normalizedFileName(file.name)];
     if (expectedHash && expectedHash !== file.contentHash) throw new AutoShipmentBlockedError(["연결 후 확정파일의 내용이 변경되었습니다. 발주확정 수량을 다시 확인해 주세요."]);
   }
-  const confirmed = resolveConfirmedQuantityRowsForShipment(requests, sourceRecords, confirmedFiles, confirmedQuantityFileNameByPo);
+  const confirmed = resolveConfirmedQuantityRowsForShipment(requests, sourceRecords, confirmedFiles, confirmedQuantityFileNameByPo, options.allowUnconfirmedQuantityFallback);
 
   const reprintFiles = await loadReprintDetailFiles();
   if (reprintFiles.length === 0) {

@@ -46,7 +46,8 @@ function ShortageVendorOrdersBanner() {
     })();
   }, [waveRepository, vendorOrderRepository]);
 
-  if (!summary) return null;
+  // 부족분이 없으면 배너 자체를 표시하지 않는다(2026-09-18 — "현재 부족분이 없습니다" 박스 제거).
+  if (!summary || summary.vendorCount === 0) return null;
 
   const href = summary.waveIds.length === 1 ? `/wms/picking/waves/${summary.waveIds[0]}/vendor-orders` : "/wms/picking/waves";
 
@@ -54,22 +55,16 @@ function ShortageVendorOrdersBanner() {
     <Link href={href} style={{ display: "block", textDecoration: "none", marginBottom: "18px" }}>
       <div
         style={{
-          border: `1px solid ${summary.vendorCount > 0 ? wmsColors.warn : wmsColors.border}`,
-          background: summary.vendorCount > 0 ? wmsColors.warnSoft : wmsColors.surfaceBeige,
+          border: `1px solid ${wmsColors.warn}`,
+          background: wmsColors.warnSoft,
           borderRadius: "14px",
           padding: "12px",
         }}
       >
-        {summary.vendorCount > 0 ? (
-          <>
-            <div style={{ fontSize: "13px", fontWeight: 800, color: wmsColors.warn }}>부족분 거래처별 발주서 {summary.vendorCount}건</div>
-            <div style={{ fontSize: "11px", color: wmsColors.ink, marginTop: "2px" }}>
-              부족 SKU {summary.skuCount}개 · 총 부족수량 {summary.totalShortage}개
-            </div>
-          </>
-        ) : (
-          <div style={{ fontSize: "12px", color: wmsColors.muted }}>현재 부족분이 없습니다.</div>
-        )}
+        <div style={{ fontSize: "13px", fontWeight: 800, color: wmsColors.warn }}>부족분 거래처별 발주서 {summary.vendorCount}건</div>
+        <div style={{ fontSize: "11px", color: wmsColors.ink, marginTop: "2px" }}>
+          부족 SKU {summary.skuCount}개 · 총 부족수량 {summary.totalShortage}개
+        </div>
       </div>
     </Link>
   );
@@ -142,11 +137,45 @@ function InProgressOrdersSection() {
   );
 }
 
+/**
+ * "쉽먼트마감된 발주묶음" 안내 배너 (2026-09-18 신규).
+ *
+ * InProgressOrdersSection은 "쉽먼트마감" 전 단계까지만 보여주고, 쉽먼트마감된 묶음은 목록에서
+ * 빠진다(더 이상 "진행 중"이 아니므로 — lib/wms/invoice-group/types.ts 주석 참고). 하지만 그
+ * 묶음들은 입고결과 처리(거래처발주·단종·미납재발주)가 아직 안 끝난 채로 남아 있으므로, "입고결과
+ * 처리" 카드가 실제로 무엇을 가리키는지 여기서 개수로 명시한다. 새 화면을 만들지 않고 기존
+ * /wms/vendor-orders(구형 3카드 허브)로 그대로 연결한다 — 그 화면 자체를 바꾸는 건 별도 작업.
+ */
+function ShipmentClosedGroupsBanner() {
+  const invoiceGroupRepository = useInvoiceGroupRepository();
+  const [count, setCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const all = await invoiceGroupRepository.list();
+      setCount(all.filter(group => !group.supersededByGroupId && group.stage === "shipment_closed").length);
+    })();
+  }, [invoiceGroupRepository]);
+
+  if (!count) return null;
+
+  return (
+    <Link href="/wms/vendor-orders" style={{ display: "block", textDecoration: "none", marginBottom: "18px" }}>
+      <div style={{ border: `1px solid ${wmsColors.green}`, background: wmsColors.greenSoft, borderRadius: "14px", padding: "12px" }}>
+        <div style={{ fontSize: "13px", fontWeight: 800, color: wmsColors.greenDark }}>쉽먼트마감된 발주묶음 {count}건 · 입고결과 처리 대기</div>
+        <div style={{ fontSize: "11px", color: wmsColors.ink, marginTop: "2px" }}>거래처발주·단종처리·미납분재발주를 마무리해 주세요.</div>
+      </div>
+    </Link>
+  );
+}
+
 export default function WmsWorkCenterPage() {
   return (
     <main className={`shell wms-work-center-shell ${styles.shell}`} style={{ fontFamily: "sans-serif" }}>
       <AppNavigation active="work-center" />
       <InProgressOrdersSection />
+      <ShipmentClosedGroupsBanner />
+
       {/* 상단 메뉴 4개 — 예전 "오늘 할 일" 화면의 .tasks(태스크 카드) 패턴 재사용. 첫 카드는
        *  .task:first-child 규칙으로 자동으로 전체폭이 된다(기존 CSS 그대로, 새로 안 건드림). */}
       <div className={styles.tasks}>

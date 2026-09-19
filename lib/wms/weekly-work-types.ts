@@ -31,6 +31,16 @@ export interface WeeklyReview {
   decision: "order" | "hold" | "discontinue" | "reorder"; quantityConfirmed: boolean;
 }
 export interface WeeklyRun {
+  /** Exact closed-shipment evidence that originated this follow-up run. */
+  logisticsReceiptLine?: {
+    lineKey: string; shipmentNumber: string; boxId: string; purchaseOrderNumber: string; skuId: string;
+    deliveredQuantity: number; receivedQuantity: number; shortageQuantity: number; handledQuantity?: number;
+  };
+  /** A vendor draft may consolidate several closed shipment rows for one PO/SKU. */
+  logisticsReceiptLines?: Array<{
+    lineKey: string; shipmentNumber: string; boxId: string; purchaseOrderNumber: string; skuId: string;
+    deliveredQuantity: number; receivedQuantity: number; shortageQuantity: number; handledQuantity?: number;
+  }>;
   /** Exact PO/SKU routing intent. Completion here means delivery to the next queue, not external upload. */
   actualInboundRoute?: { decision: "vendor" | "discontinue" | "reorder" | "delay"; completed: boolean; at: string; memo?: string; resolvedAt?: string; initialShortageQuantity?: number; history?: Array<{ decision: string; at: string; memo?: string }> };
   itemRoutes?: Record<string, { decision: WeeklyReview["decision"]; at: string; completed: boolean }>;
@@ -49,6 +59,8 @@ export interface WeeklyRun {
   reorderRequestedAt?: string;
   reorderQueuePartialRequestedAt?: string;
   reorderRequestedLines?: Array<{ purchaseOrderNumber: string; skuId: string; shortageQuantity: number }>;
+  /** Exact closed-shipment rows completed through a consolidated vendor/reorder file. */
+  reorderRequestedShipmentLineKeys?: string[];
   reorderDiscardedIssues?: Array<{ skuId: string; purchaseOrderNumbers: string[] }>;
   reorderPreviouslyRequestedLines?: Array<{ purchaseOrderNumber: string; skuId: string; shortageQuantity: number }>;
   couponExcludedSkuIds?: string[];
@@ -61,6 +73,11 @@ export interface WeeklyRun {
 export interface WeeklyWorkspace {
   /** Explicitly collected shipment snapshots; separate from historical inbound events and runs. */
   shipmentReceiptOrders?: import("./shipment-receipts").ShipmentReceiptOrders;
+  /** Complete v2 logistics shipment collection, kept separate from the PO-based v1 snapshots. */
+  logisticsReceipts?: import("./logistics-receipts").LogisticsReceiptSnapshot;
+  /** A completed follow-up queue connection; it does not mean the external work itself is complete. */
+  logisticsReceiptRoutes?: Record<string, import("./logistics-receipts").LogisticsReceiptRoute>;
+  logisticsFollowUp?: import("./logistics-follow-up-types").LogisticsFollowUpState;
   materialSnapshot?: WeeklySnapshot;
   statusCompletionIds?: string[];
   statusListSnapshot?: { requests: import("./vendor-order-actions").StatusRequestRecord[]; generations: import("./vendor-order-actions").StatusFileGenerationRecord[]; at: string };

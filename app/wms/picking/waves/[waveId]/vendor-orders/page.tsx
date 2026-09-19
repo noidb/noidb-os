@@ -518,7 +518,15 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
                     lines={group.lines}
                     status={status}
                     productLinksBySku={Object.fromEntries(group.lines.map(line => [line.skuId, liveCatalogByProductCode.get(line.skuId)?.productLink || ""]))}
+                    readOnly={isPreview}
+                    busy={saving}
+                    statusSaving={false}
+                    onBeforeExport={async () => {
+                      await persistAll();
+                      return lines.filter(line => (line.vendorName || UNASSIGNED_VENDOR_NAME) === group.vendorName);
+                    }}
                     onMarkSent={() => toggleSent(group.vendorName)}
+                    orderDate={draftsByVendor[group.vendorName]?.createdAt || group.lines[0]?.createdAt || wave.createdAt}
                   />
                 )}
               </div>
@@ -546,6 +554,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
 
       {searchAddVendor && (
         <ProductSearchAddSheet
+          existingSkuIds={groups.find(group => group.vendorName === searchAddVendor)?.lines.map(line => line.skuId) || []}
           onClose={() => setSearchAddVendor(null)}
           onSelect={product => addProductFromSearch(searchAddVendor, product)}
         />

@@ -24,7 +24,7 @@ export function transferSentVendorLine(store: PickingWaveStoreSnapshot, input: S
   if (!Number.isSafeInteger(quantity) || quantity <= 0 || quantity > source.shortageQuantity) throw new Error("다른 거래처로 이동할 미입고 수량이 없습니다.");
   let drafts = store.vendorOrderDrafts;
   const targets = drafts.filter(d => d.waveId === store.activeVendorQueueId && d.vendorName === name && !d.archivedAt && !store.deletedVendorDraftIds[d.id] && d.status !== "sent");
-  if (targets.length > 1 || targets.some(d => d.status === "approved")) throw new Error("대상 거래처의 승인 발주서를 수정 상태로 바꾼 뒤 다시 이동해 주세요.");
+  if (targets.length > 1) throw new Error("대상 거래처의 진행 중인 발주서가 중복되어 있습니다. 최신 목록을 확인해 주세요.");
   let target = targets[0];
   if (!target) {
     const plan = planNewVendorDraft(store, store.activeVendorQueueId, name, input.operationId, input.now);
@@ -32,7 +32,12 @@ export function transferSentVendorLine(store: PickingWaveStoreSnapshot, input: S
     const changed = new Map(plan.mutation.drafts.map(d => [d.id, d]));
     drafts = [...drafts.filter(d => !changed.has(d.id)), ...changed.values()];
   }
-  if (store.vendorOrderLines.some(l => l.draftId === target.id && l.skuId === source.skuId && !store.deletedVendorLineIds[l.id] && !isVendorLineResolved(l))) throw new Error("대상 발주서에 같은 SKU가 이미 있습니다. 중복 수량을 먼저 확인해 주세요.");
+  const existing = store.vendorOrderLines.find(l => l.draftId === target.id && l.skuId === source.skuId && !store.deletedVendorLineIds[l.id] && !isVendorLineResolved(l));
+  if (existing && (!existing.shipmentReceiptDetails?.length || !source.shipmentReceiptDetails?.length
+    || Boolean(existing.isStockReplenishment) !== Boolean(source.isStockReplenishment)
+    || source.shipmentReceiptDetails.some(detail => existing.shipmentReceiptDetails!.some(saved => saved.lineKey === detail.lineKey)))) {
+    throw new Error("대상 발주서에 같은 SKU가 이미 있습니다. 중복 수량을 먼저 확인해 주세요.");
+  }
   const id = target.id + "::transfer-" + input.operationId;
   if (store.deletedVendorLineIds[id] || store.vendorOrderLines.some(l => l.id === id)) throw new Error("이미 사용한 이동 번호입니다. 다시 확인해 주세요.");
   const moved: VendorOrderDraftLine = {
@@ -42,8 +47,31 @@ export function transferSentVendorLine(store: PickingWaveStoreSnapshot, input: S
     actualShortageQuantity: Math.min(source.actualShortageQuantity ?? quantity, quantity), shortageQuantity: quantity,
     currentStock: source.currentStock, relatedPurchaseOrderNumbers: [...source.relatedPurchaseOrderNumbers],
     memo: source.memo, isManuallyAdded: true, isStockReplenishment: source.isStockReplenishment,
+    sourceType: source.sourceType, actualInboundDetails: source.actualInboundDetails?.map(detail => ({ ...detail })),
+    shipmentReceiptDetails: source.shipmentReceiptDetails?.map(detail => ({ ...detail })),
+    importedVendorSource: source.importedVendorSource && { ...source.importedVendorSource, details: source.importedVendorSource.details.map(detail => ({ ...detail })) },
+    coupangConfirmedQuantity: source.coupangConfirmedQuantity, coupangReceivedQuantity: source.coupangReceivedQuantity,
     vendorTransferSourceLineId: source.id, createdAt: input.now, updatedAt: input.now,
   };
-  const original = { ...source, vendorTransfer: { operationId: input.operationId, targetDraftId: target.id, targetLineId: id, vendorName: name, quantity, at: input.now, sourceUpdatedAt: source.updatedAt }, updatedAt: input.now };
-  return { ...store, vendorOrderDrafts: drafts, vendorOrderLines: [...store.vendorOrderLines.map(l => l.id === source.id ? original : l), moved] };
+  let destination = moved;
+  if (existing) {
+    const details = [...existing.shipmentReceiptDetails!, ...moved.shipmentReceiptDetails!];
+    const byPo = new Map<string, { purchaseOrderNumber: string; confirmedQuantity: number; receivedQuantity: number; shortageQuantity: number }>();
+    for (const detail of details) {
+      const row = byPo.get(detail.purchaseOrderNumber) || { purchaseOrderNumber: detail.purchaseOrderNumber, confirmedQuantity: 0, receivedQuantity: 0, shortageQuantity: 0 };
+      row.confirmedQuantity += detail.receivedQuantity + detail.shortageQuantity;
+      row.receivedQuantity += detail.receivedQuantity; row.shortageQuantity += detail.shortageQuantity;
+      byPo.set(detail.purchaseOrderNumber, row);
+    }
+    destination = { ...existing, shortageQuantity: existing.shortageQuantity + quantity,
+      actualShortageQuantity: details.reduce((sum, detail) => sum + detail.shortageQuantity, 0),
+      shipmentReceiptDetails: details, actualInboundDetails: [...byPo.values()],
+      relatedPurchaseOrderNumbers: [...new Set([...existing.relatedPurchaseOrderNumbers, ...source.relatedPurchaseOrderNumbers])],
+      updatedAt: input.now };
+  }
+  const original = { ...source, vendorTransfer: { operationId: input.operationId, targetDraftId: target.id, targetLineId: destination.id, vendorName: name, quantity, at: input.now, sourceUpdatedAt: source.updatedAt }, updatedAt: input.now };
+  // Adding demand invalidates approval; other sent orders keep their original records.
+  drafts = drafts.map(draft => draft.id === target.id ? { ...draft, status: draft.status === "approved" ? "resend_needed" : draft.status, updatedAt: input.now } : draft);
+  return { ...store, vendorOrderDrafts: drafts,
+    vendorOrderLines: [...store.vendorOrderLines.filter(line => line.id !== existing?.id).map(line => line.id === source.id ? original : line), destination] };
 }

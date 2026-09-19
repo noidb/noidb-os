@@ -14,7 +14,19 @@ const SHEET_PATH = "xl/worksheets/sheet1.xml";
 const REORDER_REASON = "업체실수로 인한 출고누락";
 const HEADERS = ["SKU ID", "발주번호", "발주 요청수량", "요청 입고예정일", "요청사유", "첨부 파일", "Comment"];
 
-/** The first Friday strictly after the generation date in Korea. */
+/**
+ * Only Friday public holidays are needed because reorder requests always target Friday.
+ * Source: Korea Astronomy and Space Science Institute's official almanacs:
+ * https://astro.kasi.re.kr/life/post/almanac?year=2026
+ * https://astro.kasi.re.kr/life/post/almanac?year=2027
+ * Verified: 2026-09-20. Add an officially confirmed year before generating its files.
+ */
+const KOREAN_PUBLIC_HOLIDAY_FRIDAYS: Readonly<Record<number, ReadonlySet<string>>> = Object.freeze({
+  2026: new Set(["2026-09-25", "2026-10-09", "2026-12-25"]),
+  2027: new Set(["2027-01-01"]),
+});
+
+/** The Friday of the next calendar week in Korea, moved by full weeks for public holidays. */
 export function nextWeeklyReorderFriday(now = new Date()): string {
   if (!Number.isFinite(now.getTime())) throw new Error("재발주 파일 생성일이 올바르지 않습니다.");
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -22,9 +34,15 @@ export function nextWeeklyReorderFriday(now = new Date()): string {
   }).formatToParts(now);
   const part = (type: string) => Number(parts.find(value => value.type === type)?.value);
   const day = new Date(Date.UTC(part("year"), part("month") - 1, part("day")));
-  const daysUntilFriday = (5 - day.getUTCDay() + 7) % 7 || 7;
-  day.setUTCDate(day.getUTCDate() + daysUntilFriday);
-  return day.toISOString().slice(0, 10);
+  const daysUntilNextMonday = (8 - day.getUTCDay()) % 7 || 7;
+  day.setUTCDate(day.getUTCDate() + daysUntilNextMonday + 4);
+  while (true) {
+    const requestedDate = day.toISOString().slice(0, 10);
+    const holidays = KOREAN_PUBLIC_HOLIDAY_FRIDAYS[day.getUTCFullYear()];
+    if (!holidays) throw new Error("해당 연도의 공휴일 자료를 먼저 확인해야 합니다.");
+    if (!holidays.has(requestedDate)) return requestedDate;
+    day.setUTCDate(day.getUTCDate() + 7);
+  }
 }
 
 function xmlEscape(value: string): string {

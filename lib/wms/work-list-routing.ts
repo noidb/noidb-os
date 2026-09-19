@@ -6,6 +6,7 @@ import { getVendorLineDeletionBlockReason } from "./vendor-order/delete-lines";
 import { savedWeeklyMaterial } from "./saved-weekly-material";
 import { vendorReorderMaterial } from "./vendor-order/reorder-material";
 import { transferWeeklyVendorQueue } from "./weekly-vendor-queue";
+import { logisticsReorderLines } from "./logistics-reorder-material";
 import type { WeeklyRun } from "./weekly-work-types";
 
 const dependencies = { readWeeklyWorkspace, mutateWeeklyWorkspace, listStatusRequests, readPickingWaveStore, mutatePickingWaveStore, transferWeeklyVendorQueue };
@@ -51,6 +52,9 @@ export async function moveWorkListItem(source: "status" | "vendor", sourceId: st
         confirmedMaterial = vendorReorderMaterial(workspace,line,confirmedReorder.purchaseOrderNumbers);
         if (confirmedMaterial.token !== confirmedReorder.token) throw new Error("확인 후 미입고 자료가 바뀌었습니다. 수량을 다시 확인해 주세요.");
         purchaseOrders = confirmedMaterial.purchaseOrderNumbers;
+      } else if (line.shipmentReceiptDetails?.length || line.importedVendorSource) {
+        confirmedMaterial = vendorReorderMaterial(workspace, line);
+        purchaseOrders = confirmedMaterial.purchaseOrderNumbers;
       }
       vendorSource = { waveId: line.waveId, updatedAt: line.updatedAt, preserve };
     }
@@ -61,7 +65,11 @@ export async function moveWorkListItem(source: "status" | "vendor", sourceId: st
     const { snapshot, item } = confirmedMaterial || savedWeeklyMaterial(workspace, skuId, purchaseOrders);
     // The user may have manually added the same product after it was already queued.
     // Reuse that exact PO/SKU demand instead of blocking the source order forever.
-    const existingTarget = confirmedMaterial && vendorSource?.preserve && workspace.runs.find(run => !run.completedAt && !run.reorderRequestedAt && run.reviews[skuId]?.decision === "reorder" && !run.routedElsewhereSkuIds?.includes(skuId) && purchaseOrders.every(po => run.snapshot.vendorItems.some(row => row.skuId === skuId && row.shortageDetails?.some(detail => detail.purchaseOrderNumber === po && detail.shortageQuantity === item.shortageDetails!.find(d=>d.purchaseOrderNumber===po)!.shortageQuantity))));
+    const sourceKeys = confirmedMaterial && "shipmentReceiptLines" in confirmedMaterial ? confirmedMaterial.shipmentReceiptLines?.map(line => line.lineKey) || [] : [];
+    const sourceDetails = confirmedMaterial && "shipmentReceiptLines" in confirmedMaterial ? confirmedMaterial.shipmentReceiptLines || [] : [];
+    const existingTarget = confirmedMaterial && vendorSource?.preserve && workspace.runs.find(run => !run.completedAt && !run.reorderRequestedAt && run.reviews[skuId]?.decision === "reorder" && !run.routedElsewhereSkuIds?.includes(skuId) && (sourceKeys.length
+      ? logisticsReorderLines(run).length === sourceKeys.length && sourceDetails.every(detail => logisticsReorderLines(run).some(saved => saved.lineKey === detail.lineKey && saved.deliveredQuantity === detail.deliveredQuantity && saved.receivedQuantity === detail.receivedQuantity && saved.shortageQuantity === detail.shortageQuantity && (saved.handledQuantity || 0) === (detail.handledQuantity || 0))) && !run.reorderRequestedShipmentLineKeys?.some(key => sourceKeys.includes(key))
+      : !logisticsReorderLines(run).length && purchaseOrders.every(po => run.snapshot.vendorItems.some(row => row.skuId === skuId && row.shortageDetails?.some(detail => detail.purchaseOrderNumber === po && detail.shortageQuantity === item.shortageDetails!.find(d=>d.purchaseOrderNumber===po)!.shortageQuantity)))));
     if (existingTarget && vendorSource) {
       const at=new Date().toISOString();
       await deps.mutatePickingWaveStore({action:"resolveSentVendorLine",lineId:sourceId,expectedUpdatedAt:vendorSource.updatedAt,kind:"reorder",destinationId:existingTarget.id,now:at});
@@ -69,9 +77,13 @@ export async function moveWorkListItem(source: "status" | "vendor", sourceId: st
       return {id:sourceId,runId:existingTarget.id,reused:true};
     }
     for (const run of workspace.runs) {
-      if (run.reorderRequestedLines?.some(row=>row.skuId===skuId && purchaseOrders.includes(row.purchaseOrderNumber))) throw new Error("이 발주번호의 상품은 이미 재발주 요청을 완료했습니다.");
+      const completedKeys = run.reorderRequestedShipmentLineKeys || (run.reorderRequestedAt ? logisticsReorderLines(run).map(line => line.lineKey) : []);
+      if (sourceKeys.length ? sourceKeys.some(lineKey => completedKeys.includes(lineKey)) : run.reorderRequestedLines?.some(row=>row.skuId===skuId && purchaseOrders.includes(row.purchaseOrderNumber))) throw new Error("이 원본 상품은 이미 재발주 요청을 완료했습니다.");
       const transfer = Object.values(workspace.workTransfers || {}).find(move=>move.runId===run.id);
-      if (transfer && (transfer.target === "reorder" || target === "order") && run.snapshot.vendorItems.some(row=>row.skuId===skuId && row.relatedPurchaseOrderNumbers.some(po=>purchaseOrders.includes(po)))) throw new Error("같은 발주번호의 상품이 이미 이동됐거나 이동 중입니다. 대상 목록을 확인해 주세요.");
+      const matchesPair = run.snapshot.vendorItems.some(row=>row.skuId===skuId && row.relatedPurchaseOrderNumbers.some(po=>purchaseOrders.includes(po)));
+      const runSources = logisticsReorderLines(run);
+      if (sourceKeys.length && runSources.some(line => sourceKeys.includes(line.lineKey)) && run.reviews[skuId]?.decision === "reorder") throw new Error("같은 쉽먼트 상품이 이미 재발주 목록에 있습니다. 연결된 수량을 확인해 주세요.");
+      if (transfer && (transfer.target === "reorder" || target === "order") && (sourceKeys.length && runSources.length ? runSources.some(line => sourceKeys.includes(line.lineKey)) : matchesPair)) throw new Error("같은 원본 상품이 이미 이동됐거나 이동 중입니다. 대상 목록을 확인해 주세요.");
     }
     if (completedAt && Date.parse(snapshot.createdAt) <= Date.parse(completedAt)) throw new Error("단종 처리완료 이후의 해제 상태를 확인해야 합니다. 해제 후 입고상세내역 조회를 한 번 진행해 주세요.");
     const at = new Date().toISOString(), runId = `TRANSFER-${key.slice(0,24)}`;
@@ -83,7 +95,9 @@ export async function moveWorkListItem(source: "status" | "vendor", sourceId: st
       const run: WeeklyRun = { id: runId, snapshot: { ...snapshot, id: runId, couponItems: [], couponReceiptKeys: {}, vendorItems: [item] },
         reviews: { [skuId]: { skuId, vendorName: item.vendorName, imageUrl: item.imageUrl, quantity: item.shortageQuantity, quantityConfirmed: true, decision: target } },
         reviewedSkuIds: [skuId], revision: 0, updatedAt: at, sentVendors: {}, routedElsewhereSkuIds: target === "reorder" ? [skuId] : [],
-        itemRoutes: { [skuId]: { decision: target, at, completed: false } } };
+        itemRoutes: { [skuId]: { decision: target, at, completed: false } },
+        ...(confirmedMaterial && "shipmentReceiptLines" in confirmedMaterial ? { logisticsReceiptLines: confirmedMaterial.shipmentReceiptLines } : {}),
+        ...(confirmedMaterial && "importedVendorEvidence" in confirmedMaterial ? { actualInboundRoute: { decision: "reorder" as const, completed: true, at } } : {}) };
       current.runs.push(run);
       current.workTransfers = { ...current.workTransfers, [key]: { source, sourceId, sourceUpdatedAt: vendorSource?.updatedAt, target, runId, completed: false, at } };
       return run;

@@ -7,6 +7,7 @@ import { buildScheduleChangeRecommendations } from "@/lib/wms/schedule-recommend
 import { cleanDisplayProductName } from "@/lib/wms/display-name";
 import { groupPurchaseOrdersForShipping, toggleExpectedDateSelection } from "@/lib/wms/purchase-order-view";
 import { buildInvoiceGroupDrafts, type InvoiceGroupDraft } from "@/lib/wms/invoice-group/build-groups";
+import { isAsideCompletedDispatchPurchaseOrder } from "@/lib/wms/logistics-aside-dispatch";
 import { useInvoiceGroupRepository } from "@/lib/wms/invoice-group/context";
 import { INVOICE_GROUP_STAGE_LABEL, type InvoiceGroup, type InvoiceGroupStage } from "@/lib/wms/invoice-group/types";
 import { wmsColors, wmsGhostButton, wmsPrimaryButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
@@ -108,7 +109,7 @@ export default function WmsNewOrdersPage() {
     return [...map.entries()];
   }, [inProgressGroups]);
 
-  const visibleOrders = useMemo(() => (orders || []).filter(order => !closedPoNumbers.has(order.purchaseOrderNumber) && !excludedPoNumbers.has(order.purchaseOrderNumber)), [orders, closedPoNumbers, excludedPoNumbers]);
+  const visibleOrders = useMemo(() => (orders || []).filter(order => !closedPoNumbers.has(order.purchaseOrderNumber) && !excludedPoNumbers.has(order.purchaseOrderNumber) && !isAsideCompletedDispatchPurchaseOrder(order.purchaseOrderNumber)), [orders, closedPoNumbers, excludedPoNumbers]);
   const ungroupedOrders = useMemo(() => visibleOrders.filter(order => !groupedPoNumbers.has(order.purchaseOrderNumber)), [visibleOrders, groupedPoNumbers]);
 
   function toggle(poNumber: string) {

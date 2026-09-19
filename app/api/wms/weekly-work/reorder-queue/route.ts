@@ -5,6 +5,8 @@ import { savedWeeklyMaterial } from "@/lib/wms/saved-weekly-material";
 import { readWeeklyFile, saveWeeklyFile } from "@/lib/wms/weekly-work-files";
 import { buildWeeklyReorderWorkbook, nextWeeklyReorderFriday, type WeeklyReorderRow } from "@/lib/wms/weekly-reorder-files";
 import { pendingReorderQueue, currentReorderRows, reorderPair, reorderDigest } from "@/lib/wms/weekly-reorder-queue";
+import { logisticsReorderLines } from "@/lib/wms/logistics-reorder-material";
+import { completeVendorReceiptOrigins } from "@/lib/wms/logistics-follow-up";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -24,7 +26,11 @@ export async function GET() {
 }
 async function refresh(queue: ReturnType<typeof pendingReorderQueue>) {
   const workspace = await readWeeklyWorkspace();
+  const current = pendingReorderQueue(workspace);
+  if (current.token !== queue.token) throw new Error("수집 자료 또는 재발주 대기 목록이 바뀌었습니다. 목록을 새로고침해 주세요.");
+  const logisticsPairs = new Set(current.logisticsPairs);
   return queue.rows.map(row => {
+    if (logisticsPairs.has(reorderPair(row))) return row;
     const { snapshot, item } = savedWeeklyMaterial(workspace, row.skuId, [row.purchaseOrderNumber]);
     return currentReorderRows([row], { ...snapshot, vendorItems: [item] })[0];
   });
@@ -71,12 +77,18 @@ export async function POST(request: NextRequest) {
         const run = workspace.runs.find(run => run.id === source.id)!;
         const pairs = new Set(source.pairs);
         const requested = new Map((run.reorderRequestedLines || []).map(row=>[reorderPair(row),row]));
-        for (const { purchaseOrderNumber, skuId, shortageQuantity } of rows.filter(row=>pairs.has(reorderPair(row)))) requested.set(reorderPair({purchaseOrderNumber,skuId}),{purchaseOrderNumber,skuId,shortageQuantity});
+        const sourceRows = source.kind === "logistics" ? source.rows! : rows.filter(row=>pairs.has(reorderPair(row)));
+        for (const { purchaseOrderNumber, skuId, shortageQuantity } of sourceRows) {
+          const pair = reorderPair({purchaseOrderNumber,skuId});
+          requested.set(pair, { purchaseOrderNumber, skuId, shortageQuantity: shortageQuantity + (source.kind === "logistics" ? requested.get(pair)?.shortageQuantity || 0 : 0) });
+        }
         run.reorderRequestedLines = [...requested.values()];
-        if (source.hasIssues) run.reorderQueuePartialRequestedAt = at;
+        if (source.kind === "logistics" && source.lineKey) run.reorderRequestedShipmentLineKeys = [...new Set([...(run.reorderRequestedShipmentLineKeys || []), source.lineKey])];
+        if (source.hasIssues || logisticsReorderLines(run).some(line => !run.reorderRequestedShipmentLineKeys?.includes(line.lineKey))) run.reorderQueuePartialRequestedAt = at;
         else { run.reorderRequestedAt = at; run.reorderQueuePartialRequestedAt = undefined; }
         run.updatedAt = at; run.revision++;
       }
+      completeVendorReceiptOrigins(workspace, queue.sources.flatMap(source => source.kind === "logistics" && source.lineKey ? [source.lineKey] : []), at);
     });
     return NextResponse.json({ success: true }, { headers });
   } catch (error) { return failure(error); }

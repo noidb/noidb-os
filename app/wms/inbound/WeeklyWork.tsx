@@ -229,7 +229,9 @@ export default function WeeklyWork({ processingOnly = false, clearanceMode = fal
         setRuns(saved);
         setShortageClearanceEvidence(data.shortageClearanceEvidence || []);
         setKnownVendors(Array.from(new Set(Object.values(data.productOverrides || {}).map(item => item.vendorName).filter(Boolean))).sort());
-        const initial = clearanceMode ? data.run : processingOnly ? weeklyReorderQueueRuns(saved)[0] : saved.find(item=>!item.id.startsWith("TRANSFER-") && !item.id.startsWith("CLEARANCE-"));
+        const requestedRunId = new URLSearchParams(window.location.search).get("runId");
+        const requestedRun = requestedRunId ? saved.find(item => item.id === requestedRunId) : undefined;
+        const initial = requestedRun || (clearanceMode ? data.run : processingOnly ? weeklyReorderQueueRuns(saved)[0] : saved.find(item=>!item.id.startsWith("TRANSFER-") && !item.id.startsWith("CLEARANCE-")));
         if (initial) { installRun(initial); setPeriod(initial.snapshot.period); setPreset("custom"); }
         else if (saved.length) { setPeriod(recentPeriod(7)); setPreset("week"); }
       } catch (failure) { if (!cancelled) setError(failure instanceof Error ? failure.message : "주간 업무를 불러오지 못했습니다."); }

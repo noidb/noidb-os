@@ -73,12 +73,54 @@ export function consolidateVendorOrders(store: PickingWaveStoreSnapshot, operati
     if (!skuId || !Number.isSafeInteger(source.shortageQuantity) || source.shortageQuantity <= 0) throw new Error("발주 SKU와 수량을 확인해 주세요.");
     // Keep intentional requests to different vendors. Incoming automatic demand
     // may still refer to the old vendor name, so it follows an existing edited SKU.
-    const key = JSON.stringify([skuId, source.vendorName.trim() || UNASSIGNED_VENDOR_NAME, Boolean(source.isStockReplenishment)]);
-    const explicitVendor = source.waveId === currentQueue || (source.isManuallyAdded && !source.relatedPurchaseOrderNumbers.length);
-    const existing = result.get(key) || (!explicitVendor ? [...result.values()].find(line => line.skuId === skuId && Boolean(line.isStockReplenishment) === Boolean(source.isStockReplenishment)) : undefined);
+    const shipmentSource = Boolean(source.shipmentReceiptDetails?.length);
+    const key = JSON.stringify([skuId, source.vendorName.trim() || UNASSIGNED_VENDOR_NAME, Boolean(source.isStockReplenishment), shipmentSource]);
+    const explicitVendor = shipmentSource || source.waveId === currentQueue || (source.isManuallyAdded && !source.relatedPurchaseOrderNumbers.length);
+    const existing = result.get(key) || (!explicitVendor ? [...result.values()].find(line => line.skuId === skuId && !line.shipmentReceiptDetails?.length && Boolean(line.isStockReplenishment) === Boolean(source.isStockReplenishment)) : undefined);
     if (existing) {
       duplicates++;
-      const existingKey = JSON.stringify([skuId, existing.vendorName, Boolean(existing.isStockReplenishment)]);
+      const existingKey = JSON.stringify([skuId, existing.vendorName, Boolean(existing.isStockReplenishment), Boolean(existing.shipmentReceiptDetails?.length)]);
+      if (shipmentSource) {
+        const details = new Map((existing.shipmentReceiptDetails || []).map(detail => [detail.lineKey, detail]));
+        let addedQuantity = 0;
+        for (const detail of source.shipmentReceiptDetails!) {
+          const prior = details.get(detail.lineKey);
+          if (prior && JSON.stringify(prior) !== JSON.stringify(detail)) throw new Error("같은 쉽먼트 상품의 미납수량이 바뀌었습니다. 기존 발주를 확인해 주세요.");
+          if (!prior) { details.set(detail.lineKey, detail); addedQuantity += detail.shortageQuantity; }
+        }
+        const values = [...details.values()];
+        const byPo = new Map<string, { purchaseOrderNumber: string; confirmedQuantity: number; receivedQuantity: number; shortageQuantity: number }>();
+        for (const detail of values) {
+          const row = byPo.get(detail.purchaseOrderNumber) || { purchaseOrderNumber: detail.purchaseOrderNumber, confirmedQuantity: 0, receivedQuantity: 0, shortageQuantity: 0 };
+          row.confirmedQuantity += detail.receivedQuantity + detail.shortageQuantity;
+          row.receivedQuantity += detail.receivedQuantity; row.shortageQuantity += detail.shortageQuantity;
+          byPo.set(detail.purchaseOrderNumber, row);
+        }
+        result.set(existingKey, withTimestampIfChanged(existing, { ...existing, shipmentReceiptDetails: values,
+          actualShortageQuantity: values.reduce((sum, detail) => sum + detail.shortageQuantity, 0),
+          shortageQuantity: existing.shortageQuantity + addedQuantity, actualInboundDetails: [...byPo.values()],
+          relatedPurchaseOrderNumbers: [...new Set([...existing.relatedPurchaseOrderNumbers, ...source.relatedPurchaseOrderNumbers])] }));
+        continue;
+      }
+      if (source.actualInboundDetails?.length) {
+        const details = new Map((existing.actualInboundDetails || []).map(detail => [detail.purchaseOrderNumber, detail]));
+        let addedQuantity = 0;
+        for (const detail of source.actualInboundDetails) {
+          if (details.has(detail.purchaseOrderNumber)) continue;
+          details.set(detail.purchaseOrderNumber, detail);
+          addedQuantity += detail.shortageQuantity;
+        }
+        const values = [...details.values()];
+        const actualShortageQuantity = values.reduce((sum, detail) => sum + detail.shortageQuantity, 0);
+        // A matching displayed/actual total is an untouched automatic inbound line.
+        // Preserve a user's adjusted order quantity when it has diverged from evidence.
+        const preserveEditedQuantity = existing.shortageQuantity !== existing.actualShortageQuantity;
+        result.set(existingKey, withTimestampIfChanged(existing, { ...existing,
+          actualInboundDetails: values, actualShortageQuantity,
+          shortageQuantity: preserveEditedQuantity ? existing.shortageQuantity : existing.shortageQuantity + addedQuantity,
+          relatedPurchaseOrderNumbers: [...new Set([...existing.relatedPurchaseOrderNumbers, ...source.relatedPurchaseOrderNumbers])] }));
+        continue;
+      }
       result.set(existingKey, withTimestampIfChanged(existing, { ...existing, imageUrl: existing.imageUrl || source.imageUrl,
         actualShortageQuantity: incomingIds.has(source.id) && source.actualShortageQuantity !== undefined ? source.actualShortageQuantity : existing.actualShortageQuantity,
         relatedPurchaseOrderNumbers: [...new Set([...existing.relatedPurchaseOrderNumbers, ...source.relatedPurchaseOrderNumbers])] }));

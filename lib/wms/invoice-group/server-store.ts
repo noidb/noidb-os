@@ -7,6 +7,7 @@ import {
   type InvoiceGroupStoreSnapshot,
 } from "./shared-store-types";
 import { missingInvoiceGroupDispatchRequirements, nextInvoiceGroupStage, type InvoiceGroup } from "./types";
+import { isAsideCompletedDispatchPurchaseOrder } from "../logistics-aside-dispatch";
 
 /**
  * 발주묶음 전용 서버 저장소 (2026-09-18 신규). lib/wms/picking-wave/server-store.ts와 같은
@@ -143,6 +144,7 @@ export function applyInvoiceGroupStoreMutation(current: InvoiceGroupStoreSnapsho
     const existing = next.groups.find(group => group.id === incoming.id);
     if (!existing && next.deletedGroupIds[incoming.id]) throw new Error("삭제된 발주묶음 ID는 다시 저장할 수 없습니다.");
     if (!existing && incoming.stage !== "new") throw new Error("새 발주묶음은 신규 단계로만 만들 수 있습니다.");
+    if (!existing && incoming.purchaseOrderNumbers.some(isAsideCompletedDispatchPurchaseOrder)) throw new Error("Aside에서 출고완료한 발주서는 새 출고묶음으로 다시 만들 수 없습니다.");
     if (existing) {
       if (Date.parse(incoming.updatedAt) < Date.parse(existing.updatedAt)) throw new Error("더 최신 발주묶음 기록이 있어 이전 저장 요청을 차단했습니다.");
       const samePurchaseOrderSet = incoming.purchaseOrderNumbers.length === existing.purchaseOrderNumbers.length

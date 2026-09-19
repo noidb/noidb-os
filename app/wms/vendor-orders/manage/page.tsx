@@ -110,12 +110,15 @@ export default function VendorOrderManageListPage() {
 
   return (
     <main style={pageStyle}>
-      <h1 style={{ fontSize: "20px", margin: "0 0 4px" }}>거래처 발주관리</h1>
-      <p>어디서 보낸 상품이든 이 목록에 추가됩니다. 거래처별로 수정하고 발주서를 보내세요.</p>
-      <nav style={{ display: "flex", gap: "16px", marginBottom: "12px" }}><a href="/wms/vendor-orders/receiving">입고관리</a><a href="/wms/vendor-orders/status-requests">단종·해제 관리</a></nav>
+      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px", marginBottom: "24px" }}>
+        <h1 style={{ fontSize: "20px", margin: 0 }}>거래처 발주관리</h1>
+        <nav style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <a href="/wms/inbound/shipments?tab=followup" style={{ ...wmsGhostButton, minHeight: "44px", display: "inline-flex", alignItems: "center", textDecoration: "none" }}>후속처리 목록</a>
+          <button type="button" disabled={queueEditing || refreshing} onClick={() => void refreshManually()} style={{ ...wmsGhostButton, minHeight: "44px" }}>{refreshing ? "새로고침 중…" : "새로고침"}</button>
+        </nav>
+      </header>
       {refreshPending && <p role="alert" style={{ color: "#934633", fontSize: "13px", lineHeight: 1.6 }}>다른 화면에서 발주 목록이 변경되었습니다. 입력한 내용은 유지했습니다. 저장을 마친 뒤 최신 목록을 확인해 주세요.</p>}
       {refreshError && <p role="alert" style={{ color: "#934633", fontSize: "13px" }}>{refreshError}</p>}
-      <button type="button" disabled={queueEditing || refreshing} onClick={() => void refreshManually()} style={{ ...wmsGhostButton, minHeight: "44px" }}>{refreshing ? "새로고침 중…" : "새로고침"}</button>
       <VendorQueueEditingContext.Provider value={reportQueueEditing}>{queueId && <QueueEditor key={`${queueId}:${editorVersion}`} params={{ waveId: queueId }} sharedSnapshot={editorSnapshot} />}</VendorQueueEditingContext.Provider>
 
     </main>

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
+import { ClosedShipmentHistory } from "./ClosedShipmentHistory";
 
 type MonthlyInboundRow = {
   year: number;
@@ -112,6 +113,7 @@ export default function InboundCumulativePage() {
           <a href="/wms/work-center" style={{ ...wmsGhostButton, display: "inline-flex", marginTop: "14px", textDecoration: "none" }}>작업센터로 돌아가기</a>
         </>
       )}
+      <ClosedShipmentHistory />
     </main>
   );
 }

@@ -7,6 +7,7 @@
     if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) throw new Error("수량을 정확히 읽지 못했습니다.");
     return Number(raw);
   };
+  const allowedOrderStatuses = new Set(["정상", "불가", "일시중단"]);
 
   // Expand rowspan/colspan before assigning columns (one box spans multiple SKU rows).
   function expandRows(rows) {
@@ -36,8 +37,9 @@
   }))));
 
   function parseDetail(doc, shipmentNumber) {
-    const heading = [...doc.querySelectorAll("h4")].map(node => clean(node.textContent)).find(value => value.includes("쉽먼트 상태"));
-    if (!heading || !heading.includes(`# ${shipmentNumber} `)) throw new Error(`쉽먼트 ${shipmentNumber} 상세를 확인하지 못했습니다. 로그인을 확인해 주세요.`);
+    const exactShipment = new RegExp(`(?:^|\\s)#\\s*${shipmentNumber}(?=\\s|$)`);
+    const heading = [...doc.querySelectorAll("h4")].map(node => clean(node.textContent)).find(value => value.includes("쉽먼트 상태") && exactShipment.test(value));
+    if (!heading) throw new Error(`쉽먼트 ${shipmentNumber} 상세를 확인하지 못했습니다. 로그인을 확인해 주세요.`);
     const status = heading.match(/쉽먼트\s*상태\s*:\s*(.+)$/)?.[1]?.trim();
     if (status !== "마감") return { shipmentNumber, status: status || "확인 필요", totalDelivered: null, totalReceived: null, lines: [] };
     const table = doc.querySelector("#shipmentDetailTable");
@@ -131,7 +133,87 @@
     }
     return { schemaVersion: 1, source: "supplier-hub-shipments", collectedAt: new Date().toISOString(), orders, shipments: [...shipments.values()] };
   }
-  const api = { expandRows, parseDetail, parseList, collect };
+
+  // The logistics-receipt flow receives an explicit, server-selected shipment list.
+  // It deliberately does not enumerate Supplier Hub lists or infer additional shipments.
+  async function collectShipments(targets, progress = () => {}, signal) {
+    if (location.origin !== "https://supplier.coupang.com") throw new Error("Supplier Hub에서 실행해 주세요.");
+    const values = Array.isArray(targets) ? targets : [];
+    const normalizedTargets = values.map(target => ({
+      shipmentNumber: clean(typeof target === "string" ? target : target?.shipmentNumber),
+      expectedDate: clean(target?.expectedDate), centerName: clean(target?.centerName), source: clean(target?.source),
+      purchaseOrderNumbers: Array.isArray(target?.purchaseOrderNumbers) ? target.purchaseOrderNumbers.map(value => clean(value)) : [],
+    }));
+    const shipmentNumbers = normalizedTargets.map(target => target.shipmentNumber);
+    if (!shipmentNumbers.length || shipmentNumbers.length > 200 || !normalizedTargets.every(target => /^\d{1,20}$/.test(target.shipmentNumber)
+      && /^\d{4}-\d{2}-\d{2}/.test(target.expectedDate) && target.centerName && ["dispatch", "aside"].includes(target.source)
+      && target.purchaseOrderNumbers.every(value => /^\d{1,20}$/.test(value))
+      && (target.source === "aside" || target.purchaseOrderNumbers.length > 0))) {
+      throw new Error("NOID-B의 쉽먼트 대상 목록을 정확히 확인하지 못했습니다.");
+    }
+    if (new Set(shipmentNumbers).size !== shipmentNumbers.length) throw new Error("NOID-B의 쉽먼트 대상 목록에 중복이 있습니다. 수집을 중단했습니다.");
+    async function getDocument(shipmentNumber) {
+      const request = new AbortController(), abort = () => request.abort();
+      if (signal?.aborted) abort();
+      signal?.addEventListener("abort", abort, { once: true });
+      const timer = setTimeout(abort, 30000);
+      try {
+        const response = await fetch(`/ibs/shipment/parcel/${shipmentNumber}`, { credentials: "same-origin", cache: "no-store", signal: request.signal });
+        if (!response.ok || response.redirected || new URL(response.url).origin !== location.origin || !new URL(response.url).pathname.startsWith("/ibs/shipment/parcel/")) {
+          throw new Error("쿠팡 조회가 실패했습니다. 다시 로그인한 뒤 가져와 주세요.");
+        }
+        return new DOMParser().parseFromString(await response.text(), "text/html");
+      } catch (error) {
+        if (request.signal.aborted && !signal?.aborted) throw new Error("쿠팡 조회 응답이 30초 이상 지연됐습니다. 잠시 후 다시 가져와 주세요.");
+        throw error;
+      } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
+    }
+    async function getSkuStatus(skuId) {
+      const request = new AbortController(), abort = () => request.abort();
+      if (signal?.aborted) abort();
+      signal?.addEventListener("abort", abort, { once: true });
+      const timer = setTimeout(abort, 30000);
+      try {
+        const response = await fetch("/plan/v1/ticket/sku/listTicketSku?locale=ko", {
+          method: "POST", credentials: "same-origin", cache: "no-store", signal: request.signal,
+          headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
+          body: JSON.stringify({ skuId, skuName: "", barcode: "", orderingStatus: "", unit1: "", unit2: "", issueStatus: "", issueType: "", size: 10, page: 1 }),
+        });
+        if (!response.ok || response.redirected || new URL(response.url).origin !== location.origin) throw new Error(`SKU ${skuId} 공급상태 조회에 실패했습니다.`);
+        const body = await response.json(); const content = body?.content;
+        if (!Array.isArray(content) || content.length !== 1 || String(content[0]?.skuId) !== skuId || !allowedOrderStatuses.has(content[0]?.orderStatus)) {
+          throw new Error(`SKU ${skuId} 공급상태를 정확히 확인하지 못했습니다.`);
+        }
+        return { skuId, orderStatus: content[0].orderStatus };
+      } catch (error) {
+        if (request.signal.aborted && !signal?.aborted) throw new Error("SKU 공급상태 조회 응답이 30초 이상 지연됐습니다. 잠시 후 다시 가져와 주세요.");
+        throw error;
+      } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
+    }
+    const shipments = [];
+    for (const [index, shipmentNumber] of shipmentNumbers.entries()) {
+      progress(`쉽먼트 ${index + 1}/${shipmentNumbers.length} · ${shipmentNumber} 조회 중`);
+      const receipt = parseDetail(await getDocument(shipmentNumber), shipmentNumber);
+      if (!["마감", "발송 완료", "발송 가능"].includes(receipt.status)) {
+        throw new Error(`쉽먼트 ${shipmentNumber}의 상태를 처리할 수 없습니다. 수집을 중단했습니다.`);
+      }
+      const target = normalizedTargets[index];
+      if (receipt.status === "마감" && target.source === "dispatch") {
+        const detailPos = [...new Set(receipt.lines.map(line => line.purchaseOrderNumber))].sort();
+        const expectedPos = [...new Set(target.purchaseOrderNumbers)].sort();
+        if (JSON.stringify(detailPos) !== JSON.stringify(expectedPos)) throw new Error(`쉽먼트 ${shipmentNumber} 상세의 발주번호가 NOID-B 출고 대상과 다릅니다. 수집을 중단했습니다.`);
+      }
+      shipments.push(receipt);
+    }
+    const skuIds = [...new Set(shipments.filter(receipt => receipt.status === "마감").flatMap(receipt => receipt.lines.map(line => line.skuId)))].sort();
+    const skuStatuses = [];
+    for (const [index, skuId] of skuIds.entries()) {
+      progress(`공급상태 ${index + 1}/${skuIds.length} · SKU ${skuId} 조회 중`);
+      skuStatuses.push(await getSkuStatus(skuId));
+    }
+    return { source: "supplier-hub-shipments", schemaVersion: 3, collectedAt: new Date().toISOString(), requestedShipmentNumbers: shipmentNumbers, shipments, skuStatuses };
+  }
+  const api = { expandRows, parseDetail, parseList, collect, collectShipments };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.NoidbShipmentReceipts = api;
 })(globalThis);

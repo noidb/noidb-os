@@ -1,0 +1,25 @@
+.shell { max-width: 920px; margin: 0 auto; padding: 48px 28px 72px; color: #282522; }
+.header { margin: 18px 0 36px; }
+.eyebrow { margin: 0 0 7px; color: #547365; font-size: 12px; font-weight: 800; letter-spacing: .04em; }
+.header h1 { margin: 0; font-size: 30px; letter-spacing: -.03em; }
+.header > p:last-child { max-width: 620px; color: #716b64; font-size: 14px; line-height: 1.65; }
+.summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 26px 0 36px; }
+.summary div { display: grid; gap: 6px; min-width: 0; padding: 18px; border: 1px solid #e4dcd1; border-radius: 14px; background: #faf8f4; }
+.summary strong { font-size: 13px; }
+.summary span { color: #77716a; font-size: 11px; line-height: 1.4; }
+.stages { display: grid; gap: 18px; margin: 0; padding: 0; list-style: none; }
+.stage { display: grid; grid-template-columns: 58px minmax(0, 1fr) minmax(170px, 210px); align-items: center; gap: 20px; padding: 22px; border: 1px solid #e4dcd1; border-radius: 16px; background: #fff; }
+.number { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; background: #e3ece6; color: #3f6654; font-size: 13px; font-weight: 800; }
+.content h2 { margin: 0 0 5px; font-size: 17px; }
+.content p { margin: 0; font-size: 13px; line-height: 1.55; }
+.content small { display: block; margin-top: 5px; color: #77716a; font-size: 11px; line-height: 1.55; }
+.primaryButton, .secondaryButton { display: grid; gap: 2px; min-height: 48px; border-radius: 10px; padding: 9px 11px; font-size: 13px; font-weight: 800; }
+.primaryButton { border: 1px solid #b9d2c0; background: #e3ece6; color: #365f4e; }
+.secondaryButton { border: 1px solid #ddd3c7; background: #f8f5f0; color: #5a5147; }
+.primaryButton:disabled, .secondaryButton:disabled { cursor: default; opacity: 1; }
+.primaryButton span, .secondaryButton span { font-size: 10px; font-weight: 500; opacity: .7; }
+.rules { margin-top: 34px; padding: 22px; border-radius: 16px; background: #f3f7f4; border: 1px solid #c9daca; }
+.rules h2 { margin: 0 0 8px; font-size: 16px; }
+.rules ul { margin: 0; padding-left: 20px; color: #5b665e; font-size: 12px; line-height: 1.8; }
+.back { display: inline-block; margin-top: 30px; color: #5d6d63; font-size: 13px; }
+@media (max-width: 680px) { .shell { padding: 34px 18px 56px; } .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 28px; } .summary div { padding: 14px; } .stages { gap: 14px; } .stage { grid-template-columns: 42px minmax(0, 1fr); gap: 14px; padding: 18px; } .stage button { grid-column: 1 / -1; } }
