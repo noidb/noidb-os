@@ -53,7 +53,7 @@ interface CardLayout {
 function buildTopInfoLines(_category: string, option: string, quantity: number, memo = ""): TopInfoLine[] {
   const lines: TopInfoLine[] = [];
   if (option) {
-    lines.push({ text: option, font: "bold 36px sans-serif", color: "#4d6358", lineHeight: 48, marginTop: 12, marginBottom: 8 });
+    lines.push({ text: option, font: NAME_FONT, color: "#4d6358", lineHeight: NAME_LINE_HEIGHT, marginTop: 12, marginBottom: 8 });
   }
   // 수량은 항상 "주문수량 N개" 형태로 표시 — 카테고리·옵션 유무와 무관하게 상단 핵심 정보로
   // 가장 크게 그린다(2026-08-20 배포 전 마지막 실기기 확인 4번). 값이 비어 있어도 NaN개/undefined개가
@@ -158,15 +158,8 @@ export async function renderVendorOrderImage(
     return { line, displayName: name, topInfoLines, topInfoHeight, nameLines, cardHeight };
   });
 
-  const deliveryAddress = "강원도 원주시\n전망길 22-3 1층";
-  const addressFont = "bold 60px sans-serif";
-  const addressLineHeight = 76;
-  measureCtx.font = addressFont;
-  const deliveryLines = [...deliveryAddress.split("\n"), "받는 사람: 노이드비", "전화번호: 010-5769-5602"]
-    .flatMap(part => wrapText(measureCtx, part, TEXT_MAX_WIDTH - 56));
-  const deliveryHeight = 216 + addressLineHeight * (deliveryLines.length - 1) + 44;
   const totalCardsHeight = cards.reduce((sum, card) => sum + card.cardHeight, 0);
-  const height = HEADER_HEIGHT + totalCardsHeight + deliveryHeight + 130;
+  const height = HEADER_HEIGHT + totalCardsHeight;
   const canvas = document.createElement("canvas");
   canvas.width = WIDTH;
   canvas.height = height;
@@ -228,30 +221,6 @@ export async function renderVendorOrderImage(
 
     cursorY += card.cardHeight;
   });
-
-  // 배송정보는 상품 목록 맨 아래에서 가장 잘 보이도록 별도 강조 박스로 그린다.
-  const deliveryTop = cursorY + 72;
-  ctx.fillStyle = "#f6f0e7";
-  ctx.beginPath();
-  ctx.roundRect(CARD_PAD_X, deliveryTop, WIDTH - CARD_PAD_X * 2, deliveryHeight, 18);
-  ctx.fill();
-  const deliveryX = CARD_PAD_X + 28;
-  ctx.fillStyle = "#4d6358";
-  ctx.beginPath();
-  ctx.roundRect(deliveryX, deliveryTop + 28, 480, 108, 20);
-  ctx.fill();
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 72px sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText("배송지 정보", deliveryX + 240, deliveryTop + 107);
-  ctx.textAlign = "left";
-  ctx.fillStyle = "#263d33";
-  ctx.font = addressFont;
-  let deliveryY = deliveryTop + 216;
-  for (const deliveryLine of deliveryLines) {
-    ctx.fillText(deliveryLine, deliveryX, deliveryY);
-    deliveryY += addressLineHeight;
-  }
 
   return new Promise<Blob | null>(resolve => {
     try {
