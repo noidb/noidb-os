@@ -106,6 +106,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
   const [partialCompletionSkus, setPartialCompletionSkus] = useState<Set<string>>(new Set());
   const [completionMessage, setCompletionMessage] = useState<string | null>(null);
   const [sentOrderProcessing, setSentOrderProcessing] = useState<Set<string>>(new Set());
+  const [draftOrderExpanded, setDraftOrderExpanded] = useState<Set<string>>(new Set());
   const [completedDiscontinueSkus, setCompletedDiscontinueSkus] = useState<Set<string>>(new Set());
   const linesRef = useRef(lines);
   linesRef.current = lines;
@@ -1078,6 +1079,8 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
             const totalActualShortage = group.lines.reduce((sum, l) => sum + (l.actualShortageQuantity ?? l.shortageQuantity), 0);
             const pendingReorders = pendingReorderLines.filter(line => (line.vendorName || UNASSIGNED_VENDOR_NAME) === group.vendorName);
             const sentCollapsed = status === "sent" && !processingSent;
+            const draftCollapsed = status !== "sent" && !draftOrderExpanded.has(entry.id);
+            const orderCollapsed = sentCollapsed || draftCollapsed;
             const pendingClassificationCount = group.lines.filter(line => vendorLineClassification(line) === "pending").length;
             const delayedClassificationCount = group.lines.filter(line => vendorLineClassification(line) === "delayed").length;
             const onlyDelayed = status === "sent" && delayedClassificationCount > 0 && pendingClassificationCount === 0;
@@ -1110,7 +1113,19 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                     }}
                   >발주결과처리</button>
                 </div>}
-                {!sentCollapsed && <div id={`vendor-order-${entry.id}`}>
+                {status !== "sent" && <div style={{ marginBottom: "12px" }}>
+                  <button
+                    type="button"
+                    disabled={saving || workspaceMoved}
+                    aria-expanded={!draftCollapsed}
+                    aria-controls={`vendor-order-${entry.id}`}
+                    style={{ ...wmsSecondaryButton, minHeight: "44px", width: "100%" }}
+                    onClick={() => {
+                      setDraftOrderExpanded(previous => { const next = new Set(previous); if (next.has(entry.id)) next.delete(entry.id); else next.add(entry.id); return next; });
+                    }}
+                  >발주서 작성</button>
+                </div>}
+                {!orderCollapsed && <div id={`vendor-order-${entry.id}`}>
                 {status === "sent" && <p role="status" style={{ fontSize: "12px" }}>미처리 {pendingClassificationCount} · 입고지연 {delayedClassificationCount}</p>}
                 {!historical && editConflicts.filter(conflict => conflict.vendorName === group.vendorName).map(conflict => <div key={conflict.key} role="alert" style={{ padding: 12, background: wmsColors.warnSoft, marginBottom: 10 }}>
                   <p>다른 기기에서도 같은 {conflict.field === "__deleted" ? "상품 또는 발주서가 삭제·변경되었습니다" : `항목(${conflict.field})을 변경했습니다`}.</p>

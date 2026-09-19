@@ -35,6 +35,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "잘못된 이미지 주소입니다." }, { status: 400 });
   }
 
+  // Older supplier records contain HTTP Coupang image links; fetch the same
+  // trusted CDN resource over HTTPS without changing the stored product data.
+  if (target.protocol === "http:" && (target.hostname === "coupangcdn.com" || target.hostname.endsWith(".coupangcdn.com"))) {
+    target.protocol = "https:";
+  }
+
   if (target.protocol !== "https:" || !isAllowedHost(target.hostname)) {
     return NextResponse.json({ error: "허용되지 않은 이미지 주소입니다." }, { status: 400 });
   }
