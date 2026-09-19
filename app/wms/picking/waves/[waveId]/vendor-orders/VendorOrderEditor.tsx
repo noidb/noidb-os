@@ -1075,8 +1075,11 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
             const historical = !entry.group;
             const group = entry.group || { vendorName: entry.vendorName, lines: entry.historyLines || [] };
             const status = entry.draft?.status || statusOf(group.vendorName);
-            const processingSent = status === "sent" && sentOrderProcessing.has(entry.id) && !saving && !workspaceMoved;
-            const editable = !historical && !isPreview && !workspaceMoved && !saving && statusSavingVendor !== group.vendorName && status !== "sent";
+            // Keep an opened order mounted while a line deletion is saving. `saving` still
+            // locks every control below, but must not be allowed to turn this display state
+            // into a collapsed card before the request succeeds or fails.
+            const processingSent = status === "sent" && sentOrderProcessing.has(entry.id) && !workspaceMoved;
+            const editable = !historical && !isPreview && !workspaceMoved && statusSavingVendor !== group.vendorName && status !== "sent";
             const totalOrderQuantity = group.lines.reduce((sum, l) => sum + l.shortageQuantity, 0);
             const totalActualShortage = group.lines.reduce((sum, l) => sum + (l.actualShortageQuantity ?? l.shortageQuantity), 0);
             const pendingReorders = pendingReorderLines.filter(line => (line.vendorName || UNASSIGNED_VENDOR_NAME) === group.vendorName);
@@ -1100,7 +1103,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                   <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", maxWidth: "100%" }}>
                     <StatusBadge status={status === "approved" ? "draft" : status} delayed={onlyDelayed} />
                     {status !== "sent" && entry.draft && (!isPreview || historyView) && <DeleteVendorOrderButton draft={entry.draft} label={entry.label} disabled={saving || workspaceMoved || Boolean(statusSavingVendor)} onDeleted={handleVendorOrderDeleted} />}
-                    {!entry.draft && editable && <button type="button" onClick={() => void deleteVendorOrder(group.vendorName, group.lines)} style={{ ...wmsWarnButton, minHeight: "36px", fontSize: "12px" }}>발주서 삭제</button>}
+                    {!entry.draft && editable && <button type="button" disabled={saving} onClick={() => void deleteVendorOrder(group.vendorName, group.lines)} style={{ ...wmsWarnButton, minHeight: "36px", fontSize: "12px" }}>발주서 삭제</button>}
                   </div>
                 </div>
                 {status === "sent" && <div style={{ marginBottom: "12px" }}>
@@ -1127,7 +1130,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                     }}
                   >발주서 작성</button>
                 </div>}
-                {!orderCollapsed && <div id={`vendor-order-${entry.id}`}>
+                {!orderCollapsed && <fieldset id={`vendor-order-${entry.id}`} disabled={saving} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
                 {status === "sent" && <p role="status" style={{ fontSize: "12px" }}>미처리 {pendingClassificationCount} · 입고지연 {delayedClassificationCount}</p>}
                 {!historical && editConflicts.filter(conflict => conflict.vendorName === group.vendorName).map(conflict => <div key={conflict.key} role="alert" style={{ padding: 12, background: wmsColors.warnSoft, marginBottom: 10 }}>
                   <p>다른 기기에서도 같은 {conflict.field === "__deleted" ? "상품 또는 발주서가 삭제·변경되었습니다" : `항목(${conflict.field})을 변경했습니다`}.</p>
@@ -1223,7 +1226,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                     onMarkSent={() => markSent(group.vendorName)}
                   />
                 )}
-                </div>}
+                </fieldset>}
               </div>
             );
           })}
@@ -1360,12 +1363,13 @@ function VendorOrderLineCard({
   }, [line.id]);
 
   const { option: displayOption } = resolveDisplayNameAndOption(line.productName, line.optionLabel);
+  const photoEditable = editable && !optionsBusy;
 
 
   /** 이미지 업로드는 이미 성공했지만(구글드라이브), 제품DB 시트 쓰기가 실패했을 때 재시도할 수 있게
    *  업로드된 URL만 따로 기억해둔다 — 재시도 시 사진을 다시 고를 필요가 없다. */
   async function pastePhoto(file: File) {
-    if (!editable || pasteUploading.current) return;
+    if (!photoEditable || pasteUploading.current) return;
     pasteUploading.current = true; setImageSaving(true); setImageSaveError(null); onPhotoWork(true);
     try {
       const dataUrl = await resizeProductPhoto(file);
@@ -1462,17 +1466,17 @@ function VendorOrderLineCard({
   }
 
   return (
-    <div data-vendor-sku={line.skuId} tabIndex={editable ? 0 : -1} aria-label={line.skuId + " 상품 사진 붙여넣기"} onClick={event => {
-      if (!editable || (event.target as HTMLElement).closest("input, textarea, select, button, a")) return;
+    <div data-vendor-sku={line.skuId} tabIndex={photoEditable ? 0 : -1} aria-label={line.skuId + " 상품 사진 붙여넣기"} onClick={event => {
+      if (!photoEditable || (event.target as HTMLElement).closest("input, textarea, select, button, a")) return;
       event.currentTarget.focus();
     }} onPaste={event => {
       const file = Array.from(event.clipboardData.files).find(file => file.type.startsWith("image/"));
-      if (!editable) return;
+      if (!photoEditable) return;
       if (file) { event.preventDefault(); void pastePhoto(file); }
       else if (!(event.target as HTMLElement).closest("input, textarea, [contenteditable=true]")) { event.preventDefault(); setImageSaveError("이미지 파일을 복사하거나 끌어 놓아 주세요."); }
-    }} onDragEnter={event => { event.preventDefault(); if (editable) setImageDragActive(true); }} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = editable ? "copy" : "none"; }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setImageDragActive(false); }} onDrop={event => {
+    }} onDragEnter={event => { event.preventDefault(); if (photoEditable) setImageDragActive(true); }} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = photoEditable ? "copy" : "none"; }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setImageDragActive(false); }} onDrop={event => {
       event.preventDefault(); setImageDragActive(false);
-      if (!editable) return;
+      if (!photoEditable) return;
       const images = Array.from(event.dataTransfer.files).filter(file => file.type.startsWith("image/"));
       if (images.length > 1) { setImageSaveError("한 상품에는 사진 한 장씩 끌어 놓아 주세요."); return; }
       if (images[0]) void pastePhoto(images[0]); else setImageSaveError("웹 링크 대신 이미지 파일을 끌어 놓거나 복사해 주세요.");
