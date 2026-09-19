@@ -36,7 +36,7 @@ export default function VendorOrderCardPreview({ line, vendorName, orderDate, on
   const { name, option } = resolveDisplayNameAndOption(line.productName, line.optionLabel);
   const imageReady = image?.key === key;
   const currentError = error?.key === key ? error : null;
-  const fallback = <div style={{ padding: "24px 16px", border: `1px solid ${wmsColors.border}`, borderRadius: 10, textAlign: "center" }}>
+  const fallback = <div style={{ boxSizing: "border-box", height: "100%", overflowY: "auto", padding: "24px 16px", textAlign: "center" }}>
     <p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{name || "상품명 없음"}</p>
     {option && <p style={{ margin: "6px 0 0", fontSize: 16, fontWeight: 700 }}>{option}</p>}
     <p style={{ margin: "10px 0 0", fontSize: 14, color: wmsColors.muted }}>주문수량 {line.shortageQuantity}개</p>
@@ -45,7 +45,9 @@ export default function VendorOrderCardPreview({ line, vendorName, orderDate, on
   </div>;
 
   return <div data-vendor-card-preview={line.id} style={{ width: "100%", maxWidth: 420, marginInline: "auto" }}>
-    {imageReady ? <img src={image.url} alt={`${line.productName} · ${line.optionLabel || ""} · 주문수량 ${line.shortageQuantity}개`} draggable={false} style={{ display: "block", width: "100%", height: "auto", borderRadius: 10 }} /> : fallback}
+    <div style={{ aspectRatio: "1080 / 1440", overflow: "hidden", border: `1px solid ${wmsColors.border}`, borderRadius: 10, background: "#fff" }}>
+      {imageReady ? <img src={image.url} alt={`${line.productName} · ${line.optionLabel || ""} · 주문수량 ${line.shortageQuantity}개`} draggable={false} style={{ display: "block", width: "100%", height: "100%", objectFit: "contain", objectPosition: "top" }} /> : fallback}
+    </div>
     {onEditImage && <button type="button" style={{ ...wmsSecondaryButton, marginTop: 12, width: "100%" }} onClick={onEditImage}>사진 수정</button>}
   </div>;
 }

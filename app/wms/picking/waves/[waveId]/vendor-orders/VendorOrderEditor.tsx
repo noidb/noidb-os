@@ -37,7 +37,6 @@ import { deriveArchivedVendorOrderWorkspace } from "@/lib/wms/vendor-order/deriv
 import { useReceivingDelays } from "@/lib/wms/vendor-order/use-receiving-delays";
 import { receivingDelayDate, type ReceivingDelaySummary } from "@/lib/wms/vendor-order/receiving-delay";
 import { normalizeSkuId } from "@/lib/wms/sku-normalize";
-import ReceivingDelayDialog from "./ReceivingDelayDialog";
 import { planVendorReassignment } from "@/lib/wms/vendor-order/reassign-vendor";
 import VendorOrderExportPanel from "./ExportPanel";
 import VendorOrderCardPreview from "./VendorOrderCardPreview";
@@ -115,8 +114,8 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
   const completionRequest = useRef(0);
   const deletingLines = useRef(false);
   const receivingDelays = useReceivingDelays();
-  const [delayTarget, setDelayTarget] = useState<{ line: VendorOrderDraftLine; previous?: ReceivingDelaySummary; sent?: boolean } | null>(null);
   const [sentDelaySaving, setSentDelaySaving] = useState(false);
+  const delaySavingRef = useRef(false);
   const sentDelay = (line: VendorOrderDraftLine): ReceivingDelaySummary => ({ skuId: line.skuId, active: Boolean(line.receivingDelayedAt && !line.receivingDelayReleasedAt), recentDelayedAt: line.receivingDelayedAt || "", lastActionAt: line.updatedAt, memo: line.receivingDelayMemo, vendorName: line.vendorName });
   const [delayError, setDelayError] = useState<string | null>(null);
   const [delayMessage, setDelayMessage] = useState<string | null>(null);
@@ -952,19 +951,21 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     finally { setStatusSavingVendor(null); }
   }
 
-  async function saveReceivingDelay(memo: string) {
-    if (!delayTarget) return;
+  async function saveReceivingDelay(target: { line: VendorOrderDraftLine; previous?: ReceivingDelaySummary; sent?: boolean }) {
+    if (delaySavingRef.current) return;
+    delaySavingRef.current = true;
     setDelayError(null);
-    const { line, previous } = delayTarget;
+    setDelayMessage(null);
+    const { line, previous } = target;
+    const memo = previous?.memo || line.receivingDelayMemo || "";
     try {
-      if (delayTarget.sent) {
+      if (target.sent) {
         setSentDelaySaving(true);
         const response = await fetch("/api/wms/vendor-orders/delay", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lineId: line.id, expectedUpdatedAt: line.updatedAt, delayed: !previous?.active, memo }) });
         const data = await response.json();
         if (!response.ok || !data.success || !data.line) throw new Error(data.error || "입고지연 저장에 실패했습니다.");
         handleSentLineSaved(data.line);
         setDelayMessage(previous?.active ? "입고지연 표시를 해제했습니다. 상품은 처리할 때까지 남습니다." : "입고지연으로 저장했습니다. 이 발주서에 남아 나중에 다시 처리할 수 있습니다.");
-        setDelayTarget(null);
         return;
       }
       const live = liveCatalogByProductCode.get(line.skuId);
@@ -976,9 +977,8 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
         memo, expectedLastActionAt: previous?.lastActionAt || null,
       });
       setDelayMessage(`SKU ${line.skuId} ${summary.active ? "입고지연을 저장했습니다. 다음 출고작업에도 표시됩니다." : "입고지연을 해제했습니다."}`);
-      setDelayTarget(null);
     } catch (reason) { setDelayError(reason instanceof Error ? reason.message : "입고지연 저장에 실패했습니다."); }
-    finally { setSentDelaySaving(false); }
+    finally { delaySavingRef.current = false; setSentDelaySaving(false); }
   }
 
   if (loading) {
@@ -1018,6 +1018,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
 
       {receivingDelays.error && <p role="alert" style={{ color: "#b42318", fontSize: "12px" }}>{receivingDelays.error} <button type="button" onClick={() => void receivingDelays.refresh()} style={{ ...wmsGhostButton, minHeight: "36px" }}>지연 이력 다시 확인</button></p>}
       {delayMessage && <p role="status" style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{delayMessage}</p>}
+      {delayError && <p role="alert" style={{ color: "#b42318", fontSize: "12px" }}>{delayError}</p>}
       {workspaceMoved && <p role="alert" style={{ color: "#b42318" }}>이 창은 이전 발주대기입니다. 입력한 내용은 유지했습니다. <a href="/wms/vendor-orders/manage" target="_blank" rel="noreferrer">최신 발주대기 열기</a></p>}
       {completionMessage && <p role="status" style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{completionMessage}</p>}
       {completionError && <p role="alert" style={{ color: "#b42318", fontSize: "12px" }}>{completionError} <button type="button" onClick={() => void checkCompletion().catch(() => {})} style={wmsGhostButton}>처리 상태 다시 확인</button></p>}
@@ -1160,7 +1161,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                       productLink={liveCatalogByProductCode.get(normalizeSkuId(line.skuId))?.productLink || ""}
                       delaySummary={status === "sent" ? sentDelay(line) : receivingDelays.summaries.get(normalizeSkuId(line.skuId))}
                       delayDisabled={((historical || historyView) && !processingSent) || (status === "sent" ? sentDelaySaving : receivingDelays.loading || receivingDelays.saving || Boolean(receivingDelays.error)) || saving}
-                      onDelay={() => { setDelayError(null); setDelayTarget({ line, sent: status === "sent", previous: status === "sent" ? sentDelay(line) : receivingDelays.summaries.get(normalizeSkuId(line.skuId)) }); }}
+                      onDelay={() => void saveReceivingDelay({ line, sent: status === "sent", previous: status === "sent" ? sentDelay(line) : receivingDelays.summaries.get(normalizeSkuId(line.skuId)) })}
                       onChange={patch => updateLine(line.id, patch)}
                       onPhotoWork={active => setPhotoWorkCount(count => Math.max(0, count + (active ? 1 : -1)))}
                       onSavePhoto={url => savePastedPhoto(line.id, url)}
@@ -1256,7 +1257,6 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
         const anchor = linesRef.current.find(line => normalizeSkuId(line.skuId) === normalizeSkuId(variantTarget.skuId) && line.vendorName === variantTarget.vendorName);
         addProductsFromSearch(variantTarget.vendorName, products, anchor?.manualListGroup, anchor?.isStockReplenishment);
       }} />}
-      {delayTarget && <ReceivingDelayDialog line={delayTarget.line} previous={delayTarget.previous} sentOrder={delayTarget.sent} busy={receivingDelays.saving || sentDelaySaving} error={delayError} onClose={() => setDelayTarget(null)} onSave={memo => void saveReceivingDelay(memo)} />}
     </main>
   );
 }
