@@ -1080,6 +1080,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
             const sentCollapsed = status === "sent" && !processingSent;
             const pendingClassificationCount = group.lines.filter(line => vendorLineClassification(line) === "pending").length;
             const delayedClassificationCount = group.lines.filter(line => vendorLineClassification(line) === "delayed").length;
+            const onlyDelayed = status === "sent" && delayedClassificationCount > 0 && pendingClassificationCount === 0;
 
             return (
               <div key={entry.id} data-vendor-group={group.vendorName} data-vendor-order-id={entry.id} style={cardStyle}>
@@ -1092,7 +1093,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                   </h2>
                   {entry.draft?.sentAt && <span style={{ color: wmsColors.muted, fontSize: "12px" }}>전송 {new Date(entry.draft.sentAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}</span>}
                   <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", maxWidth: "100%" }}>
-                    <StatusBadge status={status === "approved" ? "draft" : status} />
+                    <StatusBadge status={status === "approved" ? "draft" : status} delayed={onlyDelayed} />
                     {status !== "sent" && entry.draft && (!isPreview || historyView) && <DeleteVendorOrderButton draft={entry.draft} label={entry.label} disabled={saving || workspaceMoved || Boolean(statusSavingVendor)} onDeleted={handleVendorOrderDeleted} />}
                     {!entry.draft && editable && <button type="button" onClick={() => void deleteVendorOrder(group.vendorName, group.lines)} style={{ ...wmsWarnButton, minHeight: "36px", fontSize: "12px" }}>발주서 삭제</button>}
                   </div>
@@ -1631,7 +1632,7 @@ function VendorOrderLineCard({
   );
 }
 
-function StatusBadge({ status }: { status: VendorOrderDraftStatus }) {
+function StatusBadge({ status, delayed = false }: { status: VendorOrderDraftStatus; delayed?: boolean }) {
   const colorMap: Record<VendorOrderDraftStatus, { bg: string; text: string }> = {
     draft: { bg: wmsColors.surfaceBeige, text: wmsColors.muted },
     review: { bg: "#fff3e0", text: "#a6614e" },
@@ -1639,10 +1640,10 @@ function StatusBadge({ status }: { status: VendorOrderDraftStatus }) {
     sent: { bg: wmsColors.green, text: "#ffffff" },
     resend_needed: { bg: wmsColors.warnSoft, text: wmsColors.warn },
   };
-  const color = colorMap[status];
+  const color = delayed ? { bg: wmsColors.warnSoft, text: wmsColors.warn } : colorMap[status];
   return (
     <span style={{ fontSize: "11px", fontWeight: 700, padding: "3px 10px", borderRadius: "999px", background: color.bg, color: color.text }}>
-      {VENDOR_ORDER_STATUS_LABEL[status]}
+      {delayed ? "입고지연" : VENDOR_ORDER_STATUS_LABEL[status]}
     </span>
   );
 }
