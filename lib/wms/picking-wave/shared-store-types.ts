@@ -95,6 +95,7 @@ export type PickingWaveStoreMutation =
   | { action: "transferSentVendorLine"; lineId: string; vendorName: string; operationId: string; expectedUpdatedAt: string; expectedQueueId: string; expectedTargetVersion: string; now: string }
   | { action: "resolveSentVendorLine"; lineId: string; expectedUpdatedAt: string; kind: "reorder" | "discontinue"; destinationId: string; now: string }
   | { action: "setSentVendorDelay"; lineId: string; expectedUpdatedAt: string; delayed: boolean; memo: string; now: string }
+  | { action: "setSentVendorMemo"; lineId: string; expectedUpdatedAt: string; memo: string; now: string }
   | { action: "discardVendorOrder"; draftId: string; expectedUpdatedAt: string; expectedUpdatedAtByLineId: Record<string, string>; reason: "잘못 생성" | "중복" | "테스트"; deletedAt: string }
   | { action: "restoreVendorDraft"; draft: VendorOrderDraft; lines: VendorOrderDraftLine[] }
   | { action: "deleteVendorLines"; waveId: string; lineIds: string[]; expectedUpdatedAtByLineId: Record<string, string>; deletedAt: string }
@@ -211,6 +212,7 @@ export function isPickingWaveStoreMutation(value: unknown): value is PickingWave
   if (value.action === "transferSentVendorLine") return ["lineId", "vendorName", "operationId", "expectedUpdatedAt", "expectedQueueId", "expectedTargetVersion", "now"].every(key => hasText(value, key)) && Number.isFinite(Date.parse(String(value.now)));
   if (value.action === "resolveSentVendorLine") return ["lineId", "expectedUpdatedAt", "destinationId", "now"].every(key => hasText(value, key)) && ["reorder", "discontinue"].includes(String(value.kind)) && Number.isFinite(Date.parse(String(value.now)));
   if (value.action === "setSentVendorDelay") return ["lineId","expectedUpdatedAt","now"].every(key=>hasText(value,key)) && typeof value.delayed==="boolean" && typeof value.memo==="string" && value.memo.length<=500 && Number.isFinite(Date.parse(String(value.now)));
+  if (value.action === "setSentVendorMemo") return ["lineId","expectedUpdatedAt","now"].every(key=>hasText(value,key)) && typeof value.memo==="string" && value.memo.length<=500 && Number.isFinite(Date.parse(String(value.now)));
   if (value.action === "discardVendorOrder") {
     const versions = value.expectedUpdatedAtByLineId;
     return hasText(value, "draftId") && hasText(value, "expectedUpdatedAt") && hasText(value, "deletedAt") && Number.isFinite(Date.parse(String(value.deletedAt)))

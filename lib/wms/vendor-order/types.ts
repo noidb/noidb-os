@@ -79,6 +79,8 @@ export interface VendorOrderDraftLine {
   /** 이 부족분과 관련된 쿠팡 발주서 번호들 (추적용) */
   relatedPurchaseOrderNumbers: string[];
   memo: string;
+  /** 발주결과처리에서 전송 완료 품목에 남기는 별도 결과 메모. 원본 발주 메모와 전송 이미지에는 사용하지 않는다. */
+  resultMemo?: string;
   /** 자동 집계가 아니라 사용자가 화면에서 직접 추가한 라인인지 */
   isManuallyAdded: boolean;
   isStockReplenishment?: boolean;

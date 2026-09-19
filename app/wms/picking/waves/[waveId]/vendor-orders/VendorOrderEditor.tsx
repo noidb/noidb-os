@@ -45,6 +45,7 @@ import DeleteVendorOrderButton from "./DeleteVendorOrderButton";
 import CompleteReceivingButton from "./CompleteReceivingButton";
 import SentVendorChangeButton from "./SentVendorChangeButton";
 import SentReorderButton from "./SentReorderButton";
+import SentVendorMemoInput from "./SentVendorMemoInput";
 import { isVendorLineResolved, vendorLineClassification } from "@/lib/wms/vendor-order/receiving-state";
 import ImageEditSheet from "../ImageEditSheet";
 import { ExternalLinkIcon } from "../../../../icons";
@@ -1595,6 +1596,7 @@ function VendorOrderLineCard({
         <button type="button" disabled={delayDisabled} onClick={onDelay} style={{...wmsSecondaryButton,width:"100%",height:"100%",minHeight:48,fontSize:13}}>{delaySummary?.active ? "입고지연 해제" : "입고지연"}</button>
         {deletionAvailable && <button type="button" onClick={onRemove} disabled={Boolean(deleteBlockReason) || optionsBusy} style={{...wmsWarnButton,width:"100%",height:"100%",minHeight:48,fontSize:13,opacity:deleteBlockReason ? .5 : 1}}>삭제</button>}
       </div>}
+      {processingSent && <SentVendorMemoInput line={line} disabled={delayDisabled || Boolean(optionsBusy)} onSaved={onReceivingSaved} />}
       {processingSent && statusMessage && <p role="status" style={{fontSize:12,color:wmsColors.warn}}>{statusMessage}</p>}
       {processingSent && deletionAvailable && deleteBlockReason && <p style={{fontSize:12,color:wmsColors.muted}}>{deleteBlockReason}</p>}
 
