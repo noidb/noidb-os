@@ -179,9 +179,9 @@ export default function WmsWorkCenterPage() {
        *  .task:first-child 규칙으로 자동으로 전체폭이 된다(기존 CSS 그대로, 새로 안 건드림). */}
       <div className={styles.tasks}>
         <section className={styles.task}>
-          <h2>입고결과 누적</h2>
-          <p>SKU별 누적 입고 수량을 월별로 조회합니다.</p>
-          <Link className={styles.taskButtonGrayWhite} href="/wms/inbound/cumulative">누적 조회</Link>
+          <h2>발주서작업</h2>
+          <p>입고예정일이 가까운 발주서부터 확인하고 발주묶음을 만듭니다.</p>
+          <Link className={styles.primaryPink} href="/wms/logistics/new-orders">발주서 검색·처리 시작</Link>
         </section>
         <section className={styles.task}>
           <h2>거래처 발주</h2>
@@ -189,14 +189,14 @@ export default function WmsWorkCenterPage() {
           <Link className={styles.taskButtonGrayWhite} href="/wms/vendor-orders/manage">거래처 발주 이어하기</Link>
         </section>
         <section className={styles.task}>
-          <h2>발주서작업</h2>
-          <p>입고예정일이 가까운 발주서부터 확인하고 발주묶음을 만듭니다.</p>
-          <Link className={styles.primaryPink} href="/wms/logistics/new-orders">발주서 검색·처리 시작</Link>
-        </section>
-        <section className={styles.task}>
           <h2>입고결과 처리</h2>
           <p>거래처 발주·단종 처리·미납분 재발주를 한곳에서 진행합니다.</p>
           <Link className={styles.taskButtonBeige} href="/wms/vendor-orders">입고결과 확인</Link>
+        </section>
+        <section className={styles.task}>
+          <h2>입고결과 누적</h2>
+          <p>SKU별 누적 입고 수량을 월별로 조회합니다.</p>
+          <Link className={styles.taskButtonGrayWhite} href="/wms/inbound/cumulative">누적 조회</Link>
         </section>
       </div>
 
