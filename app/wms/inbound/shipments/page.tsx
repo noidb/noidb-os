@@ -583,7 +583,7 @@ export default function ShipmentReceiptsPage() {
       )}
       <p className={styles.notice}>
         Aside의 9월 17일 기록을 반영했습니다. 당시 마감 25건은 다시 처리하지
-        않고, 미마감 18건은 계속 확인합니다.
+        않고, 남은 미마감 건과 추가 출고 건은 계속 확인합니다.
       </p>
       {payload?.board.warnings.map((warning, index) => (
         <p

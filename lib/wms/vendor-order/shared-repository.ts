@@ -34,7 +34,10 @@ export class SharedVendorOrderRepository implements VendorOrderRepository {
     if (this.migrationPromise) return this.migrationPromise;
     const needed = !window.localStorage.getItem(MIGRATION_KEY) || Boolean(window.localStorage.getItem(DIRTY_KEY));
     this.migrationPromise = (async () => {
-      if (needed) mirror(await requestSnapshot({ action: "migrate", snapshot: readLocalVendorOrderSnapshot() }));
+      if (needed) {
+        const localSnapshot = readLocalVendorOrderSnapshot();
+        mirror(await requestSnapshot(localSnapshot.vendorOrderDrafts.length || localSnapshot.vendorOrderLines.length ? { action: "migrate", snapshot: localSnapshot } : undefined));
+      }
     })().catch(error => { this.migrationPromise = null; throw error; });
     return this.migrationPromise;
   }

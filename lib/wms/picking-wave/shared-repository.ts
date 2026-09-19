@@ -77,7 +77,8 @@ export class SharedPickingWaveRepository implements PickingWaveRepository {
       if (needsMigration) {
         const localSnapshot = { ...readLocalPickingWaveSnapshot(), poConfirmationRecords: listPoConfirmationRecords() };
         const beforeWaveIds = localSnapshot.waves.map(wave => wave.id).sort();
-        const serverSnapshot = await requestSnapshot({ action: "migrate", snapshot: localSnapshot });
+        const hasLocalHistory = localSnapshot.waves.length > 0 || localSnapshot.items.length > 0 || localSnapshot.baskets.length > 0 || localSnapshot.poConfirmationRecords.length > 0;
+        const serverSnapshot = await requestSnapshot(hasLocalHistory ? { action: "migrate", snapshot: localSnapshot } : undefined);
         mirrorServerSnapshot(serverSnapshot);
         if (process.env.NODE_ENV !== "production") {
           console.info("[picking-wave-migration]", { beforeWaveIds, afterWaveIds: serverSnapshot.waves.map(wave => wave.id).sort(), serverRevision: serverSnapshot.revision });
