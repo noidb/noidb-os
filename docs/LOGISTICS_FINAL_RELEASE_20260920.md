@@ -53,3 +53,13 @@
 ## 크롬 확장 연결
 
 현재 크롬의 확장 ID는 `mfandkillkjgkhaamlghljjklpkbmjia`, 설치 버전은 0.9.2이며 과거 별도 worktree를 참조한다. 해당 과거 폴더는 수정하지 않는다. 최신 버전 0.9.5의 실제 소스는 `E:\노이드비AI\extensions\supplier-hub-poc`이다. 크롬 확장 관리에서 구 확장을 끄고 이 폴더를 압축해제 확장으로 불러온 후 Supplier Hub 쉽먼트 페이지를 새로고침해야 새 일괄 가져오기 버튼이 나타난다. 웹 배포가 크롬의 설치 경로를 자동 변경하지 않는다.
+
+## 운영 반영 완료
+
+- 코드 커밋: `aad1ba3`(전체 후속 흐름), `5ed71d5`(빈 브라우저 조회 보호), `69007c7`(작업센터 거래처 바로가기).
+- 최종 배포: `dpl_77YB9ac6WoQ2LrAF2LZ2d9u2EXH3`. Vercel 전체 빌드·타입검사와 READY를 확인한 뒤 promote 완료. 운영 주소는 `https://noidb-os.vercel.app`이며 메인 상단 `입고센터`가 `/wms/work-center`로 연결된다.
+- 운영 브라우저 확인: 작업센터·신규발주·쉽먼트 입고결과·거래처 관리·누적입고 모두 HTTP 200, JavaScript 오류 0, 페이지 진입에 따른 저장 요청 0. 개발 fixture API는 운영에서 404다.
+- 운영 수집 API v3 정상, 추적 대상 19건과 추가 쉽먼트 `50640740` 포함 확인. 거래처 Aside 19행 유지 확인. 전체 화면 확인 후 Picking/Weekly 저장소를 다시 읽어 배포 전 JSON과 동일함을 확인했다. 이번 배포 확인에 따른 실제 업무 쓰기·쿠팡 제출·카카오 전송은 없다.
+- 기존 월별 누적의 과거 원본 저장본은 운영에서 아직 없다는 안내가 표시된다. 기존 `과거 원본 새로고침` 기능을 보존했으며 이번 검증으로 과거 자료를 자동 이관하지 않았다. 새 마감 쉽먼트 이력 영역은 정상 응답하며 실제 수집 전에는 비어 있다.
+- 크롬 구버전 확장 교체와 그 이후 인증된 전체 수집·운영 전송 확인은 남아 있다. 교체 안내: `extensions/supplier-hub-poc/SHIPMENT_READER.md`.
+- 증거: `.tmp/logistics-final-release/{overlay-manifest.json,final-build.log,production-smoke.json,after-ui-data-check.json}` 및 화면 캡처. 보호 배포 접속 링크가 든 임시 파일은 Git 및 배포에서 제외했다.
