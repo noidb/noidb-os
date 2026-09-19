@@ -1,0 +1,93 @@
+const fs = require('node:fs'), path = require('node:path'), Module = require('node:module'), assert = require('node:assert/strict'), ts = require('typescript');
+require.extensions['.ts'] = (module, file) => module._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, file);
+const resolve = Module._resolveFilename;
+Module._resolveFilename = function(request, ...args) { return resolve.call(this, request.startsWith('@/') ? path.join(process.cwd(), request.slice(2)) : request, ...args); };
+const { parseShipmentReceiptImport, mergeShipmentReceiptImport, summarizeShipmentReceipt } = require('../lib/wms/shipment-receipts.ts');
+const { expandRows, parseDetail, parseList, collect } = require('../extensions/supplier-hub-poc/shipment-reader.js');
+const cell = (text, rowSpan = 1) => ({ text, rowSpan, colSpan: 1 });
+const rows = [
+  ['박스', '발주번호', 'SKU', 'SKU 이름', 'SKU 바코드', '납품수량', '입고수량'].map(v => cell(v)),
+  [cell('박스 #1 PBL0109068548', 2), ...['142186780', '38249239', '상품 A', 'R016057330001', '4', '4'].map(v => cell(v))],
+  ['142186780', '38256621', '상품 B', 'R016030940073', '3', '3'].map(v => cell(v)),
+];
+assert.deepEqual(expandRows(rows)[2], ['박스 #1 PBL0109068548', '142186780', '38256621', '상품 B', 'R016030940073', '3', '3']);
+assert.throws(() => expandRows([[cell('partial', 2)]]), /일부 행/);
+const table = rows => ({ rows: rows.map(row => ({ cells: row.map(c => ({ textContent: c.text, rowSpan: c.rowSpan, colSpan: c.colSpan })) })) });
+const detail = table(rows);
+const totals = table([['발주 종수', 'SKU 종수', '박스수', '총 납품 수량', '총 입고 수량'].map(v => cell(v)), ['1', '2', '1', '7', '7'].map(v => cell(v))]);
+const doc = { querySelector: selector => selector === '#shipmentDetailTable' ? detail : null,
+  querySelectorAll: selector => selector === 'h4' ? [{ textContent: '택배 쉽먼트 # 50570817 쉽먼트 상태 : 마감' }] : selector === 'table' ? [detail, totals] : [] };
+const shipment = parseDetail(doc, '50570817');
+assert.equal(shipment.totalReceived, 7); assert.equal(shipment.lines[1].skuId, '38256621');
+assert.throws(() => parseDetail(doc, '999'), /상세를 확인/);
+totals.rows[1].cells[4].textContent = '8';
+assert.throws(() => parseDetail(doc, '50570817'), /총수량이 다릅니다/);
+totals.rows[1].cells[4].textContent = '7';
+const input = { schemaVersion: 1, source: 'supplier-hub-shipments', collectedAt: '2026-09-19T00:00:00.000Z',
+  orders: [{ purchaseOrderNumber: '142186780', shipmentNumbers: ['50570817'] }], shipments: [shipment] };
+const first = mergeShipmentReceiptImport({}, input), second = mergeShipmentReceiptImport(first, input);
+assert.deepEqual(second, first, 'Repeated collection must replace, not add');
+assert.deepEqual(summarizeShipmentReceipt(second['142186780']).receivedBySku, { '38249239': 4, '38256621': 3 });
+const partial = structuredClone(input);
+partial.orders[0].shipmentNumbers.push('50570818');
+partial.shipments.push({ shipmentNumber: '50570818', status: '발송 완료', totalDelivered: null, totalReceived: null, lines: [] });
+const waiting = summarizeShipmentReceipt(mergeShipmentReceiptImport({}, partial)['142186780']);
+assert.equal(waiting.complete, false); assert.deepEqual(waiting.receivedBySku, {});
+const missing = { ...input, orders: [{ purchaseOrderNumber: '142186780', shipmentNumbers: [] }], shipments: [] };
+assert.equal(summarizeShipmentReceipt(mergeShipmentReceiptImport({}, missing)['142186780']).complete, false);
+const wrong = structuredClone(input); wrong.shipments[0].lines[0].receivedQuantity = 0;
+assert.throws(() => parseShipmentReceiptImport(wrong), /합계/);
+const duplicate = structuredClone(input); duplicate.shipments[0].lines.push(duplicate.shipments[0].lines[0]);
+assert.throws(() => parseShipmentReceiptImport(duplicate), /불완전/);
+const old = { ...input, collectedAt: '2026-09-18T00:00:00.000Z' };
+assert.throws(() => mergeShipmentReceiptImport(first, old), /더 최신/);
+const wrongPo = structuredClone(input); wrongPo.orders[0].purchaseOrderNumber = '123';
+assert.throws(() => parseShipmentReceiptImport(wrongPo), /불완전/);
+const split = structuredClone(input);
+split.orders[0].shipmentNumbers.push('50570819');
+split.shipments.push({ ...structuredClone(shipment), shipmentNumber: '50570819' });
+assert.equal(summarizeShipmentReceipt(mergeShipmentReceiptImport({}, split)['142186780']).receivedBySku['38249239'], 8, 'Different shipments for one PO must both count');
+const otherPo = structuredClone(input);
+otherPo.shipments[0].lines[1].purchaseOrderNumber = '142186781';
+otherPo.orders.push({ purchaseOrderNumber: '142186781', shipmentNumbers: ['50570817'] });
+const mixed = mergeShipmentReceiptImport({}, otherPo);
+assert.deepEqual(summarizeShipmentReceipt(mixed['142186780']).receivedBySku, { '38249239': 4 });
+assert.deepEqual(summarizeShipmentReceipt(mixed['142186781']).receivedBySku, { '38256621': 3 });
+const emptyList = { querySelector: () => ({ querySelectorAll: () => [] }), querySelectorAll: () => [{ textContent: "$('#parcel-pagination').bootpag({page:1,total:0})" }] };
+assert.equal(parseList(emptyList, 1).totalPages, 0);
+assert.throws(() => parseList(emptyList, 2), /전체 범위/);
+assert.throws(() => parseList({ querySelector: () => null, querySelectorAll: () => [] }, 1), /로그인/);
+// Network-only collector test: only scoped GETs; retry of list must match, failure returns no batch.
+global.location = { origin: 'https://supplier.coupang.com' };
+const row = { getAttribute: key => key === 'data-id' ? '50570817' : 'PARCEL', cells: [{}, { textContent: '마감' }] };
+const listDoc = { querySelector: () => ({ querySelectorAll: () => [row] }), querySelectorAll: () => [{ textContent: "$('#parcel-pagination').bootpag({page:1,total:1})" }] };
+global.DOMParser = class { parseFromString(value) { return value === 'detail' ? doc : listDoc; } };
+const requests = [];
+global.fetch = async (url, options) => { requests.push({url, options}); return { ok: true, redirected: false, url: 'https://supplier.coupang.com' + url, text: async () => url.includes('/list?') ? 'list' : 'detail' }; };
+(async () => {
+  const actual = await collect(['142186780']);
+  assert.equal(actual.shipments[0].totalReceived, 7);
+  assert.equal(requests.length, 3);
+  assert.ok(requests.every(request => !request.options.method || request.options.method === 'GET'));
+  assert.ok(requests.filter(request => request.url.includes('/list?')).every(request => request.url.includes('purchaseOrderSeq=142186780')));
+  global.fetch = async () => ({ ok: false });
+  await assert.rejects(collect(['142186780']), /조회가 실패/);
+  const fixtureDir = fs.mkdtempSync(path.join(process.cwd(), '.tmp', 'shipment-receipts-'));
+  process.env.WMS_WEEKLY_WORK_STORE_FILE = path.join(fixtureDir, 'weekly.json');
+  const preserved = { schemaVersion: 1, revision: 0, runs: [], productOverrides: { '123': { vendorName: '보존', imageUrl: '', discontinued: false } }, sentinel: 'preserve' };
+  fs.writeFileSync(process.env.WMS_WEEKLY_WORK_STORE_FILE, JSON.stringify(preserved));
+  const api = require('../app/api/wms/vendor-orders/shipment-receipts/route.ts');
+  const post = data => api.POST(new Request('http://localhost/api/wms/vendor-orders/shipment-receipts', { method: 'POST', body: JSON.stringify(data) }));
+  assert.equal((await post(input)).status, 200);
+  assert.equal((await post(input)).status, 200);
+  const get = await (await api.GET()).json();
+  assert.equal(get.status, 'ready'); assert.equal(get.orders.length, 1); assert.equal(get.orders[0].receivedBySku['38249239'], 4);
+  const saved = fs.readFileSync(process.env.WMS_WEEKLY_WORK_STORE_FILE, 'utf8');
+  assert.deepEqual(JSON.parse(saved).productOverrides, preserved.productOverrides);
+  assert.equal(JSON.parse(saved).sentinel, 'preserve');
+  assert.equal((await post(wrong)).status, 400);
+  assert.equal((await post(old)).status, 400);
+  assert.equal(fs.readFileSync(process.env.WMS_WEEKLY_WORK_STORE_FILE, 'utf8'), saved, 'Rejected imports cannot modify the store');
+  console.log('PASS shipment rowspan, exact PO/SKU/box identity, totals, login/schema failure, idempotency, stale collection guard, split/mixed PO, partial closure, scoped read-only collection');
+  console.log('PASS isolated API GET/POST, repeated import without double counting, preservation of existing workspace, failed import without writes');
+})().catch(error => { console.error(error); process.exitCode = 1; });

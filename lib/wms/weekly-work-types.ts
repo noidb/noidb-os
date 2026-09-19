@@ -59,6 +59,8 @@ export interface WeeklyRun {
   generated?: { at: string; reviewToken: string; couponCount: number; vendors: string[]; discontinueCount: number; discontinueSkuIds?: string[]; reorderCount?: number; reorderRequestDate?: string; advertisingCount?: number; advertisingFiles?: string[]; advertisingToken?: string };
 }
 export interface WeeklyWorkspace {
+  /** Explicitly collected shipment snapshots; separate from historical inbound events and runs. */
+  shipmentReceiptOrders?: import("./shipment-receipts").ShipmentReceiptOrders;
   materialSnapshot?: WeeklySnapshot;
   statusCompletionIds?: string[];
   statusListSnapshot?: { requests: import("./vendor-order-actions").StatusRequestRecord[]; generations: import("./vendor-order-actions").StatusFileGenerationRecord[]; at: string };

@@ -5,6 +5,7 @@ export const dynamic = "force-dynamic";
 
 export default function VendorOrdersPage() {
   return <>
+    <nav style={{ padding: 20 }}><a href="/wms/inbound/shipments">쉽먼트 입고결과 가져오기 →</a></nav>
     <WeeklyWork clearanceMode />
     <ActualInboundShortage pendingOnly />
     <nav aria-label="입고결과 후속 업무" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, margin: "24px 0", padding: 20, background: "#fff", border: "1px solid #ddd7cd", borderRadius: 14 }}>
