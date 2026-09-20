@@ -23,12 +23,15 @@ import { dataUrlToBlob } from "@/lib/product-db/files";
 import { buildProductDbZip } from "@/lib/product-db/zip";
 import { compressImageDataUrl } from "@/lib/image/compress";
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
+import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { coverSquareCanvas, defaultFitAdjust, fitToWhiteCanvas, type FitAdjust } from "@/lib/thumbnail/fit";
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
 import WimsRegistrationImportPanel from "@/app/product-registration/WimsRegistrationImportPanel";
 import SupplyStatusAuditPanel from "@/app/product-registration/SupplyStatusAuditPanel";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
+
+const REREGISTRATION_PREP_KEY = "noidb_reregistration_prep_v1";
 
 type Product = {
   supplier: string;
@@ -248,6 +251,18 @@ function loadImage(src: string) {
   });
 }
 
+async function imageUrlToDataUrl(url: string): Promise<string> {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`대표이미지 조회 실패 (${response.status})`);
+  const blob = await response.blob();
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("대표이미지 변환 실패"));
+    reader.readAsDataURL(blob);
+  });
+}
+
 export default function Home() {
   const [product, setProduct] = useState<Product>({ ...DEFAULT_PRODUCT });
   const [supplierOptions, setSupplierOptions] = useState<string[]>(DEFAULT_SUPPLIERS);
@@ -321,6 +336,7 @@ export default function Home() {
   const [modelCheckMessage, setModelCheckMessage] = useState("");
   const [modelReregisterable, setModelReregisterable] = useState(false);
   const [pendingReplacementCleanup, setPendingReplacementCleanup] = useState<PendingReplacementCleanup | null>(null);
+  const reregisterLoadedRef = useRef(false);
 
   const [dbSupported, setDbSupported] = useState(false);
   const [dbHandle, setDbHandle] = useState<FileSystemDirectoryHandle | null>(null);
@@ -398,6 +414,65 @@ export default function Home() {
     } catch {
       /* ignore */
     }
+  }, []);
+
+  useEffect(() => {
+    const requestedModel = new URLSearchParams(window.location.search).get("reregisterModel")?.trim() || "";
+    if (!requestedModel || reregisterLoadedRef.current) return;
+    reregisterLoadedRef.current = true;
+    let active = true;
+    void (async () => {
+      try {
+        let prepared: any = null;
+        try {
+          const raw = window.localStorage.getItem(REREGISTRATION_PREP_KEY);
+          const parsed = raw ? JSON.parse(raw) : null;
+          if (parsed && String(parsed.modelName || "").trim().toLowerCase() === requestedModel.toLowerCase()) prepared = parsed;
+        } catch { /* prepared data is optional */ }
+        let group = Array.isArray(prepared?.items) ? prepared.items : [];
+        if (!group.length) {
+          const response = await fetch("/api/wms/product-registration-catalog", { cache: "no-store" });
+          const data = await response.json();
+          if (!response.ok || !Array.isArray(data.items)) throw new Error(data?.error || "재등록 대상 조회 실패");
+          group = data.items.filter((item: any) => String(item.modelName || "").trim().toLowerCase() === requestedModel.toLowerCase());
+        }
+        if (!group.length) throw new Error(`${requestedModel} 모델을 제품DB에서 찾지 못했습니다.`);
+        const first = group[0];
+        const optionText = group.map((item: any) => String(item.optionLabel || "").split("|").pop()?.trim() || "");
+        const colors = [...new Set(optionText.map((value: string) => value.replace(/\s*\d+(?:\.\d+)?\s*호\s*$/u, "").trim()).filter(Boolean))];
+        const sizes = [...new Set(group.flatMap((item: any) => String(item.productName || "").match(/\d+(?:\.\d+)?\s*호/gu) || []))];
+        const digits = requestedModel.match(/\d+/)?.[0] || "";
+        if (!active) return;
+        setProduct(prev => ({
+          ...prev,
+          supplier: String(first.vendorName || prev.supplier),
+          category: String(first.category || prev.category),
+          gender: String(first.gender || prev.gender),
+          modelName: requestedModel,
+          modelNo: digits || prev.modelNo,
+          colors: colors.join(",") || prev.colors,
+          sizes: sizes.join(",") || (String(first.category || prev.category) === "반지" ? prev.sizes : "Free"),
+          coupangTitle: String(first.productName || prev.coupangTitle || ""),
+          material: /써지컬스틸/i.test(String(first.productName || "")) ? "써지컬스틸" : prev.material,
+        }));
+        setModelCheckMessage(`재등록 대상 불러옴 · ${requestedModel} · 옵션 ${group.length}개 · 기존 DB는 아직 변경하지 않았습니다.`);
+        const preparedHit = Array.isArray(prepared?.hits) ? prepared.hits[0] : null;
+        const imageUrl = preparedHit?.path
+          ? `/api/image-search/preview?path=${encodeURIComponent(String(preparedHit.path))}`
+          : getWmsDisplayImageUrl(String(first.imageUrl || ""));
+        if (imageUrl) {
+          try {
+            const dataUrl = await imageUrlToDataUrl(imageUrl);
+            if (active && dataUrl.startsWith("data:image/")) setPhotos([{ id: `catalog:${requestedModel}`, name: `${requestedModel}-기존대표이미지`, dataUrl }]);
+          } catch {
+            if (active) setPhotoMessage("기존 대표이미지를 불러오지 못했습니다. 사진 후보에서 직접 선택해주세요.");
+          }
+        }
+      } catch (error) {
+        if (active) setModelCheckMessage(`재등록 대상 불러오기 실패: ${error instanceof Error ? error.message : "제품DB 조회 실패"}`);
+      }
+    })();
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {

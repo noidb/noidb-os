@@ -66,7 +66,13 @@ export async function GET(req: NextRequest) {
       action: "checkModel",
       model,
     });
-    return NextResponse.json({ configured: called.configured, duplicate: Boolean(called.result?.duplicate) });
+    return NextResponse.json({
+      configured: called.configured,
+      duplicate: Boolean(called.result?.duplicate),
+      reregisterable: called.result?.reregisterable === true,
+      reason: String(called.result?.reason || ""),
+      rowCount: Number(called.result?.rowCount || 0),
+    });
   } catch (error) {
     return NextResponse.json({ configured: true, duplicate: false, error: error instanceof Error ? error.message : "중복 확인 실패" });
   }

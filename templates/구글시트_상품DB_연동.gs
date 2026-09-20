@@ -2612,13 +2612,17 @@ function reregistrationEligibility_(db, model) {
   const columns = data.columns;
   if (!items.length) return { duplicate: false, reregisterable: false, rowCount: 0, reason: '' };
   const emptyIds = row => ['SKU ID','바코드','발주가능상태','제품링크','노출상품ID','옵션ID'].every(name => !String(row[columns[name]] == null ? '' : row[columns[name]]).trim());
-  const stopped = items.every(item => String(item.values[columns['현재상태']] || '').trim() === '판매중지');
+  // 쿠팡에서는 한 옵션의 판매중지 이후 같은 모델의 다른 옵션 제품링크도 함께
+  // 사용할 수 없게 되는 경우가 있으므로, 모델 내 하나라도 판매중지면 전체
+  // 모델 옵션을 재등록 대상으로 본다. 옵션 행 자체의 대응은 아래 모델SKU
+  // 근거로 계속 개별 검증한다.
+  const stopped = items.some(item => String(item.values[columns['현재상태']] || '').trim() === '판매중지');
   const retry = items.every(item => String(item.values[columns['현재상태']] || '').trim() === '재등록파일생성' && emptyIds(item.values));
   const keys = items.map(item => String(item.values[columns['모델SKU']] || '').trim().toUpperCase());
   const uniqueOptions = keys.every((key, index) => key && keys.indexOf(key) === index);
   const eligible = !data.casingMismatch && uniqueOptions && (stopped || retry) && items.every(item => !isReregistrationPackage_(item.values, columns));
   return { duplicate: true, reregisterable: eligible, rowCount: items.length,
-    reason: eligible ? (retry ? '재등록 파일 다시 저장 가능' : '판매중지 상품 재등록 가능')
+    reason: eligible ? (retry ? '재등록 파일 다시 저장 가능' : '모델 내 판매중지 옵션이 있어 전체 옵션 재등록 가능')
       : data.casingMismatch ? '기존 모델명과 대소문자까지 정확히 같아야 재등록할 수 있습니다.'
       : !uniqueOptions ? '기존 모델SKU가 비어 있거나 중복되어 있습니다. 정확한 옵션 행을 먼저 확인해주세요.'
       : '판매중지 기본 옵션만 재등록할 수 있습니다. 기존 상태와 패키지 행을 확인해주세요.' };
