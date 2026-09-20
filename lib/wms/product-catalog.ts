@@ -89,32 +89,47 @@ function firstNonEmpty(row: Record<string, string>, headerCandidates: string[]):
   return "";
 }
 
-/** 구글시트 설정 여부와 카탈로그 항목을 함께 반환한다. 미설정이면 configured:false, items:[]. */
-export async function fetchProductCatalog(): Promise<{ configured: boolean; items: ProductCatalogItem[] }> {
+function mapCatalogRow(row: Record<string, string>): ProductCatalogItem {
+  return {
+    skuId: normalizeSkuId(row["SKU ID"]),
+    modelSku: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.modelSku),
+    modelName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.modelName),
+    category: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.category),
+    gender: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.gender),
+    productName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productName),
+    optionLabel: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.optionLabel),
+    imageUrl: extractImageUrl(row["이미지"]),
+    warehouseNumber: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.warehouseNumber),
+    boxNumber: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.boxNumber),
+    currentStock: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.currentStock),
+    currentStatus: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.currentStatus),
+    costVatIncluded: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.costVatIncluded),
+    vendorName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.vendorName),
+    barcode: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.barcode),
+    countryOfOrigin: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.countryOfOrigin),
+    productLink: extractImageUrl(firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productLink)),
+  };
+}
+
+function hasCatalogIdentity(item: ProductCatalogItem): boolean {
+  return Boolean(item.skuId || item.modelSku || item.modelName || item.productName || item.optionLabel || item.barcode);
+}
+
+export interface FetchProductCatalogOptions {
+  /** SKU 발급 전 등록대기 행도 포함한다. 기본값은 기존 호출과 같은 SKU 필터다. */
+  includePending?: boolean;
+}
+
+/**
+ * 구글시트 설정 여부와 카탈로그 항목을 함께 반환한다. 미설정이면 configured:false, items:[].
+ * 기본 동작은 기존 WMS 화면을 위해 SKU ID가 있는 행만 반환한다. 상품등록 연결 대장은
+ * includePending:true로 호출해 SKU 발급 전 행도 같은 원본에서 읽는다.
+ */
+export async function fetchProductCatalog(options: FetchProductCatalogOptions = {}): Promise<{ configured: boolean; items: ProductCatalogItem[] }> {
   if (!isWmsGoogleSheetsConfigured()) {
     return { configured: false, items: [] };
   }
   const rows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" });
-  const items = rowsToObjects(rows)
-    .map((row): ProductCatalogItem => ({
-      skuId: normalizeSkuId(row["SKU ID"]),
-      modelSku: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.modelSku),
-      modelName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.modelName),
-      category: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.category),
-      gender: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.gender),
-      productName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productName),
-      optionLabel: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.optionLabel),
-      imageUrl: extractImageUrl(row["이미지"]),
-      warehouseNumber: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.warehouseNumber),
-      boxNumber: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.boxNumber),
-      currentStock: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.currentStock),
-      currentStatus: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.currentStatus),
-      costVatIncluded: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.costVatIncluded),
-      vendorName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.vendorName),
-      barcode: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.barcode),
-      countryOfOrigin: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.countryOfOrigin),
-      productLink: extractImageUrl(firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productLink)),
-    }))
-    .filter(item => item.skuId);
+  const items = rowsToObjects(rows).map(mapCatalogRow).filter(item => options.includePending ? hasCatalogIdentity(item) : item.skuId);
   return { configured: true, items };
 }
