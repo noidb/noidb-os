@@ -28,6 +28,20 @@ function clean(value: string): string {
   return String(value || "").trim().toLowerCase();
 }
 
+function modelGroupKey(item: ProductCatalogItem): string {
+  const modelName = clean(item.modelName);
+  return modelName || `modelsku:${clean(item.modelSku)}`;
+}
+
+function isSalesStopped(item: ProductCatalogItem): boolean {
+  // 거래처단종은 재등록이 아니라 공급 종료일 수 있으므로 자동 재등록 큐에서 제외한다.
+  return /판매중지|판매중단/i.test(item.currentStatus || "");
+}
+
+function isRocketRegistered(item: ProductCatalogItem): boolean {
+  return /^R/i.test(String(item.barcode || "").trim());
+}
+
 function externalUrl(value: string): string {
   const trimmed = String(value || "").trim();
   return /^https?:\/\//i.test(trimmed) ? trimmed : "";
@@ -52,6 +66,14 @@ export default function ProductCatalogPage() {
   const [error, setError] = useState("");
   const [photoStates, setPhotoStates] = useState<Record<string, PhotoState>>({});
   const [linkChecks, setLinkChecks] = useState<Record<string, LinkCheckState>>({});
+
+  const stoppedModelKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const item of items) if (isSalesStopped(item)) keys.add(modelGroupKey(item));
+    return keys;
+  }, [items]);
+
+  const isReregistrationTarget = useCallback((item: ProductCatalogItem) => stoppedModelKeys.has(modelGroupKey(item)), [stoppedModelKeys]);
 
   const loadCatalog = useCallback(async (activeRef?: { current: boolean }) => {
     setLoading(true);
@@ -103,13 +125,17 @@ export default function ProductCatalogPage() {
       const wims = snapshot ? findWimsRow(item, snapshot.rows) : null;
       const searchable = [item.modelName, item.modelSku, item.skuId, item.barcode, item.productName, item.optionLabel].map(clean).join(" ");
       const matchesQuery = !needle || searchable.includes(needle);
+      const reregistration = isReregistrationTarget(item);
+      const rocketPending = !isRocketRegistered(item);
       const matchesStatus = status === "all"
         || (status === "pending" && !item.skuId)
         || (status === "issued" && Boolean(item.skuId))
-        || (status === "wims" && Boolean(wims));
+        || (status === "wims" && Boolean(wims))
+        || (status === "reregister" && reregistration)
+        || (status === "rocket-pending" && rocketPending);
       return matchesQuery && matchesStatus;
-    });
-  }, [items, query, snapshot, status]);
+    }).sort((a, b) => Number(isReregistrationTarget(b)) - Number(isReregistrationTarget(a)));
+  }, [items, query, snapshot, status, isReregistrationTarget]);
 
   const rejectedRows = useMemo(() => {
     const needle = clean(query);
@@ -121,10 +147,14 @@ export default function ProductCatalogPage() {
     issued: items.filter(item => item.skuId).length,
     pending: items.filter(item => !item.skuId).length,
     models: new Set(items.map(item => item.modelName).filter(Boolean)).size,
-  }), [items]);
+    reregisterModels: stoppedModelKeys.size,
+    reregisterOptions: items.filter(item => isReregistrationTarget(item)).length,
+    rocketPending: items.filter(item => !isRocketRegistered(item)).length,
+  }), [items, isReregistrationTarget, stoppedModelKeys]);
 
   async function searchPhotos(item: ProductCatalogItem) {
-    const key = item.modelSku || item.modelName || item.productName;
+    // 사진 폴더는 모델 단위이므로 같은 모델의 옵션들이 검색 결과를 공유한다.
+    const key = item.modelName || item.modelSku || item.productName;
     if (!key || photoStates[key]?.loading) return;
     setPhotoStates(current => ({ ...current, [key]: { loading: true, hits: current[key]?.hits || [] } }));
     try {
@@ -169,7 +199,7 @@ export default function ProductCatalogPage() {
 
       <div style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: 14, marginBottom: 14 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
-          {[["전체 행", summary.total], ["DB에 SKU 있음", summary.issued], ["DB에 SKU 없음", summary.pending], ["상품군", summary.models]].map(([label, value]) => (
+          {[["전체 행", summary.total], ["재등록 모델", summary.reregisterModels], ["재등록 옵션", summary.reregisterOptions], ["로켓 등록 전", summary.rocketPending]].map(([label, value]) => (
             <div key={String(label)} style={{ background: wmsColors.surface, borderRadius: 10, padding: "10px 12px" }}><div style={{ color: wmsColors.muted, fontSize: 11 }}>{label}</div><strong style={{ color: wmsColors.ink, fontSize: 20 }}>{value}</strong></div>
           ))}
         </div>
@@ -177,7 +207,7 @@ export default function ProductCatalogPage() {
           <input value={query} onChange={event => setQuery(event.target.value)} placeholder="모델명·모델SKU·SKU ID·바코드·상품명 검색" style={{ flex: "1 1 340px", minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px" }} />
           <button type="button" onClick={() => void loadCatalog()} disabled={loading} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "새로 읽는 중…" : "제품DB 새로고침"}</button>
           <select value={status} onChange={event => setStatus(event.target.value)} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 10px", background: "#fff" }}>
-            <option value="all">전체 상태</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
+            <option value="all">전체 상태</option><option value="reregister">재등록 필요(모델 전체)</option><option value="rocket-pending">로켓 등록 전/확인 필요</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
           </select>
         </div>
       </div>
@@ -213,20 +243,22 @@ export default function ProductCatalogPage() {
           {filteredItems.slice(0, 200).map((item, index) => {
             const rowKey = `${item.skuId}|${item.modelSku}|${item.modelName}|${index}`;
             const wims = snapshot ? findWimsRow(item, snapshot.rows) : null;
-            const photoKey = item.modelSku || item.modelName || item.productName;
+            const photoKey = item.modelName || item.modelSku || item.productName;
             const photos = photoStates[photoKey];
             const imageUrl = getWmsDisplayImageUrl(externalUrl(item.imageUrl));
             const productLink = externalUrl(item.productLink);
             const linkCheck = linkChecks[item.skuId || item.modelSku || productLink];
+            const reregistration = isReregistrationTarget(item);
+            const rocketPending = !isRocketRegistered(item);
             return <article key={rowKey} style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 12, padding: 12 }}>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12 }}>
                 <div>
                   <div style={{ color: wmsColors.ink, fontWeight: 800 }}>{item.modelName || "모델명 없음"} <span style={{ color: wmsColors.muted, fontWeight: 600 }}>· {item.optionLabel || item.modelSku || "옵션 미확인"}</span></div>
                   <div style={{ color: wmsColors.muted, fontSize: 12, marginTop: 4 }}>{item.productName || "상품명 없음"}</div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 9, fontSize: 12 }}><span>모델SKU: <b>{item.modelSku || "-"}</b></span><span>SKU ID: <b>{item.skuId || "DB 미입력"}</b></span><span>바코드: <b>{item.barcode || "DB 미입력"}</b></span></div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 9, fontSize: 12 }}><span>모델SKU: <b>{item.modelSku || "-"}</b></span><span>SKU ID: <b>{item.skuId || "DB 미입력"}</b></span><span>바코드: <b>{item.barcode || "DB 미입력"}</b></span><span>발주가능상태: <b>{item.orderableStatus || "미입력"}</b></span></div>
                   {wims && <div style={{ marginTop: 6, fontSize: 12, color: wmsColors.muted }}>WIMS 대조 후보 · {wims.statusLabel || "상태 미확인"} · SKU {wims.skuId || "미확인"} · 바코드 {wims.barcode || "미확인"} · 등록일 {wims.registeredAt || "미확인"} (DB 연결 확정 전)</div>}
                 </div>
-                <div style={{ textAlign: "right", minWidth: 120 }}><div style={{ color: item.skuId ? wmsColors.greenDark : wmsColors.warn, fontWeight: 800, fontSize: 12 }}>{item.skuId ? "DB에 SKU 있음" : "승인정보 연결 필요"}</div><div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 5 }}>DB 상태: {item.currentStatus || "미입력"}</div></div>
+                <div style={{ textAlign: "right", minWidth: 150 }}><div style={{ color: reregistration ? wmsColors.warnText : item.skuId ? wmsColors.greenDark : wmsColors.warn, fontWeight: 800, fontSize: 12 }}>{reregistration ? "모델 전체 재등록 대상" : item.skuId ? "DB에 SKU 있음" : "승인정보 연결 필요"}</div><div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 5 }}>DB 상태: {item.currentStatus || "미입력"}</div>{rocketPending && <div style={{ color: wmsColors.warnText, fontSize: 11, marginTop: 3 }}>로켓 등록 전/확인 필요</div>}</div>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
                 <button type="button" onClick={() => void searchPhotos(item)} disabled={!photoKey || photos?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "사진 검색 중…" : "사진 후보 검색"}</button>

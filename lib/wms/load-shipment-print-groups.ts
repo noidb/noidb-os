@@ -149,7 +149,7 @@ export async function loadShipmentPrintGroups(waveId: string, items: PickingWave
       catalog = barcodeRows.map(row => ({
         skuId: row.skuId, modelSku: "", modelName: row.embeddedModelName, category: "", gender: "",
         productName: "", optionLabel: "", imageUrl: "", warehouseNumber: "", boxNumber: "",
-        currentStock: "", currentStatus: "", costVatIncluded: "", vendorName: "", barcode: "",
+        currentStock: "", currentStatus: "", orderableStatus: "", costVatIncluded: "", vendorName: "", barcode: "",
         countryOfOrigin: row.embeddedCountryOfOrigin, productLink: "",
       }));
     }

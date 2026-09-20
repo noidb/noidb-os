@@ -63,6 +63,7 @@ const catalog: ProductCatalogItem[] = manifestOrder.map(skuId => ({
   boxNumber: "",
   currentStock: "",
   currentStatus: "",
+  orderableStatus: "",
   costVatIncluded: "",
   vendorName: "",
   barcode: `R${skuId}`,

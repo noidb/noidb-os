@@ -32,6 +32,8 @@ export interface ProductCatalogItem {
   currentStock: string;
   /** 제품DB 현재상태(단종/과재고 등). */
   currentStatus: string;
+  /** 제품DB 발주가능상태(공급상태 파일의 최신 승인/발주 상태). */
+  orderableStatus: string;
   /** 제품DB 원가(부가세포함). 거래처 입고단가 반영 전후 비교에 사용한다. */
   costVatIncluded: string;
   /** 아직 제품DB에 없는 컬럼(나중 추가 예정) — 없으면 항상 "" (거래처별 부족분 발주서 그룹핑에 사용) */
@@ -60,6 +62,7 @@ export const FIELD_HEADER_CANDIDATES: Record<Exclude<keyof ProductCatalogItem, "
   boxNumber: ["BOX번호", "박스번호"],
   currentStock: ["현재고", "재고수량"],
   currentStatus: ["현재상태"],
+  orderableStatus: ["발주가능상태"],
   costVatIncluded: ["원가(부가세포함)"],
   vendorName: ["거래처", "거래처명", "매입처"],
   barcode: ["쿠팡 바코드", "Seller SKU Barcode", "쿠팡바코드", "바코드"],
@@ -103,6 +106,7 @@ function mapCatalogRow(row: Record<string, string>): ProductCatalogItem {
     boxNumber: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.boxNumber),
     currentStock: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.currentStock),
     currentStatus: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.currentStatus),
+    orderableStatus: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.orderableStatus),
     costVatIncluded: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.costVatIncluded),
     vendorName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.vendorName),
     barcode: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.barcode),
