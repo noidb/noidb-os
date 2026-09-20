@@ -67,9 +67,25 @@ function headerIndex(headers: string[], candidates: string[]): number {
   return normalized.findIndex(header => candidates.some(candidate => header === normalize(candidate)));
 }
 
-interface ReregistrationHistory { latestAt: number; previousSkuIds: Set<string> }
+interface ReregistrationHistory {
+  latestAt: number;
+  previousSkuIds: Set<string>;
+  modelSku: string;
+  baseModelKey: string;
+}
 
-function parseReregistrationHistory(rows: string[][]): { byModelSku: Map<string, ReregistrationHistory>; retiredSkuIds: Set<string> } {
+interface ParsedReregistrationHistory {
+  byModelSku: Map<string, ReregistrationHistory>;
+  byNormalizedModelSku: Map<string, ReregistrationHistory[]>;
+  byBaseModel: Map<string, ReregistrationHistory[]>;
+  retiredSkuIds: Set<string>;
+}
+
+function baseModelKey(modelSku: string): string {
+  return identityKey(modelSku.split(/[-_\s]/, 1)[0]);
+}
+
+function parseReregistrationHistory(rows: string[][]): ParsedReregistrationHistory {
   const headers = rows[0] || [];
   const statusIndex = headerIndex(headers, ["처리상태"]);
   const dateIndex = headerIndex(headers, ["처리일시"]);
@@ -91,13 +107,31 @@ function parseReregistrationHistory(rows: string[][]): { byModelSku: Map<string,
       // 중복정리 시각은 실제 업로드보다 늦을 수 있으므로 등록일 하한으로 쓰지 않는다.
       const registeredAt = isDuplicateCleanup ? 0 : Date.parse(String(row[dateIndex] || ""));
       if (!modelSku || !Number.isFinite(registeredAt)) continue;
-      const history = histories.get(modelSku) || { latestAt: registeredAt, previousSkuIds: new Set<string>() };
+      const history = histories.get(modelSku) || { latestAt: registeredAt, previousSkuIds: new Set<string>(), modelSku, baseModelKey: baseModelKey(modelSku) };
       history.latestAt = Math.max(history.latestAt, registeredAt);
       if (previousSkuId) history.previousSkuIds.add(previousSkuId);
       histories.set(modelSku, history);
     } catch { /* 해석되지 않은 이력은 현재 재등록을 입증할 수 없다. */ }
   }
-  return { byModelSku: histories, retiredSkuIds };
+  const byNormalizedModelSku = new Map<string, ReregistrationHistory[]>();
+  const byBaseModel = new Map<string, ReregistrationHistory[]>();
+  for (const history of histories.values()) {
+    const normalized = normalize(history.modelSku);
+    byNormalizedModelSku.set(normalized, [...(byNormalizedModelSku.get(normalized) || []), history]);
+    byBaseModel.set(history.baseModelKey, [...(byBaseModel.get(history.baseModelKey) || []), history]);
+  }
+  return { byModelSku: histories, byNormalizedModelSku, byBaseModel, retiredSkuIds };
+}
+
+function findReregistrationHistory(modelSku: string, history: ParsedReregistrationHistory): ReregistrationHistory | undefined {
+  const exact = history.byModelSku.get(identityKey(modelSku));
+  if (exact) return exact;
+  const normalized = history.byNormalizedModelSku.get(normalize(modelSku)) || [];
+  if (normalized.length === 1) return normalized[0];
+  // 구형 단일옵션 코드는 현재 옵션 접미사가 달라질 수 있다(예: S → SI).
+  // 같은 기본 모델에 이력이 하나일 때만 fallback으로 인정해 다옵션 오연결을 막는다.
+  const baseMatches = history.byBaseModel.get(baseModelKey(modelSku)) || [];
+  return baseMatches.length === 1 ? baseMatches[0] : undefined;
 }
 
 function isCurrentRegistration(wims: WimsRegistrationRow, history: ReregistrationHistory): boolean {
@@ -163,7 +197,7 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
     }
     const product = matches[0];
     const base = { wims, sheetRowNumber: product.sheetRowNumber, productDbModelSku: product.modelSku, productDbSkuId: product.skuId, productDbStatus: product.status, productDbProductName: product.productName, productDbBarcode: product.barcode };
-    const history = reregistrations.byModelSku.get(identityKey(product.modelSku));
+    const history = findReregistrationHistory(product.modelSku, reregistrations);
     const isReregistration = ["재등록파일생성", "기존상품승인대기"].includes(product.status) || (PENDING.has(product.status) && Boolean(history));
     if ((product.status === "재등록파일생성" && !history) || (isReregistration && history && !isCurrentRegistration(wims, history))) {
       rows.push({ ...base, sheetRowNumber: undefined, type: "unmatched", message: "이전 등록 이력이거나 재등록 이후 등록 건임을 확인할 수 없습니다. WIMS 등록일·시간을 포함해 이번 재등록 건을 다시 수집해주세요." });
