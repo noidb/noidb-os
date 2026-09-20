@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { wmsColors } from "@/lib/wms/ui-tokens";
+import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import type { ImageHit } from "@/lib/image-search";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
@@ -144,7 +145,7 @@ export default function ProductCatalogPage() {
             const wims = snapshot ? findWimsRow(item, snapshot.rows) : null;
             const photoKey = item.modelSku || item.modelName || item.productName;
             const photos = photoStates[photoKey];
-            const imageUrl = externalUrl(item.imageUrl);
+            const imageUrl = getWmsDisplayImageUrl(externalUrl(item.imageUrl));
             const productLink = externalUrl(item.productLink);
             return <article key={rowKey} style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 12, padding: 12 }}>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12 }}>
