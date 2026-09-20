@@ -96,6 +96,11 @@ export default function ProductCatalogPage() {
     });
   }, [items, query, snapshot, status]);
 
+  const rejectedRows = useMemo(() => {
+    const needle = clean(query);
+    return (snapshot?.rows || []).filter(row => row.status === "rejected" && (!needle || [row.productName, row.modelSku].map(clean).join(" ").includes(needle)));
+  }, [snapshot, query]);
+
   const summary = useMemo(() => ({
     total: items.length,
     issued: items.filter(item => item.skuId).length,
@@ -149,6 +154,27 @@ export default function ProductCatalogPage() {
       {!configured && !loading && <div style={{ border: `1px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>Google Sheets 연결 설정이 없어 상품을 읽지 못했습니다.</div>}
       {error && <div style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{error}</div>}
       <p style={{ fontSize: 12, color: wmsColors.muted }}>제품DB의 공란만으로 쿠팡 승인 여부를 판단할 수 없습니다. {snapshot ? `이 브라우저·사이트에 저장된 WIMS ${snapshot.rows.length}건의 대조 후보를 함께 표시합니다. 재등록 이력 검증과 DB 반영은 별도입니다.` : "이 브라우저·사이트에서 읽을 수 있는 WIMS 자료가 없습니다. 다른 브라우저나 운영 사이트의 저장 자료는 여기와 공유되지 않습니다."} <Link href="/product-registration#wims-registration">WIMS 대조 화면 열기</Link></p>
+
+      {rejectedRows.length > 0 && <section style={{ border: `2px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 14, marginBottom: 14 }}>
+        <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 18 }}>반려 · 보완 후 재등록</div>
+        <p style={{ margin: "6px 0 12px", color: wmsColors.ink, fontSize: 12 }}>제품DB의 기존 SKU 유무와 관계없이 독립적인 WIMS 등록건입니다. DB 행이 있다고 신규승인으로 판단하지 마세요.</p>
+        <p style={{ margin: "0 0 12px", color: wmsColors.muted, fontSize: 12 }}>등록일은 반려일이 아닙니다. 상세 반려 사유와 반려일은 쿠팡 반려 안내에서 확인해 주세요.</p>
+        <div style={{ display: "grid", gap: 8 }}>
+          {rejectedRows.map((row, index) => <article key={`${row.modelSku}|${row.estimateId}|${index}`} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "start" }}>
+              <div style={{ color: wmsColors.ink, fontWeight: 800 }}>{row.productName || "상품명 미확인"}</div>
+              <span style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 13 }}>반려</span>
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8, color: wmsColors.muted, fontSize: 12 }}>
+              <span>WIMS모델SKU: <b>{row.modelSku || "-"}</b></span>
+              <span>견적서ID: <b>{row.estimateId || "-"}</b></span>
+              <span>등록일: <b>{row.registeredAt || "미확인"}</b></span>
+              <span>반려일: <b>미확인</b></span>
+            </div>
+            <div style={{ marginTop: 7, color: wmsColors.ink, fontSize: 12 }}>상태: <b>{row.statusLabel || ""}</b></div>
+          </article>)}
+        </div>
+      </section>}
 
       {loading ? <p style={{ color: wmsColors.muted }}>상품 연결 대장을 읽는 중입니다.</p> : (
         <div style={{ display: "grid", gap: 10 }}>
