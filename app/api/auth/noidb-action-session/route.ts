@@ -36,12 +36,16 @@ export async function POST(request: NextRequest) {
   if (!isNoidbActionAuthConfigured()) {
     return NextResponse.json({ error: "NOID-B 관리자 연동번호가 서버에 설정되지 않았습니다." }, { status: 503 });
   }
-  let code = "";
+  // 기존 화면은 연동번호를 요청 헤더로 보내고, 외부 호출자는 JSON 본문을
+  // 사용할 수 있으므로 둘 다 허용한다. 값은 로그나 응답에 그대로 남기지 않는다.
+  let code = request.headers.get("x-noidb-action-code")?.trim() || "";
   try {
-    const body = await request.json();
-    code = typeof body?.code === "string" ? body.code.trim() : "";
+    if (!code) {
+      const body = await request.json();
+      code = typeof body?.code === "string" ? body.code.trim() : "";
+    }
   } catch {
-    return NextResponse.json({ error: "요청 형식이 올바르지 않습니다." }, { status: 400 });
+    if (!code) return NextResponse.json({ error: "요청 형식이 올바르지 않습니다." }, { status: 400 });
   }
   if (!verifyNoidbActionCode(code)) {
     return NextResponse.json({ error: "관리자 연동번호가 올바르지 않습니다." }, { status: 401 });
