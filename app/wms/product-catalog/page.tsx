@@ -25,6 +25,11 @@ function clean(value: string): string {
   return String(value || "").trim().toLowerCase();
 }
 
+function externalUrl(value: string): string {
+  const trimmed = String(value || "").trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : "";
+}
+
 function findWimsRow(item: ProductCatalogItem, rows: WimsRegistrationRow[]): WimsRegistrationRow | null {
   const skuId = clean(item.skuId);
   const modelSku = clean(item.modelSku);
@@ -139,6 +144,8 @@ export default function ProductCatalogPage() {
             const wims = snapshot ? findWimsRow(item, snapshot.rows) : null;
             const photoKey = item.modelSku || item.modelName || item.productName;
             const photos = photoStates[photoKey];
+            const imageUrl = externalUrl(item.imageUrl);
+            const productLink = externalUrl(item.productLink);
             return <article key={rowKey} style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 12, padding: 12 }}>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12 }}>
                 <div>
@@ -150,7 +157,8 @@ export default function ProductCatalogPage() {
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
                 <button type="button" onClick={() => void searchPhotos(item)} disabled={!photoKey || photos?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "사진 검색 중…" : "사진 후보 검색"}</button>
-                {item.imageUrl && <a href={item.imageUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: wmsColors.slate }}>제품DB 대표이미지</a>}
+                {imageUrl && <a href={imageUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: wmsColors.slate }}>대표이미지 원본 열기 ↗</a>}
+                {productLink && <a href={productLink} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: wmsColors.slate }}>쿠팡 제품페이지 열기 ↗</a>}
                 {item.skuId && <Link href={`/wms/products/${encodeURIComponent(item.skuId)}`} style={{ fontSize: 12, color: wmsColors.slate }}>SKU 상세 보기</Link>}
                 {photos?.error && <span style={{ color: wmsColors.warnText, fontSize: 11 }}>{photos.error}</span>}
                 {photos && !photos.loading && !photos.error && <span style={{ color: wmsColors.muted, fontSize: 11 }}>사진 후보 {photos.hits.length}개</span>}
