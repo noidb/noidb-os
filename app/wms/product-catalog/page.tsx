@@ -1,14 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { wmsColors } from "@/lib/wms/ui-tokens";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
-import type { ImageHit } from "@/lib/image-search";
+import { connectPhotoFolder, photoFolderName, searchPhotoFolder, savePreparedPhotos, type LocalPhoto } from "@/lib/image-search/browser-folder";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 
-type PhotoState = { loading: boolean; hits: ImageHit[]; error?: string };
+type PhotoState = { loading: boolean; hits: (LocalPhoto & { fileName: string; preview: string; selected: boolean })[]; error?: string };
 type LinkCheckState = { loading: boolean; state?: string; message?: string; status?: number; checkedAt?: string };
 
 const SNAPSHOT_KEY = "noidb_wims_registration_snapshot_v1";
@@ -58,6 +59,15 @@ function findWimsRow(item: ProductCatalogItem, rows: WimsRegistrationRow[]): Wim
 }
 
 export default function ProductCatalogPage() {
+  const router = useRouter();
+  const [folderName, setFolderName] = useState("");
+  const [folderMessage, setFolderMessage] = useState("");
+  const [preparing, setPreparing] = useState("");
+  const photoUrls = useRef<string[]>([]);
+  useEffect(() => {
+    void photoFolderName().then(setFolderName).catch(() => {});
+    return () => { photoUrls.current.forEach(url => URL.revokeObjectURL(url)); };
+  }, []);
   const [items, setItems] = useState<ProductCatalogItem[]>([]);
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [snapshot, setSnapshot] = useState<WimsRegistrationSnapshot | null>(null);
@@ -178,17 +188,28 @@ export default function ProductCatalogPage() {
     if (!key || photoStates[key]?.loading) return;
     setPhotoStates(current => ({ ...current, [key]: { loading: true, hits: current[key]?.hits || [] } }));
     try {
-      const response = await fetch("/api/image-search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: item.modelName || item.modelSku, rootIds: ["mybox"] }),
+      const found = await searchPhotoFolder(item.modelName || item.modelSku);
+      const hits = found.map(hit => {
+        const preview = URL.createObjectURL(hit.file);
+        photoUrls.current.push(preview);
+        return { ...hit, fileName: hit.name, preview, selected: false };
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.error || "사진 후보를 찾지 못했습니다.");
-      setPhotoStates(current => ({ ...current, [key]: { loading: false, hits: Array.isArray(data.hits) ? data.hits : [] } }));
+      setPhotoStates(current => ({ ...current, [key]: { loading: false, hits } }));
     } catch (cause) {
       setPhotoStates(current => ({ ...current, [key]: { loading: false, hits: [], error: cause instanceof Error ? cause.message : "사진 후보를 찾지 못했습니다." } }));
     }
+  }
+
+  async function prepareModel(modelName: string, groupItems: ProductCatalogItem[]) {
+    setPreparing(modelName);
+    setFolderMessage("");
+    try {
+      await savePreparedPhotos(modelName, (photoStates[modelName]?.hits || []).filter(hit => hit.selected));
+      window.localStorage.setItem(REREGISTRATION_PREP_KEY, JSON.stringify({ modelName, items: groupItems }));
+      router.push(`/?reregisterModel=${encodeURIComponent(modelName)}`);
+    } catch {
+      setFolderMessage("등록 준비를 저장하지 못했습니다. 브라우저 저장공간과 선택한 사진을 확인해주세요.");
+    } finally { setPreparing(""); }
   }
 
   async function checkProductLink(item: ProductCatalogItem) {
@@ -215,6 +236,13 @@ export default function ProductCatalogPage() {
           <p style={{ margin: 0, color: wmsColors.muted, fontSize: 13 }}>모델명은 상품군, 모델SKU는 옵션 키입니다. 이 화면은 읽기 전용입니다.</p>
         </div>
         <Link href="/wms/work-center" style={{ color: wmsColors.ink, fontWeight: 800, fontSize: 13 }}>작업센터로 돌아가기</Link>
+      </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <button type="button" onClick={() => void connectPhotoFolder().then(name => { setFolderName(name); setFolderMessage(""); }).catch(error => { if (error?.name !== "AbortError") setFolderMessage(error instanceof Error ? error.message : "사진 폴더 연결 실패"); })}>사진 원본 폴더 연결</button>
+        <span style={{ marginLeft: 8, fontSize: 12 }}>{folderName ? `연결: ${folderName}` : "PC에서 MYBOX 동기화 사진 폴더를 한 번 선택해주세요."}</span>
+        <p style={{ fontSize: 12 }}>사진은 이 브라우저에서 읽습니다. 모델 사진 검색 후 사용할 사진을 최대 10장 선택하고 등록 준비를 누르세요.</p>
+        {folderMessage && <p role="status">{folderMessage}</p>}
       </div>
 
       <div style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: 14, marginBottom: 14 }}>
@@ -270,9 +298,19 @@ export default function ProductCatalogPage() {
                 return <article key={group.key} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 10 }}>
                   <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", gap: 10 }}>
                     <div><div style={{ color: wmsColors.ink, fontWeight: 800 }}>{group.modelName}</div><div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 4 }}>{group.items.length}개 후보 행 · {group.items.map(item => item.modelSku || item.optionLabel || "옵션 미확인").join(" · ")}</div></div>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}><Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={() => { try { window.localStorage.setItem(REREGISTRATION_PREP_KEY, JSON.stringify({ modelName: group.modelName, items: group.items, hits: photos?.hits || [] })); } catch { /* storage is optional */ } }} style={{ fontSize: 12, color: wmsColors.slate, fontWeight: 700 }}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first)} disabled={!group.modelName || photos?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: photos?.loading ? "wait" : "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "사진 검색 중…" : "이 모델 사진 검색"}</button></div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}><Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={{ fontSize: 12, color: wmsColors.slate, fontWeight: 700 }}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first)} disabled={!group.modelName || photos?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: photos?.loading ? "wait" : "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "사진 검색 중…" : "이 모델 사진 검색"}</button></div>
                   </div>
                   {photos?.error && <div style={{ color: wmsColors.warnText, fontSize: 11, marginTop: 7 }}>{photos.error}</div>}
+                  {photos && photos.hits.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                    {photos.hits.map(hit => <label key={hit.id} style={{ width: 100, fontSize: 11, overflowWrap: "anywhere" }}>
+                      <img src={hit.preview} alt={hit.fileName} loading="lazy" style={{ width: 100, height: 100, objectFit: "contain" }} />
+                      <input type="checkbox" checked={hit.selected} disabled={!hit.selected && photos.hits.filter(photo => photo.selected).length >= 10} onChange={event => {
+                        const selected = event.target.checked;
+                        setPhotoStates(current => ({ ...current, [group.modelName]: { ...current[group.modelName], hits: current[group.modelName].hits.map(photo => photo.id === hit.id ? { ...photo, selected } : photo) } }));
+                      }} />{hit.fileName}
+                    </label>)}
+                    {photos.hits.length === 100 && <p>최대 100장을 표시합니다. 대상 모델의 사진 폴더로 좁혀 연결하면 나머지도 확인할 수 있습니다.</p>}
+                  </div>}
                   {photos && !photos.loading && !photos.error && <div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 7 }}>사진 후보 {photos.hits.length}개{photos.hits.length > 0 ? ` · ${photos.hits.slice(0, 3).map(hit => hit.fileName).join(" · ")}` : ""}</div>}
                 </article>;
               })}
@@ -311,7 +349,7 @@ export default function ProductCatalogPage() {
                 {photos?.error && <span style={{ color: wmsColors.warnText, fontSize: 11 }}>{photos.error}</span>}
                 {photos && !photos.loading && !photos.error && <span style={{ color: wmsColors.muted, fontSize: 11 }}>사진 후보 {photos.hits.length}개</span>}
               </div>
-              {photos && photos.hits.length > 0 && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 6, marginTop: 10 }}>{photos.hits.slice(0, 8).map(hit => <div key={hit.id} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, padding: 7, fontSize: 10, overflow: "hidden" }}><div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{hit.fileName}</div><div style={{ color: wmsColors.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{hit.path}</div></div>)}</div>}
+              {photos && photos.hits.length > 0 && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 6, marginTop: 10 }}>{photos.hits.slice(0, 8).map(hit => <div key={hit.id} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, padding: 7, fontSize: 10, overflow: "hidden" }}><div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{hit.fileName}</div><div style={{ color: wmsColors.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{hit.id}</div></div>)}</div>}
             </article>;
           })}
           {filteredItems.length > 200 && <p style={{ color: wmsColors.muted, fontSize: 12 }}>검색 결과가 많아 처음 200개만 표시합니다. 검색어를 좁혀 주세요.</p>}

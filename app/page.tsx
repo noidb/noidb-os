@@ -24,6 +24,7 @@ import { buildProductDbZip } from "@/lib/product-db/zip";
 import { compressImageDataUrl } from "@/lib/image/compress";
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
+import { loadPreparedPhotos } from "@/lib/image-search/browser-folder";
 import { coverSquareCanvas, defaultFitAdjust, fitToWhiteCanvas, type FitAdjust } from "@/lib/thumbnail/fit";
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
@@ -336,7 +337,7 @@ export default function Home() {
   const [modelCheckMessage, setModelCheckMessage] = useState("");
   const [modelReregisterable, setModelReregisterable] = useState(false);
   const [pendingReplacementCleanup, setPendingReplacementCleanup] = useState<PendingReplacementCleanup | null>(null);
-  const reregisterLoadedRef = useRef(false);
+  const [reregistrationMessage, setReregistrationMessage] = useState("");
 
   const [dbSupported, setDbSupported] = useState(false);
   const [dbHandle, setDbHandle] = useState<FileSystemDirectoryHandle | null>(null);
@@ -366,6 +367,7 @@ export default function Home() {
     })();
 
     try {
+      if (new URLSearchParams(window.location.search).has("reregisterModel")) return;
       const legacyKey = localStorage.getItem(LAURA_DRAFT_STORAGE_KEY) ? LAURA_DRAFT_STORAGE_KEY : LEGACY_DRAFT_STORAGE_KEY;
       const legacyRaw = localStorage.getItem(legacyKey);
       const raw = localStorage.getItem(DRAFT_STORAGE_KEY) || legacyRaw;
@@ -418,8 +420,7 @@ export default function Home() {
 
   useEffect(() => {
     const requestedModel = new URLSearchParams(window.location.search).get("reregisterModel")?.trim() || "";
-    if (!requestedModel || reregisterLoadedRef.current) return;
-    reregisterLoadedRef.current = true;
+    if (!requestedModel) return;
     let active = true;
     void (async () => {
       try {
@@ -438,28 +439,30 @@ export default function Home() {
         }
         if (!group.length) throw new Error(`${requestedModel} 모델을 제품DB에서 찾지 못했습니다.`);
         const first = group[0];
-        const optionText = group.map((item: any) => String(item.optionLabel || "").split("|").pop()?.trim() || "");
+        const optionText = group.map((item: any) => {
+          const label = String(item.optionLabel || "").split("|").pop()?.trim() || "";
+          return label === String(item.modelSku || "").trim() ? "" : label.replace(/^\[색상\]\s*/, "");
+        });
         const colors = [...new Set(optionText.map((value: string) => value.replace(/\s*\d+(?:\.\d+)?\s*호\s*$/u, "").trim()).filter(Boolean))];
-        const sizes = [...new Set(group.flatMap((item: any) => String(item.productName || "").match(/\d+(?:\.\d+)?\s*호/gu) || []))];
         const digits = requestedModel.match(/\d+/)?.[0] || "";
         if (!active) return;
-        setProduct(prev => ({
-          ...prev,
-          supplier: String(first.vendorName || prev.supplier),
-          category: String(first.category || prev.category),
-          gender: String(first.gender || prev.gender),
+        setProduct({
+          ...DEFAULT_PRODUCT,
+          supplier: String(first.vendorName || ""),
+          category: String(first.category || ""),
+          gender: String(first.gender || ""),
           modelName: requestedModel,
-          modelNo: digits || prev.modelNo,
-          colors: colors.join(",") || prev.colors,
-          sizes: sizes.join(",") || (String(first.category || prev.category) === "반지" ? prev.sizes : "Free"),
-          coupangTitle: String(first.productName || prev.coupangTitle || ""),
-          material: /써지컬스틸/i.test(String(first.productName || "")) ? "써지컬스틸" : prev.material,
-        }));
-        setModelCheckMessage(`재등록 대상 불러옴 · ${requestedModel} · 옵션 ${group.length}개 · 기존 DB는 아직 변경하지 않았습니다.`);
-        const preparedHit = Array.isArray(prepared?.hits) ? prepared.hits[0] : null;
-        const imageUrl = preparedHit?.path
-          ? `/api/image-search/preview?path=${encodeURIComponent(String(preparedHit.path))}`
-          : getWmsDisplayImageUrl(String(first.imageUrl || ""));
+          modelNo: digits,
+          colors: colors.join(","),
+          sizes: "",
+          coupangTitle: String(first.productName || ""),
+          material: "", keyword: "", searchTags: "", cost: "", price: "", dimension: "", warehouse: "", replacementSku: "",
+        });
+        setReregistrationMessage(`재등록 준비: ${requestedModel} · 후보 ${group.length}행. 기존 모델SKU: ${group.map((item: any) => item.modelSku || "미확인").join(" · ")}. 색상·사이즈·소재·가격을 확인해주세요. 기존 DB는 변경하지 않았습니다.`);
+        const selectedPhotos = await loadPreparedPhotos(requestedModel).catch(() => []);
+        if (!active) return;
+        if (selectedPhotos.length) { setPhotos(selectedPhotos); return; }
+        const imageUrl = getWmsDisplayImageUrl(String(first.imageUrl || ""));
         if (imageUrl) {
           try {
             const dataUrl = await imageUrlToDataUrl(imageUrl);
@@ -469,7 +472,7 @@ export default function Home() {
           }
         }
       } catch (error) {
-        if (active) setModelCheckMessage(`재등록 대상 불러오기 실패: ${error instanceof Error ? error.message : "제품DB 조회 실패"}`);
+        if (active) setReregistrationMessage(`재등록 대상 불러오기 실패: ${error instanceof Error ? error.message : "제품DB 조회 실패"}`);
       }
     })();
     return () => { active = false; };
@@ -2011,6 +2014,7 @@ export default function Home() {
 
   return (
     <main className="shell">
+      {reregistrationMessage && <p role="status" className="message">{reregistrationMessage}</p>}
       <AppNavigation active="product-registration" />
       <header className="hero">
         <div className="heroBrandArea">
