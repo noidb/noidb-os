@@ -220,21 +220,40 @@ export async function POST(req: NextRequest) {
     }
 
     if (mode === "coupangExtract") {
-      if (files.length !== 1) throw new Error("쿠팡쇼핑몰 추출DB.xlsx 파일 하나만 선택해주세요.");
-      const { rows } = await xlsxRows(files[0]);
-      const objects = toObjects(rows);
-      const hasExtractColumns = objects.some(row =>
-        ("제품링크" in row || "상품링크" in row) && "쿠팡노출가격" in row
-      );
-      if (!hasExtractColumns) throw new Error("쿠팡쇼핑몰 추출DB 형식을 확인해주세요.");
-
-      const items = objects.map(row => ({
-        sku: cleanText(row["SKU ID"] || row["SKU"]),
-        optionId: cleanText(row["옵션ID"]),
-        productLink: cleanText(row["상품링크"] || row["제품링크"]),
-        exposurePrice: parseNumber(row["쿠팡노출가격"] || row["쿠팡 노출가"]),
-        stockStatus: cleanText(row["재고현황"] || row["재고상태"] || row["재고 상태"]),
-      })).filter(item => item.sku || item.optionId);
+      const allJson = files.every(file => file.name.toLowerCase().endsWith(".json"));
+      if (!allJson && files.length !== 1) throw new Error("쿠팡쇼핑몰 추출DB.xlsx는 1개, 광고센터 상품링크 JSON은 여러 개를 선택할 수 있습니다.");
+      const isJson = allJson;
+      let items: { sku: string; optionId: string; productLink: string; exposurePrice: number; stockStatus: string }[];
+      if (isJson) {
+        items = [];
+        for (const file of files) {
+          let source: any;
+          try { source = JSON.parse(Buffer.from(await file.arrayBuffer()).toString("utf8")); }
+          catch { throw new Error("상품링크 JSON 형식을 읽지 못했습니다."); }
+          if (!Array.isArray(source?.items)) throw new Error("상품링크 JSON에 items 목록이 없습니다.");
+          items.push(...source.items.map((row: any) => ({
+            sku: cleanText(row?.skuId || row?.sku || row?.["SKU ID"]),
+            optionId: cleanText(row?.optionId || row?.["옵션ID"]),
+            productLink: cleanText(row?.productLink || row?.["상품링크"] || row?.["제품링크"]),
+            exposurePrice: parseNumber(row?.exposurePrice || row?.["쿠팡노출가격"]),
+            stockStatus: cleanText(row?.stockStatus || row?.["재고현황"]),
+          })).filter((item: { sku: string; optionId: string }) => item.sku || item.optionId));
+        }
+      } else {
+        const { rows } = await xlsxRows(files[0]);
+        const objects = toObjects(rows);
+        const hasExtractColumns = objects.some(row =>
+          ("제품링크" in row || "상품링크" in row) && "쿠팡노출가격" in row
+        );
+        if (!hasExtractColumns) throw new Error("쿠팡쇼핑몰 추출DB 형식을 확인해주세요.");
+        items = objects.map(row => ({
+          sku: cleanText(row["SKU ID"] || row["SKU"]),
+          optionId: cleanText(row["옵션ID"]),
+          productLink: cleanText(row["상품링크"] || row["제품링크"]),
+          exposurePrice: parseNumber(row["쿠팡노출가격"] || row["쿠팡 노출가"]),
+          stockStatus: cleanText(row["재고현황"] || row["재고상태"] || row["재고 상태"]),
+        })).filter(item => item.sku || item.optionId);
+      }
       const summary = { ok: true, mode, files: 1, parsed: items.length };
       if (dryRun) return NextResponse.json({ ...summary, sample: items.slice(0, 3) });
       const result = await callWebhook({ action: "importCoupangExtract", items });

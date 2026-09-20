@@ -65,3 +65,51 @@ const collector = async () => {
 };
 
 export const COUPANG_ADS_BOOKMARKLET = `javascript:(${collector.toString()})()`;
+
+const productLinkCollector = () => {
+  const notify = (message: string) => window.alert(`[NOID-B 상품링크 수집]\n${message}`);
+  try {
+    if (!location.hostname.endsWith("coupang.com") || !location.pathname.includes("/marketing/campaign/registration")) {
+      throw new Error("쿠팡 광고 만들기 화면에서 실행해주세요.");
+    }
+    const numericInputs = [...document.querySelectorAll<HTMLInputElement>("input")]
+      .map(input => input.value.trim())
+      .filter(value => /^\d{5,}$/.test(value));
+    const skuId = numericInputs.at(-1) || "";
+    if (!skuId) throw new Error("검색한 SKU ID를 찾지 못했습니다. SKU ID로 검색한 뒤 다시 실행해주세요.");
+    const items = [...document.querySelectorAll<HTMLAnchorElement>('a[href*="/vp/products/"]')]
+      .map(anchor => {
+        const url = new URL(anchor.href, location.origin);
+        const match = url.pathname.match(/\/vp\/products\/(\d+)/);
+        if (!match) return null;
+        return {
+          skuId,
+          productName: anchor.textContent?.replace(/\s+/g, " ").trim() || "",
+          productLink: url.toString(),
+          productId: match[1],
+          itemId: url.searchParams.get("itemId") || "",
+          vendorItemId: url.searchParams.get("vendorItemId") || "",
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => Boolean(item));
+    const unique = [...new Map(items.map(item => [item.productLink, item])).values()];
+    if (!unique.length) throw new Error(`SKU ID ${skuId}의 상품 검색 결과 링크를 찾지 못했습니다.`);
+    const payload = {
+      source: "Coupang Ads campaign registration SKU search",
+      capturedAt: new Date().toISOString(),
+      searchCriterion: "SKU ID",
+      items: unique,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const anchor = document.createElement("a");
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = `coupang_product_links_${skuId}.json`;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(anchor.href), 2000);
+    notify(`${skuId} · 상품링크 ${unique.length}건 저장 완료\n다운로드한 JSON을 노이드비 상품DB의 '쿠팡 추출DB 업데이트'에 올려주세요.`);
+  } catch (error) {
+    notify(error instanceof Error ? error.message : "상품링크 수집 중 오류가 발생했습니다.");
+  }
+};
+
+export const COUPANG_PRODUCT_LINK_BOOKMARKLET = `javascript:(${productLinkCollector.toString()})()`;

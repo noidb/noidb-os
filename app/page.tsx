@@ -2640,9 +2640,9 @@ export default function Home() {
             </label>
             <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("coupangExtract", e)}>
               <strong>쿠팡 추출DB 업데이트</strong>
-              <span>쿠팡쇼핑몰 추출DB.xlsx 한 파일만 선택</span>
+              <span>쿠팡쇼핑몰 추출DB.xlsx 1개 또는 광고센터 상품링크 JSON 여러 개</span>
               <span>제품DB 행 추가 없음 · 기존 행의 상품링크/쿠팡 노출가/재고현황만 갱신</span>
-              <input type="file" accept=".xlsx" disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("coupangExtract", e.target.files); e.target.value = ""; }} />
+              <input type="file" accept=".xlsx,.json,application/json" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("coupangExtract", e.target.files); e.target.value = ""; }} />
             </label>
           </div>
           {coupangImportMessage && <p className={coupangImportMessage.startsWith("오류") ? "error" : "detailMessage"}>{coupangImportMessage}</p>}

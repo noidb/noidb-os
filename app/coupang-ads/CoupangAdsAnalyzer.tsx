@@ -2,7 +2,7 @@
 
 import { DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import { parseCoupangAdsSnapshot, summarizeCoupangAds } from "../../lib/coupang-ads/analysis";
-import { COUPANG_ADS_BOOKMARKLET } from "../../lib/coupang-ads/bookmarklet";
+import { COUPANG_ADS_BOOKMARKLET, COUPANG_PRODUCT_LINK_BOOKMARKLET } from "../../lib/coupang-ads/bookmarklet";
 import { exportCoupangAdsAnalysis } from "../../lib/coupang-ads/excel";
 import { listCoupangAdsSnapshots, saveCoupangAdsSnapshot, type StoredCoupangAdsSnapshot } from "../../lib/coupang-ads/snapshot-store";
 import type { CoupangAdsAnalyzedItem, CoupangAdsParsedSnapshot } from "../../lib/coupang-ads/types";
@@ -20,6 +20,7 @@ function percent(value: number): string { return `${decimalFormat.format(value)}
 export default function CoupangAdsAnalyzer() {
   const inputRef = useRef<HTMLInputElement>(null);
   const bookmarkletRef = useRef<HTMLAnchorElement>(null);
+  const productLinkBookmarkletRef = useRef<HTMLAnchorElement>(null);
   const [parsed, setParsed] = useState<CoupangAdsParsedSnapshot | null>(null);
   const [snapshots, setSnapshots] = useState<StoredCoupangAdsSnapshot[]>([]);
   const [error, setError] = useState("");
@@ -33,6 +34,7 @@ export default function CoupangAdsAnalyzer() {
   useEffect(() => {
     void listCoupangAdsSnapshots().then(setSnapshots).catch(() => undefined);
     bookmarkletRef.current?.setAttribute("href", COUPANG_ADS_BOOKMARKLET);
+    productLinkBookmarkletRef.current?.setAttribute("href", COUPANG_PRODUCT_LINK_BOOKMARKLET);
   }, []);
 
   const summary = useMemo(() => parsed ? summarizeCoupangAds(parsed.items) : null, [parsed]);
@@ -107,6 +109,15 @@ export default function CoupangAdsAnalyzer() {
           </div>
           <ol className={styles.steps}><li>Chrome 북마크를 하나 만듭니다.</li><li>복사한 내용을 북마크 URL에 붙여넣습니다.</li><li>쿠팡 광고 상품 성과 화면에서 북마크를 클릭합니다.</li></ol>
           <small>쿠팡 로그인 쿠키나 토큰은 JSON 또는 NOID-B 서버로 전송되지 않습니다.</small>
+        </article>
+        <article className={styles.panel}>
+          <h2>상품링크 수집 버튼 설치</h2>
+          <p className={styles.help}>광고 만들기 화면에서 검색한 SKU의 실제 쿠팡 상품 링크를 저장합니다.</p>
+          <div className={styles.bookmarkActions}>
+            <a ref={productLinkBookmarkletRef} href="#product-link-bookmarklet" draggable title="Chrome 북마크바로 끌어놓으세요">NOID-B 상품링크 수집</a>
+          </div>
+          <ol className={styles.steps}><li>광고 만들기에서 검색 기준을 SKU ID로 선택합니다.</li><li>SKU ID를 검색하고 결과가 보이면 이 북마크를 클릭합니다.</li><li>다운로드된 JSON을 상품등록 화면의 쿠팡 추출DB 업데이트에 올립니다.</li></ol>
+          <small>상품명이나 모델명이 아닌 SKU ID로만 제품DB 행을 연결합니다.</small>
         </article>
       </section>
 
