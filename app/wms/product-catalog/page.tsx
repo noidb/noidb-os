@@ -152,6 +152,16 @@ export default function ProductCatalogPage() {
     rocketPending: items.filter(item => !isRocketRegistered(item)).length,
   }), [items, isReregistrationTarget, stoppedModelKeys]);
 
+  const reregistrationGroups = useMemo(() => {
+    if (status !== "reregister") return [];
+    const groups = new Map<string, ProductCatalogItem[]>();
+    for (const item of filteredItems) {
+      const key = modelGroupKey(item);
+      groups.set(key, [...(groups.get(key) || []), item]);
+    }
+    return [...groups.entries()].map(([key, groupItems]) => ({ key, modelName: groupItems[0].modelName || groupItems[0].modelSku || "모델명 없음", items: groupItems }));
+  }, [filteredItems, status]);
+
   async function searchPhotos(item: ProductCatalogItem) {
     // 사진 폴더는 모델 단위이므로 같은 모델의 옵션들이 검색 결과를 공유한다.
     const key = item.modelName || item.modelSku || item.productName;
@@ -240,6 +250,24 @@ export default function ProductCatalogPage() {
 
       {loading ? <p style={{ color: wmsColors.muted }}>상품 연결 대장을 읽는 중입니다.</p> : (
         <div style={{ display: "grid", gap: 10 }}>
+          {status === "reregister" && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 14, marginBottom: 2 }}>
+            <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>재등록 작업 묶음 · {reregistrationGroups.length}개 모델</div>
+            <p style={{ color: wmsColors.ink, fontSize: 12, margin: "6px 0 12px" }}>모델 하나에 옵션이 여러 개 있어도 사진 폴더 검색은 한 번만 합니다. 아래 옵션 목록은 각각 별도 모델SKU로 유지됩니다.</p>
+            <div style={{ display: "grid", gap: 8 }}>
+              {reregistrationGroups.map(group => {
+                const first = group.items[0];
+                const photos = photoStates[group.modelName];
+                return <article key={group.key} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 10 }}>
+                  <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", gap: 10 }}>
+                    <div><div style={{ color: wmsColors.ink, fontWeight: 800 }}>{group.modelName}</div><div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 4 }}>{group.items.length}개 옵션 · {group.items.map(item => item.modelSku || item.optionLabel || "옵션 미확인").join(" · ")}</div></div>
+                    <button type="button" onClick={() => void searchPhotos(first)} disabled={!group.modelName || photos?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: photos?.loading ? "wait" : "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "사진 검색 중…" : "이 모델 사진 검색"}</button>
+                  </div>
+                  {photos?.error && <div style={{ color: wmsColors.warnText, fontSize: 11, marginTop: 7 }}>{photos.error}</div>}
+                  {photos && !photos.loading && !photos.error && <div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 7 }}>사진 후보 {photos.hits.length}개{photos.hits.length > 0 ? ` · ${photos.hits.slice(0, 3).map(hit => hit.fileName).join(" · ")}` : ""}</div>}
+                </article>;
+              })}
+            </div>
+          </section>}
           {filteredItems.slice(0, 200).map((item, index) => {
             const rowKey = `${item.skuId}|${item.modelSku}|${item.modelName}|${index}`;
             const wims = snapshot ? findWimsRow(item, snapshot.rows) : null;
