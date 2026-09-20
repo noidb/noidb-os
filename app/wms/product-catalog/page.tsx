@@ -9,6 +9,7 @@ import type { ImageHit } from "@/lib/image-search";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 
 type PhotoState = { loading: boolean; hits: ImageHit[]; error?: string };
+type LinkCheckState = { loading: boolean; state?: string; message?: string; status?: number; checkedAt?: string };
 
 const SNAPSHOT_KEY = "noidb_wims_registration_snapshot_v1";
 
@@ -50,6 +51,7 @@ export default function ProductCatalogPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [photoStates, setPhotoStates] = useState<Record<string, PhotoState>>({});
+  const [linkChecks, setLinkChecks] = useState<Record<string, LinkCheckState>>({});
 
   const loadCatalog = useCallback(async (activeRef?: { current: boolean }) => {
     setLoading(true);
@@ -139,6 +141,21 @@ export default function ProductCatalogPage() {
     }
   }
 
+  async function checkProductLink(item: ProductCatalogItem) {
+    const url = externalUrl(item.productLink);
+    if (!url) return;
+    const key = item.skuId || item.modelSku || url;
+    setLinkChecks(current => ({ ...current, [key]: { loading: true } }));
+    try {
+      const response = await fetch(`/api/wms/product-link-check?url=${encodeURIComponent(url)}`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.message || "링크 확인에 실패했습니다.");
+      setLinkChecks(current => ({ ...current, [key]: { loading: false, state: data.state, message: data.message, status: data.status, checkedAt: new Date().toLocaleTimeString("ko-KR") } }));
+    } catch (cause) {
+      setLinkChecks(current => ({ ...current, [key]: { loading: false, state: "error", message: cause instanceof Error ? cause.message : "링크 확인에 실패했습니다.", checkedAt: new Date().toLocaleTimeString("ko-KR") } }));
+    }
+  }
+
   return (
     <main style={{ maxWidth: 1180, margin: "0 auto", padding: "20px 16px 48px", fontFamily: "sans-serif" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "start", marginBottom: 18 }}>
@@ -200,6 +217,7 @@ export default function ProductCatalogPage() {
             const photos = photoStates[photoKey];
             const imageUrl = getWmsDisplayImageUrl(externalUrl(item.imageUrl));
             const productLink = externalUrl(item.productLink);
+            const linkCheck = linkChecks[item.skuId || item.modelSku || productLink];
             return <article key={rowKey} style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 12, padding: 12 }}>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12 }}>
                 <div>
@@ -213,7 +231,11 @@ export default function ProductCatalogPage() {
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
                 <button type="button" onClick={() => void searchPhotos(item)} disabled={!photoKey || photos?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "사진 검색 중…" : "사진 후보 검색"}</button>
                 {imageUrl && <a href={imageUrl} target="_blank" rel="noreferrer" aria-label="대표이미지 크게 보기" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: wmsColors.slate }}><img src={imageUrl} alt="대표이미지" width={42} height={42} loading="lazy" style={{ width: 42, height: 42, objectFit: "contain", border: `1px solid ${wmsColors.border}`, borderRadius: 6, background: wmsColors.surface }} /><span>대표이미지 원본 열기 ↗</span></a>}
-                {productLink ? <a href={productLink} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: wmsColors.slate }}>쿠팡 제품페이지 열기 ↗</a> : <span style={{ color: wmsColors.muted, fontSize: 11 }}>쿠팡 제품주소: DB 미입력 (실제 주소 별도 확인 필요)</span>}
+                {productLink ? <>
+                  <a href={productLink} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: wmsColors.slate }}>쿠팡 제품페이지 열기 ↗</a>
+                  <button type="button" onClick={() => void checkProductLink(item)} disabled={linkCheck?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: linkCheck?.loading ? "wait" : "pointer", fontWeight: 700, color: wmsColors.ink }}>{linkCheck?.loading ? "링크 확인 중…" : "링크 상태 확인"}</button>
+                  {linkCheck && !linkCheck.loading && <span style={{ color: linkCheck.state === "reachable" ? wmsColors.greenDark : wmsColors.warnText, fontSize: 11 }}>{linkCheck.message}{linkCheck.checkedAt ? ` · ${linkCheck.checkedAt}` : ""}</span>}
+                </> : <span style={{ color: wmsColors.muted, fontSize: 11 }}>쿠팡 제품주소: 미등록 · 해당 SKU를 광고센터에서 SKU ID로 검색해야 합니다.</span>}
                 {item.skuId && <Link href={`/wms/products/${encodeURIComponent(item.skuId)}`} style={{ fontSize: 12, color: wmsColors.slate }}>SKU 상세 보기</Link>}
                 {photos?.error && <span style={{ color: wmsColors.warnText, fontSize: 11 }}>{photos.error}</span>}
                 {photos && !photos.loading && !photos.error && <span style={{ color: wmsColors.muted, fontSize: 11 }}>사진 후보 {photos.hits.length}개</span>}
