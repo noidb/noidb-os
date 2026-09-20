@@ -168,6 +168,7 @@ export default function ProductCatalogPage() {
       {!configured && !loading && <div style={{ border: `1px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>Google Sheets 연결 설정이 없어 상품을 읽지 못했습니다.</div>}
       {error && <div style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{error}</div>}
       <p style={{ fontSize: 12, color: wmsColors.muted }}>제품DB의 공란만으로 쿠팡 승인 여부를 판단할 수 없습니다. {snapshot ? `이 브라우저·사이트에 저장된 WIMS ${snapshot.rows.length}건의 대조 후보를 함께 표시합니다. 재등록 이력 검증과 DB 반영은 별도입니다.` : "이 브라우저·사이트에서 읽을 수 있는 WIMS 자료가 없습니다. 다른 브라우저나 운영 사이트의 저장 자료는 여기와 공유되지 않습니다."} <Link href="/product-registration#wims-registration">WIMS 대조 화면 열기</Link></p>
+      <p style={{ fontSize: 12, color: wmsColors.muted }}>제품페이지 주소가 비어 있는 행은 SKU ID를 임의로 URL로 바꾸지 않습니다. 쿠팡에서 내려받은 <b>쿠팡쇼핑몰 추출DB.xlsx</b>를 <Link href="/#coupang-data-import">작업센터의 ‘쿠팡 추출DB 업데이트’</Link>에 올리면 SKU ID/옵션ID로 기존 행의 제품링크만 연결할 수 있습니다.</p>
 
       {rejectedRows.length > 0 && <section style={{ border: `2px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 14, marginBottom: 14 }}>
         <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 18 }}>반려 · 보완 후 재등록</div>

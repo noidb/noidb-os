@@ -2625,7 +2625,7 @@ export default function Home() {
           </div>
         </div>
         {dbStatus && <p className="note">{dbStatus}</p>}
-        <details className="advancedPanel coupangDataPanel">
+        <details id="coupang-data-import" className="advancedPanel coupangDataPanel">
           <summary>기타 쿠팡 데이터 수동 업데이트</summary>
           <div className="coupangImportGrid">
             <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("inboundHistory", e)}>
