@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { wmsColors } from "@/lib/wms/ui-tokens";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
@@ -51,36 +51,49 @@ export default function ProductCatalogPage() {
   const [error, setError] = useState("");
   const [photoStates, setPhotoStates] = useState<Record<string, PhotoState>>({});
 
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      try {
-        const response = await fetch("/api/wms/product-registration-catalog", { cache: "no-store" });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data?.error || "상품 연결 대장을 읽지 못했습니다.");
-        if (active) {
-          setItems(Array.isArray(data.items) ? data.items : []);
-          setConfigured(Boolean(data.configured));
-          setSnapshot(readSnapshot());
-        }
-      } catch (cause) {
-        if (active) setError(cause instanceof Error ? cause.message : "상품 연결 대장을 읽지 못했습니다.");
-      } finally {
-        if (active) setLoading(false);
+  const loadCatalog = useCallback(async (activeRef?: { current: boolean }) => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/wms/product-registration-catalog", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "상품 연결 대장을 읽지 못했습니다.");
+      if (!activeRef || activeRef.current) {
+        setItems(Array.isArray(data.items) ? data.items : []);
+        setConfigured(Boolean(data.configured));
+        setSnapshot(readSnapshot());
       }
-    })();
-    return () => { active = false; };
+    } catch (cause) {
+      if (!activeRef || activeRef.current) setError(cause instanceof Error ? cause.message : "상품 연결 대장을 읽지 못했습니다.");
+    } finally {
+      if (!activeRef || activeRef.current) setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
+    const active = { current: true };
+    void loadCatalog(active);
+    return () => { active.current = false; };
+  }, [loadCatalog]);
+
+  useEffect(() => {
+    let lastRefresh = 0;
+    const refreshCatalog = () => {
+      // 탭을 오갈 때마다 Sheets를 읽지 않고, 20초 이상 지난 경우에만 다시 읽는다.
+      if (Date.now() - lastRefresh < 20_000) return;
+      lastRefresh = Date.now();
+      void loadCatalog();
+    };
     const refreshSnapshot = () => setSnapshot(readSnapshot());
+    window.addEventListener("focus", refreshCatalog);
     window.addEventListener("focus", refreshSnapshot);
     window.addEventListener("storage", refreshSnapshot);
     return () => {
+      window.removeEventListener("focus", refreshCatalog);
       window.removeEventListener("focus", refreshSnapshot);
       window.removeEventListener("storage", refreshSnapshot);
     };
-  }, []);
+  }, [loadCatalog]);
 
   const filteredItems = useMemo(() => {
     const needle = clean(query);
@@ -145,6 +158,7 @@ export default function ProductCatalogPage() {
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
           <input value={query} onChange={event => setQuery(event.target.value)} placeholder="모델명·모델SKU·SKU ID·바코드·상품명 검색" style={{ flex: "1 1 340px", minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px" }} />
+          <button type="button" onClick={() => void loadCatalog()} disabled={loading} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "새로 읽는 중…" : "제품DB 새로고침"}</button>
           <select value={status} onChange={event => setStatus(event.target.value)} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 10px", background: "#fff" }}>
             <option value="all">전체 상태</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
           </select>
