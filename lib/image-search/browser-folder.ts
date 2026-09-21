@@ -184,6 +184,50 @@ export async function savePhotoSearch(model: string, state: SavedPhotoSearch) {
   await write(`search-v2:${model}`, state);
 }
 
+/**
+ * 목록용 작은 사진(약 200px) 기억. 사진 폴더 읽기가 느려서, 한 번 만든 작은 사진을 이 브라우저에 저장해
+ * 두 번째부터는 파일을 읽지 않고 바로 보여준다. 키 = 경로 + 크기 + 수정 시각이라 사진이 바뀌면 새로 만든다.
+ * 목록 표시용일 뿐이고, 크게 보기·다운로드·등록 준비는 항상 원본 파일을 쓴다.
+ */
+const THUMB_DB = "noidb-photo-thumbnails";
+
+function thumbnailKey(id: string, file: File) {
+  return `${id}|${file.size}|${file.lastModified}`;
+}
+
+async function thumbnailDatabase() {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(THUMB_DB, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("thumbs");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function loadSavedThumbnail(id: string, file: File): Promise<Blob | undefined> {
+  const db = await thumbnailDatabase();
+  try {
+    return await new Promise<Blob | undefined>((resolve, reject) => {
+      const request = db.transaction("thumbs").objectStore("thumbs").get(thumbnailKey(id, file));
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  } finally { db.close(); }
+}
+
+export async function saveThumbnail(id: string, file: File, thumbnail: Blob) {
+  const db = await thumbnailDatabase();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction("thumbs", "readwrite");
+      tx.objectStore("thumbs").put(thumbnail, thumbnailKey(id, file));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally { db.close(); }
+}
+
 /** 검색 초기화: 이 모델의 저장된 검색 결과·선택을 지운다(사진 파일은 건드리지 않는다). */
 export async function clearPhotoSearch(model: string) {
   const db = await database();

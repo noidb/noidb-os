@@ -7,7 +7,7 @@ import { wmsColors } from "@/lib/wms/ui-tokens";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
-import { clearPhotoSearch, connectPhotoFolder, FOLDER_TIER_LABELS, loadPhotoSearch, openPhotoFolders, openSavedPhotos, photoFolderName, photoFolderReady, savePhotoSearch, searchPhotoFolder, savePreparedPhotos, type FolderTier, type LocalPhoto } from "@/lib/image-search/browser-folder";
+import { clearPhotoSearch, connectPhotoFolder, FOLDER_TIER_LABELS, loadPhotoSearch, loadSavedThumbnail, saveThumbnail, openPhotoFolders, openSavedPhotos, photoFolderName, photoFolderReady, savePhotoSearch, searchPhotoFolder, savePreparedPhotos, type FolderTier, type LocalPhoto } from "@/lib/image-search/browser-folder";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 
 type PhotoHit = LocalPhoto & { fileName: string; preview: string; selected: boolean };
@@ -764,7 +764,7 @@ function ZoomableImage({ src, alt }: { src: string; alt: string }) {
 }
 
 /*
- * 목록용 작은 사진. 카메라 사진은 파일 안의 작은 미리보기를 바로 쓰고, 없으면 원본을 한 번에 3장씩 200px로 줄여 만든다.
+ * 목록용 작은 사진. 한 번 만든 것은 브라우저에 기억해 두고, 처음에는 파일 안의 작은 미리보기를 쓰거나 원본을 3장씩 200px로 줄여 만든다.
  * 줄인 사진은 경로별로 기억해 두고, 크게 보기·다운로드·등록 준비는 원본 파일을 그대로 쓴다.
  */
 const thumbnailCache = new Map<string, string>();
@@ -811,17 +811,24 @@ async function exifThumbnail(file: File): Promise<Blob | null> {
   return null;
 }
 
-async function makeThumbnail(file: File): Promise<string> {
-  const embedded = await exifThumbnail(file).catch(() => null);
-  if (embedded) return URL.createObjectURL(embedded);
+async function makeThumbnail(file: File): Promise<Blob | null> {
   const bitmap = await createImageBitmap(file, { resizeWidth: 200, resizeQuality: "medium" });
   const canvas = document.createElement("canvas");
   canvas.width = bitmap.width;
   canvas.height = bitmap.height;
   canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
   bitmap.close();
-  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/jpeg", 0.8));
-  return blob ? URL.createObjectURL(blob) : "";
+  return new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/jpeg", 0.8));
+}
+
+/** 기억해 둔 작은 사진 → 파일 안 미리보기 → 원본 축소(3장씩) 순서. 새로 만든 것은 기억해 둔다. */
+async function thumbnailBlob(photoId: string, file: File, stillWanted: () => boolean): Promise<Blob | null> {
+  const saved = await loadSavedThumbnail(photoId, file).catch(() => undefined);
+  if (saved) return saved;
+  const made = await exifThumbnail(file).catch(() => null)
+    ?? await queueThumbnail(async () => stillWanted() ? makeThumbnail(file) : null);
+  if (made) void saveThumbnail(photoId, file, made).catch(() => {});
+  return made;
 }
 
 function Thumbnail({ photoId, file, alt }: { photoId: string; file: File; alt: string }) {
@@ -829,9 +836,13 @@ function Thumbnail({ photoId, file, alt }: { photoId: string; file: File; alt: s
   useEffect(() => {
     if (thumbnailCache.has(photoId)) { setUrl(thumbnailCache.get(photoId)!); return; }
     let alive = true;
-    void exifThumbnail(file).catch(() => null)
-      .then(embedded => embedded ? URL.createObjectURL(embedded) : queueThumbnail(async () => alive ? makeThumbnail(file) : ""))
-      .then(made => { if (made) thumbnailCache.set(photoId, made); if (alive && made) setUrl(made); })
+    void thumbnailBlob(photoId, file, () => alive)
+      .then(blob => {
+        if (!blob) return;
+        const made = URL.createObjectURL(blob);
+        thumbnailCache.set(photoId, made);
+        if (alive) setUrl(made);
+      })
       .catch(() => { if (alive) setUrl(URL.createObjectURL(file)); });
     return () => { alive = false; };
   }, [photoId, file]);
