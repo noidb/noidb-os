@@ -338,6 +338,7 @@ export default function Home() {
   const [modelReregisterable, setModelReregisterable] = useState(false);
   const [pendingReplacementCleanup, setPendingReplacementCleanup] = useState<PendingReplacementCleanup | null>(null);
   const [reregistrationMessage, setReregistrationMessage] = useState("");
+  const [reregisterModelName, setReregisterModelName] = useState("");
 
   const [dbSupported, setDbSupported] = useState(false);
   const [dbHandle, setDbHandle] = useState<FileSystemDirectoryHandle | null>(null);
@@ -421,6 +422,7 @@ export default function Home() {
   useEffect(() => {
     const requestedModel = new URLSearchParams(window.location.search).get("reregisterModel")?.trim() || "";
     if (!requestedModel) return;
+    setReregisterModelName(requestedModel);
     let active = true;
     void (async () => {
       try {
@@ -462,12 +464,12 @@ export default function Home() {
         const selectedPhotos = await loadPreparedPhotos(requestedModel).catch(() => []);
         if (!active) return;
         if (selectedPhotos.length) {
-          // 분석에는 첫 장만 사용하되, 선택한 전체 사진(첫 장 포함)을
-          // 업로드 풀에 전달하고 슬롯은 사용자가 직접 지정한다.
+          // 첫 장 = 연결 대장에서 '분석용'으로 지정한 사진(savePreparedPhotos가 맨 앞에 둔다).
+          // 분석에는 그 1장만 쓰고, 선택한 전체 사진(분석용 포함)은 업로드 풀로 보내 슬롯은 사용자가 지정한다.
           const preparedSlots = selectedPhotos.map(photo => ({ dataUrl: photo.dataUrl, fileName: photo.name }));
           setPhotos([{ id: selectedPhotos[0].id, name: selectedPhotos[0].name, dataUrl: selectedPhotos[0].dataUrl }]);
           setUploadPool(preparedSlots);
-          setPhotoMessage("재등록 사진을 업로드 풀에 준비했습니다. 분석 사진은 첫 장이며, 나머지는 슬롯을 직접 지정해주세요.");
+          setPhotoMessage("재등록 사진을 준비했습니다. AI 분석에는 분석용으로 지정한 1장만 쓰고, 선택한 사진 전체는 아래 쿠팡 등록이미지 업로드 풀에 넣었습니다. 슬롯은 직접 지정해주세요.");
           return;
         }
         const imageUrl = getWmsDisplayImageUrl(String(first.imageUrl || ""));
@@ -2028,6 +2030,7 @@ export default function Home() {
   return (
     <main className="shell">
       {reregistrationMessage && <p role="status" className="message">{reregistrationMessage}</p>}
+      {reregisterModelName && <p className="message"><Link href={`/wms/product-catalog?status=reregister&model=${encodeURIComponent(reregisterModelName)}`}>← {reregisterModelName} 사진 다시 고르기 (선택한 사진·분석용 그대로 유지)</Link></p>}
       <AppNavigation active="product-registration" />
       <header className="hero">
         <div className="heroBrandArea">

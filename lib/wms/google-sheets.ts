@@ -37,10 +37,11 @@ export function getWmsSpreadsheetId(): string {
 /** 지정한 시트 탭의 전체 값을 2차원 배열로 읽어온다 (읽기 전용). */
 export async function fetchSheetRows(
   sheetName: string,
-  options?: { valueRenderOption?: SheetValueRenderOption }
+  options?: { valueRenderOption?: SheetValueRenderOption; spreadsheetId?: string }
 ): Promise<string[][]> {
   const accessToken = await getWmsGoogleAccessToken();
-  const spreadsheetId = getWmsSpreadsheetId();
+  // spreadsheetId를 주면 상품DB 대신 그 시트(예: 상품 연결표)를 읽는다. 기본값은 기존과 동일.
+  const spreadsheetId = options?.spreadsheetId || getWmsSpreadsheetId();
   const range = encodeURIComponent(`'${sheetName}'`);
   const renderOption = options?.valueRenderOption || "FORMATTED_VALUE";
   const url = `${SHEETS_API_BASE}/${spreadsheetId}/values/${range}?valueRenderOption=${renderOption}`;
