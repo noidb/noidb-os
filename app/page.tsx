@@ -461,12 +461,25 @@ export default function Home() {
         setReregistrationMessage(`재등록 준비: ${requestedModel} · 후보 ${group.length}행. 기존 모델SKU: ${group.map((item: any) => item.modelSku || "미확인").join(" · ")}. 색상·사이즈·소재·가격을 확인해주세요. 기존 DB는 변경하지 않았습니다.`);
         const selectedPhotos = await loadPreparedPhotos(requestedModel).catch(() => []);
         if (!active) return;
-        if (selectedPhotos.length) { setPhotos(selectedPhotos); return; }
+        if (selectedPhotos.length) {
+          // 분석에는 첫 장만 사용하되, 선택한 전체 사진(첫 장 포함)을
+          // 업로드 풀에 전달하고 슬롯은 사용자가 직접 지정한다.
+          const preparedSlots = selectedPhotos.map(photo => ({ dataUrl: photo.dataUrl, fileName: photo.name }));
+          setPhotos([{ id: selectedPhotos[0].id, name: selectedPhotos[0].name, dataUrl: selectedPhotos[0].dataUrl }]);
+          setUploadPool(preparedSlots);
+          setPhotoMessage("재등록 사진을 업로드 풀에 준비했습니다. 분석 사진은 첫 장이며, 나머지는 슬롯을 직접 지정해주세요.");
+          return;
+        }
         const imageUrl = getWmsDisplayImageUrl(String(first.imageUrl || ""));
         if (imageUrl) {
           try {
             const dataUrl = await imageUrlToDataUrl(imageUrl);
-            if (active && dataUrl.startsWith("data:image/")) setPhotos([{ id: `catalog:${requestedModel}`, name: `${requestedModel}-기존대표이미지`, dataUrl }]);
+            if (active && dataUrl.startsWith("data:image/")) {
+              const fallbackName = `${requestedModel}-기존대표이미지`;
+              setPhotos([{ id: `catalog:${requestedModel}`, name: fallbackName, dataUrl }]);
+              setUploadPool([{ dataUrl, fileName: fallbackName }]);
+              setPhotoMessage("기존 대표이미지를 업로드 풀에 준비했습니다. 슬롯은 사용자가 직접 지정해주세요.");
+            }
           } catch {
             if (active) setPhotoMessage("기존 대표이미지를 불러오지 못했습니다. 사진 후보에서 직접 선택해주세요.");
           }
@@ -2088,7 +2101,7 @@ export default function Home() {
               }}
             />
             <strong>클릭 또는 드래그앤드롭 (최대 {MAX_PHOTOS}장)</strong>
-            <span>첫 번째 사진이 AI 분석에 사용됩니다. 순서를 바꾸면 첫 장이 분석용입니다.</span>
+            <span>분석용은 첫 장입니다. 선택한 모든 사진은 아래 쿠팡 등록이미지에서 필요한 슬롯에 직접 배치해주세요.</span>
           </label>
         </div>
         {photoMessage && <p className="detailMessage">{photoMessage}</p>}
