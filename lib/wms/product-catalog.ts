@@ -4,8 +4,7 @@ export { normalizeSkuId, normalizeModelSkuKey } from "./sku-normalize";
 
 /**
  * "제품DB" 시트만 읽어 상품코드(SKU ID) 기준으로 모델명/카테고리/상품명/옵션명/대표이미지/창고번호/
- * BOX번호/현재고/제조국명을 매핑하는 읽기 전용 조회 모델. lib/wms/purchase-orders.ts가 이미 쓰고 있는 조인
- * 방식(SKU ID 기준)과 동일한 정규화 규칙을 쓴다. 이 파일은 오직 읽기만 수행하며 시트에 값을 쓰지 않는다.
+ * BOX번호/현재고/제조국명을 매핑하는 읽기 전용 조회 모델. 이 파일은 오직 읽기만 수행하며 시트에 값을 쓰지 않는다.
  *
  * 컬럼 확장 방법: FIELD_HEADER_CANDIDATES에 헤더 후보를 추가/수정하기만 하면 된다. 시트에 그 헤더가
  * 없으면 자동으로 빈 값("")이 되므로, 창고번호/BOX번호/현재고처럼 "나중에" 생길 컬럼도 지금 당장 코드를
@@ -52,6 +51,15 @@ export interface ProductCatalogItem {
   reregistrationTier: string;
   /** 제품DB "사진폴더(확정)"(연결표 v8 병합, 2026-09-22 신규) — 없으면 "". */
   photoFolder: string;
+  /** 제품DB "주얼리사이즈" — 재등록 시 기존 사이즈를 그대로 채우는 데 쓴다. 없으면 "". */
+  jewelrySize: string;
+  /** 제품DB "치수" — 없으면 "". */
+  dimension: string;
+  /** 제품DB "쿠팡 판매가" — 없으면 "". */
+  salePrice: string;
+  /** 제품DB "누적입고" — 시트에 저장된 값 그대로. 발주서리스트 로컬 파일 기반 집계보다 이 값이
+   *  더 안정적이다(로컬 파일은 개발 환경에만 있고 운영에는 없을 수 있음, 2026-09-23). 없으면 "". */
+  cumulativeInbound: string;
 }
 
 /** product-catalog-write.ts(제품DB 직접 수정)에서도 같은 시트/헤더 매핑을 재사용한다. */
@@ -78,6 +86,10 @@ export const FIELD_HEADER_CANDIDATES: Record<Exclude<keyof ProductCatalogItem, "
   productCode: ["제품코드"],
   reregistrationTier: ["재등록구분"],
   photoFolder: ["사진폴더(확정)"],
+  jewelrySize: ["주얼리사이즈"],
+  dimension: ["치수"],
+  salePrice: ["쿠팡 판매가"],
+  cumulativeInbound: ["누적입고"],
 };
 
 /** 제품DB '이미지' 열의 =IMAGE("url",...) 수식에서 실제 이미지 URL만 추출한다. */
@@ -125,6 +137,10 @@ function mapCatalogRow(row: Record<string, string>): ProductCatalogItem {
     productCode: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productCode),
     reregistrationTier: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.reregistrationTier),
     photoFolder: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.photoFolder),
+    jewelrySize: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.jewelrySize),
+    dimension: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.dimension),
+    salePrice: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.salePrice),
+    cumulativeInbound: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.cumulativeInbound),
   };
 }
 

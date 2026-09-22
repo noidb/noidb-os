@@ -151,6 +151,7 @@ export async function loadShipmentPrintGroups(waveId: string, items: PickingWave
         productName: "", optionLabel: "", imageUrl: "", warehouseNumber: "", boxNumber: "",
         currentStock: "", currentStatus: "", orderableStatus: "", costVatIncluded: "", vendorName: "", barcode: "",
         countryOfOrigin: row.embeddedCountryOfOrigin, productLink: "", productCode: "", reregistrationTier: "", photoFolder: "",
+        jewelrySize: "", dimension: "", salePrice: "", cumulativeInbound: "",
       }));
     }
 

@@ -456,9 +456,13 @@ export default function Home() {
           modelName: requestedModel,
           modelNo: digits,
           colors: colors.join(","),
-          sizes: "",
+          sizes: String(first.jewelrySize || ""),
           coupangTitle: String(first.productName || ""),
-          material: "", keyword: "", searchTags: "", cost: "", price: "", dimension: "", warehouse: "", replacementSku: "",
+          dimension: String(first.dimension || ""),
+          cost: String(first.costVatIncluded || ""),
+          price: String(first.salePrice || ""),
+          warehouse: String(first.warehouseNumber || ""),
+          keyword: "", searchTags: "", replacementSku: "",
         });
         setReregistrationMessage(`재등록 준비: ${requestedModel} · 후보 ${group.length}행. 기존 모델SKU: ${group.map((item: any) => item.modelSku || "미확인").join(" · ")}. 색상·사이즈·소재·가격을 확인해주세요. 기존 DB는 변경하지 않았습니다.`);
         const selectedPhotos = await loadPreparedPhotos(requestedModel).catch(() => []);
@@ -839,6 +843,14 @@ export default function Home() {
         return;
       }
       setProduct(prev => {
+        // 재등록은 제품DB의 실제 값(치수·사이즈·성별·카테고리)을 이미 채워뒀으니, AI의 일반적인
+        // 추정값으로 덮어쓰지 않는다. 검색어(keyword)만 참고용으로 갱신한다.
+        if (reregisterModelName) {
+          return {
+            ...prev,
+            keyword: normalizeKeyword(data.keyword || prev.keyword, prev),
+          };
+        }
         const analyzedGender = data.gender || prev.gender;
         const next = {
           ...prev,
@@ -856,7 +868,7 @@ export default function Home() {
             ? defaultDimension(data.category)
             : prev.dimension,
         };
-        if (!reregisterModelName) next.modelName = buildAutoModel(next);
+        next.modelName = buildAutoModel(next);
         if (!sizesUserEditedRef.current) {
           next.sizes = defaultSizes(next.gender, next.category);
         }
@@ -2131,6 +2143,7 @@ export default function Home() {
             </div>
           ))}
         </div>
+        {reregisterModelName && <p className="message">재등록은 기존 제품DB 정보(치수·사이즈·원가·판매가 등)를 그대로 가져왔으니 AI 사진분석 없이 바로 저장해도 됩니다. 최근 바뀐 값만 확인해서 고쳐주세요. (검색어가 필요하면 아래 버튼을 눌러도 됩니다 — 가져온 값은 덮어쓰지 않습니다.)</p>}
         <button className="aiButton" type="button" disabled={loading} onClick={analyzeImage}>
           {loading ? "분석 중..." : "AI 사진분석 (첫 번째 사진)"}
         </button>

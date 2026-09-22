@@ -72,6 +72,10 @@ const catalog: ProductCatalogItem[] = manifestOrder.map(skuId => ({
   productCode: "",
   reregistrationTier: "",
   photoFolder: "",
+  jewelrySize: "",
+  dimension: "",
+  salePrice: "",
+  cumulativeInbound: "",
 }));
 
 async function main() {

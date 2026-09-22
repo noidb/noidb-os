@@ -33,8 +33,6 @@ function nextPhotoLevel(state: PhotoState): number {
   if (state.level === 1 && !state.grouped) return FULL_SEARCH_LEVEL;
   return state.level + 1;
 }
-type CumulativeInboundRow = { skuId: string; actualReceivedQuantity: number };
-
 const SNAPSHOT_KEY = "noidb_wims_registration_snapshot_v1";
 const REREGISTRATION_PREP_KEY = "noidb_reregistration_prep_v1";
 const VIEW_KEY = "noidb_product_catalog_view_v1";
@@ -104,8 +102,6 @@ export default function ProductCatalogPage() {
   const [items, setItems] = useState<ProductCatalogItem[]>([]);
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [snapshot, setSnapshot] = useState<WimsRegistrationSnapshot | null>(null);
-  const [cumulativeInboundBySku, setCumulativeInboundBySku] = useState<Map<string, number>>(new Map());
-  const [cumulativeInboundState, setCumulativeInboundState] = useState<"loading" | "loaded" | "error">("loading");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
   const [loading, setLoading] = useState(true);
@@ -181,27 +177,6 @@ export default function ProductCatalogPage() {
   }, [loadCatalog]);
 
   useEffect(() => {
-    let active = true;
-    void fetch("/api/wms/supplier-hub-orders?includeHistorical=1", { cache: "no-store" })
-      .then(async response => {
-        const data = await response.json() as { cumulativeInboundBySku?: CumulativeInboundRow[] };
-        if (!response.ok) throw new Error(data?.toString() || "누적 입고 자료를 읽지 못했습니다.");
-        const totals = new Map<string, number>();
-        for (const row of data.cumulativeInboundBySku || []) {
-          const skuId = String(row.skuId || "").trim();
-          const quantity = Number(row.actualReceivedQuantity);
-          if (skuId && Number.isFinite(quantity)) {
-            const key = clean(skuId);
-            totals.set(key, (totals.get(key) || 0) + quantity);
-          }
-        }
-        if (active) { setCumulativeInboundBySku(totals); setCumulativeInboundState("loaded"); }
-      })
-      .catch(() => { if (active) { setCumulativeInboundBySku(new Map()); setCumulativeInboundState("error"); } });
-    return () => { active = false; };
-  }, []);
-
-  useEffect(() => {
     let lastRefresh = 0;
     const refreshCatalog = () => {
       // 탭을 오갈 때마다 Sheets를 읽지 않고, 20초 이상 지난 경우에만 다시 읽는다.
@@ -235,9 +210,9 @@ export default function ProductCatalogPage() {
         || (status === "reregister" && reregistration)
         || (status === "rocket-pending" && rocketPending);
       return matchesQuery && matchesStatus;
-    }).sort((a, b) => (cumulativeInboundBySku.get(clean(b.skuId)) || 0) - (cumulativeInboundBySku.get(clean(a.skuId)) || 0)
+    }).sort((a, b) => (Number(b.cumulativeInbound) || 0) - (Number(a.cumulativeInbound) || 0)
       || Number(isReregistrationTarget(b)) - Number(isReregistrationTarget(a)));
-  }, [cumulativeInboundBySku, items, query, snapshot, status, isReregistrationTarget]);
+  }, [items, query, snapshot, status, isReregistrationTarget]);
 
   const rejectedRows = useMemo(() => {
     const needle = clean(query);
@@ -593,7 +568,7 @@ export default function ProductCatalogPage() {
                 const photos = photoStates[group.modelName];
                 return <article key={group.key} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 10 }}>
                   <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", gap: 10 }}>
-                    <div><div style={{ color: wmsColors.ink, fontWeight: 800 }}>{group.modelName}</div><div style={{ color: wmsColors.ink, fontSize: 12, marginTop: 3 }}>{group.productName}</div><div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 4 }}>{group.items.length}개 후보 행</div><div style={{ display: "grid", gap: 3, marginTop: 6, fontSize: 11 }}>{group.items.map((item, itemIndex) => { const itemLink = externalUrl(item.productLink); return <div key={`${item.skuId}|${item.modelSku}|${item.optionLabel}|${itemIndex}`} style={{ color: wmsColors.muted }}>모델SKU <b>{item.modelSku || "미확인"}</b> · 기존 SKU ID <b>{item.skuId || "미확인"}</b> · 바코드 <b>{item.barcode || "미확인"}</b> · 옵션 <b>{item.optionLabel || "미확인"}</b> · 누적입고 <b>{cumulativeInboundState === "loaded" ? `${(cumulativeInboundBySku.get(clean(item.skuId)) || 0).toLocaleString()}개` : "미확인"}</b> · 발주가능상태 <b>{item.orderableStatus || "미확인"}</b>{itemLink ? <> · <a href={itemLink} target="_blank" rel="noreferrer" style={{ color: wmsColors.slate }}>제품페이지 열기 ↗</a></> : " · 제품주소 미등록"}</div>; })}</div></div>
+                    <div><div style={{ color: wmsColors.ink, fontWeight: 800 }}>{group.modelName}</div><div style={{ color: wmsColors.ink, fontSize: 12, marginTop: 3 }}>{group.productName}</div><div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 4 }}>{group.items.length}개 후보 행</div><div style={{ display: "grid", gap: 3, marginTop: 6, fontSize: 11 }}>{group.items.map((item, itemIndex) => { const itemLink = externalUrl(item.productLink); return <div key={`${item.skuId}|${item.modelSku}|${item.optionLabel}|${itemIndex}`} style={{ color: wmsColors.muted }}>모델SKU <b>{item.modelSku || "미확인"}</b> · 기존 SKU ID <b>{item.skuId || "미확인"}</b> · 바코드 <b>{item.barcode || "미확인"}</b> · 옵션 <b>{item.optionLabel || "미확인"}</b> · 누적입고 <b>{item.cumulativeInbound ? `${(Number(item.cumulativeInbound) || 0).toLocaleString()}개` : "미확인"}</b> · 발주가능상태 <b>{item.orderableStatus || "미확인"}</b>{itemLink ? <> · <a href={itemLink} target="_blank" rel="noreferrer" style={{ color: wmsColors.slate }}>제품페이지 열기 ↗</a></> : " · 제품주소 미등록"}</div>; })}</div></div>
                     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}><Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={{ fontSize: 12, color: wmsColors.slate, fontWeight: 700 }}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName || photos?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: photos?.loading ? "wait" : "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "사진 검색 중…" : "이 모델 사진 검색"}</button>{photos && !photos.loading && photos.hits.length > 0 && <button type="button" onClick={() => void searchPhotos(first, group.items, true)} title="1차 확정 폴더부터 새로 찾습니다. 고른 사진과 분석용은 유지됩니다." style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.muted }}>다시 검색 (1차부터)</button>}{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.warnText }}>검색 초기화</button>}</div>
                   </div>
                   {!photos && savedHints[group.modelName] !== undefined && <div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 7 }}>저장된 사진 검색 결과가 있습니다(선택 {savedHints[group.modelName]}장). ‘이 모델 사진 검색’을 누르면 다시 검색하지 않고 바로 불러옵니다.</div>}
@@ -635,14 +610,13 @@ export default function ProductCatalogPage() {
             const productLink = externalUrl(item.productLink);
             const reregistration = isReregistrationTarget(item);
             const rocketPending = !isRocketRegistered(item);
-            const cumulativeInbound = cumulativeInboundBySku.get(clean(item.skuId));
             const identityNeedsChecking = reregistration && !namedModelGroupKey(item);
             return <article key={rowKey} style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 12, padding: 12 }}>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12 }}>
                 <div>
                   <div style={{ color: wmsColors.ink, fontWeight: 800 }}>{item.modelName || "모델명 없음"}</div>
                   <div style={{ color: wmsColors.muted, fontSize: 12, marginTop: 4 }}>{resolveDisplayNameAndOption(item.productName || "", item.optionLabel).name || "상품명 없음"}</div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 9, fontSize: 12 }}><span>옵션: <b>{item.optionLabel || "미확인"}</b></span><span>모델SKU: <b>{item.modelSku || "미확인"}</b></span><span>기존 SKU ID: <b>{item.skuId || "미확인"}</b></span><span>바코드: <b>{item.barcode || "미확인"}</b></span><span>누적입고: <b>{cumulativeInboundState === "loaded" && cumulativeInbound !== undefined ? `${cumulativeInbound.toLocaleString()}개` : "미확인"}</b></span><span>발주가능상태: <b>{item.orderableStatus || "미확인"}</b></span></div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 9, fontSize: 12 }}><span>옵션: <b>{item.optionLabel || "미확인"}</b></span><span>모델SKU: <b>{item.modelSku || "미확인"}</b></span><span>기존 SKU ID: <b>{item.skuId || "미확인"}</b></span><span>바코드: <b>{item.barcode || "미확인"}</b></span><span>누적입고: <b>{item.cumulativeInbound ? `${(Number(item.cumulativeInbound) || 0).toLocaleString()}개` : "미확인"}</b></span><span>발주가능상태: <b>{item.orderableStatus || "미확인"}</b></span></div>
                   {wims && <div style={{ marginTop: 6, fontSize: 12, color: wmsColors.muted }}>WIMS 대조 후보 · {wims.statusLabel || "상태 미확인"} · SKU {wims.skuId || "미확인"} · 바코드 {wims.barcode || "미확인"} · 등록일 {wims.registeredAt || "미확인"} (DB 연결 확정 전)</div>}
                 </div>
                 <div style={{ textAlign: "right", minWidth: 150 }}><div style={{ color: reregistration ? wmsColors.warnText : item.skuId ? wmsColors.greenDark : wmsColors.warn, fontWeight: 800, fontSize: 12 }}>{identityNeedsChecking ? "식별정보 확인 필요" : reregistration ? "모델 전체 재등록 대상" : item.skuId ? "DB에 SKU 있음" : "승인정보 연결 필요"}</div><div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 5 }}>DB 상태: {item.currentStatus || "미입력"}</div>{rocketPending && <div style={{ color: wmsColors.warnText, fontSize: 11, marginTop: 3 }}>R 바코드 미확인 · 등록 증빙 확인 필요</div>}</div>
