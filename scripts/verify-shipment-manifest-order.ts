@@ -69,6 +69,9 @@ const catalog: ProductCatalogItem[] = manifestOrder.map(skuId => ({
   barcode: `R${skuId}`,
   countryOfOrigin: "중국",
   productLink: "",
+  productCode: "",
+  reregistrationTier: "",
+  photoFolder: "",
 }));
 
 async function main() {

@@ -33,7 +33,6 @@ function nextPhotoLevel(state: PhotoState): number {
   if (state.level === 1 && !state.grouped) return FULL_SEARCH_LEVEL;
   return state.level + 1;
 }
-type LinkCheckState = { loading: boolean; state?: string; message?: string; status?: number; checkedAt?: string };
 type CumulativeInboundRow = { skuId: string; actualReceivedQuantity: number };
 
 const SNAPSHOT_KEY = "noidb_wims_registration_snapshot_v1";
@@ -60,9 +59,18 @@ function namedModelGroupKey(item: ProductCatalogItem): string | null {
   return modelName || null;
 }
 
-function isSalesStopped(item: ProductCatalogItem): boolean {
-  // 거래처단종은 재등록이 아니라 공급 종료일 수 있으므로 자동 재등록 큐에서 제외한다.
-  return /판매중지|판매중단/i.test(item.currentStatus || "");
+/** 제품DB '재등록구분' 열(연결표 v8 병합, 2026-09-22) 기준 판단. 이 열이 재등록 목록의 유일한 기준이다. */
+function reregistrationTierOf(item: ProductCatalogItem): string {
+  return String(item.reregistrationTier || "").trim();
+}
+
+function isPermanentlyExcluded(item: ProductCatalogItem): boolean {
+  return reregistrationTierOf(item).startsWith("영구제외");
+}
+
+function isReregistrationTier(item: ProductCatalogItem): boolean {
+  const tier = reregistrationTierOf(item);
+  return tier.startsWith("1차") || tier.startsWith("2차");
 }
 
 function isRocketRegistered(item: ProductCatalogItem): boolean {
@@ -111,21 +119,26 @@ export default function ProductCatalogPage() {
   /** 모델별로 화면에 그리는 사진 수. 큰 원본 사진을 한 번에 수백 장 그리면 느려서 60장씩 늘린다. */
   const [shownCounts, setShownCounts] = useState<Record<string, number>>({});
   const savedSearchJson = useRef<Record<string, string>>({});
-  const [linkChecks, setLinkChecks] = useState<Record<string, LinkCheckState>>({});
 
-  const stoppedModelKeys = useMemo(() => {
-    const keys = new Set<string>();
+  // 재등록 대상·영구제외는 모델 단위로 판단한다: 옵션 하나라도 1차·2차면 모델 전체 대상,
+  // 옵션 하나라도 영구제외(가품·금은시세)면 그 모델은 항상 제외한다(영구제외가 우선).
+  const { reregisterModelKeys, excludedModelKeys } = useMemo(() => {
+    const target = new Set<string>();
+    const excluded = new Set<string>();
     for (const item of items) {
       const key = namedModelGroupKey(item);
-      if (isSalesStopped(item) && key) keys.add(key);
+      if (!key) continue;
+      if (isReregistrationTier(item)) target.add(key);
+      if (isPermanentlyExcluded(item)) excluded.add(key);
     }
-    return keys;
+    return { reregisterModelKeys: target, excludedModelKeys: excluded };
   }, [items]);
 
   const isReregistrationTarget = useCallback((item: ProductCatalogItem) => {
     const key = namedModelGroupKey(item);
-    return key ? stoppedModelKeys.has(key) : isSalesStopped(item);
-  }, [stoppedModelKeys]);
+    if (key && excludedModelKeys.has(key)) return false;
+    return key ? reregisterModelKeys.has(key) : isReregistrationTier(item);
+  }, [reregisterModelKeys, excludedModelKeys]);
 
   const loadCatalog = useCallback(async (activeRef?: { current: boolean }) => {
     setLoading(true);
@@ -236,10 +249,10 @@ export default function ProductCatalogPage() {
     issued: items.filter(item => item.skuId).length,
     pending: items.filter(item => !item.skuId).length,
     models: new Set(items.map(item => item.modelName).filter(Boolean)).size,
-    reregisterModels: stoppedModelKeys.size,
+    reregisterModels: [...reregisterModelKeys].filter(key => !excludedModelKeys.has(key)).length,
     reregisterCandidates: items.filter(item => isReregistrationTarget(item)).length,
     rocketPending: items.filter(item => !isRocketRegistered(item)).length,
-  }), [items, isReregistrationTarget, stoppedModelKeys]);
+  }), [items, isReregistrationTarget, reregisterModelKeys, excludedModelKeys]);
 
   const reregistrationGroups = useMemo(() => {
     if (status !== "reregister") return [];
@@ -327,13 +340,20 @@ export default function ProductCatalogPage() {
     return () => { active = false; };
   }, [status, reregistrationGroups, restoreSavedSearch]);
 
-  async function fetchLinkTable(modelName: string, skuIds: string[]): Promise<LinkTableResult> {
-    const params = new URLSearchParams({ model: modelName });
-    skuIds.filter(Boolean).forEach(skuId => params.append("sku", skuId));
-    const data = await fetch(`/api/wms/product-link-table?${params}`, { cache: "no-store" })
-      .then(response => response.json() as Promise<Partial<LinkTableResult>>)
-      .catch(() => ({} as Partial<LinkTableResult>));
-    return { folders: data.folders || [], modelKeys: [modelName, ...(data.modelKeys || [])] };
+  /**
+   * 사진 폴더 정보는 이제 제품DB '사진폴더(확정)' 열(연결표 v8 병합, 2026-09-22)에서 바로 읽는다.
+   * 제품DB를 새로고침할 때 이미 받아 둔 relatedItems에서 뽑으므로 별도 요청이 필요 없다.
+   */
+  function fetchLinkTable(modelName: string, relatedItems: ProductCatalogItem[]): LinkTableResult {
+    const folders = [...new Set(relatedItems.flatMap(related =>
+      String(related.photoFolder || "").split(/\r?\n/).map(path => path.trim()).filter(Boolean)))];
+    // 확정 폴더가 여러 모델을 담은 묶음 폴더일 때 하위 폴더를 좁히는 데 쓴다.
+    // 모델SKU의 모델번호 부분(예: we011623-1의 모델SKU we011623RG → we011623)만 쓴다.
+    const modelKeys = [...new Set([
+      modelName,
+      ...relatedItems.map(related => clean(related.modelSku).match(/^[a-z]{2,3}\d+/i)?.[0] || "").filter(Boolean),
+    ])];
+    return { folders, modelKeys };
   }
 
   // 한 단계의 사진을 읽는다. 1~3차 = 연결표 폴더, 4차 = 사진 폴더 전체 검색(모델명·SKU ID).
@@ -387,7 +407,7 @@ export default function ProductCatalogPage() {
         const restored = await restoreSavedSearch(modelName).catch(() => null);
         if (restored) { setPhotoStates(current => ({ ...current, [key]: restored })); return; }
       }
-      const link = await fetchLinkTable(modelName, relatedItems.map(related => related.skuId));
+      const link = fetchLinkTable(modelName, relatedItems);
       const { found, grouped, level, hasFolders } = await loadPhotoLevels(1, modelName, relatedItems, link);
       const keepSelected = new Set((previous?.hits || []).filter(hit => hit.selected).map(hit => hit.id));
       const foundIds = new Set(found.map(hit => hit.id));
@@ -409,7 +429,7 @@ export default function ProductCatalogPage() {
     if (!state || !level || state.loading) return;
     setPhotoStates(current => ({ ...current, [key]: { ...current[key], loading: true, error: undefined, note: undefined } }));
     try {
-      const link = await fetchLinkTable(key.trim(), relatedItems.map(related => related.skuId));
+      const link = fetchLinkTable(key.trim(), relatedItems);
       const result = await loadPhotoLevel(level, key.trim(), relatedItems, link, state.hits);
       const added = toHits(result.photos, new Set());
       const note = added.length ? `${LEVEL_NAMES[level]}에서 ${added.length}장을 뒤에 추가했습니다.` : `${LEVEL_NAMES[level]}에는 추가할 사진이 없습니다.`;
@@ -501,21 +521,6 @@ export default function ProductCatalogPage() {
     } finally { setPreparing(""); }
   }
 
-  async function checkProductLink(item: ProductCatalogItem) {
-    const url = externalUrl(item.productLink);
-    if (!url) return;
-    const key = item.skuId || item.modelSku || url;
-    setLinkChecks(current => ({ ...current, [key]: { loading: true } }));
-    try {
-      const response = await fetch(`/api/wms/product-link-check?url=${encodeURIComponent(url)}`, { cache: "no-store" });
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.message || "링크 확인에 실패했습니다.");
-      setLinkChecks(current => ({ ...current, [key]: { loading: false, state: data.state, message: data.message, status: data.status, checkedAt: new Date().toLocaleTimeString("ko-KR") } }));
-    } catch (cause) {
-      setLinkChecks(current => ({ ...current, [key]: { loading: false, state: "error", message: cause instanceof Error ? cause.message : "링크 확인에 실패했습니다.", checkedAt: new Date().toLocaleTimeString("ko-KR") } }));
-    }
-  }
-
   return (
     <main style={{ maxWidth: 1180, margin: "0 auto", padding: "20px 16px 48px", fontFamily: "sans-serif" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "start", marginBottom: 18 }}>
@@ -524,7 +529,7 @@ export default function ProductCatalogPage() {
           <h1 style={{ margin: "4px 0 6px", color: wmsColors.ink, fontSize: 26 }}>모델·옵션·SKU·사진 연결</h1>
           <p style={{ margin: 0, color: wmsColors.muted, fontSize: 13 }}>모델명은 상품군, 모델SKU는 옵션 키입니다. 이 화면은 읽기 전용입니다.</p>
         </div>
-        <Link href="/wms/work-center" style={{ color: wmsColors.ink, fontWeight: 800, fontSize: 13 }}>작업센터로 돌아가기</Link>
+        <Link href="/" style={{ color: wmsColors.ink, fontWeight: 800, fontSize: 13 }}>AI 상품등록으로 돌아가기</Link>
       </div>
 
       <div style={{ marginBottom: 14 }}>
@@ -542,6 +547,7 @@ export default function ProductCatalogPage() {
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
           <input value={query} onChange={event => setQuery(event.target.value)} placeholder="모델명·모델SKU·SKU ID·바코드·상품명 검색" style={{ flex: "1 1 340px", minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px" }} />
+          {query && <button type="button" onClick={() => { setQuery(""); try { window.sessionStorage.setItem(VIEW_KEY, JSON.stringify({ status, query: "" })); } catch {} }} title="검색어를 지웁니다." style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>검색 초기화</button>}
           <button type="button" onClick={() => void loadCatalog()} disabled={loading} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "새로 읽는 중…" : "제품DB 새로고침"}</button>
           <select value={status} onChange={event => setStatus(event.target.value)} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 10px", background: "#fff" }}>
             <option value="all">전체 상태</option><option value="reregister">재등록 필요(모델 전체)</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
@@ -587,7 +593,7 @@ export default function ProductCatalogPage() {
                 const photos = photoStates[group.modelName];
                 return <article key={group.key} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 10 }}>
                   <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", gap: 10 }}>
-                    <div><div style={{ color: wmsColors.ink, fontWeight: 800 }}>{group.modelName}</div><div style={{ color: wmsColors.ink, fontSize: 12, marginTop: 3 }}>{group.productName}</div><div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 4 }}>{group.items.length}개 후보 행</div><div style={{ display: "grid", gap: 3, marginTop: 6, fontSize: 11 }}>{group.items.map((item, itemIndex) => <div key={`${item.skuId}|${item.modelSku}|${item.optionLabel}|${itemIndex}`} style={{ color: wmsColors.muted }}>모델SKU <b>{item.modelSku || "미확인"}</b> · 기존 SKU ID <b>{item.skuId || "미확인"}</b> · 바코드 <b>{item.barcode || "미확인"}</b> · 옵션 <b>{item.optionLabel || "미확인"}</b> · 누적입고 <b>{cumulativeInboundState === "loaded" ? `${(cumulativeInboundBySku.get(clean(item.skuId)) || 0).toLocaleString()}개` : "미확인"}</b> · 발주가능상태 <b>{item.orderableStatus || "미확인"}</b></div>)}</div></div>
+                    <div><div style={{ color: wmsColors.ink, fontWeight: 800 }}>{group.modelName}</div><div style={{ color: wmsColors.ink, fontSize: 12, marginTop: 3 }}>{group.productName}</div><div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 4 }}>{group.items.length}개 후보 행</div><div style={{ display: "grid", gap: 3, marginTop: 6, fontSize: 11 }}>{group.items.map((item, itemIndex) => { const itemLink = externalUrl(item.productLink); return <div key={`${item.skuId}|${item.modelSku}|${item.optionLabel}|${itemIndex}`} style={{ color: wmsColors.muted }}>모델SKU <b>{item.modelSku || "미확인"}</b> · 기존 SKU ID <b>{item.skuId || "미확인"}</b> · 바코드 <b>{item.barcode || "미확인"}</b> · 옵션 <b>{item.optionLabel || "미확인"}</b> · 누적입고 <b>{cumulativeInboundState === "loaded" ? `${(cumulativeInboundBySku.get(clean(item.skuId)) || 0).toLocaleString()}개` : "미확인"}</b> · 발주가능상태 <b>{item.orderableStatus || "미확인"}</b>{itemLink ? <> · <a href={itemLink} target="_blank" rel="noreferrer" style={{ color: wmsColors.slate }}>제품페이지 열기 ↗</a></> : " · 제품주소 미등록"}</div>; })}</div></div>
                     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}><Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={{ fontSize: 12, color: wmsColors.slate, fontWeight: 700 }}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName || photos?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: photos?.loading ? "wait" : "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "사진 검색 중…" : "이 모델 사진 검색"}</button>{photos && !photos.loading && photos.hits.length > 0 && <button type="button" onClick={() => void searchPhotos(first, group.items, true)} title="1차 확정 폴더부터 새로 찾습니다. 고른 사진과 분석용은 유지됩니다." style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.muted }}>다시 검색 (1차부터)</button>}{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.warnText }}>검색 초기화</button>}</div>
                   </div>
                   {!photos && savedHints[group.modelName] !== undefined && <div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 7 }}>저장된 사진 검색 결과가 있습니다(선택 {savedHints[group.modelName]}장). ‘이 모델 사진 검색’을 누르면 다시 검색하지 않고 바로 불러옵니다.</div>}
@@ -627,7 +633,6 @@ export default function ProductCatalogPage() {
             const photos = photoStates[photoKey];
             const imageUrl = getWmsDisplayImageUrl(externalUrl(item.imageUrl));
             const productLink = externalUrl(item.productLink);
-            const linkCheck = linkChecks[item.skuId || item.modelSku || productLink];
             const reregistration = isReregistrationTarget(item);
             const rocketPending = !isRocketRegistered(item);
             const cumulativeInbound = cumulativeInboundBySku.get(clean(item.skuId));
@@ -647,8 +652,7 @@ export default function ProductCatalogPage() {
                 {imageUrl && <a href={imageUrl} target="_blank" rel="noreferrer" aria-label="대표이미지 크게 보기" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: wmsColors.slate }}><img src={imageUrl} alt="대표이미지" width={42} height={42} loading="lazy" style={{ width: 42, height: 42, objectFit: "contain", border: `1px solid ${wmsColors.border}`, borderRadius: 6, background: wmsColors.surface }} /><span>대표이미지 원본 열기 ↗</span></a>}
                 {productLink ? <>
                   <a href={productLink} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: wmsColors.slate }}>쿠팡 제품페이지 열기 ↗</a>
-                  <button type="button" onClick={() => void checkProductLink(item)} disabled={linkCheck?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: linkCheck?.loading ? "wait" : "pointer", fontWeight: 700, color: wmsColors.ink }}>{linkCheck?.loading ? "링크 확인 중…" : "링크 상태 확인"}</button>
-                  {linkCheck && !linkCheck.loading && <span style={{ color: linkCheck.state === "reachable" ? wmsColors.greenDark : wmsColors.warnText, fontSize: 11 }}>{linkCheck.message}{linkCheck.checkedAt ? ` · ${linkCheck.checkedAt}` : ""}</span>}
+                  <span style={{ color: wmsColors.muted, fontSize: 11 }}>쿠팡이 자동 확인을 막아 상태를 대신 알려드릴 수 없습니다. 위 링크를 직접 열어 확인해주세요.</span>
                 </> : <span style={{ color: wmsColors.muted, fontSize: 11 }}>쿠팡 제품주소: 미등록 · 해당 SKU를 광고센터에서 SKU ID로 검색해야 합니다.</span>}
                 {item.skuId && <Link href={`/wms/products/${encodeURIComponent(item.skuId)}`} style={{ fontSize: 12, color: wmsColors.slate }}>SKU 상세 보기</Link>}
                 {photos?.error && <span style={{ color: wmsColors.warnText, fontSize: 11 }}>{photos.error}</span>}

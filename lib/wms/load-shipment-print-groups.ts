@@ -150,7 +150,7 @@ export async function loadShipmentPrintGroups(waveId: string, items: PickingWave
         skuId: row.skuId, modelSku: "", modelName: row.embeddedModelName, category: "", gender: "",
         productName: "", optionLabel: "", imageUrl: "", warehouseNumber: "", boxNumber: "",
         currentStock: "", currentStatus: "", orderableStatus: "", costVatIncluded: "", vendorName: "", barcode: "",
-        countryOfOrigin: row.embeddedCountryOfOrigin, productLink: "",
+        countryOfOrigin: row.embeddedCountryOfOrigin, productLink: "", productCode: "", reregistrationTier: "", photoFolder: "",
       }));
     }
 

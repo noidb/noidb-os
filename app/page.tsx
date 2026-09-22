@@ -644,7 +644,7 @@ export default function Home() {
       if (key === "gender" && value === "남성") {
         next.colors = "실버";
       }
-      if (key === "gender" || key === "category" || key === "modelNo") {
+      if (!reregisterModelName && (key === "gender" || key === "category" || key === "modelNo")) {
         next.modelName = buildAutoModel(next);
       }
       return next;
@@ -856,7 +856,7 @@ export default function Home() {
             ? defaultDimension(data.category)
             : prev.dimension,
         };
-        next.modelName = buildAutoModel(next);
+        if (!reregisterModelName) next.modelName = buildAutoModel(next);
         if (!sizesUserEditedRef.current) {
           next.sizes = defaultSizes(next.gender, next.category);
         }
@@ -2036,6 +2036,7 @@ export default function Home() {
         <div className="heroBrandArea">
           <h1>AI 상품등록 도우미</h1>
           <div className="heroUtilityActions">
+            <Link className="imageGeneratorLink" href="/wms/product-catalog?status=reregister">재등록 대상·사진 고르기</Link>
             <Link className="imageGeneratorLink" href="/image-generator">이미지 자동생성</Link>
             <button className="draftLoadButton" type="button" onClick={() => {
               setShowDrafts(value => !value);
@@ -2190,17 +2191,17 @@ export default function Home() {
               placeholder="예: 폭 8mm, 길이 42cm" />
           </Field>
           <Field label="모델번호 숫자">
-            <input value={product.modelNo} onChange={e => update("modelNo", e.target.value)} />
+            <input value={product.modelNo} readOnly={Boolean(reregisterModelName)} onChange={e => update("modelNo", e.target.value)} />
           </Field>
           <Field label="모델명">
-            <input value={model} onChange={e => updateModel(e.target.value)} />
+            <input value={model} readOnly={Boolean(reregisterModelName)} onChange={e => updateModel(e.target.value)} />
             {modelCheckMessage && <small className={modelDuplicate && !modelReregisterable ? "duplicateModel" : "modelAvailable"}>{modelCheckMessage}</small>}
           </Field>
           <Field label="창고번호">
             <input value={product.warehouse || ""} onChange={e => update("warehouse", e.target.value)}
               placeholder="예: 711(592) · 미정이면 비워두세요" />
           </Field>
-          <Field label="기존상품 재등록 SKU ID">
+          {!reregisterModelName && <Field label="기존상품 재등록 SKU ID">
             <input inputMode="numeric" value={product.replacementSku || ""} onChange={e => update("replacementSku", e.target.value)}
               placeholder="재등록 상품만 기존 대표 SKU ID 입력" />
             <small>연결하면 기존 옵션별 창고번호·재고 이력을 가져옵니다. 기존행은 별도 최종 확인 전까지 삭제하지 않습니다.</small>
@@ -2209,7 +2210,7 @@ export default function Home() {
               <button className="secondaryButton replacementLinkButton" type="button" onClick={() => void deleteLinkedLegacyRows()}>이관 확인 후 기존행 삭제</button>
               <button className="secondaryButton replacementLinkButton" type="button" onClick={() => void undoLinkedReplacement()}>연결 취소 · 기존행 복원</button>
             </>}
-          </Field>
+          </Field>}
           <Field label="핵심키워드">
             <input value={product.keyword} onChange={e => update("keyword", e.target.value)} />
           </Field>
@@ -2627,7 +2628,7 @@ export default function Home() {
           <strong>라벨 정보</strong>
           <p>현재 상품 정보를 기본값으로 사용합니다. 바꿔야 하는 항목만 수정하세요.</p>
           <div className="labelQuickFields">
-            <Field label="모델명"><input value={model} onChange={e => updateModel(e.target.value)} /></Field>
+            <Field label="모델명"><input value={model} readOnly={Boolean(reregisterModelName)} onChange={e => updateModel(e.target.value)} /></Field>
             <Field label="제조연월"><input value={labelManufactureYearMonth} onChange={e => setLabelManufactureYearMonth(e.target.value)} placeholder="2026.09" /></Field>
             <Field label="제조자명"><input value={labelManufacturerName} onChange={e => setLabelManufacturerName(e.target.value)} /></Field>
             <Field label="수입자명"><input value={labelImporterName} onChange={e => setLabelImporterName(e.target.value)} /></Field>

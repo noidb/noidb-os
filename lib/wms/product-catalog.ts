@@ -45,6 +45,13 @@ export interface ProductCatalogItem {
   /** 제품DB "제품링크"(실제 쿠팡 상품 URL) — 없으면 "". SKU로 URL을 임의 생성하지 않고 이
    *  컬럼 값만 그대로 쓴다 (2026-08-19 5차 실사용 테스트 신규 — 거래처 발주서 카드 링크 버튼용). */
   productLink: string;
+  /** 제품DB "제품코드"(연결표 v8 병합, 2026-09-22 신규) — 없으면 "". P00001 형식, 한 번 부여하면 재사용하지 않는다. */
+  productCode: string;
+  /** 제품DB "재등록구분"(연결표 v8 병합, 2026-09-22 신규) — 1차_판매중지 / 2차_판매량저조영구정지 /
+   *  영구제외_가품 / 영구제외_금은시세 / "". 재등록 대상·영구제외 판단은 이 값만 기준으로 한다. */
+  reregistrationTier: string;
+  /** 제품DB "사진폴더(확정)"(연결표 v8 병합, 2026-09-22 신규) — 없으면 "". */
+  photoFolder: string;
 }
 
 /** product-catalog-write.ts(제품DB 직접 수정)에서도 같은 시트/헤더 매핑을 재사용한다. */
@@ -68,6 +75,9 @@ export const FIELD_HEADER_CANDIDATES: Record<Exclude<keyof ProductCatalogItem, "
   barcode: ["쿠팡 바코드", "Seller SKU Barcode", "쿠팡바코드", "바코드"],
   countryOfOrigin: ["제조국명"],
   productLink: ["제품링크", "상품링크", "쿠팡 URL", "URL", "링크"],
+  productCode: ["제품코드"],
+  reregistrationTier: ["재등록구분"],
+  photoFolder: ["사진폴더(확정)"],
 };
 
 /** 제품DB '이미지' 열의 =IMAGE("url",...) 수식에서 실제 이미지 URL만 추출한다. */
@@ -112,6 +122,9 @@ function mapCatalogRow(row: Record<string, string>): ProductCatalogItem {
     barcode: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.barcode),
     countryOfOrigin: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.countryOfOrigin),
     productLink: extractImageUrl(firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productLink)),
+    productCode: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.productCode),
+    reregistrationTier: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.reregistrationTier),
+    photoFolder: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.photoFolder),
   };
 }
 
