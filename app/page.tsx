@@ -22,6 +22,7 @@ import { assertProductDbFilesWritable, ensureProductFolderTree, rootFolderFileEx
 import { dataUrlToBlob } from "@/lib/product-db/files";
 import { buildProductDbZip } from "@/lib/product-db/zip";
 import { compressImageDataUrl } from "@/lib/image/compress";
+import { splitDetailPage, type QuickDetailSection } from "@/lib/image-generator/quick-detail";
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { loadPreparedPhotos } from "@/lib/image-search/browser-folder";
@@ -302,6 +303,7 @@ export default function Home() {
   const [detailFooter, setDetailFooter] = useState<SlotImage | null>(null);
   const [detailPreview, setDetailPreview] = useState("");
   const [detailMessage, setDetailMessage] = useState("");
+  const [detailTransforming, setDetailTransforming] = useState(false);
   const [dragDetailIndex, setDragDetailIndex] = useState<number | null>(null);
 
   const [sourcingUrls, setSourcingUrls] = useState(["", "", ""]);
@@ -987,6 +989,55 @@ export default function Home() {
     }
     setDetailPreview(await readFile(file));
     setDetailMessage(`완성된 상세페이지를 불러왔습니다: ${file.name}`);
+  };
+
+  const selectUsableDetailSections = async (sections: QuickDetailSection[]) => {
+    const selected: QuickDetailSection[] = [];
+    for (let offset = 0; offset < sections.length; offset += 8) {
+      const batch = sections.slice(offset, offset + 8);
+      setDetailMessage(`${sections.length}개 구간에서 제품 사진만 고르고 있습니다...`);
+      const response = await fetch("/api/image-generator/quick-analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sections: batch }),
+      });
+      const data = await response.json() as {
+        decisions?: Array<{ id: string; keep: boolean; kind: "product" | "wear" | "exclude" }>;
+        error?: string;
+      };
+      if (!response.ok || !data.decisions) throw new Error(data.error || "제품 사진을 선별하지 못했습니다.");
+      const decisions = new Map(data.decisions.map(decision => [decision.id, decision]));
+      batch.forEach(section => {
+        const decision = decisions.get(section.id);
+        if (decision?.keep && decision.kind !== "exclude") selected.push(section);
+      });
+    }
+    if (!selected.length) throw new Error("남길 제품 사진을 찾지 못했습니다.");
+    return selected;
+  };
+
+  const convertExistingDetail = async (file: File | undefined) => {
+    if (!file || !isAccepted(file)) {
+      setDetailMessage("JPG/JPEG/PNG 상세페이지 이미지를 선택해주세요.");
+      return;
+    }
+    setDetailTransforming(true);
+    try {
+      const source = await readFile(file);
+      const sections = await splitDetailPage(source, detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER);
+      const selected = await selectUsableDetailSections(sections);
+      setDetailImages(selected.map((section, index) => ({
+        id: `${Date.now()}-${index}-${Math.random()}`,
+        name: `기존 상세페이지 제품컷 ${String(index + 1).padStart(2, "0")}`,
+        dataUrl: section.dataUrl,
+      })));
+      setDetailPreview("");
+      setDetailMessage(`${sections.length}개 구간 중 제품 사진 ${selected.length}장만 남겼습니다. 광고·설명·회사소개·UI 구간은 제외됐으며, 제품 사진 위 옵션명은 그대로 둡니다.`);
+    } catch (e) {
+      setDetailMessage(`오류: ${e instanceof Error ? e.message : "기존 상세페이지 변환 실패"}`);
+    } finally {
+      setDetailTransforming(false);
+    }
   };
 
   const openExistingDetailPicker = async () => {
@@ -2576,6 +2627,21 @@ export default function Home() {
           <strong>완성된 상세페이지 업로드</strong>
           <span>이미 상세페이지가 있으면 클릭하거나 드래그앤드롭하세요.</span>
         </div>
+
+        <label className="multiUpload existingDetailUpload"
+          onDragOver={event => event.preventDefault()}
+          onDrop={event => {
+            event.preventDefault();
+            if (!detailTransforming) void convertExistingDetail(event.dataTransfer.files?.[0]);
+          }}>
+          <input type="file" accept="image/jpeg,image/jpg,image/png" hidden disabled={detailTransforming}
+            onChange={event => {
+              void convertExistingDetail(event.target.files?.[0]);
+              event.target.value = "";
+            }} />
+          <strong>{detailTransforming ? "기존 상세페이지 정리 중..." : "기존 상세페이지에서 제품 사진만 가져오기"}</strong>
+          <span>상·하단 광고, 회사소개, 설명, UI는 빼고 제품 사진만 남긴 뒤 NOID-B 로고로 새 상세페이지를 만듭니다.</span>
+        </label>
 
         <div className="detailList">
           {detailImages.map((item, index) => (
