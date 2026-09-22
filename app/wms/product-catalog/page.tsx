@@ -460,6 +460,19 @@ export default function ProductCatalogPage() {
 
   const viewerState = viewer ? photoStates[viewer.model] : undefined;
   const viewerHit = viewer ? viewerState?.hits[viewer.index] : undefined;
+  /** 화면 표시용 preview(blob URL)에 기대지 않고, 원본 File을 다시 읽어 강제로 저장한다.
+   *  <a download>만 쓰면 파일명에 따라 일부 환경에서 다운로드 대신 새 탭 열기로 빠지는 경우가
+   *  있어(2026-09-23 사용자 확인: 흐릿하게 보임 신고), 항상 확실히 저장되도록 직접 클릭시킨다. */
+  function downloadOriginal(photo: PhotoHit) {
+    const url = URL.createObjectURL(photo.file);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = photo.fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  }
   function moveViewer(step: number) {
     setViewer(current => {
       const count = current ? photoStatesRef.current[current.model]?.hits.length || 0 : 0;
@@ -649,7 +662,7 @@ export default function ProductCatalogPage() {
           <span>{viewer.index + 1} / {viewerState.hits.length} · {viewerHit.fileName}</span>
           <label style={{ display: "flex", gap: 6, alignItems: "center", padding: "6px 12px", borderRadius: 6, background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}><input type="checkbox" checked={viewerHit.selected} onChange={event => setPhotoSelected(viewer.model, viewerHit.id, event.target.checked)} style={{ width: 20, height: 20, margin: 0 }} />선택</label>
           <button type="button" onClick={() => setAnalysisPhoto(viewer.model, viewerHit.id)} style={{ border: 0, borderRadius: 6, padding: "6px 12px", fontWeight: 700, cursor: "pointer", background: viewerState.analysisId === viewerHit.id ? wmsColors.greenDark : "#fff", color: viewerState.analysisId === viewerHit.id ? "#fff" : wmsColors.ink }}>{viewerState.analysisId === viewerHit.id ? "★ 분석용" : "분석용으로 지정"}</button>
-          <a href={viewerHit.preview} download={viewerHit.fileName} style={{ borderRadius: 6, padding: "6px 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, textDecoration: "none" }}>다운로드</a>
+          <button type="button" onClick={() => downloadOriginal(viewerHit)} style={{ border: 0, borderRadius: 6, padding: "6px 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>원본저장 ({(viewerHit.file.size / 1024 / 1024).toFixed(1)}MB)</button>
           <button type="button" onClick={() => setViewer(null)} style={{ border: 0, borderRadius: 6, padding: "6px 12px", cursor: "pointer" }}>닫기 (Esc)</button>
         </div>
       </div>}
