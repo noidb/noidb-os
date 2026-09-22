@@ -52,8 +52,10 @@ export function verifyNoidbActionSession(token: string, now = Date.now()): boole
   return safeEqual(signature, expected);
 }
 
-export function hasNoidbActionSession(request: NextRequest): boolean {
-  return verifyNoidbActionSession(request.cookies.get(NOIDB_ACTION_SESSION_COOKIE)?.value || "");
+/** 혼자 쓰는 내부 도구라 PIN 확인은 없앴다(2026-09-23, 사용자 요청) — 같은 출처 여부만
+ *  isSameOriginActionRequest로 계속 확인한다. */
+export function hasNoidbActionSession(_request: NextRequest): boolean {
+  return true;
 }
 
 /** 브라우저의 같은 출처 fetch만 허용한다. 세션 인증과 함께 CSRF를 차단한다. */
