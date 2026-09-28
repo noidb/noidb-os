@@ -638,7 +638,7 @@ export default function Home() {
       restoringDraftRef.current = false;
       return;
     }
-    if (reregisterModelName && detailPreview) return;
+    if (detailPreview) return;
     const automatic: DetailImage[] = [];
     const add = (id: string, name: string, slot: SlotImage | null | undefined) => {
       if (slot?.dataUrl) automatic.push({ id: `slot:${id}`, name, dataUrl: slot.dataUrl });
@@ -3027,7 +3027,7 @@ export default function Home() {
         {detailMessage && <p className="detailMessage">{detailMessage}</p>}
         {detailPreview && (
           <div className="detailResult">
-            {reregisterModelName && <div className="approvedSquarePanel">
+            <div className="approvedSquarePanel">
               <button type="button" className="purpleButton" disabled={squareImagesBusy} onClick={() => void prepareApprovedSquareImages()}>
                 {squareImagesBusy ? "1000×1000 등록 이미지 만드는 중..." : "확정 상세페이지 사진으로 등록 이미지 한 번에 만들기"}
               </button>
@@ -3043,7 +3043,7 @@ export default function Home() {
                   </button>;
                 })}
               </div>}
-            </div>}
+            </div>
             <button type="button" className="secondaryButton" disabled={detailShareLoading} onClick={() => void shareDetailPreview()}>
               {detailShareLoading ? "모바일 링크 만드는 중..." : "모바일에서 볼 링크 만들기"}
             </button>
