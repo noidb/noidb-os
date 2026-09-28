@@ -302,6 +302,13 @@ export default function Home() {
   const [detailFooter, setDetailFooter] = useState<SlotImage | null>(null);
   const [detailPreview, setDetailPreview] = useState("");
   const [detailMessage, setDetailMessage] = useState("");
+  const [detailShareUrl, setDetailShareUrl] = useState("");
+  const [detailShareLoading, setDetailShareLoading] = useState(false);
+  const [detailShareError, setDetailShareError] = useState("");
+  useEffect(() => {
+    setDetailShareUrl("");
+    setDetailShareError("");
+  }, [detailPreview]);
   const [detailTransforming, setDetailTransforming] = useState(false);
   const [preparedDetail, setPreparedDetail] = useState<PreparedDetail | null>(null);
   const [dragDetailIndex, setDragDetailIndex] = useState<number | null>(null);
@@ -1647,6 +1654,26 @@ export default function Home() {
     }
   };
 
+  const shareDetailPreview = async () => {
+    if (!detailPreview || !model) return;
+    setDetailShareLoading(true);
+    setDetailShareError("");
+    try {
+      const response = await fetch("/api/detail-preview-share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, dataUrl: detailPreview }),
+      });
+      const result = await response.json() as { url?: string; error?: string };
+      if (!response.ok || !result.url) throw new Error(result.error || "링크를 만들지 못했습니다.");
+      setDetailShareUrl(result.url);
+    } catch (error) {
+      setDetailShareError(error instanceof Error ? error.message : "링크를 만들지 못했습니다.");
+    } finally {
+      setDetailShareLoading(false);
+    }
+  };
+
   const downloadDataUrl = (dataUrl: string, filename: string) => {
     const a = document.createElement("a");
     a.href = dataUrl;
@@ -2894,6 +2921,11 @@ export default function Home() {
         {detailMessage && <p className="detailMessage">{detailMessage}</p>}
         {detailPreview && (
           <div className="detailResult">
+            <button type="button" className="secondaryButton" disabled={detailShareLoading} onClick={() => void shareDetailPreview()}>
+              {detailShareLoading ? "모바일 링크 만드는 중..." : "모바일에서 볼 링크 만들기"}
+            </button>
+            {detailShareUrl && <p className="detailMessage"><a href={detailShareUrl} target="_blank" rel="noopener noreferrer">{detailShareUrl}</a></p>}
+            {detailShareError && <p className="error">{detailShareError}</p>}
             <div className="detailPreviewFrame">
               <img src={detailPreview} alt="상세페이지" />
             </div>
