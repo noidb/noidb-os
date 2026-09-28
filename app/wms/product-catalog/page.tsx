@@ -109,6 +109,7 @@ export default function ProductCatalogPage() {
   const [exclusionError, setExclusionError] = useState("");
   const [savingExclusion, setSavingExclusion] = useState("");
   const [exclusionReasons, setExclusionReasons] = useState<Record<string, string>>({});
+  const [exclusionMemos, setExclusionMemos] = useState<Record<string, string>>({});
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [snapshot, setSnapshot] = useState<WimsRegistrationSnapshot | null>(null);
   const [query, setQuery] = useState("");
@@ -669,18 +670,16 @@ export default function ProductCatalogPage() {
 
   return (
     <main style={{ maxWidth: 1180, margin: "0 auto", padding: "20px 16px 48px", fontFamily: "sans-serif" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "start", marginBottom: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 18 }}>
         <div>
-          <p style={{ margin: 0, color: wmsColors.muted, fontSize: 12, fontWeight: 700 }}>상품등록 · 연결 대장</p>
-          <h1 style={{ margin: "4px 0 6px", color: wmsColors.ink, fontSize: 26 }}>모델·옵션·SKU·사진 연결</h1>
+          <h1 style={{ margin: "4px 0 6px", color: wmsColors.ink, fontSize: 26 }}>상품등록 사진선택</h1>
         </div>
-        <Link href="/" style={{ display: "inline-flex", alignItems: "center", padding: "7px 14px", borderRadius: 8, border: "1px solid #b9cbbc", background: "#e3ede6", color: "#3f574b", fontWeight: 800, fontSize: 12, textDecoration: "none", whiteSpace: "nowrap" }}>AI상품등록</Link>
+        <Link href="/" style={{ display: "inline-flex", alignItems: "center", minHeight: 48, padding: "0 28px", borderRadius: 10, border: "1px solid #b9cbbc", background: "#e3ede6", color: "#3f574b", fontWeight: 800, fontSize: 20, textDecoration: "none", whiteSpace: "nowrap" }}>AI 상품등록</Link>
       </div>
 
       <div style={{ marginBottom: 14 }}>
         <button type="button" onClick={() => void connectPhotoFolder().then(name => { setFolderName(name); setFolderMessage(""); }).catch(error => { if (error?.name !== "AbortError") setFolderMessage(error instanceof Error ? error.message : "사진 폴더 연결 실패"); })}>사진 원본 폴더 연결</button>
         <span style={{ marginLeft: 8, fontSize: 12 }}>{folderName ? `연결: ${folderName}` : "PC에서 MYBOX 동기화 사진 폴더를 한 번 선택해주세요."}</span>
-        <p style={{ fontSize: 12 }}>사진은 이 브라우저에서 읽습니다. 모델 사진 검색 후 사용할 사진을 최대 10장 선택하고 등록 준비를 누르세요.</p>
         {folderMessage && <p role="status">{folderMessage}</p>}
       </div>
 
@@ -759,8 +758,9 @@ export default function ProductCatalogPage() {
                     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
                       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}><Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={primaryPillStyle}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName || photos?.loading} style={{ ...pillStyle, cursor: photos?.loading ? "wait" : "pointer" }}>{photos?.loading ? "사진 검색 중…" : "사진검색"}</button>{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={neutralPillStyle}>사진 검색 초기화</button>}</div>
                       <div style={{ display: "inline-flex", alignItems: "stretch", border: "1px solid #dfbdb2", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
-                        <select aria-label={`${group.modelName} 제외 사유`} value={exclusionReasons[group.key] || "가품 위험"} onChange={event => setExclusionReasons(current => ({ ...current, [group.key]: event.target.value }))} style={{ border: 0, outline: "none", background: "#f4f1ec", color: "#4b4744", fontWeight: 700, fontSize: 12, minHeight: 30, padding: "0 8px" }}><option>가품 위험</option><option>상표·디자인 위험</option><option>재등록 불필요</option><option>기타</option></select>
-                        <button type="button" onClick={() => void changeExclusion(group.modelName, exclusionReasons[group.key] || "가품 위험")} disabled={Boolean(savingExclusion)} style={{ border: 0, borderLeft: "1px solid #dfbdb2", background: "#f6e3de", color: "#7f4032", fontWeight: 800, fontSize: 12, minHeight: 30, padding: "0 12px", cursor: "pointer", whiteSpace: "nowrap" }}>재등록 제외</button>
+                        <select aria-label={`${group.modelName} 제외 사유`} value={exclusionReasons[group.key] || "상표·디자인 위험"} onChange={event => setExclusionReasons(current => ({ ...current, [group.key]: event.target.value }))} style={{ border: 0, outline: "none", background: "#f4f1ec", color: "#4b4744", fontWeight: 700, fontSize: 12, minHeight: 30, padding: "0 8px" }}><option>상표·디자인 위험</option><option>거래처 생산종료</option><option>직접입력</option></select>
+                        {(exclusionReasons[group.key] || "") === "직접입력" && <input value={exclusionMemos[group.key] || ""} onChange={event => setExclusionMemos(current => ({ ...current, [group.key]: event.target.value }))} placeholder="메모" maxLength={60} aria-label={`${group.modelName} 제외 메모`} style={{ border: 0, borderLeft: "1px solid #dfbdb2", outline: "none", minHeight: 30, width: 150, padding: "0 8px", fontSize: 12 }} />}
+                        <button type="button" onClick={() => { const chosen = exclusionReasons[group.key] || "상표·디자인 위험"; void changeExclusion(group.modelName, chosen === "직접입력" ? `직접입력 · ${(exclusionMemos[group.key] || "").trim()}` : chosen); }} disabled={Boolean(savingExclusion) || ((exclusionReasons[group.key] || "") === "직접입력" && !(exclusionMemos[group.key] || "").trim())} style={{ border: 0, borderLeft: "1px solid #dfbdb2", background: "#f6e3de", color: "#7f4032", fontWeight: 800, fontSize: 12, minHeight: 30, padding: "0 12px", cursor: "pointer", whiteSpace: "nowrap" }}>재등록 제외</button>
                       </div>
                     </div>
                   </div>
