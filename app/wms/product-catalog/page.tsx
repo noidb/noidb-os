@@ -10,6 +10,7 @@ import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { clearPhotoSearch, connectPhotoFolder, FOLDER_TIER_LABELS, loadPhotoSearch, loadSavedThumbnail, saveThumbnail, openPhotoFolders, openSavedPhotos, photoFolderName, photoFolderReady, savePhotoSearch, searchPhotoFolder, savePreparedPhotos, type FolderTier, type LocalPhoto } from "@/lib/image-search/browser-folder";
 import { savePreparedDetail } from "@/lib/image-search/browser-folder";
 import { identifyPhoto, photoPriority, type PhotoIdentity } from "@/lib/image-search/photo-kind";
+import { groupVisuallyIdentical } from "@/lib/image-search/visual-duplicates";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 import type { ReregistrationExclusion } from "@/lib/wms/reregistration-exclusions";
 
@@ -19,7 +20,8 @@ type PhotoHit = LocalPhoto & { fileName: string; preview: string; selected: bool
  * level: 어디까지 열었는지 — 1~3 = 연결표 폴더 단계(FolderTier), 4 = 사진 폴더 전체 검색.
  * grouped: 확정 폴더가 여러 모델 묶음 폴더인지(아니면 2·3차가 없다). hasFolders: 연결표 확정 폴더가 있는지.
  */
-type PhotoState = { loading: boolean; hits: PhotoHit[]; analysisId: string; level: number; grouped: boolean; hasFolders: boolean; hiddenIds?: string[]; source?: string; error?: string; note?: string };
+type PhotoDecision = { kind: "product" | "wear" | "exclude"; reason: string };
+type PhotoState = { loading: boolean; hits: PhotoHit[]; analysisId: string; level: number; grouped: boolean; hasFolders: boolean; hiddenIds?: string[]; visualGroups?: Record<string, string>; photoDecisions?: Record<string, PhotoDecision>; source?: string; error?: string; note?: string };
 type LinkTableResult = { folders: string[]; modelKeys: string[] };
 const FULL_SEARCH_LEVEL = 4;
 const THUMBNAIL_PAGE = 60;
@@ -125,6 +127,7 @@ export default function ProductCatalogPage() {
   const [detailChoices, setDetailChoices] = useState<Record<string, string>>({});
   const [brokenPhotoIds, setBrokenPhotoIds] = useState<Set<string>>(new Set());
   const [showHiddenPhotos, setShowHiddenPhotos] = useState<Record<string, boolean>>({});
+  const [tidyingModel, setTidyingModel] = useState("");
   const savedSearchJson = useRef<Record<string, string>>({});
 
   // 재등록 대상·영구제외는 모델 단위로 판단한다: 옵션 하나라도 1차·2차면 모델 전체 대상,
@@ -331,6 +334,8 @@ export default function ProductCatalogPage() {
       grouped: saved.grouped ?? true,
       hasFolders: saved.hasFolders ?? true,
       hiddenIds: saved.hiddenIds || [],
+      visualGroups: saved.visualGroups || {},
+      photoDecisions: saved.photoDecisions || {},
       source: "저장된 검색 결과",
     };
   }, []);
@@ -339,7 +344,7 @@ export default function ProductCatalogPage() {
   useEffect(() => {
     for (const [model, state] of Object.entries(photoStates)) {
       if (state.loading || !state.hits.length) continue;
-      const saved = { hits: state.hits.map(hit => ({ id: hit.id, matchedBy: hit.matchedBy })), selectedIds: state.hits.filter(hit => hit.selected).map(hit => hit.id), analysisId: state.analysisId, level: state.level, grouped: state.grouped, hasFolders: state.hasFolders, hiddenIds: state.hiddenIds || [] };
+      const saved = { hits: state.hits.map(hit => ({ id: hit.id, matchedBy: hit.matchedBy })), selectedIds: state.hits.filter(hit => hit.selected).map(hit => hit.id), analysisId: state.analysisId, level: state.level, grouped: state.grouped, hasFolders: state.hasFolders, hiddenIds: state.hiddenIds || [], visualGroups: state.visualGroups || {}, photoDecisions: state.photoDecisions || {} };
       const json = JSON.stringify(saved);
       if (savedSearchJson.current[model] === json) continue;
       savedSearchJson.current[model] = json;
@@ -448,7 +453,7 @@ export default function ProductCatalogPage() {
       const analysisId = hits.some(hit => hit.selected && hit.id === previous?.analysisId) ? previous!.analysisId : "";
       const recovered = found.some(photo => photo.matchedBy.includes("1차 · 이동된 모델 폴더"));
       const note = recovered ? "MYBOX 통합 후 이동된 모델 폴더에서 사진을 찾았습니다. 제품DB의 확정 폴더 경로는 옛 경로입니다." : hasFolders && !found.length ? "1차 확정 폴더에서 사진을 찾지 못했습니다. 아래 버튼으로 범위를 넓혀 주세요." : undefined;
-      setPhotoStates(current => ({ ...current, [key]: { loading: false, hits, analysisId, level, grouped, hasFolders, hiddenIds: previous?.hiddenIds || [], source: recovered ? "1차 · 이동된 모델 폴더" : levelSource(level, hasFolders), note } }));
+      setPhotoStates(current => ({ ...current, [key]: { loading: false, hits, analysisId, level, grouped, hasFolders, hiddenIds: previous?.hiddenIds || [], visualGroups: previous?.visualGroups || {}, photoDecisions: previous?.photoDecisions || {}, source: recovered ? "1차 · 이동된 모델 폴더" : levelSource(level, hasFolders), note } }));
     } catch (cause) {
       setPhotoStates(current => ({ ...current, [key]: { loading: false, hits: [], analysisId: "", level: 1, grouped: false, hasFolders: false, error: cause instanceof Error ? cause.message : "사진 후보를 찾지 못했습니다." } }));
     }
@@ -504,6 +509,75 @@ export default function ProductCatalogPage() {
       if (hidden) ids.add(photoId); else ids.delete(photoId);
       return { ...current, [model]: { ...state, hiddenIds: [...ids], analysisId: hidden && state.analysisId === photoId ? "" : state.analysisId, hits: state.hits.map(hit => hit.id === photoId && hidden ? { ...hit, selected: false } : hit) } };
     });
+  }
+
+  async function photoReviewBlob(hit: PhotoHit): Promise<Blob> {
+    let blob = await thumbnailBlob(hit.id, hit.file, () => true).catch(() => null);
+    if (blob) {
+      const decoded = await createImageBitmap(blob).catch(() => null);
+      decoded?.close();
+      if (!decoded) blob = null;
+    }
+    if (!blob) {
+      blob = await queueThumbnail(() => makeThumbnail(hit.file));
+      if (blob) void saveThumbnail(hit.id, hit.file, blob).catch(() => {});
+    }
+    if (!blob) throw new Error(`${hit.fileName} 미리보기를 만들지 못했습니다.`);
+    return blob;
+  }
+
+  async function blobDataUrl(blob: Blob): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function tidyPhotoCandidates(model: string) {
+    const state = photoStates[model];
+    if (!state || tidyingModel) return;
+    setTidyingModel(model);
+    try {
+      const reviewed: Array<{ hit: PhotoHit; image: Blob }> = [];
+      for (const hit of state.hits) {
+        if (hit.identity.kind === "detail") continue;
+        try { reviewed.push({ hit, image: await photoReviewBlob(hit) }); }
+        catch { /* 열 수 없는 사진은 유사판단·자동 제외에서 빼고 원본 목록에 남긴다. */ }
+      }
+      const groups = await groupVisuallyIdentical(reviewed.map(({ hit, image }) => ({ id: hit.id, image, width: hit.identity.width, height: hit.identity.height, detail: false })));
+      setPhotoStates(current => current[model] ? { ...current, [model]: { ...current[model], visualGroups: groups, note: "시각적으로 거의 같은 사진은 묶었습니다. 패키지·홍보컷을 분류하는 중입니다…" } } : current);
+      const candidates = reviewed.filter(({ hit }) => !state.hiddenIds?.includes(hit.id));
+      const decisions: Record<string, PhotoDecision> = {};
+      for (let offset = 0; offset < candidates.length; offset += 8) {
+        const batch = candidates.slice(offset, offset + 8);
+        const sections: { id: string; dataUrl: string }[] = [];
+        const requested = new Map<string, string>();
+        for (let index = 0; index < batch.length; index += 1) {
+          const id = `photo-${offset + index + 1}`;
+          requested.set(id, batch[index].hit.id);
+          sections.push({ id, dataUrl: await blobDataUrl(batch[index].image) });
+        }
+        if (!sections.length) continue;
+        const response = await fetch("/api/image-generator/quick-analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sections }) });
+        const data = await response.json() as { decisions?: Array<{ id: string; keep: boolean; kind: PhotoDecision["kind"]; reason: string }>; error?: string };
+        if (!response.ok || !Array.isArray(data.decisions)) throw new Error(data.error || "사진 자동 분류에 실패했습니다.");
+        for (const decision of data.decisions) {
+          const photoId = requested.get(decision.id);
+          if (photoId) decisions[photoId] = { kind: decision.keep ? decision.kind : "exclude", reason: decision.reason };
+        }
+      }
+      setPhotoStates(current => {
+        const latest = current[model];
+        if (!latest) return current;
+        const hidden = new Set(latest.hiddenIds || []);
+        for (const [id, decision] of Object.entries(decisions)) if (decision.kind === "exclude") hidden.add(id);
+        return { ...current, [model]: { ...latest, hiddenIds: [...hidden], photoDecisions: { ...latest.photoDecisions, ...decisions }, analysisId: hidden.has(latest.analysisId) ? "" : latest.analysisId, hits: latest.hits.map(hit => hidden.has(hit.id) ? { ...hit, selected: false } : hit), note: `사진 자동 정리 완료 · 시각적 묶음 ${new Set(Object.values(groups)).size}개 · 패키지·홍보 등 ${Object.values(decisions).filter(decision => decision.kind === "exclude").length}장 숨김 (언제든 다시 보기 가능)` } };
+      });
+    } catch (error) {
+      setPhotoStates(current => current[model] ? { ...current, [model]: { ...current[model], note: error instanceof Error ? error.message : "사진 자동 정리에 실패했습니다." } } : current);
+    } finally { setTidyingModel(""); }
   }
 
   function setPhotoSelected(model: string, photoId: string, selected: boolean) {
@@ -666,12 +740,13 @@ export default function ProductCatalogPage() {
                 const photos = photoStates[group.modelName];
                 const detailHits = photos?.hits.filter(hit => hit.identity.kind === "detail" && !photos.hiddenIds?.includes(hit.id)) || [];
                 const editedCount = photos?.hits.filter(hit => hit.identity.kind === "edited" && !photos.hiddenIds?.includes(hit.id)).length || 0;
+                const groupKeyOf = (hit: PhotoHit) => photos?.visualGroups?.[hit.id] || `name:${hit.identity.duplicateName}`;
                 const nameCounts = new Map<string, number>();
-                for (const hit of photos?.hits || []) nameCounts.set(hit.identity.duplicateName, (nameCounts.get(hit.identity.duplicateName) || 0) + 1);
+                for (const hit of photos?.hits || []) if (!photos?.hiddenIds?.includes(hit.id) || showHiddenPhotos[group.modelName]) nameCounts.set(groupKeyOf(hit), (nameCounts.get(groupKeyOf(hit)) || 0) + 1);
                 const visibleNames = new Set<string>();
                 const visibleHits = (photos?.hits || []).map((hit, index) => ({ hit, index })).filter(({ hit }) => {
                   if (photos?.hiddenIds?.includes(hit.id) && !showHiddenPhotos[group.modelName]) return false;
-                  const name = hit.identity.duplicateName;
+                  const name = groupKeyOf(hit);
                   const expanded = expandedPhotoNames[`${group.key}|${name}`];
                   if (expanded || !visibleNames.has(name) || hit.selected) { visibleNames.add(name); return true; }
                   return false;
@@ -687,6 +762,7 @@ export default function ProductCatalogPage() {
                   {photos && (photos.hiddenIds?.length || 0) > 0 && <button type="button" onClick={() => setShowHiddenPhotos(current => ({ ...current, [group.modelName]: !current[group.modelName] }))} style={{ marginTop: 6 }}>{showHiddenPhotos[group.modelName] ? "숨긴 사진 접기" : `패키지·기타로 숨긴 사진 ${photos.hiddenIds?.length}장 보기`}</button>}
                   {detailHits.length > 0 && <div style={{ marginTop: 6, fontSize: 12 }}><label>상세페이지 후보: <select value={detailChoices[group.modelName] || detailHits[0].id} onChange={event => setDetailChoices(current => ({ ...current, [group.modelName]: event.target.value }))}>{detailHits.map(hit => <option key={hit.id} value={hit.id}>{hit.fileName} ({hit.identity.width}×{hit.identity.height})</option>)}<option value="none">사용하지 않음</option></select></label></div>}
                   {photos && photos.hits.length > 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+                    <button type="button" onClick={() => void tidyPhotoCandidates(group.modelName)} disabled={Boolean(tidyingModel)} style={{ border: `1px solid ${wmsColors.slate}`, borderRadius: 8, background: "#fff", padding: "7px 12px", cursor: tidyingModel ? "wait" : "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.slate }}>{tidyingModel === group.modelName ? "중복·패키지컷 정리 중…" : "AI로 중복·패키지컷 정리"}</button>
                     <button type="button" onClick={() => selectAllPhotos(group.modelName)} disabled={photos.hits.filter(hit => hit.selected).length >= 10} style={{ border: `1px solid ${wmsColors.slate}`, borderRadius: 8, background: "#fff", padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.slate }}>전체 선택 (최대 10장)</button>
                     <button type="button" onClick={() => clearPhotoSelection(group.modelName)} disabled={!photos.hits.some(hit => hit.selected)} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.ink }}>전체 해제</button>
                     <span style={{ color: wmsColors.muted, fontSize: 11 }}>전체 해제는 분석용 지정도 함께 풉니다.</span>
@@ -705,7 +781,8 @@ export default function ProductCatalogPage() {
                          {brokenPhotoIds.has(hit.id) && <div style={{ color: wmsColors.warnText }}>미리보기를 열지 못해 선택을 막았습니다.</div>}
                          <div>{hit.fileName}</div><div style={{ color: wmsColors.muted }}>{hit.identity.folder} · {hit.identity.width && hit.identity.height ? `${hit.identity.width}×${hit.identity.height}` : "크기 미확인"}</div>
                          <button type="button" onClick={() => hidePhoto(group.modelName, hit.id, !photos.hiddenIds?.includes(hit.id))} style={{ border: 0, background: "none", color: wmsColors.warnText, padding: 0, cursor: "pointer", textAlign: "left" }}>{photos.hiddenIds?.includes(hit.id) ? "다시 사용" : "패키지·기타 숨김"}</button>
-                         {(nameCounts.get(hit.identity.duplicateName) || 0) > 1 && <button type="button" onClick={() => setExpandedPhotoNames(current => ({ ...current, [`${group.key}|${hit.identity.duplicateName}`]: !current[`${group.key}|${hit.identity.duplicateName}`] }))} style={{ border: 0, background: "none", color: wmsColors.slate, padding: 0, cursor: "pointer", textAlign: "left" }}>같은 파일명 {nameCounts.get(hit.identity.duplicateName)}장 {expandedPhotoNames[`${group.key}|${hit.identity.duplicateName}`] ? "접기" : "비교"}</button>}
+                         {photos.photoDecisions?.[hit.id] && <div style={{ color: wmsColors.muted }}>AI: {photos.photoDecisions[hit.id].kind === "product" ? "제품" : photos.photoDecisions[hit.id].kind === "wear" ? "착용" : "패키지·기타"} · {photos.photoDecisions[hit.id].reason}</div>}
+                         {(nameCounts.get(groupKeyOf(hit)) || 0) > 1 && <button type="button" onClick={() => setExpandedPhotoNames(current => ({ ...current, [`${group.key}|${groupKeyOf(hit)}`]: !current[`${group.key}|${groupKeyOf(hit)}`] }))} style={{ border: 0, background: "none", color: wmsColors.slate, padding: 0, cursor: "pointer", textAlign: "left" }}>{groupKeyOf(hit).startsWith("visual:") ? "시각적으로 유사" : "같은 파일명"} {nameCounts.get(groupKeyOf(hit))}장 {expandedPhotoNames[`${group.key}|${groupKeyOf(hit)}`] ? "접기" : "비교"}</button>}
                          <details><summary style={{ cursor: "pointer", color: wmsColors.muted }}>저장 위치</summary><span>{hit.id}</span></details>
                       </div>;
                     })}
