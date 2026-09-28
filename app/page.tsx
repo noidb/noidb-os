@@ -1363,6 +1363,8 @@ export default function Home() {
       ? photos[Number(aiImageSource.slice(6))]
       : aiImageSource.startsWith("pool:")
         ? uploadPool[Number(aiImageSource.slice(5))]
+        : aiImageSource.startsWith("detail:")
+          ? detailImages[Number(aiImageSource.slice(7))]
         : aiImageSource.startsWith("slot:")
           ? getSlotValue(aiImageSource.slice(5))
           : null;
@@ -2535,6 +2537,7 @@ export default function Home() {
                 <option value="">사진 선택</option>
                 {photos.map((photo, index) => <option key={photo.id} value={`photo:${index}`}>제품사진 {index + 1} · {photo.name}</option>)}
                 {uploadPool.map((slot, index) => <option key={`pool:${index}`} value={`pool:${index}`}>이미지 풀 {index + 1} · {slot.fileName}</option>)}
+                {detailImages.map((image, index) => <option key={image.id} value={`detail:${index}`}>상세페이지 컷 {index + 1} · {image.name}</option>)}
                 {([
                   ["mainWear", "메인착용컷"], ["all", "전체옵션"], ["detail", "디테일컷"],
                   ["wear01", "착용컷 01"], ["wear02", "착용컷 02"],
