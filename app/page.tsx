@@ -295,6 +295,7 @@ export default function Home() {
   const [adjustKey, setAdjustKey] = useState("");
   const [adjust, setAdjust] = useState<FitAdjust>(defaultFitAdjust());
   const [adjustPreview, setAdjustPreview] = useState("");
+  const [adjustResult, setAdjustResult] = useState("");
   const [lightbox, setLightbox] = useState("");
 
   const [detailImages, setDetailImages] = useState<DetailImage[]>([]);
@@ -1519,13 +1520,14 @@ export default function Home() {
     setAdjustKey(key);
     setAdjust(defaultFitAdjust());
     setAdjustPreview(dataUrl);
+    setAdjustResult("");
   };
 
   const previewAdjust = async () => {
     if (!adjustPreview) return;
     try {
       const out = await fitToWhiteCanvas(adjustPreview, adjust);
-      setAdjustPreview(out);
+      setAdjustResult(out);
     } catch {
       /* ignore */
     }
@@ -1540,6 +1542,7 @@ export default function Home() {
     } else if (adjustKey === "all") setAllOptions(slot);
     setAdjustKey("");
     setAdjustPreview("");
+    setAdjustResult("");
   };
 
   const pushDetail = (name: string, dataUrl: string) => {
@@ -2714,7 +2717,12 @@ export default function Home() {
               onExpand={setLightbox}
               onFit={() => {
                 const s = activeVariantThumbs[variant.key];
-                if (s) openAdjust(`opt:${variant.key}`, s.dataUrl);
+                if (!s) return;
+                const correctedPhotos = detailImages.filter(image => image.name.startsWith("보정본 "));
+                const sourceName = s.fileName.replace(/\s+/g, "").toLowerCase();
+                const correctedSource = correctedPhotos.find(image => image.name.slice(4).replace(/\s+/g, "").toLowerCase() === sourceName)
+                  || (variants.length === 1 ? correctedPhotos[0] : undefined);
+                openAdjust(`opt:${variant.key}`, correctedSource?.dataUrl || s.dataUrl);
               }}
               onAddDetail={
                 activeVariantThumbs[variant.key]
@@ -2780,9 +2788,9 @@ export default function Home() {
         {adjustKey && (
           <div className="adjustPanel">
             <h3>흰 배경 캔버스 맞춤 (형태 변경 없음)</h3>
-            {adjustPreview && <img src={adjustPreview} alt="조정 미리보기" className="adjustPreviewImg" />}
+            {adjustPreview && <img src={adjustResult || adjustPreview} alt="조정 미리보기" className="adjustPreviewImg" />}
             <div className="cropControls">
-              <label>확대 <input type="range" min={0.5} max={1.5} step={0.01} value={adjust.scale}
+              <label>확대 <input type="range" min={0.5} max={3.5} step={0.01} value={adjust.scale}
                 onChange={e => setAdjust(a => ({ ...a, scale: Number(e.target.value) }))} /></label>
               <label>좌우 <input type="range" min={-200} max={200} value={adjust.offsetX}
                 onChange={e => setAdjust(a => ({ ...a, offsetX: Number(e.target.value) }))} /></label>
@@ -2796,7 +2804,7 @@ export default function Home() {
             <div className="detailActions">
               <button type="button" className="secondaryButton" onClick={() => void previewAdjust()}>미리보기 적용</button>
               <button type="button" className="green" onClick={() => void confirmAdjust()}>확정</button>
-              <button type="button" className="secondaryButton" onClick={() => { setAdjustKey(""); setAdjustPreview(""); }}>취소</button>
+              <button type="button" className="secondaryButton" onClick={() => { setAdjustKey(""); setAdjustPreview(""); setAdjustResult(""); }}>취소</button>
             </div>
           </div>
         )}
@@ -3238,6 +3246,7 @@ function ImageSlot({
         }}
       />
       <div className="slotActions">
+        {value && onFit && <button type="button" className="secondaryButton" onClick={onFit}>제품 크기·위치 맞춤</button>}
         {value && <button type="button" className="removeButton" onClick={() => { pendingFileRevision.current += 1; onChange(null); }}>삭제</button>}
         {onRemoveSlot && <button type="button" className="removeButton" onClick={onRemoveSlot}>칸 삭제</button>}
       </div>

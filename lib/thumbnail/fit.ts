@@ -62,20 +62,20 @@ export async function fitToWhiteCanvas(
   ctx.fillRect(0, 0, size, size);
 
   const baseFill = 0.8;
-  const scaleFactor = Math.max(0.3, Math.min(2.5, adjust.scale));
-  const maxSide = size * Math.min(baseFill, baseFill * scaleFactor);
+  const scaleFactor = Math.max(0.3, Math.min(3.5, adjust.scale));
+  const maxSide = size * baseFill * scaleFactor;
   const scale = Math.min(maxSide / img.width, maxSide / img.height);
   const drawW = Math.max(1, Math.round(img.width * scale));
   const drawH = Math.max(1, Math.round(img.height * scale));
-  const x = Math.round((size - drawW) / 2 + adjust.offsetX * size * 0.5);
-  const y = Math.round((size - drawH) / 2 + adjust.offsetY * size * 0.5);
+  const x = Math.round((size - drawW) / 2 + adjust.offsetX);
+  const y = Math.round((size - drawH) / 2 + adjust.offsetY);
 
   if (adjust.shadow) {
     ctx.save();
     ctx.fillStyle = "rgba(0,0,0,0.10)";
     ctx.beginPath();
     ctx.ellipse(
-      size / 2 + adjust.offsetX * size * 0.5,
+      size / 2 + adjust.offsetX,
       y + drawH - 4,
       Math.max(36, drawW * 0.3),
       13,
