@@ -1,7 +1,7 @@
 "use client";
 
 import { createPortal } from "react-dom";
-import { ChangeEvent, useEffect, useId, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import AppNavigation from "./AppNavigation";
 import {
@@ -27,7 +27,7 @@ import { splitDetailPage, type QuickDetailSection } from "@/lib/image-generator/
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { loadPreparedDetail, loadPreparedPhotos, type PreparedDetail } from "@/lib/image-search/browser-folder";
-import { coverSquareCanvas, defaultFitAdjust, extendToSquareCanvas, fitToWhiteCanvas, renderSquareCrop, sharpenAmount, type FitAdjust, type SquareCrop } from "@/lib/thumbnail/fit";
+import { coverSquareCanvas, defaultFitAdjust, extendToSquareCanvas, fitToWhiteCanvas, drawSquareCrop, renderSquareCrop, sharpenAmount, type FitAdjust, type SquareCrop } from "@/lib/thumbnail/fit";
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
 import WimsRegistrationImportPanel from "@/app/product-registration/WimsRegistrationImportPanel";
@@ -62,7 +62,7 @@ type Analysis = {
 };
 
 type ProductPhoto = { id: string; name: string; dataUrl: string };
-type SlotImage = { dataUrl: string; fileName: string; source?: string; crop?: SquareCrop };
+type SlotImage = { dataUrl: string; fileName: string; source?: string; crop?: SquareCrop; locked?: boolean };
 type VariantOption = SkuRow & { key: string; label: string };
 type DetailImage = { id: string; name: string; dataUrl: string; zoom?: number; focusX?: number; focusY?: number; frameHeight?: number };
 type GeneratedImageCandidate = { model: string; category: string; kind: "product" | "wear"; dataUrl: string; fileName: string };
@@ -315,6 +315,7 @@ export default function Home() {
     setDetailShareError("");
   }, [detailPreview]);
   const [detailTransforming, setDetailTransforming] = useState(false);
+  const [pageCut, setPageCut] = useState<{ dataUrl: string; top: number; bottom: number; mode: "top" | "bottom" } | null>(null);
   const [preparedDetail, setPreparedDetail] = useState<PreparedDetail | null>(null);
   const [dragDetailIndex, setDragDetailIndex] = useState<number | null>(null);
 
@@ -1067,31 +1068,6 @@ export default function Home() {
     void prepareApprovedSquareImages();
   }, [draftRestoreRevision, detailPreview, squareImagesBusy]);
 
-  const selectUsableDetailSections = async (sections: QuickDetailSection[]) => {
-    const selected: QuickDetailSection[] = [];
-    for (let offset = 0; offset < sections.length; offset += 4) {
-      const batch = sections.slice(offset, offset + 4);
-      setDetailMessage(`${sections.length}개 구간에서 제품 사진만 고르고 있습니다...`);
-      const response = await fetch("/api/image-generator/quick-analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sections: batch }),
-      });
-      const data = await response.json() as {
-        decisions?: Array<{ id: string; keep: boolean; kind: "product" | "wear" | "exclude" }>;
-        error?: string;
-      };
-      if (!response.ok || !data.decisions) throw new Error(data.error || "제품 사진을 선별하지 못했습니다.");
-      const decisions = new Map(data.decisions.map(decision => [decision.id, decision]));
-      batch.forEach(section => {
-        const decision = decisions.get(section.id);
-        if (decision?.keep && decision.kind !== "exclude") selected.push(section);
-      });
-    }
-    if (!selected.length) throw new Error("남길 제품 사진을 찾지 못했습니다.");
-    return selected;
-  };
-
   const convertExistingDetail = async (file: File | undefined) => {
     if (!file || !isAccepted(file)) {
       setDetailMessage("JPG/JPEG/PNG 상세페이지 이미지를 선택해주세요.");
@@ -1100,15 +1076,45 @@ export default function Home() {
     setDetailTransforming(true);
     try {
       const source = await readFile(file);
-      const sections = await splitDetailPage(source, detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER);
-      const selected = await selectUsableDetailSections(sections);
-      setDetailImages(selected.map((section, index) => ({
+      setPageCut({ dataUrl: source, top: 0, bottom: 1, mode: "top" });
+      setDetailMessage("아래 미리보기에서 위쪽 자를 위치와 아래쪽 자를 위치를 클릭해 정한 뒤 '이 구간 사용'을 누르세요.");
+    } catch (e) {
+      setDetailMessage(`오류: ${e instanceof Error ? e.message : "기존 상세페이지를 불러오지 못했습니다."}`);
+    } finally {
+      setDetailTransforming(false);
+    }
+  };
+
+  const applyPageCut = async () => {
+    if (!pageCut || pageCut.bottom - pageCut.top < 0.02) {
+      setDetailMessage("사용할 구간이 너무 좁습니다. 위·아래 자를 위치를 다시 정해주세요.");
+      return;
+    }
+    setDetailTransforming(true);
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("상세페이지를 불러오지 못했습니다."));
+        image.src = pageCut.dataUrl;
+      });
+      const y = Math.round(img.naturalHeight * pageCut.top);
+      const h = Math.max(1, Math.round(img.naturalHeight * pageCut.bottom) - y);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
+      ctx.drawImage(img, 0, y, img.naturalWidth, h, 0, 0, img.naturalWidth, h);
+      const sections = await splitDetailPage(canvas.toDataURL("image/jpeg", 0.97), detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER);
+      setDetailImages(sections.map((section, index) => ({
         id: `${Date.now()}-${index}-${Math.random()}`,
-        name: `기존 상세페이지 제품컷 ${String(index + 1).padStart(2, "0")}`,
+        name: `기존 상세페이지 컷 ${String(index + 1).padStart(2, "0")}`,
         dataUrl: section.dataUrl,
       })));
       setDetailPreview("");
-      setDetailMessage(`${sections.length}개 구간 중 제품 사진 후보 ${selected.length}장을 남겼습니다. 작은 로고·문구가 사진에 함께 있을 수 있으니 각 컷을 확대해 확인하고 삭제해주세요.`);
+      setPageCut(null);
+      setDetailMessage(`선택한 구간에서 ${sections.length}장을 가져왔습니다.`);
     } catch (e) {
       setDetailMessage(`오류: ${e instanceof Error ? e.message : "기존 상세페이지 변환 실패"}`);
     } finally {
@@ -2325,13 +2331,12 @@ export default function Home() {
   return (
     <main className="shell">
       {reregistrationMessage && <p role="status" className="message">{reregistrationMessage}</p>}
-      {reregisterModelName && <p className="message"><Link href={`/wms/product-catalog?status=reregister&model=${encodeURIComponent(reregisterModelName)}`}>← {reregisterModelName} 사진 다시 고르기 (선택한 사진·분석용 그대로 유지)</Link></p>}
       <AppNavigation active="product-registration" />
       <header className="hero">
         <div className="heroBrandArea">
           <h1>AI 상품등록 도우미</h1>
           <div className="heroUtilityActions">
-            <Link className="imageGeneratorLink" href="/wms/product-catalog?status=reregister">재등록 대상·사진 고르기</Link>
+            <Link className="imageGeneratorLink" href={`/wms/product-catalog?status=reregister${reregisterModelName ? `&model=${encodeURIComponent(reregisterModelName)}` : ""}`}>제품사진선택</Link>
             <Link className="imageGeneratorLink" href="/image-generator">이미지 자동생성</Link>
             <button className="draftLoadButton" type="button" onClick={() => {
               setShowDrafts(value => !value);
@@ -2854,11 +2859,13 @@ export default function Home() {
 
       {/* 6. 상세페이지 */}
       <section className="card full">
-        <h2>6. 상세페이지</h2>
-        {preparedDetail && <div className="detailMessage" style={{ marginBottom: 12 }}>
-          MYBOX에서 기존 상세페이지 후보 <b>{preparedDetail.name}</b>을 찾았습니다. 이 파일을 먼저 정리해 사용하세요.
-          <button type="button" className="secondaryButton" disabled={detailTransforming} onClick={() => void convertExistingDetail(preparedDetail.file)} style={{ marginLeft: 8 }}>기존 상세페이지 정리하여 사용</button>
-        </div>}
+        <div className="sectionTitleRow">
+          <h2>6. 상세페이지</h2>
+          {preparedDetail && (
+            <button type="button" className="existingDetailUseButton" disabled={detailTransforming} title={`MYBOX 후보: ${preparedDetail.name}`}
+              onClick={() => void convertExistingDetail(preparedDetail.file)}>기존상세페이지 사용</button>
+          )}
+        </div>
         {reregisterModelName && !preparedDetail && <p className="detailMessage">기존 상세페이지 후보가 없으면 보정본 폴더의 사진을 먼저 선택해 새 상세페이지를 만드세요. 일반 폴더 사진은 보정 상태를 확인한 뒤 사용하세요.</p>}
         <div className="detailBrandImages">
           <div className="detailBrandBlock">
@@ -2911,9 +2918,38 @@ export default function Home() {
               void convertExistingDetail(event.target.files?.[0]);
               event.target.value = "";
             }} />
-          <strong>{detailTransforming ? "기존 상세페이지 정리 중..." : "기존 상세페이지에서 제품 사진만 가져오기"}</strong>
-          <span>상·하단 광고, 회사소개, 설명, UI는 빼고 제품 사진만 남긴 뒤 NOID-B 로고로 새 상세페이지를 만듭니다.</span>
+          <strong>{detailTransforming ? "기존 상세페이지 정리 중..." : "기존 상세페이지에서 사용할 구간 가져오기"}</strong>
+          <span>위·아래에서 버릴 부분을 직접 정하고, 가운데 부분만 NOID-B 로고로 새 상세페이지를 만듭니다.</span>
         </label>
+
+        {pageCut && (
+          <div className="pageCutPanel">
+            <div className="detailActions">
+              <button type="button" className={pageCut.mode === "top" ? "green" : "secondaryButton"} onClick={() => setPageCut(c => c && { ...c, mode: "top" })}>위쪽 자를 위치 정하기</button>
+              <button type="button" className={pageCut.mode === "bottom" ? "green" : "secondaryButton"} onClick={() => setPageCut(c => c && { ...c, mode: "bottom" })}>아래쪽 자를 위치 정하기</button>
+              <button type="button" className="purpleButton" disabled={detailTransforming} onClick={() => void applyPageCut()}>이 구간 사용</button>
+              <button type="button" className="secondaryButton" onClick={() => setPageCut(null)}>취소</button>
+            </div>
+            <p className="detailMessage">{pageCut.mode === "top" ? "사용할 부분이 시작되는 위치를 이미지에서 클릭하세요. 그 위쪽은 버려집니다." : "사용할 부분이 끝나는 위치를 이미지에서 클릭하세요. 그 아래쪽은 버려집니다."}</p>
+            <div className="pageCutScroll">
+              <div className="pageCutFrame" onClick={event => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                const ratio = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+                setPageCut(c => {
+                  if (!c) return c;
+                  return c.mode === "top" ? { ...c, top: Math.min(ratio, c.bottom - 0.01) } : { ...c, bottom: Math.max(ratio, c.top + 0.01) };
+                });
+              }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={pageCut.dataUrl} alt="기존 상세페이지" draggable={false} />
+                <div className="pageCutShade" style={{ top: 0, height: `${pageCut.top * 100}%` }} />
+                <div className="pageCutShade" style={{ top: `${pageCut.bottom * 100}%`, bottom: 0 }} />
+                <div className="pageCutLine" style={{ top: `${pageCut.top * 100}%` }}>위쪽 자름선</div>
+                <div className="pageCutLine" style={{ top: `${pageCut.bottom * 100}%` }}>아래쪽 자름선</div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <label className="multiUpload existingDetailUpload">
           <input type="file" accept="image/jpeg,image/jpg,image/png" multiple hidden
@@ -3175,23 +3211,26 @@ function Result({ label, value, status, alert }: { label: string; value: string;
 
 function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage; title: string; onChange: (v: SlotImage | null) => void; tuneHost: HTMLElement | null }) {
   const source = value.source || value.dataUrl;
-  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  const [loadedImg, setLoadedImg] = useState<HTMLImageElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [view, setView] = useState<SquareCrop>(value.crop || { zoom: 1, x: 0, y: 0 });
   const [tuneOpen, setTuneOpen] = useState(false);
-  const filterId = useId().replace(/:/g, "");
   const viewRef = useRef(view);
   const frameRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ px: number; py: number } | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const valueRef = useRef(value);
   valueRef.current = value;
+  const locked = Boolean(value.locked);
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
   const sourceRef = useRef(source);
   sourceRef.current = source;
 
   useEffect(() => {
     let alive = true;
     const img = new Image();
-    img.onload = () => { if (alive) setDims({ w: img.naturalWidth, h: img.naturalHeight }); };
+    img.onload = () => { if (alive) setLoadedImg(img); };
     img.src = source;
     return () => { alive = false; };
   }, [source]);
@@ -3225,6 +3264,7 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
     const el = frameRef.current;
     if (!el) return;
     const onWheel = (event: WheelEvent) => {
+      if (lockedRef.current) return;
       event.preventDefault();
       const v = viewRef.current;
       update({ ...v, zoom: v.zoom * (event.deltaY < 0 ? 1.06 : 1 / 1.06) });
@@ -3235,21 +3275,17 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
   }, []);
 
   const sharp = sharpenAmount(view.sharpness || 0);
-  const unit = dims ? (dims.w >= dims.h ? { w: 1, h: dims.h / dims.w } : { w: dims.w / dims.h, h: 1 }) : { w: 1, h: 1 };
-  const drawW = unit.w * view.zoom;
-  const drawH = unit.h * view.zoom;
-  const style = {
-    width: `${drawW * 100}%`,
-    height: `${drawH * 100}%`,
-    left: `${(0.5 - drawW / 2 + view.x) * 100}%`,
-    top: `${(0.5 - drawH / 2 + view.y) * 100}%`,
-  };
+
+  useEffect(() => {
+    if (canvasRef.current && loadedImg) drawSquareCrop(canvasRef.current, loadedImg, view, 540);
+  }, [loadedImg, view]);
 
   return (
     <div
       ref={frameRef}
       className="slotCropFrame"
       onPointerDown={event => {
+        if (lockedRef.current) return;
         event.currentTarget.setPointerCapture(event.pointerId);
         dragRef.current = { px: event.clientX, py: event.clientY };
       }}
@@ -3264,30 +3300,17 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
       }}
       onPointerUp={() => { dragRef.current = null; }}
       onPointerCancel={() => { dragRef.current = null; }}
-      onDoubleClick={() => update({ zoom: 1, x: 0, y: 0 })}
-      title="끌어서 위치 이동 · 마우스 휠로 확대/축소 · 더블클릭으로 처음 상태"
+      onDoubleClick={() => { if (!lockedRef.current) update({ zoom: 1, x: 0, y: 0 }); }}
+      title={locked ? "저장됨 · 수정 버튼을 누르면 다시 조절할 수 있습니다." : "끌어서 위치 이동 · 마우스 휠로 확대/축소 · 더블클릭으로 처음 상태"}
     >
-      <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true">
-        <filter id={filterId} colorInterpolationFilters="sRGB">
-          <feConvolveMatrix order="3" kernelMatrix={`0 ${-sharp} 0 ${-sharp} ${1 + 4 * sharp} ${-sharp} 0 ${-sharp} 0`} divisor="1" preserveAlpha="true" edgeMode="duplicate" />
-          <feComponentTransfer>
-            <feFuncR type="linear" slope="1" intercept={(view.brightness || 0) / 255} />
-            <feFuncG type="linear" slope="1" intercept={(view.brightness || 0) / 255} />
-            <feFuncB type="linear" slope="1" intercept={(view.brightness || 0) / 255} />
-          </feComponentTransfer>
-        </filter>
-      </svg>
-      <div className="slotCropLayer" style={{ filter: `url(#${filterId})` }}>
-        <img className="slotCropBg" src={source} alt="" draggable={false} />
-        <img className="slotCropImg" src={source} alt={title} draggable={false} style={style} />
-      </div>
-      <div className="slotCropTools" onPointerDown={event => event.stopPropagation()}>
+      <canvas ref={canvasRef} className="slotCropCanvas" aria-label={title} />
+      {!locked && <div className="slotCropTools" onPointerDown={event => event.stopPropagation()}>
         <button type="button" onClick={() => update({ zoom: 1, x: 0, y: 0, brightness: 0, sharpness: 0 })} title="처음 상태로 되돌리기">↻</button>
         <button type="button" onClick={() => setTuneOpen(open => !open)} title="밝기·선명도">☀</button>
         <button type="button" onClick={() => update({ ...viewRef.current, zoom: viewRef.current.zoom / 1.1 })}>－</button>
         <button type="button" onClick={() => update({ ...viewRef.current, zoom: viewRef.current.zoom * 1.1 })}>＋</button>
-      </div>
-      {tuneOpen && tuneHost && createPortal(
+      </div>}
+      {!locked && tuneOpen && tuneHost && createPortal(
         <div className="slotCropTune" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
           <label>밝기 {view.brightness || 0}
             <input type="range" min={-60} max={60} step={1} value={view.brightness || 0}
@@ -3361,7 +3384,7 @@ function ImageSlot({
         {displaySubtitle && <p className="slotAlias" title={displaySubtitle}>{displaySubtitle}</p>}
       </div>
       <div
-        className={"slotDrop" + (value ? " slotDropEdit" : "")}
+        className={"slotDrop" + (value && !value.locked ? " slotDropEdit" : "")}
         onClick={() => { if (!value) inputRef.current?.click(); }}
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
@@ -3403,6 +3426,7 @@ function ImageSlot({
         }}
       />
       <div className="slotActions">
+        {value && <button type="button" className={value.locked ? "secondaryButton" : "green"} onClick={() => onChange({ ...value, locked: !value.locked })}>{value.locked ? "수정" : "저장"}</button>}
         {value && <button type="button" className="removeButton" onClick={() => { pendingFileRevision.current += 1; onChange(null); }}>삭제</button>}
         {onRemoveSlot && <button type="button" className="removeButton" onClick={onRemoveSlot}>칸 삭제</button>}
       </div>

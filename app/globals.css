@@ -599,11 +599,23 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 .slotDropEdit{cursor:grab;touch-action:none}
 .slotCropFrame{position:relative;width:100%;height:100%;overflow:hidden;user-select:none;touch-action:none;background:#fff}
 .slotCropFrame:active{cursor:grabbing}
-.slotCropBg{position:absolute;inset:0;width:100%!important;height:100%!important;object-fit:cover;filter:blur(10px);transform:scale(1.1)}
-.slotCropImg{position:absolute;max-width:none;pointer-events:none;object-fit:fill!important}
+.slotCropCanvas{display:block;width:100%;height:100%}
 .slotCropTools{position:absolute;right:6px;bottom:6px;display:flex;gap:4px}
 .slotCropTools button{width:26px;height:26px;padding:0;border:1px solid #d8d3cc;border-radius:6px;background:rgba(255,255,255,.9);cursor:pointer;line-height:1}
-.slotCropLayer{position:absolute;inset:0}
 .slotCropTune{margin-top:6px;display:flex;flex-direction:column;gap:2px;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,.92);border:1px solid #d8d3cc;font-size:11px}
 .slotCropTune label{display:flex;flex-direction:column;gap:1px}
 .slotCropTune input{width:100%;margin:0}
+
+/* 기존 상세페이지 위·아래 자르기 */
+.pageCutScroll{max-height:640px;overflow-y:auto;border:1px solid #d8d3cc;border-radius:10px;background:#fff;max-width:420px}
+.pageCutFrame{position:relative;cursor:crosshair}
+.pageCutFrame img{display:block;width:100%;height:auto}
+.pageCutShade{position:absolute;left:0;right:0;background:rgba(0,0,0,.55);pointer-events:none}
+.pageCutLine{position:absolute;left:0;right:0;height:0;border-top:2px solid #e11d48;pointer-events:none;color:#e11d48;font-size:11px;font-weight:700}
+.slotCropFrame[title^="저장됨"]{cursor:default}
+
+.sectionTitleRow{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px}
+.sectionTitleRow h2{margin:0}
+.existingDetailUseButton{border:1px solid #b9cbbc;border-radius:999px;padding:9px 18px;background:#e3ede6;color:#3f574b;font-weight:800;cursor:pointer}
+.existingDetailUseButton:hover:not(:disabled){background:#d3e3d9}
+.existingDetailUseButton:disabled{opacity:.6;cursor:default}
