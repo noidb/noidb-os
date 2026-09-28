@@ -64,6 +64,7 @@ type ProductPhoto = { id: string; name: string; dataUrl: string };
 type SlotImage = { dataUrl: string; fileName: string };
 type VariantOption = SkuRow & { key: string; label: string };
 type DetailImage = { id: string; name: string; dataUrl: string; zoom?: number };
+type GeneratedImageCandidate = { model: string; category: string; kind: "product" | "wear"; dataUrl: string; fileName: string };
 type CustomSlot = { id: string; type: "all" | "detail" | "wear"; slot: SlotImage | null };
 type QuoteQueueRecord = { model: string; gender: string; category: string; skuCount: number; savedAt: number | string; payload: any };
 type PendingReplacementCleanup = { model: string; legacySku: string; oldRows: number; matchedOptions: number };
@@ -313,6 +314,12 @@ export default function Home() {
   const [sourcingImages, setSourcingImages] = useState<ProductPhoto[]>([]);
   const [sourcingSaveStatus, setSourcingSaveStatus] = useState("");
   const [uploadPool, setUploadPool] = useState<SlotImage[]>([]);
+  const [aiImageSource, setAiImageSource] = useState("");
+  const [aiImageKind, setAiImageKind] = useState<"product" | "wear">("product");
+  const [aiImageBusy, setAiImageBusy] = useState(false);
+  const [aiImageCandidate, setAiImageCandidate] = useState<GeneratedImageCandidate | null>(null);
+  const [aiImageTarget, setAiImageTarget] = useState("detail");
+  const [aiImageMessage, setAiImageMessage] = useState("");
 
   const [exportLoading, setExportLoading] = useState("");
   const [exportMessage, setExportMessage] = useState("");
@@ -1105,6 +1112,9 @@ export default function Home() {
     setWear02(null);
     setCustomSlots([]);
     setUploadPool([]);
+    setAiImageSource("");
+    setAiImageCandidate(null);
+    setAiImageMessage("");
     setAdjustKey("");
     setAdjustPreview("");
     setDetailPreview("");
@@ -1345,6 +1355,61 @@ export default function Home() {
     else if (key.startsWith("custom:")) {
       setCustomSlots(prev => prev.map(item => item.id === key.slice(7) ? { ...item, slot: value } : item));
     }
+  };
+
+  const generateRegistrationImage = async () => {
+    if (!model) return setAiImageMessage("모델명을 먼저 확인해주세요.");
+    const source = aiImageSource.startsWith("photo:")
+      ? photos[Number(aiImageSource.slice(6))]
+      : aiImageSource.startsWith("pool:")
+        ? uploadPool[Number(aiImageSource.slice(5))]
+        : aiImageSource.startsWith("slot:")
+          ? getSlotValue(aiImageSource.slice(5))
+          : null;
+    if (!source?.dataUrl) return setAiImageMessage("생성에 사용할 제품 사진을 선택해주세요.");
+    const sourceModel = model;
+    const sourceCategory = product.category;
+    setAiImageBusy(true);
+    setAiImageCandidate(null);
+    setAiImageMessage("선택한 사진을 바탕으로 이미지를 만들고 있습니다...");
+    try {
+      const reference = await compressImageDataUrl(source.dataUrl, 1600, 0.88);
+      const response = await fetch("/api/image-generator/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "quick-detail",
+          sectionKind: aiImageKind,
+          style: "clean",
+          references: [{ role: aiImageKind === "wear" ? "wear-reference" : "front", dataUrl: reference }],
+        }),
+      });
+      const data = await response.json() as { imageDataUrl?: string; error?: string };
+      if (!response.ok || !data.imageDataUrl) throw new Error(data.error || "이미지를 만들지 못했습니다.");
+      const candidate: GeneratedImageCandidate = {
+        model: sourceModel,
+        category: sourceCategory,
+        kind: aiImageKind,
+        dataUrl: data.imageDataUrl,
+        fileName: `${sourceModel}-AI-${aiImageKind === "wear" ? "WEAR" : "PRODUCT"}.jpg`,
+      };
+      setAiImageCandidate(candidate);
+      setAiImageTarget(aiImageKind === "wear" ? "wear01" : "detail");
+      setAiImageMessage("생성 완료. 제품 형태·색상·착용 위치와 글자 유무를 확인한 뒤 사용할 곳을 선택해주세요.");
+    } catch (error) {
+      setAiImageMessage(`오류: ${error instanceof Error ? error.message : "이미지 생성 실패"}`);
+    } finally {
+      setAiImageBusy(false);
+    }
+  };
+
+  const usableGeneratedImage = aiImageCandidate?.model === model && aiImageCandidate.category === product.category
+    ? aiImageCandidate : null;
+
+  const applyGeneratedImageToSlot = () => {
+    if (!usableGeneratedImage) return setAiImageMessage("현재 상품에서 생성한 이미지를 다시 선택해주세요.");
+    setSlotValue(aiImageTarget, { dataUrl: usableGeneratedImage.dataUrl, fileName: usableGeneratedImage.fileName });
+    setAiImageMessage("선택한 등록 이미지 칸에 넣었습니다. 상세페이지 목록에도 자동 반영됩니다.");
   };
 
   const swapSlots = (sourceKey: string, targetKey: string) => {
@@ -1711,6 +1776,9 @@ export default function Home() {
     setSourcingUrlInputs(Array.isArray(data.sourcingUrlInputs) ? data.sourcingUrlInputs : ["", "", ""]);
     setSourcingImages(Array.isArray(data.sourcingImages) ? data.sourcingImages : []);
     setUploadPool(Array.isArray(data.uploadPool) ? data.uploadPool : []);
+    setAiImageSource("");
+    setAiImageCandidate(null);
+    setAiImageMessage("");
     setShowDrafts(false);
     setDraftStatus(data.cloudOnly
       ? `${record.model} 기본정보를 불러왔습니다. 다른 기기의 이미지는 다시 올려주세요.`
@@ -2457,6 +2525,63 @@ export default function Home() {
             ))}
           </div>
         )}
+
+        <div className="inlineImageGenerator">
+          <h3>AI 이미지 자동생성</h3>
+          <p className="note">현재 상품 사진 한 장을 선택해 제품컷 또는 착용컷을 만듭니다. 생성에는 이미지 AI 비용이 들며, 원본과 기존 등록 사진은 바뀌지 않습니다.</p>
+          <div className="inlineImageGeneratorControls">
+            <label>참고 사진
+              <select value={aiImageSource} disabled={aiImageBusy} onChange={event => { setAiImageSource(event.target.value); setAiImageCandidate(null); }}>
+                <option value="">사진 선택</option>
+                {photos.map((photo, index) => <option key={photo.id} value={`photo:${index}`}>제품사진 {index + 1} · {photo.name}</option>)}
+                {uploadPool.map((slot, index) => <option key={`pool:${index}`} value={`pool:${index}`}>이미지 풀 {index + 1} · {slot.fileName}</option>)}
+                {([
+                  ["mainWear", "메인착용컷"], ["all", "전체옵션"], ["detail", "디테일컷"],
+                  ["wear01", "착용컷 01"], ["wear02", "착용컷 02"],
+                  ...variants.map(variant => [`opt:${variant.key}`, `${variant.label} 썸네일`]),
+                ] as string[][]).map(([key, label]) => {
+                  const slot = getSlotValue(key);
+                  return slot?.dataUrl ? <option key={key} value={`slot:${key}`}>등록칸 · {label}</option> : null;
+                })}
+              </select>
+            </label>
+            <label>만들 이미지
+              <select value={aiImageKind} disabled={aiImageBusy} onChange={event => { setAiImageKind(event.target.value as "product" | "wear"); setAiImageCandidate(null); }}>
+                <option value="product">제품컷 · 흰색 스튜디오</option>
+                <option value="wear">착용컷 · 기존 착용 사진 보정</option>
+              </select>
+            </label>
+            <button type="button" className="purpleButton" disabled={aiImageBusy || !aiImageSource || !model} onClick={() => void generateRegistrationImage()}>
+              {aiImageBusy ? "이미지 생성 중..." : "선택 사진으로 생성"}
+            </button>
+          </div>
+          {aiImageMessage && <p role="status" className="detailMessage">{aiImageMessage}</p>}
+          {usableGeneratedImage && <div className="inlineImageGeneratorResult">
+            <button type="button" className="inlineImageGeneratorPreview" onClick={() => setLightbox(usableGeneratedImage.dataUrl)}>
+              <img src={usableGeneratedImage.dataUrl} alt="AI 생성 결과 확대" />
+              <span>눌러서 확대 확인</span>
+            </button>
+            <div>
+              <strong>생성 결과 · {usableGeneratedImage.fileName}</strong>
+              <p className="note">제품 형태·색상·크기가 원본과 같은지 확인하세요. 등록 칸에 넣으면 상세페이지 목록에도 자동 반영됩니다. 고해상도 보정본이 있으면 그 사진을 우선 사용하세요.</p>
+              <label>사용할 등록 이미지 칸
+                <select value={aiImageTarget} onChange={event => setAiImageTarget(event.target.value)}>
+                  <option value="detail">디테일컷</option>
+                  <option value="mainWear">메인착용컷</option>
+                  <option value="all">전체옵션 이미지</option>
+                  <option value="wear01">착용컷 01</option>
+                  <option value="wear02">착용컷 02</option>
+                  {variants.map(variant => <option key={variant.key} value={`opt:${variant.key}`}>{variant.label} 썸네일</option>)}
+                </select>
+              </label>
+              <div className="detailActions">
+                <button type="button" onClick={applyGeneratedImageToSlot}>선택한 등록 칸에 사용</button>
+                <button type="button" onClick={() => pushDetail("AI 생성 이미지", usableGeneratedImage.dataUrl)}>상세페이지에 추가</button>
+                <button type="button" onClick={() => { setUploadPool(prev => [...prev, { dataUrl: usableGeneratedImage.dataUrl, fileName: usableGeneratedImage.fileName }]); setAiImageMessage("생성 결과를 이미지 풀에 추가했습니다."); }}>이미지 풀에 추가</button>
+              </div>
+            </div>
+          </div>}
+        </div>
 
         <div className="slotAddButtons">
           <button type="button" onClick={() => addCustomSlot("all")}>+ 전체옵션 이미지</button>
