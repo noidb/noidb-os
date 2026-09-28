@@ -638,9 +638,12 @@ export default function Home() {
     add("wear01", "착용컷 01", wear01);
     add("wear02", "착용컷 02", wear02);
     customSlots.forEach((item, index) => add(`custom:${item.id}`, `${item.type === "all" ? "전체옵션" : item.type === "detail" ? "디테일컷" : "착용컷"} 추가 ${index + 1}`, item.slot));
-    setDetailImages(prev => [...automatic, ...prev.filter(item => !item.id.startsWith("slot:"))]);
+    setDetailImages(prev => {
+      if (reregisterModelName && prev.some(item => !item.id.startsWith("slot:"))) return prev;
+      return [...automatic, ...prev.filter(item => !item.id.startsWith("slot:"))];
+    });
     setDetailPreview("");
-  }, [mainWear, allOptions, activeVariantThumbs, variants, detailCut, wear01, wear02, customSlots, draftRestoreRevision]);
+  }, [mainWear, allOptions, activeVariantThumbs, variants, detailCut, wear01, wear02, customSlots, draftRestoreRevision, reregisterModelName]);
 
   const update = (key: keyof Product, value: string) => {
     setProduct(prev => {
@@ -1374,11 +1377,20 @@ export default function Home() {
     const sourceName = "fileName" in source ? source.fileName : source.name;
     setSlotValue(aiImageTarget, { dataUrl: source.dataUrl, fileName: sourceName });
     if (sourceDetail && !sourceDetail.id.startsWith("slot:")) {
-      setDetailImages(prev => prev.filter(image => image.id !== sourceDetail.id));
+      const slotId = aiImageTarget.startsWith("opt:") ? `slot:variant:${aiImageTarget.slice(4)}` : `slot:${aiImageTarget}`;
+      const slotName = aiImageTarget === "mainWear" ? "메인착용컷"
+        : aiImageTarget === "all" ? "전체옵션"
+          : aiImageTarget === "detail" ? "디테일컷"
+            : aiImageTarget === "wear01" ? "착용컷 01"
+              : aiImageTarget === "wear02" ? "착용컷 02" : sourceDetail.name;
+      setDetailImages(prev => prev.filter(image => image.id !== slotId).map(image => image.id === sourceDetail.id
+        ? { ...image, id: slotId, name: slotName } : image));
     }
     setAiImageSource("");
     setAiImageCandidate(null);
-    setAiImageMessage("선택한 원본 사진을 등록칸에 넣었습니다. 상세페이지 목록에는 한 번만 표시됩니다.");
+    setAiImageMessage(sourceDetail && !sourceDetail.id.startsWith("slot:")
+      ? "선택한 원본 컷을 등록칸으로 옮겼습니다. 상세페이지에는 한 번만 남습니다."
+      : "선택한 원본 사진을 등록칸에 넣었습니다. 기존 상세페이지 구성은 유지됩니다.");
   };
 
   const generateRegistrationImage = async () => {
@@ -1427,7 +1439,9 @@ export default function Home() {
   const applyGeneratedImageToSlot = () => {
     if (!usableGeneratedImage) return setAiImageMessage("현재 상품에서 생성한 이미지를 다시 선택해주세요.");
     setSlotValue(aiImageTarget, { dataUrl: usableGeneratedImage.dataUrl, fileName: usableGeneratedImage.fileName });
-    setAiImageMessage("선택한 등록 이미지 칸에 넣었습니다. 상세페이지 목록에도 자동 반영됩니다.");
+    setAiImageMessage(reregisterModelName && detailImages.some(image => !image.id.startsWith("slot:"))
+      ? "선택한 등록칸에 넣었습니다. 기존 상세페이지 구성은 유지됩니다. 필요하면 아래 버튼으로 상세페이지에 추가하세요."
+      : "선택한 등록 이미지 칸에 넣었습니다. 상세페이지 목록에도 자동 반영됩니다.");
   };
 
   const swapSlots = (sourceKey: string, targetKey: string) => {
@@ -2598,7 +2612,7 @@ export default function Home() {
             </button>
             <div>
               <strong>생성 결과 · {usableGeneratedImage.fileName}</strong>
-              <p className="note">제품 형태·색상·크기가 원본과 같은지 확인하세요. 등록 칸에 넣으면 상세페이지 목록에도 자동 반영됩니다. 고해상도 보정본이 있으면 그 사진을 우선 사용하세요.</p>
+              <p className="note">제품 형태·색상·크기가 원본과 같은지 확인하세요. 재등록 상세페이지를 이미 정리했다면 등록칸 적용 후에도 그 구성은 유지됩니다. 고해상도 보정본이 있으면 그 사진을 우선 사용하세요.</p>
               <div className="detailActions">
                 <button type="button" onClick={applyGeneratedImageToSlot}>선택한 등록 칸에 사용</button>
                 <button type="button" onClick={() => pushDetail("AI 생성 이미지", usableGeneratedImage.dataUrl)}>상세페이지에 추가</button>
