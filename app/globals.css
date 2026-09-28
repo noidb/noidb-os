@@ -621,12 +621,12 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 .existingDetailUseButton:disabled{opacity:.6;cursor:default}
 
 /* 상단 도구 버튼: 한 줄 4칸, 같은 높이·모양으로 정리 */
-.heroUtilityActions{grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;max-width:780px}
+.heroUtilityActions{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;max-width:585px}
 .heroUtilityActions .imageGeneratorLink,.heroUtilityActions .draftLoadButton,.heroUtilityActions .resetAllButton{min-height:48px;padding:10px 12px;border:1px solid transparent;border-radius:12px;font-size:14px;font-weight:800;white-space:nowrap;box-shadow:none}
 .heroUtilityActions .imageGeneratorLink{border-color:#e3d7c8}
 .heroUtilityActions .draftLoadButton{border-color:var(--brand-sage)}
 @media(max-width:760px){
-  .heroUtilityActions{grid-template-columns:repeat(2,minmax(0,1fr));max-width:none}
+  .heroUtilityActions{grid-template-columns:repeat(3,minmax(0,1fr));max-width:none}
   .heroUtilityActions .imageGeneratorLink,.heroUtilityActions .draftLoadButton,.heroUtilityActions .resetAllButton{font-size:13px;padding:9px 6px}
 }
 
@@ -644,3 +644,5 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 .appNavigation{margin-bottom:24px}
 .hero{margin-bottom:16px}
 .heroUtilityActions{margin-top:8px;gap:8px}
+
+.balancedShell>:last-child{margin-bottom:0!important}

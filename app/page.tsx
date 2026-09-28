@@ -24,6 +24,7 @@ import { dataUrlToBlob } from "@/lib/product-db/files";
 import { buildProductDbZip } from "@/lib/product-db/zip";
 import { compressImageDataUrl } from "@/lib/image/compress";
 import { splitDetailPage, type QuickDetailSection } from "@/lib/image-generator/quick-detail";
+import QuickDetailRemake from "./QuickDetailRemake";
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { loadPreparedDetail, loadPreparedPhotos, type PreparedDetail } from "@/lib/image-search/browser-folder";
@@ -89,7 +90,7 @@ const GENDER_WORDS = new Set(["여성", "남성", "남녀공용", "여성용", "
 const FEMALE_RING_SIZES = "9호,11호,14호,17호,20호";
 const MALE_RING_SIZES = "20호,22호,25호";
 const UNISEX_RING_SIZES = "9호,11호,14호,17호,20호,22호,25호";
-const MAX_PHOTOS = 10;
+const MAX_PHOTOS = 20;
 const ACCEPTED = ["image/jpeg", "image/jpg", "image/png"];
 const DEFAULT_DETAIL_HEADER = "/노이드비-상단이미지.jpg";
 const DRAFT_STORAGE_KEY = "noidb-product-draft";
@@ -312,8 +313,8 @@ export default function Home() {
     setDetailShareUrl("");
     setDetailShareError("");
   }, [detailPreview]);
-  const [detailTransforming, setDetailTransforming] = useState(false);
-  const [pageCut, setPageCut] = useState<{ dataUrl: string; top: number; bottom: number; mode: "top" | "bottom" } | null>(null);
+  const [incomingDetailFile, setIncomingDetailFile] = useState<File | null>(null);
+  const [incomingDetailToken, setIncomingDetailToken] = useState(0);
   const [preparedDetail, setPreparedDetail] = useState<PreparedDetail | null>(null);
   const [dragDetailIndex, setDragDetailIndex] = useState<number | null>(null);
 
@@ -361,7 +362,6 @@ export default function Home() {
   const [dbStatus, setDbStatus] = useState("");
   const [dbSavedFiles, setDbSavedFiles] = useState<string[]>([]);
   const [registrationUploadReady, setRegistrationUploadReady] = useState<{ model: string; files: string[] } | null>(null);
-  const existingDetailInputRef = useRef<HTMLInputElement>(null);
   const uploadPoolInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -996,16 +996,6 @@ export default function Home() {
     }
   };
 
-  const uploadExistingDetail = async (file: File | undefined) => {
-    if (!file || !isAccepted(file)) {
-      setDetailMessage("JPG/JPEG/PNG 상세페이지 이미지를 선택해주세요.");
-      return;
-    }
-    setDetailPreview(await readFile(file));
-    setSquareImagesMessage("");
-    setDetailMessage(`완성된 상세페이지를 불러왔습니다: ${file.name}`);
-  };
-
   const prepareApprovedSquareImages = async () => {
     if (!detailPreview || squareImagesBusy) return;
     setSquareImagesBusy(true);
@@ -1028,82 +1018,6 @@ export default function Home() {
       setSquareImagesMessage(`오류: ${error instanceof Error ? error.message : "등록 이미지 생성 실패"}`);
     } finally {
       setSquareImagesBusy(false);
-    }
-  };
-
-  const convertExistingDetail = async (file: File | undefined) => {
-    if (!file || !isAccepted(file)) {
-      setDetailMessage("JPG/JPEG/PNG 상세페이지 이미지를 선택해주세요.");
-      return;
-    }
-    setDetailTransforming(true);
-    try {
-      const source = await readFile(file);
-      setPageCut({ dataUrl: source, top: 0, bottom: 1, mode: "top" });
-      setDetailMessage("아래 미리보기에서 위쪽 자를 위치와 아래쪽 자를 위치를 클릭해 정한 뒤 '이 구간 사용'을 누르세요.");
-    } catch (e) {
-      setDetailMessage(`오류: ${e instanceof Error ? e.message : "기존 상세페이지를 불러오지 못했습니다."}`);
-    } finally {
-      setDetailTransforming(false);
-    }
-  };
-
-  const applyPageCut = async () => {
-    if (!pageCut || pageCut.bottom - pageCut.top < 0.02) {
-      setDetailMessage("사용할 구간이 너무 좁습니다. 위·아래 자를 위치를 다시 정해주세요.");
-      return;
-    }
-    setDetailTransforming(true);
-    try {
-      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const image = new Image();
-        image.onload = () => resolve(image);
-        image.onerror = () => reject(new Error("상세페이지를 불러오지 못했습니다."));
-        image.src = pageCut.dataUrl;
-      });
-      const y = Math.round(img.naturalHeight * pageCut.top);
-      const h = Math.max(1, Math.round(img.naturalHeight * pageCut.bottom) - y);
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
-      ctx.drawImage(img, 0, y, img.naturalWidth, h, 0, 0, img.naturalWidth, h);
-      const sections = await splitDetailPage(canvas.toDataURL("image/jpeg", 0.97), detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER);
-      setDetailImages(sections.map((section, index) => ({
-        id: `${Date.now()}-${index}-${Math.random()}`,
-        name: `기존 상세페이지 컷 ${String(index + 1).padStart(2, "0")}`,
-        dataUrl: section.dataUrl,
-      })));
-      setDetailPreview("");
-      setPageCut(null);
-      setDetailMessage(`선택한 구간에서 ${sections.length}장을 가져왔습니다.`);
-    } catch (e) {
-      setDetailMessage(`오류: ${e instanceof Error ? e.message : "기존 상세페이지 변환 실패"}`);
-    } finally {
-      setDetailTransforming(false);
-    }
-  };
-
-  const openExistingDetailPicker = async () => {
-    try {
-      if (dbHandle && model && product.category) {
-        const modelDir = await ensureProductFolderTree(dbHandle, product.category, model);
-        const picker = (window as any).showOpenFilePicker;
-        if (typeof picker === "function") {
-          const [handle] = await picker({
-            startIn: modelDir,
-            multiple: false,
-            types: [{ description: "상세페이지 이미지", accept: { "image/jpeg": [".jpg", ".jpeg"], "image/png": [".png"] } }],
-          });
-          if (handle) await uploadExistingDetail(await handle.getFile());
-          return;
-        }
-      }
-      existingDetailInputRef.current?.click();
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      setDetailMessage(`오류: ${e instanceof Error ? e.message : "상세페이지 선택 실패"}`);
     }
   };
 
@@ -1469,12 +1383,6 @@ export default function Home() {
     setAdjustResult("");
   };
 
-  const correctedPhotoSource = (slot: SlotImage) => {
-    const sourceName = slot.fileName.replace(/\s+/g, "").toLowerCase();
-    return detailImages.find(image => image.name.startsWith("보정본 ")
-      && image.name.slice(4).replace(/\s+/g, "").toLowerCase() === sourceName)?.dataUrl || slot.dataUrl;
-  };
-
   const previewAdjust = async () => {
     if (!adjustPreview) return;
     try {
@@ -1507,24 +1415,6 @@ export default function Home() {
     ]);
     setDetailPreview("");
     setDetailMessage(`${name}을(를) 상세페이지 목록에 추가했습니다.`);
-  };
-
-  const addEditedDetailPhotos = async (files: FileList | null) => {
-    if (!files?.length) return;
-    try {
-      const accepted = [...files].filter(isAccepted).slice(0, 10);
-      if (!accepted.length) throw new Error("JPG/JPEG/PNG 사진을 선택해주세요.");
-      const added = await Promise.all(accepted.map(async file => ({
-        id: `${Date.now()}-${Math.random()}`,
-        name: `보정본 ${file.name}`,
-        dataUrl: await readFile(file),
-      })));
-      setDetailImages(prev => [...prev, ...added]);
-      setDetailPreview("");
-      setDetailMessage(`보정본 ${added.length}장을 원본 해상도로 추가했습니다. 상세페이지를 다시 만드세요.`);
-    } catch (error) {
-      setDetailMessage(`오류: ${error instanceof Error ? error.message : "보정본 추가 실패"}`);
-    }
   };
 
   const changeDetailBrandImage = async (position: "header" | "footer", file: File | undefined) => {
@@ -2208,7 +2098,6 @@ export default function Home() {
           <h1>AI 상품등록 도우미</h1>
           <div className="heroUtilityActions">
             <Link className="imageGeneratorLink" href={`/wms/product-catalog?status=reregister${reregisterModelName ? `&model=${encodeURIComponent(reregisterModelName)}` : ""}`}>제품사진선택</Link>
-            <Link className="imageGeneratorLink" href="/image-generator">이미지 자동생성</Link>
             <button className="draftLoadButton" type="button" onClick={() => {
               setShowDrafts(value => !value);
               if (!showDrafts) void refreshDrafts();
@@ -2676,11 +2565,10 @@ export default function Home() {
         <div className="sectionTitleRow">
           <h2>6. 상세페이지</h2>
           {preparedDetail && (
-            <button type="button" className="existingDetailUseButton" disabled={detailTransforming} title={`MYBOX 후보: ${preparedDetail.name}`}
-              onClick={() => void convertExistingDetail(preparedDetail.file)}>기존상세페이지 사용</button>
+            <button type="button" className="existingDetailUseButton" title={`MYBOX 후보: ${preparedDetail.name}`}
+              onClick={() => { setIncomingDetailFile(preparedDetail.file); setIncomingDetailToken(token => token + 1); }}>기존상세페이지 사용</button>
           )}
         </div>
-        {reregisterModelName && !preparedDetail && <p className="detailMessage">기존 상세페이지 후보가 없으면 보정본 폴더의 사진을 먼저 선택해 새 상세페이지를 만드세요. 일반 폴더 사진은 보정 상태를 확인한 뒤 사용하세요.</p>}
         <div className="detailBrandImages">
           <div className="detailBrandBlock">
             <strong>상단 로고 이미지</strong>
@@ -2705,74 +2593,23 @@ export default function Home() {
             {detailFooter && <button type="button" className="secondaryButton" onClick={() => { setDetailFooter(null); setDetailPreview(""); }}>하단 이미지 빼기</button>}
           </div>
         </div>
-        <div className="multiUpload existingDetailUpload" onClick={() => void openExistingDetailPicker()}
-          onDragOver={e => e.preventDefault()}
-          onDrop={e => {
-            e.preventDefault();
-            void uploadExistingDetail(e.dataTransfer.files?.[0]);
-          }}>
-          <input ref={existingDetailInputRef} type="file" accept="image/jpeg,image/jpg,image/png" hidden
-            onClick={e => e.stopPropagation()}
-            onChange={e => {
-              void uploadExistingDetail(e.target.files?.[0]);
-              e.target.value = "";
-            }} />
-          <strong>완성된 상세페이지 업로드</strong>
-          <span>이미 상세페이지가 있으면 클릭하거나 드래그앤드롭하세요.</span>
-        </div>
+        <QuickDetailRemake
+          headerUrl={detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER}
+          footerUrl={detailFooter?.dataUrl || ""}
+          modelName={model}
+          incomingFile={incomingDetailFile}
+          incomingToken={incomingDetailToken}
+          onComplete={({ dataUrl }) => {
+            setDetailPreview(dataUrl);
+            setSquareImagesMessage("");
+            setDetailMessage("새 상세페이지를 아래 상세페이지 칸에 넣었습니다.");
+          }}
+          onAddToList={items => {
+            setUploadPool(prev => [...prev, ...items]);
+            setPhotoMessage(`${items.length}장을 5번 쿠팡 등록이미지 목록에 추가했습니다. 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
+          }}
+        />
 
-        <label className="multiUpload existingDetailUpload"
-          onDragOver={event => event.preventDefault()}
-          onDrop={event => {
-            event.preventDefault();
-            if (!detailTransforming) void convertExistingDetail(event.dataTransfer.files?.[0]);
-          }}>
-          <input type="file" accept="image/jpeg,image/jpg,image/png" hidden disabled={detailTransforming}
-            onChange={event => {
-              void convertExistingDetail(event.target.files?.[0]);
-              event.target.value = "";
-            }} />
-          <strong>{detailTransforming ? "기존 상세페이지 정리 중..." : "기존 상세페이지에서 사용할 구간 가져오기"}</strong>
-          <span>위·아래에서 버릴 부분을 직접 정하고, 가운데 부분만 NOID-B 로고로 새 상세페이지를 만듭니다.</span>
-        </label>
-
-        {pageCut && (
-          <div className="pageCutPanel">
-            <div className="detailActions">
-              <button type="button" className={pageCut.mode === "top" ? "green" : "secondaryButton"} onClick={() => setPageCut(c => c && { ...c, mode: "top" })}>위쪽 자를 위치 정하기</button>
-              <button type="button" className={pageCut.mode === "bottom" ? "green" : "secondaryButton"} onClick={() => setPageCut(c => c && { ...c, mode: "bottom" })}>아래쪽 자를 위치 정하기</button>
-              <button type="button" className="purpleButton" disabled={detailTransforming} onClick={() => void applyPageCut()}>이 구간 사용</button>
-              <button type="button" className="secondaryButton" onClick={() => setPageCut(null)}>취소</button>
-            </div>
-            <p className="detailMessage">{pageCut.mode === "top" ? "사용할 부분이 시작되는 위치를 이미지에서 클릭하세요. 그 위쪽은 버려집니다." : "사용할 부분이 끝나는 위치를 이미지에서 클릭하세요. 그 아래쪽은 버려집니다."}</p>
-            <div className="pageCutScroll">
-              <div className="pageCutFrame" onClick={event => {
-                const rect = event.currentTarget.getBoundingClientRect();
-                const ratio = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
-                setPageCut(c => {
-                  if (!c) return c;
-                  return c.mode === "top" ? { ...c, top: Math.min(ratio, c.bottom - 0.01) } : { ...c, bottom: Math.max(ratio, c.top + 0.01) };
-                });
-              }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={pageCut.dataUrl} alt="기존 상세페이지" draggable={false} />
-                <div className="pageCutShade" style={{ top: 0, height: `${pageCut.top * 100}%` }} />
-                <div className="pageCutShade" style={{ top: `${pageCut.bottom * 100}%`, bottom: 0 }} />
-                <div className="pageCutLine" style={{ top: `${pageCut.top * 100}%` }}>위쪽 자름선</div>
-                <div className="pageCutLine" style={{ top: `${pageCut.bottom * 100}%` }}>아래쪽 자름선</div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <label className="multiUpload existingDetailUpload">
-          <input type="file" accept="image/jpeg,image/jpg,image/png" multiple hidden
-            onChange={event => { void addEditedDetailPhotos(event.target.files); event.target.value = ""; }} />
-          <strong>보정본 고해상도 사진 바로 추가</strong>
-          <span>썸네일 크기로 줄이지 않고 상세페이지에 사용합니다. 여러 장을 한 번에 선택할 수 있습니다.</span>
-        </label>
-
-        <p className="detailMessage">제품을 크게 보여줄 컷은 보정 폴더의 고해상도 사진을 사용하세요.</p>
         <div className="detailList">
           {detailImages.map((item, index) => (
             <div

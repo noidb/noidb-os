@@ -203,11 +203,10 @@ export default function WmsNewOrdersPage() {
   }
 
   return (
-    <main className={`shell wms-work-center-shell ${styles.shell}`} style={{ fontFamily: "sans-serif" }}>
-      <header className={styles.heading}>
-        <p className="eyebrow">NOID-B OPERATIONS</p>
+    <main className={`shell wms-work-center-shell balancedShell ${styles.shell}`} style={{ fontFamily: "sans-serif", padding: "24px 24px calc(24px + env(safe-area-inset-bottom))" }}>
+      <header className={styles.heading} style={{ margin: "0 0 16px" }}>
+        <p className="eyebrow" style={{ marginTop: 0 }}>NOID-B OPERATIONS</p>
         <h1>신규 발주서</h1>
-        <p>발주서리스트 파일을 가져온 뒤, 입고예정일과 입고센터가 같은 발주서만 합배송 묶음으로 만듭니다. 조회와 다음 단계 이동은 사용자가 누른 버튼에서만 실행합니다.</p>
       </header>
       {fixtureMode && <p style={{ margin: "0 0 16px", padding: "12px", borderRadius: "10px", background: "#fff4d8", color: "#7a4d00", fontSize: "12px", fontWeight: 800 }}>개발용 테스트 데이터 20건 · 메모리 저장소만 사용하며 실제 API·파일·운영 기록을 변경하지 않습니다.</p>}
 
@@ -357,7 +356,7 @@ export default function WmsNewOrdersPage() {
             })}
           </div>
 
-          <div style={{ position: "sticky", bottom: "0", background: wmsColors.background, paddingTop: "8px", borderTop: `1px solid ${wmsColors.border}` }}>
+          <div style={{ position: "sticky", bottom: "0", background: "#eeece8", paddingTop: "12px", paddingBottom: "0", borderTop: `1px solid ${wmsColors.border}` }}>
             <div style={{ background: wmsColors.surfaceBeige, border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "10px 12px", marginBottom: "8px", fontSize: "12px", lineHeight: 1.7 }}>
               <strong>합배송 묶음 미리보기 · {previewGroups.length}개</strong>
               {previewGroups.length > 0 && (

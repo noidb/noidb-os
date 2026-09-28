@@ -1,3 +1,5 @@
+import { extendToSquareCanvas } from "@/lib/thumbnail/fit";
+
 export type QuickDetailStyle = "clean" | "ivory" | "modern";
 
 export type QuickDetailSection = {
@@ -14,117 +16,9 @@ export type QuickDetailResult = {
   height: number;
 };
 
-type CropRect = { x: number; y: number; size: number };
-
-function findSquareContentCrop(image: HTMLImageElement): CropRect {
-  const sampleSize = Math.min(320, image.naturalWidth, image.naturalHeight);
-  const sample = document.createElement("canvas");
-  const scale = sampleSize / Math.max(image.naturalWidth, image.naturalHeight);
-  sample.width = Math.max(1, Math.round(image.naturalWidth * scale));
-  sample.height = Math.max(1, Math.round(image.naturalHeight * scale));
-  const ctx = sample.getContext("2d", { willReadFrequently: true });
-  if (!ctx) return { x: 0, y: 0, size: Math.min(image.naturalWidth, image.naturalHeight) };
-  ctx.drawImage(image, 0, 0, sample.width, sample.height);
-  const pixels = ctx.getImageData(0, 0, sample.width, sample.height).data;
-  const isContent = (x: number, y: number) => {
-    const offset = (y * sample.width + x) * 4;
-    // JPG 압축 노이즈가 섞인 흰색 테두리도 배경으로 처리합니다.
-    return (255 - pixels[offset]) + (255 - pixels[offset + 1]) + (255 - pixels[offset + 2]) > 34;
-  };
-  const rowRatio = (y: number) => {
-    let count = 0;
-    for (let x = 0; x < sample.width; x += 1) if (isContent(x, y)) count += 1;
-    return count / sample.width;
-  };
-  const columnRatio = (x: number) => {
-    let count = 0;
-    for (let y = 0; y < sample.height; y += 1) if (isContent(x, y)) count += 1;
-    return count / sample.height;
-  };
-  const edgeThreshold = 0.025;
-  let minX = 0;
-  let minY = 0;
-  let maxX = sample.width - 1;
-  let maxY = sample.height - 1;
-  while (minX < maxX && columnRatio(minX) < edgeThreshold) minX += 1;
-  while (maxX > minX && columnRatio(maxX) < edgeThreshold) maxX -= 1;
-  while (minY < maxY && rowRatio(minY) < edgeThreshold) minY += 1;
-  while (maxY > minY && rowRatio(maxY) < edgeThreshold) maxY -= 1;
-  if (maxX < minX || maxY < minY) return { x: 0, y: 0, size: Math.min(image.naturalWidth, image.naturalHeight) };
-  // 흰 프레임은 다시 넣지 않도록 사진 경계 안쪽 1px만 사용합니다.
-  minX = Math.min(maxX, minX + 1);
-  minY = Math.min(maxY, minY + 1);
-  maxX = Math.max(minX, maxX - 1);
-  maxY = Math.max(minY, maxY - 1);
-  const desiredSize = Math.max(maxX - minX + 1, maxY - minY + 1);
-  const centerX = (minX + maxX) / 2;
-  const centerY = (minY + maxY) / 2;
-  const squareSize = Math.min(desiredSize, sample.width, sample.height);
-  const sampleX = Math.max(0, Math.min(sample.width - squareSize, centerX - squareSize / 2));
-  const sampleY = Math.max(0, Math.min(sample.height - squareSize, centerY - squareSize / 2));
-  return {
-    x: Math.round(sampleX / scale),
-    y: Math.round(sampleY / scale),
-    size: Math.min(Math.round(squareSize / scale), image.naturalWidth, image.naturalHeight),
-  };
-}
-
-function drawFullSquare(ctx: CanvasRenderingContext2D, image: HTMLImageElement, size: number, x = 0, y = 0) {
-  const crop = findSquareContentCrop(image);
-  ctx.save();
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  // 확대 비율이 큰 저해상도 사진은 단계별로 키워 계단 현상과 뭉개짐을 줄입니다.
-  let source: CanvasImageSource = image;
-  let sourceX = crop.x;
-  let sourceY = crop.y;
-  let sourceSize = crop.size;
-  if (crop.size < size * 0.9) {
-    const cropped = document.createElement("canvas");
-    cropped.width = crop.size;
-    cropped.height = crop.size;
-    const croppedContext = cropped.getContext("2d");
-    if (croppedContext) {
-      croppedContext.drawImage(image, crop.x, crop.y, crop.size, crop.size, 0, 0, crop.size, crop.size);
-      source = cropped;
-      sourceX = 0;
-      sourceY = 0;
-      while (sourceSize < size) {
-        const nextSize = Math.min(size, sourceSize * 2);
-        const next = document.createElement("canvas");
-        next.width = nextSize;
-        next.height = nextSize;
-        const nextContext = next.getContext("2d");
-        if (!nextContext) break;
-        nextContext.imageSmoothingEnabled = true;
-        nextContext.imageSmoothingQuality = "high";
-        nextContext.drawImage(source, sourceX, sourceY, sourceSize, sourceSize, 0, 0, nextSize, nextSize);
-        source = next;
-        sourceX = 0;
-        sourceY = 0;
-        sourceSize = nextSize;
-      }
-      // 약한 대비·선명도 보정만 적용해 제품 무늬를 새로 만들지 않습니다.
-      ctx.filter = "contrast(1.025) saturate(1.015)";
-    }
-  }
-  const productSize = Math.round(size * 0.8);
-  const inset = Math.round((size - productSize) / 2);
-  ctx.drawImage(source, sourceX, sourceY, sourceSize, sourceSize, x + inset, y + inset, productSize, productSize);
-  ctx.restore();
-}
-
+/** 저장·조합에 쓰는 개별 사진: 여백 없이 꽉 찬 1:1 (사진은 자르거나 늘리지 않고 남는 곳은 가장자리 색으로 채움). */
 export async function resizeSectionTo1000(dataUrl: string) {
-  const image = await loadImage(dataUrl);
-  const canvas = document.createElement("canvas");
-  canvas.width = 1000;
-  canvas.height = 1000;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("개별 이미지를 1000px로 저장하지 못했습니다.");
-  ctx.fillStyle = "#FFFFFF";
-  ctx.fillRect(0, 0, 1000, 1000);
-  drawFullSquare(ctx, image, 1000);
-  return canvas.toDataURL("image/jpeg", 0.93);
+  return extendToSquareCanvas(dataUrl, 1000);
 }
 
 function loadImage(src: string) {
@@ -240,18 +134,19 @@ export async function splitDetailPage(sourceUrl: string, headerUrl: string): Pro
 }
 
 export async function composeQuickDetailPage(headerUrl: string, sections: QuickDetailSection[], footerUrl?: string): Promise<QuickDetailResult> {
-  const loaded = await Promise.all([loadImage(headerUrl), ...sections.map(section => loadImage(section.dataUrl)), ...(footerUrl ? [loadImage(footerUrl)] : [])]);
+  const targetWidth = 780;
+  const squareUrls = await Promise.all(sections.map(section => extendToSquareCanvas(section.dataUrl, targetWidth)));
+  const loaded = await Promise.all([loadImage(headerUrl), ...squareUrls.map(url => loadImage(url)), ...(footerUrl ? [loadImage(footerUrl)] : [])]);
   const header = loaded[0];
   const images = loaded.slice(1, 1 + sections.length);
   const footer = footerUrl ? loaded[loaded.length - 1] : undefined;
-  const targetWidth = 780;
   const imageGap = 90;
   const headerHeight = Math.round(header.naturalHeight * (targetWidth / header.naturalWidth));
   const footerHeight = footer ? Math.round(footer.naturalHeight * (targetWidth / footer.naturalWidth)) : 0;
   const sectionHeight = targetWidth;
   const canvas = document.createElement("canvas");
   canvas.width = targetWidth;
-  // 로고 아래, 사진 사이, 마지막 사진 아래까지 모두 90px 여백을 둡니다.
+  // 로고 아래, 사진 사이, 마지막 사진 아래까지 모두 90px 여백을 둡니다. 사진은 가로 폭을 꽉 채웁니다.
   const gapCount = images.length + 1 + (footer ? 1 : 0);
   canvas.height = headerHeight + images.length * sectionHeight + gapCount * imageGap + footerHeight;
   const ctx = canvas.getContext("2d");
@@ -261,7 +156,7 @@ export async function composeQuickDetailPage(headerUrl: string, sections: QuickD
   ctx.drawImage(header, 0, 0, targetWidth, headerHeight);
   images.forEach((image, index) => {
     const y = headerHeight + imageGap + index * (sectionHeight + imageGap);
-    drawFullSquare(ctx, image, targetWidth, 0, y);
+    ctx.drawImage(image, 0, y, targetWidth, sectionHeight);
   });
   if (footer) {
     const footerY = headerHeight + images.length * sectionHeight + (images.length + 1) * imageGap;

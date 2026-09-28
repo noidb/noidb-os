@@ -93,6 +93,8 @@ function duplicateKey(file: File) {
 }
 
 const MAX_PHOTOS = 400;
+/** 등록 도우미로 한 번에 넘길 수 있는 선택 사진 수(옵션이 많은 상품까지 고려해 20장). */
+export const MAX_SELECTED_PHOTOS = 20;
 /** 다른 모델번호(예: wb011625, mn0009)가 이름에 들어간 폴더 — 맨 뒤로 보낸다. */
 const OTHER_MODEL_FOLDER = /(^|[^a-z0-9])[mw][a-z]\d{3,}/i;
 
@@ -306,7 +308,7 @@ export async function searchPhotoFolder(searchTerms: string[], existing: LocalPh
 /** analysisId 사진을 맨 앞에 둔다 — 등록도우미는 첫 장을 AI 분석용으로, 전체를 업로드 풀로 쓴다. */
 export async function savePreparedPhotos(model: string, photos: LocalPhoto[], analysisId = "") {
   const ordered = [...photos.filter(photo => photo.id === analysisId), ...photos.filter(photo => photo.id !== analysisId)];
-  const result = await Promise.all(ordered.slice(0, 10).map(async photo => ({
+  const result = await Promise.all(ordered.slice(0, MAX_SELECTED_PHOTOS).map(async photo => ({
     id: photo.id, name: photo.name, dataUrl: await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result));

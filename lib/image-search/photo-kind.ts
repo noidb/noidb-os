@@ -1,4 +1,4 @@
-export type PhotoKind = "detail" | "edited" | "editing-original" | "unspecified";
+export type PhotoKind = "detail" | "edited-1000" | "edited" | "editing-original" | "unspecified";
 
 export type PhotoIdentity = {
   kind: PhotoKind;
@@ -42,12 +42,29 @@ export async function identifyPhoto(id: string, file: File): Promise<PhotoIdenti
   const folder = id.split("/").slice(-2, -1)[0] || "";
   const [width, height] = await dimensions(file).catch(() => [0, 0]);
   const detail = /상세|detail/i.test(id) || (width > 0 && height >= 1200 && height / width >= 3);
-  const kind: PhotoKind = detail ? "detail" : normalized.includes("/보정/보정원본/") ? "editing-original" : normalized.includes("/보정/") ? "edited" : "unspecified";
-  const label = kind === "detail" ? "기존 상세페이지 후보" : kind === "edited" ? "보정본 폴더" : kind === "editing-original" ? "보정 전 원본 폴더" : "일반 폴더 · 보정 여부 미확인";
+  // 1000 폴더: 보정원본을 1000×1000으로 편집해 둔 사진. 상세페이지 다음으로 우선한다.
+  const in1000Folder = /(^|\/)1000(x1000|px)?\//.test(normalized);
+  const evoto = normalized.includes("evoto");
+  const kind: PhotoKind = detail ? "detail"
+    : in1000Folder ? "edited-1000"
+    : normalized.includes("/보정/보정원본/") ? "editing-original"
+    : normalized.includes("/보정/") || evoto ? "edited"
+    : "unspecified";
+  const label = kind === "detail" ? "기존 상세페이지 후보"
+    : kind === "edited-1000" ? "1000 폴더 편집본"
+    : kind === "edited" ? "보정본 폴더"
+    : kind === "editing-original" ? "보정 전 원본 폴더"
+    : "일반 폴더 · 보정 여부 미확인";
   const duplicateName = file.name.toLowerCase().replace(/[_ ]?\(\d+\)(?=\.[^.]+$)/i, "");
   return { kind, label, folder, width, height, duplicateName };
 }
 
 export function photoPriority(kind: PhotoKind): number {
-  return kind === "detail" ? 0 : kind === "edited" ? 1 : kind === "unspecified" ? 2 : 3;
+  return kind === "detail" ? 0 : kind === "edited-1000" ? 1 : kind === "edited" ? 2 : kind === "unspecified" ? 3 : 4;
+}
+
+/** 화면 묶음: 바로 보여줄 사진(상세페이지·1000 폴더 편집본) / 보정본 폴더 / 원본 폴더(폴더 바깥 사진 포함). */
+export type PhotoTier = "primary" | "edited" | "original";
+export function photoTier(kind: PhotoKind): PhotoTier {
+  return kind === "detail" || kind === "edited-1000" ? "primary" : kind === "edited" ? "edited" : "original";
 }
