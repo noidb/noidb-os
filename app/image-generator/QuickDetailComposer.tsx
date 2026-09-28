@@ -72,19 +72,7 @@ export default function QuickDetailComposer() {
       setDrafts(items);
       setDraftsReady(true);
     }).catch(() => setDraftsReady(true));
-    const storedCode = window.localStorage.getItem(SYNC_CODE_STORAGE_KEY) || "";
-    if (storedCode) {
-      setSyncCode(storedCode);
-      setSyncCodeInput(storedCode);
-    }
   }, []);
-
-  useEffect(() => {
-    if (!draftsReady || !syncCode) return;
-    void connectCloud(syncCode, false);
-    // 연동번호가 바뀔 때만 클라우드 목록을 다시 읽습니다.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftsReady, syncCode]);
 
   useEffect(() => {
     if (!draftsReady || !originalSections.length) return;
@@ -657,18 +645,9 @@ export default function QuickDetailComposer() {
     </div>
     {originalSections.length > 0 && !result && <div className={styles.preEditReview}><div><h3>편집 전 사진 확인</h3><p>제품컷·착용컷 구분이 틀리면 먼저 바꿔주세요. 불필요한 사진은 삭제하고, AI 비용 없이 그대로 쓸 사진은 `편집 제외`를 누르세요.</p></div><div className={styles.reviewGrid}>{originalSections.map((section, index) => { const original = sectionActions[section.id] === "original"; return <article key={section.id}><img src={section.dataUrl} alt={`선별 사진 ${index + 1}`} /><button type="button" className={styles.kindToggle} onClick={() => toggleSectionKind(section.id)}>{section.kind === "wear" ? "착용컷 → 제품컷으로 변경" : "제품컷 → 착용컷으로 변경"}</button><strong>{index + 1}. {section.kind === "wear" ? "착용컷" : "제품컷"}</strong><small>{section.reason}</small><div><button type="button" className={original ? styles.reviewSelected : ""} onClick={() => toggleSectionEdit(section.id)}>{original ? "원본 사용 중" : "편집 제외"}</button><button type="button" className={styles.reviewDelete} onClick={() => deleteSection(section.id)}>삭제</button></div></article>; })}</div><p className={styles.reviewCost}>최종 사용 {originalSections.length}장 · 예상 AI 편집 <strong>{expectedEdits}회</strong> · 원본 사용 {originalSections.length - expectedEdits}장</p></div>}
     {result && <div className={styles.quickResult}><div><strong>완성 미리보기</strong><span>{result.width}×{result.height}px · 최종 사용 {result.sectionCount}장</span><small>제품 무늬·잠금장치·크기가 원본과 같은지 확대해서 확인해주세요.</small><button className={styles.zipDownload} disabled={busy} onClick={saveZip}>상세페이지 + 개별사진 ZIP 저장</button></div><a href={result.dataUrl} target="_blank" rel="noreferrer"><img src={result.dataUrl} alt="AI로 새롭게 만든 상세페이지" /></a></div>}
-    <section className={styles.cloudSync}>
-      <div>
-        <strong>집·창고 PC 임시저장 연동</strong>
-        <p>{cloudStatus}</p>
-      </div>
-      <label>연동번호<input type="password" value={syncCodeInput} onChange={event => setSyncCodeInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void connectCloud(); }} placeholder="두 PC에 같은 8자리 이상 번호" autoComplete="off" /></label>
-      <button type="button" disabled={cloudBusy || syncCodeInput.trim().length < 8} onClick={() => void connectCloud()}>{cloudBusy ? "연결 중…" : cloudConfigured ? "목록 새로고침" : "연결하기"}</button>
-      {cloudConfigured && drafts.length > 0 && <button type="button" className={styles.cloudUploadAll} disabled={cloudBusy} onClick={() => void uploadAllLocalDrafts()}>이 PC 임시저장 모두 올리기</button>}
-    </section>
     {draftItems.length > 0 && <section className={styles.quickDrafts}>
       <div className={styles.draftToolbar}>
-        <div><h3>임시저장 목록 <span>{draftItems.length}/{MAX_QUICK_DRAFTS}</span></h3><p>현재 PC는 즉시 저장하고, 연결되면 집·창고 공용 목록에도 자동 저장합니다.</p></div>
+        <div><h3>임시저장 목록 <span>{draftItems.length}/{MAX_QUICK_DRAFTS}</span></h3><p>현재 PC에 즉시 저장됩니다.</p></div>
         <div><label><input type="checkbox" checked={selectedDraftIds.length === draftItems.length && draftItems.length > 0} onChange={() => setSelectedDraftIds(selectedDraftIds.length === draftItems.length ? [] : draftItems.map(draft => draft.id))} /> 전체 선택</label><button type="button" disabled={busy || cloudBusy || !selectedDraftIds.length} onClick={saveSelectedDrafts}>선택한 작업 일괄저장</button></div>
       </div>
       <div className={styles.draftGrid}>{draftItems.map(item => {

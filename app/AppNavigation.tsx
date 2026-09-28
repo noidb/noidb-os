@@ -8,9 +8,9 @@ interface AppNavigationProps {
 }
 
 const navigationItems: Array<{ id: AppSection; href: string; label: string }> = [
-  { id: "product-registration", href: "/", label: "AI 상품등록" },
+  { id: "product-registration", href: "/", label: "상품등록" },
   { id: "work-center", href: "/wms/work-center", label: "입고센터" },
-  { id: "coupang-ads", href: "/coupang-ads", label: "쿠팡 광고 분석" },
+  { id: "coupang-ads", href: "/coupang-ads", label: "광고분석" },
 ];
 
 export default function AppNavigation({ active }: AppNavigationProps) {

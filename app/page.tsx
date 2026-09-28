@@ -65,7 +65,6 @@ type ProductPhoto = { id: string; name: string; dataUrl: string };
 type SlotImage = { dataUrl: string; fileName: string; source?: string; crop?: SquareCrop; locked?: boolean };
 type VariantOption = SkuRow & { key: string; label: string };
 type DetailImage = { id: string; name: string; dataUrl: string; zoom?: number; focusX?: number; focusY?: number; frameHeight?: number };
-type GeneratedImageCandidate = { model: string; category: string; kind: "product" | "wear"; dataUrl: string; fileName: string };
 type CustomSlot = { id: string; type: "all" | "detail" | "wear"; slot: SlotImage | null };
 type QuoteQueueRecord = { model: string; gender: string; category: string; skuCount: number; savedAt: number | string; payload: any };
 type PendingReplacementCleanup = { model: string; legacySku: string; oldRows: number; matchedOptions: number };
@@ -303,7 +302,6 @@ export default function Home() {
   const [detailHeader, setDetailHeader] = useState<SlotImage | null>(null);
   const [detailFooter, setDetailFooter] = useState<SlotImage | null>(null);
   const [detailPreview, setDetailPreview] = useState("");
-  const [approvedSquareImages, setApprovedSquareImages] = useState<SlotImage[]>([]);
   const [squareImagesBusy, setSquareImagesBusy] = useState(false);
   const [squareImagesMessage, setSquareImagesMessage] = useState("");
   const [detailMessage, setDetailMessage] = useState("");
@@ -327,12 +325,6 @@ export default function Home() {
   const [sourcingImages, setSourcingImages] = useState<ProductPhoto[]>([]);
   const [sourcingSaveStatus, setSourcingSaveStatus] = useState("");
   const [uploadPool, setUploadPool] = useState<SlotImage[]>([]);
-  const [aiImageSource, setAiImageSource] = useState("");
-  const [aiImageKind, setAiImageKind] = useState<"product" | "wear">("product");
-  const [aiImageBusy, setAiImageBusy] = useState(false);
-  const [aiImageCandidate, setAiImageCandidate] = useState<GeneratedImageCandidate | null>(null);
-  const [aiImageTarget, setAiImageTarget] = useState("detail");
-  const [aiImageMessage, setAiImageMessage] = useState("");
 
   const [exportLoading, setExportLoading] = useState("");
   const [exportMessage, setExportMessage] = useState("");
@@ -354,12 +346,13 @@ export default function Home() {
   const draftRefreshRef = useRef(0);
   const restoringDraftRef = useRef(false);
   const [draftRestoreRevision, setDraftRestoreRevision] = useState(0);
-  const restoreApprovedSquareImagesRef = useRef(false);
   const [modelDuplicate, setModelDuplicate] = useState(false);
   const [modelCheckMessage, setModelCheckMessage] = useState("");
   const [modelReregisterable, setModelReregisterable] = useState(false);
   const [pendingReplacementCleanup, setPendingReplacementCleanup] = useState<PendingReplacementCleanup | null>(null);
   const [reregistrationMessage, setReregistrationMessage] = useState("");
+  const [titleBackup, setTitleBackup] = useState("");
+  const [tagsBackup, setTagsBackup] = useState("");
   const [reregisterModelName, setReregisterModelName] = useState("");
 
   const [dbSupported, setDbSupported] = useState(false);
@@ -482,7 +475,6 @@ export default function Home() {
           warehouse: String(first.warehouseNumber || ""),
           keyword: "", searchTags: "", replacementSku: "",
         });
-        setReregistrationMessage(`재등록 준비: ${requestedModel} · 후보 ${group.length}행. 기존 모델SKU: ${group.map((item: any) => item.modelSku || "미확인").join(" · ")}. 색상·사이즈·소재·가격을 확인해주세요. 기존 DB는 변경하지 않았습니다.`);
         const existingDetail = await loadPreparedDetail(requestedModel).catch(() => null);
         if (active) setPreparedDetail(existingDetail);
         const selectedPhotos = await loadPreparedPhotos(requestedModel).catch(() => []);
@@ -1010,29 +1002,8 @@ export default function Home() {
       return;
     }
     setDetailPreview(await readFile(file));
-    setApprovedSquareImages([]);
     setSquareImagesMessage("");
     setDetailMessage(`완성된 상세페이지를 불러왔습니다: ${file.name}`);
-  };
-
-  const chooseApprovedThumbnail = (images: SlotImage[], selectedIndex: number) => {
-    const variant = variants[0];
-    if (!variant) throw new Error("상품 옵션을 먼저 확인해주세요.");
-    const selected = images[selectedIndex];
-    if (!selected) throw new Error("대표이미지를 선택해주세요.");
-    const extras = images.filter((_, index) => index !== selectedIndex);
-    variantUploadRevision.current[variant.key] = (variantUploadRevision.current[variant.key] || 0) + 1;
-    setVariantThumbs(previous => ({ ...previous, [variant.key]: selected }));
-    setAllOptions(extras[0] || null);
-    setDetailCut(extras[1] || null);
-    setWear01(extras[2] || null);
-    setWear02(extras[3] || null);
-    setCustomSlots(extras.slice(4).map((slot, index) => ({
-      id: `approved-square-${index + 5}`,
-      type: "detail" as const,
-      slot,
-    })));
-    setSquareImagesMessage(`${images.length}장을 등록 이미지에 넣었습니다. 대표이미지: ${selected.fileName}`);
   };
 
   const prepareApprovedSquareImages = async () => {
@@ -1040,10 +1011,8 @@ export default function Home() {
     setSquareImagesBusy(true);
     setSquareImagesMessage("확정된 상세페이지에서 사진을 분리하고 있습니다...");
     try {
-      if (variants.length !== 1) throw new Error("이 기능은 단일 옵션 상품에서 먼저 사용할 수 있습니다. 여러 옵션은 각각 다른 썸네일을 지정해주세요.");
       if (!model) throw new Error("모델명을 먼저 확인해주세요.");
       const sections = await splitDetailPage(detailPreview, detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER);
-      if (sections.length > 10) throw new Error(`사진 ${sections.length}장은 추가이미지 최대 9장에 모두 담을 수 없습니다. 상세페이지 사진을 10장 이하로 정리해주세요.`);
       const images: SlotImage[] = [];
       for (let index = 0; index < sections.length; index += 1) {
         setSquareImagesMessage(`${sections.length}장 중 ${index + 1}장을 1000×1000으로 만드는 중...`);
@@ -1053,20 +1022,14 @@ export default function Home() {
           fileName: `${model}-detail-square-${String(index + 1).padStart(2, "0")}.jpg`,
         });
       }
-      setApprovedSquareImages(images);
-      chooseApprovedThumbnail(images, Math.max(0, images.length - 3));
+      setUploadPool(prev => [...prev.filter(item => !item.fileName.startsWith(`${model}-detail-square-`)), ...images]);
+      setSquareImagesMessage(`${images.length}장을 5번 이미지 풀에 넣었습니다. 쓸 사진을 대표·추가이미지 칸으로 끌어 넣으세요.`);
     } catch (error) {
       setSquareImagesMessage(`오류: ${error instanceof Error ? error.message : "등록 이미지 생성 실패"}`);
     } finally {
       setSquareImagesBusy(false);
     }
   };
-
-  useEffect(() => {
-    if (!restoreApprovedSquareImagesRef.current || !detailPreview || squareImagesBusy) return;
-    restoreApprovedSquareImagesRef.current = false;
-    void prepareApprovedSquareImages();
-  }, [draftRestoreRevision, detailPreview, squareImagesBusy]);
 
   const convertExistingDetail = async (file: File | undefined) => {
     if (!file || !isAccepted(file)) {
@@ -1190,11 +1153,7 @@ export default function Home() {
     setWear02(null);
     setCustomSlots([]);
     setUploadPool([]);
-    setApprovedSquareImages([]);
     setSquareImagesMessage("");
-    setAiImageSource("");
-    setAiImageCandidate(null);
-    setAiImageMessage("");
     setAdjustKey("");
     setAdjustPreview("");
     setDetailPreview("");
@@ -1204,6 +1163,8 @@ export default function Home() {
   const resetAll = () => {
     if (!window.confirm("기본값을 제외한 입력값과 업로드 이미지를 모두 초기화할까요?")) return;
     setProduct({ ...DEFAULT_PRODUCT });
+    setTitleBackup("");
+    setTagsBackup("");
     sizesUserEditedRef.current = false;
     setPhotos([]);
     setPhotoMessage("");
@@ -1435,90 +1396,6 @@ export default function Home() {
     else if (key.startsWith("custom:")) {
       setCustomSlots(prev => prev.map(item => item.id === key.slice(7) ? { ...item, slot: value } : item));
     }
-  };
-
-  const selectedAiImageSource = aiImageSource.startsWith("photo:")
-    ? photos[Number(aiImageSource.slice(6))]
-    : aiImageSource.startsWith("pool:")
-      ? uploadPool[Number(aiImageSource.slice(5))]
-      : aiImageSource.startsWith("detail:")
-        ? detailImages[Number(aiImageSource.slice(7))]
-        : aiImageSource.startsWith("slot:")
-          ? getSlotValue(aiImageSource.slice(5))
-          : null;
-
-  const applySelectedPhotoToSlot = () => {
-    const source = selectedAiImageSource;
-    if (!source?.dataUrl) return setAiImageMessage("등록칸에 사용할 사진을 먼저 선택해주세요.");
-    const sourceDetail = aiImageSource.startsWith("detail:") ? detailImages[Number(aiImageSource.slice(7))] : null;
-    const sourceName = "fileName" in source ? source.fileName : source.name;
-    setSlotValue(aiImageTarget, { dataUrl: source.dataUrl, fileName: sourceName });
-    if (sourceDetail && !sourceDetail.id.startsWith("slot:")) {
-      const slotId = aiImageTarget.startsWith("opt:") ? `slot:variant:${aiImageTarget.slice(4)}` : `slot:${aiImageTarget}`;
-      const slotName = aiImageTarget === "mainWear" ? "메인착용컷"
-        : aiImageTarget === "all" ? "전체옵션"
-          : aiImageTarget === "detail" ? "디테일컷"
-            : aiImageTarget === "wear01" ? "착용컷 01"
-              : aiImageTarget === "wear02" ? "착용컷 02" : sourceDetail.name;
-      setDetailImages(prev => prev.filter(image => image.id !== slotId).map(image => image.id === sourceDetail.id
-        ? { ...image, id: slotId, name: slotName } : image));
-    }
-    setAiImageSource("");
-    setAiImageCandidate(null);
-    setAiImageMessage(sourceDetail && !sourceDetail.id.startsWith("slot:")
-      ? "선택한 원본 컷을 등록칸으로 옮겼습니다. 상세페이지에는 한 번만 남습니다."
-      : "선택한 원본 사진을 등록칸에 넣었습니다. 기존 상세페이지 구성은 유지됩니다.");
-  };
-
-  const generateRegistrationImage = async () => {
-    if (!model) return setAiImageMessage("모델명을 먼저 확인해주세요.");
-    const source = selectedAiImageSource;
-    if (!source?.dataUrl) return setAiImageMessage("생성에 사용할 제품 사진을 선택해주세요.");
-    const sourceModel = model;
-    const sourceCategory = product.category;
-    setAiImageBusy(true);
-    setAiImageCandidate(null);
-    setAiImageMessage("선택한 사진을 바탕으로 이미지를 만들고 있습니다...");
-    try {
-      const reference = await compressImageDataUrl(source.dataUrl, 1600, 0.88);
-      const response = await fetch("/api/image-generator/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kind: "quick-detail",
-          sectionKind: aiImageKind,
-          style: "clean",
-          references: [{ role: aiImageKind === "wear" ? "wear-reference" : "front", dataUrl: reference }],
-        }),
-      });
-      const data = await response.json() as { imageDataUrl?: string; error?: string };
-      if (!response.ok || !data.imageDataUrl) throw new Error(data.error || "이미지를 만들지 못했습니다.");
-      const candidate: GeneratedImageCandidate = {
-        model: sourceModel,
-        category: sourceCategory,
-        kind: aiImageKind,
-        dataUrl: data.imageDataUrl,
-        fileName: `${sourceModel}-AI-${aiImageKind === "wear" ? "WEAR" : "PRODUCT"}.jpg`,
-      };
-      setAiImageCandidate(candidate);
-      setAiImageTarget(aiImageKind === "wear" ? "wear01" : "detail");
-      setAiImageMessage("생성 완료. 제품 형태·색상·착용 위치와 글자 유무를 확인한 뒤 사용할 곳을 선택해주세요.");
-    } catch (error) {
-      setAiImageMessage(`오류: ${error instanceof Error ? error.message : "이미지 생성 실패"}`);
-    } finally {
-      setAiImageBusy(false);
-    }
-  };
-
-  const usableGeneratedImage = aiImageCandidate?.model === model && aiImageCandidate.category === product.category
-    ? aiImageCandidate : null;
-
-  const applyGeneratedImageToSlot = () => {
-    if (!usableGeneratedImage) return setAiImageMessage("현재 상품에서 생성한 이미지를 다시 선택해주세요.");
-    setSlotValue(aiImageTarget, { dataUrl: usableGeneratedImage.dataUrl, fileName: usableGeneratedImage.fileName });
-    setAiImageMessage(reregisterModelName && detailImages.some(image => !image.id.startsWith("slot:"))
-      ? "선택한 등록칸에 넣었습니다. 기존 상세페이지 구성은 유지됩니다. 필요하면 아래 버튼으로 상세페이지에 추가하세요."
-      : "선택한 등록 이미지 칸에 넣었습니다. 상세페이지 목록에도 자동 반영됩니다.");
   };
 
   const swapSlots = (sourceKey: string, targetKey: string) => {
@@ -1842,7 +1719,7 @@ export default function Home() {
         savedAt: Date.now(),
         data: {
           product, analysis, photos, mainWear, allOptions, optionThumbs, variantThumbs, detailCut, wear01, wear02, customSlots,
-          detailImages, detailHeader, detailFooter, detailPreview, approvedSquareImages, sourcingUrls, sourcingUrlInputs, sourcingImages,
+          detailImages, detailHeader, detailFooter, detailPreview, sourcingUrls, sourcingUrlInputs, sourcingImages,
           uploadPool, title, tags, sourcingAnalysis,
           labelManufactureYearMonth, labelManufacturerName, labelImporterName,
         },
@@ -1916,17 +1793,11 @@ export default function Home() {
     setDetailHeader(data.detailHeader || null);
     setDetailFooter(data.detailFooter || null);
     setDetailPreview(data.detailPreview || "");
-    const savedApprovedSquareImages = Array.isArray(data.approvedSquareImages) ? data.approvedSquareImages : [];
-    setApprovedSquareImages(savedApprovedSquareImages);
-    restoreApprovedSquareImagesRef.current = savedApprovedSquareImages.length === 0 && Boolean(data.detailPreview);
     setSquareImagesMessage("");
     setSourcingUrls(Array.isArray(data.sourcingUrls) ? data.sourcingUrls : ["", "", ""]);
     setSourcingUrlInputs(Array.isArray(data.sourcingUrlInputs) ? data.sourcingUrlInputs : ["", "", ""]);
     setSourcingImages(Array.isArray(data.sourcingImages) ? data.sourcingImages : []);
     setUploadPool(Array.isArray(data.uploadPool) ? data.uploadPool : []);
-    setAiImageSource("");
-    setAiImageCandidate(null);
-    setAiImageMessage("");
     setShowDrafts(false);
     setDraftStatus(data.cloudOnly
       ? `${record.model} 기본정보를 불러왔습니다. 다른 기기의 이미지는 다시 올려주세요.`
@@ -2404,8 +2275,8 @@ export default function Home() {
                 e.target.value = "";
               }}
             />
-            <strong>클릭 또는 드래그앤드롭 (최대 {MAX_PHOTOS}장)</strong>
-            <span>분석용은 첫 장입니다. 선택한 모든 사진은 아래 쿠팡 등록이미지에서 필요한 슬롯에 직접 배치해주세요.</span>
+            <strong>클릭 또는 드래그앤드롭</strong>
+            <span>제품이 가장 잘 나온 사진으로 분석합니다</span>
           </label>
         </div>
         {photoMessage && <p className="detailMessage">{photoMessage}</p>}
@@ -2431,9 +2302,8 @@ export default function Home() {
             </div>
           ))}
         </div>
-        {reregisterModelName && <p className="message">재등록은 기존 제품DB 정보(치수·사이즈·원가·판매가 등)를 그대로 가져왔으니 AI 사진분석 없이 바로 저장해도 됩니다. 최근 바뀐 값만 확인해서 고쳐주세요. (검색어가 필요하면 아래 버튼을 눌러도 됩니다 — 가져온 값은 덮어쓰지 않습니다.)</p>}
         <button className="aiButton" type="button" disabled={loading} onClick={analyzeImage}>
-          {loading ? "분석 중..." : "AI 사진분석 (첫 번째 사진)"}
+          {loading ? "분석 중..." : "AI 사진분석"}
         </button>
         {message && <p className={message.startsWith("오류") ? "error" : "message"}>{message}</p>}
       </section>
@@ -2518,12 +2388,20 @@ export default function Home() {
           <Field label="쿠팡 상품명">
             <input value={product.coupangTitle || generatedTitle} onChange={e => update("coupangTitle", e.target.value)} />
             <small>직접 수정할 수 있습니다. 자동 상품명으로 되돌리려면 아래 버튼을 누르세요.</small>
-            <button className="secondaryButton compactFieldButton" type="button" onClick={() => update("coupangTitle", "")}>자동 상품명 사용</button>
+            <button className="existingDetailUseButton compactFieldButton" type="button" disabled={!product.coupangTitle && !titleBackup}
+              onClick={() => {
+                if (product.coupangTitle) { setTitleBackup(product.coupangTitle); update("coupangTitle", ""); }
+                else { update("coupangTitle", titleBackup); setTitleBackup(""); }
+              }}>{product.coupangTitle ? "자동 상품명 사용" : titleBackup ? "직접 입력값 복구" : "자동 상품명 사용 중"}</button>
           </Field>
           <Field label="검색태그">
             <input value={product.searchTags || generatedTags} onChange={e => update("searchTags", e.target.value)} />
             <small>쉼표로 구분해 직접 수정할 수 있습니다.</small>
-            <button className="secondaryButton compactFieldButton" type="button" onClick={() => update("searchTags", "")}>자동 검색태그 사용</button>
+            <button className="existingDetailUseButton compactFieldButton" type="button" disabled={!product.searchTags && !tagsBackup}
+              onClick={() => {
+                if (product.searchTags) { setTagsBackup(product.searchTags); update("searchTags", ""); }
+                else { update("searchTags", tagsBackup); setTagsBackup(""); }
+              }}>{product.searchTags ? "자동 검색태그 사용" : tagsBackup ? "직접 입력값 복구" : "자동 검색태그 사용 중"}</button>
           </Field>
           <Field label="원가 (부가세 미포함)">
             <input inputMode="numeric" value={product.cost} onChange={e => update("cost", e.target.value)} />
@@ -2672,70 +2550,6 @@ export default function Home() {
             ))}
           </div>
         )}
-
-        <div className="inlineImageGenerator">
-          <h3>AI 이미지 자동생성</h3>
-          <p className="note">현재 상품 사진을 등록칸에 그대로 넣거나 AI로 제품컷·착용컷을 만듭니다. 생성에는 이미지 AI 비용이 들며, 생성만으로 원본과 기존 등록 사진은 바뀌지 않습니다.</p>
-          <div className="inlineImageGeneratorControls">
-            <label>참고 사진
-              <select value={aiImageSource} disabled={aiImageBusy} onChange={event => { setAiImageSource(event.target.value); setAiImageCandidate(null); }}>
-                <option value="">사진 선택</option>
-                {photos.map((photo, index) => <option key={photo.id} value={`photo:${index}`}>제품사진 {index + 1} · {photo.name}</option>)}
-                {uploadPool.map((slot, index) => <option key={`pool:${index}`} value={`pool:${index}`}>이미지 풀 {index + 1} · {slot.fileName}</option>)}
-                {detailImages.map((image, index) => <option key={image.id} value={`detail:${index}`}>상세페이지 컷 {index + 1} · {image.name}</option>)}
-                {([
-                  ["mainWear", "메인착용컷"], ["all", "전체옵션"], ["detail", "디테일컷"],
-                  ["wear01", "착용컷 01"], ["wear02", "착용컷 02"],
-                  ...variants.map(variant => [`opt:${variant.key}`, `${variant.label} 썸네일`]),
-                ] as string[][]).map(([key, label]) => {
-                  const slot = getSlotValue(key);
-                  return slot?.dataUrl ? <option key={key} value={`slot:${key}`}>등록칸 · {label}</option> : null;
-                })}
-              </select>
-            </label>
-            <label>만들 이미지
-              <select value={aiImageKind} disabled={aiImageBusy} onChange={event => {
-                const kind = event.target.value as "product" | "wear";
-                setAiImageKind(kind);
-                setAiImageTarget(kind === "wear" ? "wear01" : "detail");
-                setAiImageCandidate(null);
-              }}>
-                <option value="product">제품컷 · 흰색 스튜디오</option>
-                <option value="wear">착용컷 · 기존 착용 사진 보정</option>
-              </select>
-            </label>
-            <label>사용할 등록 이미지 칸
-              <select value={aiImageTarget} onChange={event => setAiImageTarget(event.target.value)}>
-                <option value="detail">디테일컷</option>
-                <option value="mainWear">메인착용컷</option>
-                <option value="all">전체옵션 이미지</option>
-                <option value="wear01">착용컷 01</option>
-                <option value="wear02">착용컷 02</option>
-                {variants.map(variant => <option key={variant.key} value={`opt:${variant.key}`}>{variant.label} 썸네일</option>)}
-              </select>
-            </label>
-            <button type="button" disabled={aiImageBusy || !selectedAiImageSource} onClick={applySelectedPhotoToSlot}>선택 원본 그대로 사용</button>
-            <button type="button" className="purpleButton" disabled={aiImageBusy || !aiImageSource || !model} onClick={() => void generateRegistrationImage()}>
-              {aiImageBusy ? "이미지 생성 중..." : "선택 사진으로 생성"}
-            </button>
-          </div>
-          {aiImageMessage && <p role="status" className="detailMessage">{aiImageMessage}</p>}
-          {usableGeneratedImage && <div className="inlineImageGeneratorResult">
-            <button type="button" className="inlineImageGeneratorPreview" onClick={() => setLightbox(usableGeneratedImage.dataUrl)}>
-              <img src={usableGeneratedImage.dataUrl} alt="AI 생성 결과 확대" />
-              <span>눌러서 확대 확인</span>
-            </button>
-            <div>
-              <strong>생성 결과 · {usableGeneratedImage.fileName}</strong>
-              <p className="note">제품 형태·색상·크기가 원본과 같은지 확인하세요. 재등록 상세페이지를 이미 정리했다면 등록칸 적용 후에도 그 구성은 유지됩니다. 고해상도 보정본이 있으면 그 사진을 우선 사용하세요.</p>
-              <div className="detailActions">
-                <button type="button" onClick={applyGeneratedImageToSlot}>선택한 등록 칸에 사용</button>
-                <button type="button" onClick={() => pushDetail("AI 생성 이미지", usableGeneratedImage.dataUrl)}>상세페이지에 추가</button>
-                <button type="button" onClick={() => { setUploadPool(prev => [...prev, { dataUrl: usableGeneratedImage.dataUrl, fileName: usableGeneratedImage.fileName }]); setAiImageMessage("생성 결과를 이미지 풀에 추가했습니다."); }}>이미지 풀에 추가</button>
-              </div>
-            </div>
-          </div>}
-        </div>
 
         <div className="slotAddButtons">
           <button type="button" onClick={() => addCustomSlot("all")}>+ 전체옵션 이미지</button>
@@ -3003,26 +2817,15 @@ export default function Home() {
         {detailMessage && <p className="detailMessage">{detailMessage}</p>}
         {detailPreview && (
           <div className="detailResult">
-            <div className="approvedSquarePanel">
-              <button type="button" className="purpleButton" disabled={squareImagesBusy} onClick={() => void prepareApprovedSquareImages()}>
-                {squareImagesBusy ? "1000×1000 등록 이미지 만드는 중..." : "확정 상세페이지 사진으로 등록 이미지 한 번에 만들기"}
+            <div className="detailResultActions">
+              <button type="button" className="existingDetailUseButton" disabled={squareImagesBusy} onClick={() => void prepareApprovedSquareImages()}>
+                {squareImagesBusy ? "만드는 중..." : "상세페이지 사진사용"}
               </button>
-              <p className="detailMessage">상단 로고를 제외한 사진을 1000×1000으로 만들고, 대표·추가이미지 칸에 넣습니다. 아래에서 대표이미지만 선택하세요.</p>
-              {squareImagesMessage && <p className="detailMessage">{squareImagesMessage}</p>}
-              {!!approvedSquareImages.length && <div className="approvedSquareGrid">
-                {approvedSquareImages.map((image, index) => {
-                  const selected = variants[0] && activeVariantThumbs[variants[0].key]?.dataUrl === image.dataUrl;
-                  return <button key={image.fileName} type="button" className={`approvedSquareChoice${selected ? " selected" : ""}`}
-                    onClick={() => chooseApprovedThumbnail(approvedSquareImages, index)}>
-                    <img src={image.dataUrl} alt={`등록 이미지 ${index + 1}`} />
-                    <span>{selected ? "대표이미지 ✓" : `사진 ${index + 1} · 대표로 선택`}</span>
-                  </button>;
-                })}
-              </div>}
+              <button type="button" className="pillButtonBeige" disabled={detailShareLoading} onClick={() => void shareDetailPreview()}>
+                {detailShareLoading ? "링크 만드는 중..." : "모바일 링크 만들기"}
+              </button>
             </div>
-            <button type="button" className="secondaryButton" disabled={detailShareLoading} onClick={() => void shareDetailPreview()}>
-              {detailShareLoading ? "모바일 링크 만드는 중..." : "모바일에서 볼 링크 만들기"}
-            </button>
+            {squareImagesMessage && <p className="detailMessage">{squareImagesMessage}</p>}
             {detailShareUrl && <p className="detailMessage"><a href={detailShareUrl} target="_blank" rel="noopener noreferrer">{detailShareUrl}</a></p>}
             {detailShareError && <p className="error">{detailShareError}</p>}
             <div className="detailPreviewFrame">

@@ -662,6 +662,11 @@ export default function ProductCatalogPage() {
     } finally { setPreparing(""); }
   }
 
+  const pillStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", minHeight: 30, padding: "0 12px", borderRadius: 8, border: "1px solid #b9cbbc", background: "#e3ede6", color: "#3f574b", fontWeight: 800, fontSize: 12, textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" };
+  const primaryPillStyle: React.CSSProperties = { ...pillStyle, background: "#60766a", borderColor: "#60766a", color: "#fff" };
+  const neutralPillStyle: React.CSSProperties = { ...pillStyle, background: "#f4f1ec", borderColor: "#d8d3cc", color: "#4b4744" };
+  const dangerPillStyle: React.CSSProperties = { ...pillStyle, background: "#f6e3de", borderColor: "#dfbdb2", color: "#7f4032" };
+
   return (
     <main style={{ maxWidth: 1180, margin: "0 auto", padding: "20px 16px 48px", fontFamily: "sans-serif" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "start", marginBottom: 18 }}>
@@ -669,7 +674,7 @@ export default function ProductCatalogPage() {
           <p style={{ margin: 0, color: wmsColors.muted, fontSize: 12, fontWeight: 700 }}>상품등록 · 연결 대장</p>
           <h1 style={{ margin: "4px 0 6px", color: wmsColors.ink, fontSize: 26 }}>모델·옵션·SKU·사진 연결</h1>
         </div>
-        <Link href="/" style={{ display: "inline-flex", alignItems: "center", padding: "9px 18px", borderRadius: 999, border: "1px solid #b9cbbc", background: "#e3ede6", color: "#3f574b", fontWeight: 800, fontSize: 13, textDecoration: "none", whiteSpace: "nowrap" }}>AI상품등록</Link>
+        <Link href="/" style={{ display: "inline-flex", alignItems: "center", padding: "7px 14px", borderRadius: 8, border: "1px solid #b9cbbc", background: "#e3ede6", color: "#3f574b", fontWeight: 800, fontSize: 12, textDecoration: "none", whiteSpace: "nowrap" }}>AI상품등록</Link>
       </div>
 
       <div style={{ marginBottom: 14 }}>
@@ -728,11 +733,12 @@ export default function ProductCatalogPage() {
             {!manualExclusions && <p style={{ fontSize: 12 }}>재등록 제외 목록을 확인하는 중입니다. 확인 전에는 등록 준비를 할 수 없습니다.</p>}
             {manualExclusions && Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).length > 0 && <div style={{ margin: "10px 0", padding: 10, border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff" }}>
               <strong style={{ fontSize: 12 }}>재등록 제외 모델</strong>
-              {Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).map(entry => <div key={clean(entry.modelName)} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 7, fontSize: 12 }}><b>{entry.modelName}</b><span>사유: {entry.reason}</span><button type="button" onClick={() => void changeExclusion(entry.modelName, null)} disabled={Boolean(savingExclusion)} style={{ cursor: "pointer" }}>제외 해제</button></div>)}
+              {Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).map(entry => <div key={clean(entry.modelName)} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 7, fontSize: 12 }}><b>{entry.modelName}</b><span>사유: {entry.reason}</span><button type="button" onClick={() => void changeExclusion(entry.modelName, null)} disabled={Boolean(savingExclusion)} style={neutralPillStyle}>제외 해제</button></div>)}
             </div>}
             <div style={{ display: "grid", gap: 8 }}>
               {reregistrationGroups.map(group => {
                 const first = group.items[0];
+                const groupLink = group.items.map(item => externalUrl(item.productLink)).find(Boolean) || "";
                 const photos = photoStates[group.modelName];
                 const detailHits = photos?.hits.filter(hit => hit.identity.kind === "detail" && !photos.hiddenIds?.includes(hit.id)) || [];
                 const groupKeyOf = (hit: PhotoHit) => photos?.visualGroups?.[hit.id] || `name:${hit.identity.duplicateName}`;
@@ -748,10 +754,29 @@ export default function ProductCatalogPage() {
                 });
                 return <article key={group.key} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 10 }}>
                   <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", gap: 10 }}>
-                    <div><div style={{ color: wmsColors.ink, fontWeight: 800 }}>{group.modelName}</div><div style={{ color: wmsColors.ink, fontSize: 12, marginTop: 3 }}>{group.productName}</div><div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 4 }}>{group.items.length}개 후보 행</div><div style={{ display: "grid", gap: 3, marginTop: 6, fontSize: 11 }}>{group.items.map((item, itemIndex) => { const itemLink = externalUrl(item.productLink); return <div key={`${item.skuId}|${item.modelSku}|${item.optionLabel}|${itemIndex}`} style={{ color: wmsColors.muted }}>모델SKU <b>{item.modelSku || "미확인"}</b> · 기존 SKU ID <b>{item.skuId || "미확인"}</b> · 바코드 <b>{item.barcode || "미확인"}</b> · 옵션 <b>{item.optionLabel || "미확인"}</b> · 누적입고 <b>{item.cumulativeInbound ? `${(Number(item.cumulativeInbound) || 0).toLocaleString()}개` : "미확인"}</b> · 발주가능상태 <b>{item.orderableStatus || "미확인"}</b>{itemLink ? <> · <a href={itemLink} target="_blank" rel="noreferrer" style={{ color: wmsColors.slate }}>제품페이지 열기 ↗</a></> : " · 제품주소 미등록"}</div>; })}</div></div>
-                     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}><Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={{ fontSize: 12, color: wmsColors.slate, fontWeight: 700 }}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName || photos?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: photos?.loading ? "wait" : "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "사진 검색 중…" : "이 모델 사진 검색"}</button><select aria-label={`${group.modelName} 제외 사유`} value={exclusionReasons[group.key] || "가품 위험"} onChange={event => setExclusionReasons(current => ({ ...current, [group.key]: event.target.value }))}><option>가품 위험</option><option>상표·디자인 위험</option><option>재등록 불필요</option><option>기타</option></select><button type="button" onClick={() => void changeExclusion(group.modelName, exclusionReasons[group.key] || "가품 위험")} disabled={Boolean(savingExclusion)} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.warnText }}>재등록 제외</button>{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.warnText }}>사진 검색 초기화</button>}</div>
+                    <div>
+                      {groupLink
+                        ? <a href={groupLink} target="_blank" rel="noreferrer" title="제품링크 열기" style={{ color: wmsColors.ink, fontWeight: 800, textDecoration: "underline", textUnderlineOffset: 3, cursor: "pointer" }}>{group.modelName}</a>
+                        : <div style={{ color: wmsColors.ink, fontWeight: 800 }}>{group.modelName}</div>}
+                      <div style={{ color: wmsColors.ink, fontSize: 12, marginTop: 3 }}>{group.productName}</div>
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}><Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={primaryPillStyle}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName || photos?.loading} style={{ ...pillStyle, cursor: photos?.loading ? "wait" : "pointer" }}>{photos?.loading ? "사진 검색 중…" : "사진검색"}</button>{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={neutralPillStyle}>사진 검색 초기화</button>}</div>
+                      <div style={{ display: "inline-flex", alignItems: "stretch", border: "1px solid #dfbdb2", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
+                        <select aria-label={`${group.modelName} 제외 사유`} value={exclusionReasons[group.key] || "가품 위험"} onChange={event => setExclusionReasons(current => ({ ...current, [group.key]: event.target.value }))} style={{ border: 0, outline: "none", background: "#f4f1ec", color: "#4b4744", fontWeight: 700, fontSize: 12, minHeight: 30, padding: "0 8px" }}><option>가품 위험</option><option>상표·디자인 위험</option><option>재등록 불필요</option><option>기타</option></select>
+                        <button type="button" onClick={() => void changeExclusion(group.modelName, exclusionReasons[group.key] || "가품 위험")} disabled={Boolean(savingExclusion)} style={{ border: 0, borderLeft: "1px solid #dfbdb2", background: "#f6e3de", color: "#7f4032", fontWeight: 800, fontSize: 12, minHeight: 30, padding: "0 12px", cursor: "pointer", whiteSpace: "nowrap" }}>재등록 제외</button>
+                      </div>
+                    </div>
                   </div>
-                  {!photos && savedHints[group.modelName] !== undefined && <div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 7 }}>저장된 사진 검색 결과가 있습니다(선택 {savedHints[group.modelName]}장). ‘이 모델 사진 검색’을 누르면 다시 검색하지 않고 바로 불러옵니다.</div>}
+                  <div style={{ display: "grid", gap: 4, marginTop: 6, fontSize: 12 }}>{group.items.map((item, itemIndex) => {
+                    const itemLink = externalUrl(item.productLink);
+                    const field = (label: string, value: string) => <span style={{ whiteSpace: "nowrap" }}>{label} <b>{value}</b></span>;
+                    const sku = item.modelSku || "미확인";
+                    return <div key={`${item.skuId}|${item.modelSku}|${item.optionLabel}|${itemIndex}`} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px 12px", color: wmsColors.muted }}>
+                      {itemLink ? <a href={itemLink} target="_blank" rel="noreferrer" title="제품링크 열기" style={{ color: wmsColors.ink, fontWeight: 800, whiteSpace: "nowrap", textDecoration: "underline", textUnderlineOffset: 2 }}>{sku}</a> : <b style={{ color: wmsColors.ink, whiteSpace: "nowrap" }}>{sku}</b>}
+                      {field("SKU ID", item.skuId || "미확인")}{field("바코드", item.barcode || "미확인")}{field("옵션", item.optionLabel || "미확인")}{field("누적입고", item.cumulativeInbound ? `${(Number(item.cumulativeInbound) || 0).toLocaleString()}개` : "미확인")}{field("발주가능상태", item.orderableStatus || "미확인")}
+                    </div>;
+                  })}</div>
                   {photos?.error && <div style={{ color: wmsColors.warnText, fontSize: 11, marginTop: 7 }}>{photos.error}</div>}
                   {photos && (photos.hiddenIds?.length || 0) > 0 && <button type="button" onClick={() => setShowHiddenPhotos(current => ({ ...current, [group.modelName]: !current[group.modelName] }))} style={{ marginTop: 6 }}>{showHiddenPhotos[group.modelName] ? "숨긴 사진 접기" : `패키지·기타로 숨긴 사진 ${photos.hiddenIds?.length}장 보기`}</button>}
                   {detailHits.length > 1 && <div style={{ marginTop: 6, fontSize: 12 }}><label>상세페이지 후보: <select value={detailChoices[group.modelName] || detailHits[0].id} onChange={event => setDetailChoices(current => ({ ...current, [group.modelName]: event.target.value }))}>{detailHits.map(hit => <option key={hit.id} value={hit.id}>{hit.fileName} ({hit.identity.width}×{hit.identity.height})</option>)}<option value="none">사용하지 않음</option></select></label></div>}

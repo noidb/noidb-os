@@ -616,6 +616,26 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 
 .sectionTitleRow{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px}
 .sectionTitleRow h2{margin:0}
-.existingDetailUseButton{border:1px solid #b9cbbc;border-radius:999px;padding:9px 18px;background:#e3ede6;color:#3f574b;font-weight:800;cursor:pointer}
+.existingDetailUseButton{border:1px solid #b9cbbc;border-radius:8px;padding:9px 18px;background:#e3ede6;color:#3f574b;font-weight:800;cursor:pointer}
 .existingDetailUseButton:hover:not(:disabled){background:#d3e3d9}
 .existingDetailUseButton:disabled{opacity:.6;cursor:default}
+
+/* 상단 도구 버튼: 한 줄 4칸, 같은 높이·모양으로 정리 */
+.heroUtilityActions{grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;max-width:780px}
+.heroUtilityActions .imageGeneratorLink,.heroUtilityActions .draftLoadButton,.heroUtilityActions .resetAllButton{min-height:48px;padding:10px 12px;border:1px solid transparent;border-radius:12px;font-size:14px;font-weight:800;white-space:nowrap;box-shadow:none}
+.heroUtilityActions .imageGeneratorLink{border-color:#e3d7c8}
+.heroUtilityActions .draftLoadButton{border-color:var(--brand-sage)}
+@media(max-width:760px){
+  .heroUtilityActions{grid-template-columns:repeat(2,minmax(0,1fr));max-width:none}
+  .heroUtilityActions .imageGeneratorLink,.heroUtilityActions .draftLoadButton,.heroUtilityActions .resetAllButton{font-size:13px;padding:9px 6px}
+}
+
+/* 상단 메뉴: 세 버튼을 같은 크기로 */
+.appNavigationMenu{display:grid;grid-template-columns:repeat(3,112px)}
+.appNavigationLink{width:100%;padding-inline:8px}
+@media(max-width:760px){.appNavigationMenu{grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+.detailResultActions{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:12px 0}
+.pillButtonBeige{border:1px solid #e3d7c8;border-radius:8px;padding:9px 18px;background:#f4ede3;color:#554b3f;font-weight:800;cursor:pointer}
+.pillButtonBeige:hover:not(:disabled){background:#eadfd0}
+.pillButtonBeige:disabled{opacity:.6;cursor:default}
