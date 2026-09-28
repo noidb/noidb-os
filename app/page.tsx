@@ -352,6 +352,7 @@ export default function Home() {
   const draftRefreshRef = useRef(0);
   const restoringDraftRef = useRef(false);
   const [draftRestoreRevision, setDraftRestoreRevision] = useState(0);
+  const restoreApprovedSquareImagesRef = useRef(false);
   const [modelDuplicate, setModelDuplicate] = useState(false);
   const [modelCheckMessage, setModelCheckMessage] = useState("");
   const [modelReregisterable, setModelReregisterable] = useState(false);
@@ -1057,6 +1058,12 @@ export default function Home() {
       setSquareImagesBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!restoreApprovedSquareImagesRef.current || !detailPreview || squareImagesBusy) return;
+    restoreApprovedSquareImagesRef.current = false;
+    void prepareApprovedSquareImages();
+  }, [draftRestoreRevision, detailPreview, squareImagesBusy]);
 
   const selectUsableDetailSections = async (sections: QuickDetailSection[]) => {
     const selected: QuickDetailSection[] = [];
@@ -1901,7 +1908,9 @@ export default function Home() {
     setDetailHeader(data.detailHeader || null);
     setDetailFooter(data.detailFooter || null);
     setDetailPreview(data.detailPreview || "");
-    setApprovedSquareImages(Array.isArray(data.approvedSquareImages) ? data.approvedSquareImages : []);
+    const savedApprovedSquareImages = Array.isArray(data.approvedSquareImages) ? data.approvedSquareImages : [];
+    setApprovedSquareImages(savedApprovedSquareImages);
+    restoreApprovedSquareImagesRef.current = savedApprovedSquareImages.length === 0 && Boolean(data.detailPreview);
     setSquareImagesMessage("");
     setSourcingUrls(Array.isArray(data.sourcingUrls) ? data.sourcingUrls : ["", "", ""]);
     setSourcingUrlInputs(Array.isArray(data.sourcingUrlInputs) ? data.sourcingUrlInputs : ["", "", ""]);
