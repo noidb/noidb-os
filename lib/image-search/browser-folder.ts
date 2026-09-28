@@ -160,16 +160,29 @@ export async function openPhotoFolders(folderPaths: string[], modelKeys: string[
     }
   }
   // MYBOX 통합 후 예전 확정 경로가 사라졌다면, 새 분류 위치의 정확한 모델 폴더만 확인한다.
-  // 폴더명에 모델번호가 섞여 있는 묶음 자료는 다른 제품 사진이 들어갈 수 있어 자동 선택하지 않는다.
+  // 복합 촬영 자료는 해당 모델명이 붙은 하위 폴더가 있을 때만 연다.
   if (tier === 1 && !found.length && root.name === "★전체제품사진") {
     const exactNames = new Set(modelKeys.map(key => key.trim().toLowerCase()).filter(Boolean));
+    const isModelFolderName = (name: string) => [...exactNames].some(key => {
+      const lower = name.toLowerCase();
+      return lower.startsWith(key) && !/[a-z0-9]/.test(lower[key.length] || "");
+    });
     for (const segments of [["01", "_제품별"], ["02", "_복합촬영·작업자료"]]) {
       const parent = await descend(root, segments).catch(() => null);
       if (!parent) continue;
       for await (const [name, entry] of (parent as any).entries()) {
-        if (entry.kind !== "directory" || !exactNames.has(name.toLowerCase())) continue;
-        label = "1차 · 이동된 모델 폴더";
-        await collect(entry, [root.name, ...segments, name].join("/"));
+        if (entry.kind !== "directory") continue;
+        if (exactNames.has(name.toLowerCase())) {
+          label = "1차 · 이동된 모델 폴더";
+          await collect(entry, [root.name, ...segments, name].join("/"));
+        } else if (segments[0] === "02" && matches(name).length) {
+          // 복합 촬영 폴더 안에서는 모델명이 붙은 하위 폴더만 연다.
+          for await (const [childName, child] of (entry as any).entries()) {
+            if (child.kind !== "directory" || !isModelFolderName(childName)) continue;
+            label = "1차 · 이동된 모델 폴더";
+            await collect(child, [root.name, ...segments, name, childName].join("/"));
+          }
+        }
       }
       if (found.length) break;
     }
