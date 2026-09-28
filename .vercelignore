@@ -3,6 +3,7 @@
 .worktrees
 .deploy-*
 .claude
+local-archive
 .secrets
 .env*
 !.env.example
