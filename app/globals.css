@@ -594,3 +594,16 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 @media (max-width:760px){
   .wms-rounded-page-shell{margin-top:18px;padding:0;overflow-x:clip}
 }
+
+/* 슬롯 드래그 크롭 편집 */
+.slotDropEdit{cursor:grab;touch-action:none}
+.slotCropFrame{position:relative;width:100%;height:100%;overflow:hidden;user-select:none;touch-action:none;background:#fff}
+.slotCropFrame:active{cursor:grabbing}
+.slotCropBg{position:absolute;inset:0;width:100%!important;height:100%!important;object-fit:cover;filter:blur(10px);transform:scale(1.1)}
+.slotCropImg{position:absolute;max-width:none;pointer-events:none;object-fit:fill!important}
+.slotCropTools{position:absolute;right:6px;bottom:6px;display:flex;gap:4px}
+.slotCropTools button{width:26px;height:26px;padding:0;border:1px solid #d8d3cc;border-radius:6px;background:rgba(255,255,255,.9);cursor:pointer;line-height:1}
+.slotCropLayer{position:absolute;inset:0}
+.slotCropTune{margin-top:6px;display:flex;flex-direction:column;gap:2px;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,.92);border:1px solid #d8d3cc;font-size:11px}
+.slotCropTune label{display:flex;flex-direction:column;gap:1px}
+.slotCropTune input{width:100%;margin:0}

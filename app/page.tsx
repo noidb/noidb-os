@@ -1,6 +1,7 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { ChangeEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import AppNavigation from "./AppNavigation";
 import {
@@ -26,7 +27,7 @@ import { splitDetailPage, type QuickDetailSection } from "@/lib/image-generator/
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { loadPreparedDetail, loadPreparedPhotos, type PreparedDetail } from "@/lib/image-search/browser-folder";
-import { coverSquareCanvas, defaultFitAdjust, fitToWhiteCanvas, type FitAdjust } from "@/lib/thumbnail/fit";
+import { coverSquareCanvas, defaultFitAdjust, extendToSquareCanvas, fitToWhiteCanvas, renderSquareCrop, sharpenAmount, type FitAdjust, type SquareCrop } from "@/lib/thumbnail/fit";
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
 import WimsRegistrationImportPanel from "@/app/product-registration/WimsRegistrationImportPanel";
@@ -61,7 +62,7 @@ type Analysis = {
 };
 
 type ProductPhoto = { id: string; name: string; dataUrl: string };
-type SlotImage = { dataUrl: string; fileName: string };
+type SlotImage = { dataUrl: string; fileName: string; source?: string; crop?: SquareCrop };
 type VariantOption = SkuRow & { key: string; label: string };
 type DetailImage = { id: string; name: string; dataUrl: string; zoom?: number; focusX?: number; focusY?: number; frameHeight?: number };
 type GeneratedImageCandidate = { model: string; category: string; kind: "product" | "wear"; dataUrl: string; fileName: string };
@@ -1046,7 +1047,8 @@ export default function Home() {
       for (let index = 0; index < sections.length; index += 1) {
         setSquareImagesMessage(`${sections.length}장 중 ${index + 1}장을 1000×1000으로 만드는 중...`);
         images.push({
-          dataUrl: await fitToWhiteCanvas(sections[index].dataUrl, { ...defaultFitAdjust(), scale: 1.25, shadow: false }),
+          dataUrl: await extendToSquareCanvas(sections[index].dataUrl),
+          source: sections[index].dataUrl,
           fileName: `${model}-detail-square-${String(index + 1).padStart(2, "0")}.jpg`,
         });
       }
@@ -1636,7 +1638,7 @@ export default function Home() {
       })));
       setDetailImages(prev => [...prev, ...added]);
       setDetailPreview("");
-      setDetailMessage(`보정본 ${added.length}장을 원본 해상도로 추가했습니다. 제품 확대를 조절한 뒤 상세페이지를 다시 만드세요.`);
+      setDetailMessage(`보정본 ${added.length}장을 원본 해상도로 추가했습니다. 상세페이지를 다시 만드세요.`);
     } catch (error) {
       setDetailMessage(`오류: ${error instanceof Error ? error.message : "보정본 추가 실패"}`);
     }
@@ -1668,8 +1670,8 @@ export default function Home() {
       detailImages.map(async item => {
         const img = await loadImage(item.dataUrl);
         const naturalHeight = Math.max(1, Math.round((img.height / img.width) * width));
-        const height = item.frameHeight ? Math.max(width, Math.min(1300, item.frameHeight)) : naturalHeight;
-        const zoom = Math.max(1, Math.min(3, item.zoom || 1));
+        const height = naturalHeight;
+        const zoom = 1;
         const sourceWidth = img.width / zoom;
         const sourceHeight = sourceWidth * height / width;
         if (sourceWidth < width || sourceHeight > img.height + 2) {
@@ -2768,7 +2770,6 @@ export default function Home() {
             onPoolDrop={index => assignPoolItem(index, setAllOptions)}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
-            onFit={() => allOptions && openAdjust("all", correctedPhotoSource(allOptions))}
             onAddDetail={
               includeAllOptionsInDetail && allOptions
                 ? () => pushDetail("전체옵션", allOptions.dataUrl)
@@ -2788,15 +2789,6 @@ export default function Home() {
               coverSquare
               onSlotSwap={swapSlots}
               onExpand={setLightbox}
-              onFit={() => {
-                const s = activeVariantThumbs[variant.key];
-                if (!s) return;
-                const matchedSource = correctedPhotoSource(s);
-                const fallbackSource = variants.length === 1
-                  ? detailImages.find(image => image.name.startsWith("보정본 "))?.dataUrl
-                  : undefined;
-                openAdjust(`opt:${variant.key}`, matchedSource === s.dataUrl ? fallbackSource || s.dataUrl : matchedSource);
-              }}
               onAddDetail={
                 activeVariantThumbs[variant.key]
                   ? () => pushDetail(`${variant.label} 썸네일`, activeVariantThumbs[variant.key]!.dataUrl)
@@ -2815,7 +2807,6 @@ export default function Home() {
             onPoolDrop={index => assignPoolItem(index, setDetailCut)}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
-            onFit={() => detailCut && openAdjust("detail", correctedPhotoSource(detailCut))}
             onAddDetail={detailCut ? () => pushDetail("디테일컷", detailCut.dataUrl) : undefined}
           />
           <ImageSlot
@@ -2828,7 +2819,6 @@ export default function Home() {
             onPoolDrop={index => assignPoolItem(index, setWear01)}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
-            onFit={() => wear01 && openAdjust("wear01", correctedPhotoSource(wear01))}
             onAddDetail={wear01 ? () => pushDetail("착용컷 01", wear01.dataUrl) : undefined}
           />
           <ImageSlot
@@ -2841,7 +2831,6 @@ export default function Home() {
             onPoolDrop={index => assignPoolItem(index, setWear02)}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
-            onFit={() => wear02 && openAdjust("wear02", correctedPhotoSource(wear02))}
             onAddDetail={wear02 ? () => pushDetail("착용컷 02", wear02.dataUrl) : undefined}
           />
           {customSlots.map((item, index) => (
@@ -2861,29 +2850,6 @@ export default function Home() {
           ))}
         </div>
 
-        {adjustKey && (
-          <div className="adjustPanel">
-            <h3>흰 배경 캔버스 맞춤 (형태 변경 없음)</h3>
-            {adjustPreview && <img src={adjustResult || adjustPreview} alt="조정 미리보기" className="adjustPreviewImg" />}
-            <div className="cropControls">
-              <label>확대 <input type="range" min={0.5} max={3.5} step={0.01} value={adjust.scale}
-                onChange={e => { setAdjust(a => ({ ...a, scale: Number(e.target.value) })); setAdjustResult(""); }} /></label>
-              <label>좌우 <input type="range" min={-200} max={200} value={adjust.offsetX}
-                onChange={e => { setAdjust(a => ({ ...a, offsetX: Number(e.target.value) })); setAdjustResult(""); }} /></label>
-              <label>상하 <input type="range" min={-200} max={200} value={adjust.offsetY}
-                onChange={e => { setAdjust(a => ({ ...a, offsetY: Number(e.target.value) })); setAdjustResult(""); }} /></label>
-              <label>밝기 <input type="range" min={-40} max={40} value={adjust.brightness}
-                onChange={e => { setAdjust(a => ({ ...a, brightness: Number(e.target.value) })); setAdjustResult(""); }} /></label>
-              <label>대비 <input type="range" min={0.7} max={1.4} step={0.01} value={adjust.contrast}
-                onChange={e => { setAdjust(a => ({ ...a, contrast: Number(e.target.value) })); setAdjustResult(""); }} /></label>
-            </div>
-            <div className="detailActions">
-              <button type="button" className="secondaryButton" onClick={() => void previewAdjust()}>미리보기 적용</button>
-              <button type="button" className="green" onClick={() => void confirmAdjust()}>확정</button>
-              <button type="button" className="secondaryButton" onClick={() => { setAdjustKey(""); setAdjustPreview(""); setAdjustResult(""); }}>취소</button>
-            </div>
-          </div>
-        )}
       </section>
 
       {/* 6. 상세페이지 */}
@@ -2956,7 +2922,7 @@ export default function Home() {
           <span>썸네일 크기로 줄이지 않고 상세페이지에 사용합니다. 여러 장을 한 번에 선택할 수 있습니다.</span>
         </label>
 
-        <p className="detailMessage">제품을 크게 보여줄 컷은 보정 폴더의 고해상도 사진을 사용하고, 아래 제품 확대를 약 200%로 맞춰 미리보기를 확인하세요. 기존 상세페이지에서 가져온 작은 사진을 확대하면 화질이 떨어집니다.</p>
+        <p className="detailMessage">제품을 크게 보여줄 컷은 보정 폴더의 고해상도 사진을 사용하세요.</p>
         <div className="detailList">
           {detailImages.map((item, index) => (
             <div
@@ -2980,40 +2946,6 @@ export default function Home() {
               <img src={item.dataUrl} alt={item.name} />
               <div className="detailItemInfo">
                 <strong>{item.name}</strong>
-                <label>제품 확대 {Math.round((item.zoom || 1) * 100)}%
-                  <input type="range" min="1" max={item.name.startsWith("보정본") ? "3" : "2.5"} step="0.1" value={item.zoom || 1}
-                    onChange={event => {
-                      const zoom = Number(event.target.value);
-                      setDetailImages(prev => prev.map(image => image.id === item.id ? { ...image, zoom } : image));
-                      setDetailPreview("");
-                    }} />
-                </label>
-                {item.name.startsWith("보정본") && <>
-                  <label>가로 중심 {Math.round((item.focusX ?? 0.5) * 100)}%
-                    <input type="range" min="0.2" max="0.8" step="0.01" value={item.focusX ?? 0.5}
-                      onChange={event => {
-                        const focusX = Number(event.target.value);
-                        setDetailImages(prev => prev.map(image => image.id === item.id ? { ...image, focusX } : image));
-                        setDetailPreview("");
-                      }} />
-                  </label>
-                  <label>세로 중심 {Math.round((item.focusY ?? 0.5) * 100)}%
-                    <input type="range" min="0.2" max="0.8" step="0.01" value={item.focusY ?? 0.5}
-                      onChange={event => {
-                        const focusY = Number(event.target.value);
-                        setDetailImages(prev => prev.map(image => image.id === item.id ? { ...image, focusY } : image));
-                        setDetailPreview("");
-                      }} />
-                  </label>
-                  <label>컷 높이 {item.frameHeight || 780}px
-                    <input type="range" min="780" max="1300" step="20" value={item.frameHeight || 780}
-                      onChange={event => {
-                        const frameHeight = Number(event.target.value);
-                        setDetailImages(prev => prev.map(image => image.id === item.id ? { ...image, frameHeight } : image));
-                        setDetailPreview("");
-                      }} />
-                  </label>
-                </>}
                 <div className="detailItemButtons">
                   <button type="button" onClick={() => setLightbox(item.dataUrl)}>확대</button>
                   <button type="button" className="removeButton"
@@ -3241,6 +3173,137 @@ function Result({ label, value, status, alert }: { label: string; value: string;
   );
 }
 
+function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage; title: string; onChange: (v: SlotImage | null) => void; tuneHost: HTMLElement | null }) {
+  const source = value.source || value.dataUrl;
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  const [view, setView] = useState<SquareCrop>(value.crop || { zoom: 1, x: 0, y: 0 });
+  const [tuneOpen, setTuneOpen] = useState(false);
+  const filterId = useId().replace(/:/g, "");
+  const viewRef = useRef(view);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ px: number; py: number } | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
+
+  useEffect(() => {
+    let alive = true;
+    const img = new Image();
+    img.onload = () => { if (alive) setDims({ w: img.naturalWidth, h: img.naturalHeight }); };
+    img.src = source;
+    return () => { alive = false; };
+  }, [source]);
+
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+
+  const commit = (next: SquareCrop) => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(async () => {
+      try {
+        const dataUrl = await renderSquareCrop(sourceRef.current, next);
+        onChange({ ...valueRef.current, dataUrl, source: sourceRef.current, crop: next });
+      } catch { /* ignore */ }
+    }, 250);
+  };
+
+  const update = (next: SquareCrop) => {
+    const clamped = {
+      zoom: Math.max(0.3, Math.min(5, next.zoom)),
+      x: Math.max(-1.5, Math.min(1.5, next.x)),
+      y: Math.max(-1.5, Math.min(1.5, next.y)),
+      brightness: Math.max(-60, Math.min(60, next.brightness || 0)),
+      sharpness: Math.max(0, Math.min(1, next.sharpness || 0)),
+    };
+    viewRef.current = clamped;
+    setView(clamped);
+    commit(clamped);
+  };
+
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const v = viewRef.current;
+      update({ ...v, zoom: v.zoom * (event.deltaY < 0 ? 1.06 : 1 / 1.06) });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const sharp = sharpenAmount(view.sharpness || 0);
+  const unit = dims ? (dims.w >= dims.h ? { w: 1, h: dims.h / dims.w } : { w: dims.w / dims.h, h: 1 }) : { w: 1, h: 1 };
+  const drawW = unit.w * view.zoom;
+  const drawH = unit.h * view.zoom;
+  const style = {
+    width: `${drawW * 100}%`,
+    height: `${drawH * 100}%`,
+    left: `${(0.5 - drawW / 2 + view.x) * 100}%`,
+    top: `${(0.5 - drawH / 2 + view.y) * 100}%`,
+  };
+
+  return (
+    <div
+      ref={frameRef}
+      className="slotCropFrame"
+      onPointerDown={event => {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        dragRef.current = { px: event.clientX, py: event.clientY };
+      }}
+      onPointerMove={event => {
+        const start = dragRef.current;
+        const box = frameRef.current;
+        if (!start || !box) return;
+        const size = box.getBoundingClientRect().width || 1;
+        const v = viewRef.current;
+        dragRef.current = { px: event.clientX, py: event.clientY };
+        update({ ...v, x: v.x + (event.clientX - start.px) / size, y: v.y + (event.clientY - start.py) / size });
+      }}
+      onPointerUp={() => { dragRef.current = null; }}
+      onPointerCancel={() => { dragRef.current = null; }}
+      onDoubleClick={() => update({ zoom: 1, x: 0, y: 0 })}
+      title="끌어서 위치 이동 · 마우스 휠로 확대/축소 · 더블클릭으로 처음 상태"
+    >
+      <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden="true">
+        <filter id={filterId} colorInterpolationFilters="sRGB">
+          <feConvolveMatrix order="3" kernelMatrix={`0 ${-sharp} 0 ${-sharp} ${1 + 4 * sharp} ${-sharp} 0 ${-sharp} 0`} divisor="1" preserveAlpha="true" edgeMode="duplicate" />
+          <feComponentTransfer>
+            <feFuncR type="linear" slope="1" intercept={(view.brightness || 0) / 255} />
+            <feFuncG type="linear" slope="1" intercept={(view.brightness || 0) / 255} />
+            <feFuncB type="linear" slope="1" intercept={(view.brightness || 0) / 255} />
+          </feComponentTransfer>
+        </filter>
+      </svg>
+      <div className="slotCropLayer" style={{ filter: `url(#${filterId})` }}>
+        <img className="slotCropBg" src={source} alt="" draggable={false} />
+        <img className="slotCropImg" src={source} alt={title} draggable={false} style={style} />
+      </div>
+      <div className="slotCropTools" onPointerDown={event => event.stopPropagation()}>
+        <button type="button" onClick={() => update({ zoom: 1, x: 0, y: 0, brightness: 0, sharpness: 0 })} title="처음 상태로 되돌리기">↻</button>
+        <button type="button" onClick={() => setTuneOpen(open => !open)} title="밝기·선명도">☀</button>
+        <button type="button" onClick={() => update({ ...viewRef.current, zoom: viewRef.current.zoom / 1.1 })}>－</button>
+        <button type="button" onClick={() => update({ ...viewRef.current, zoom: viewRef.current.zoom * 1.1 })}>＋</button>
+      </div>
+      {tuneOpen && tuneHost && createPortal(
+        <div className="slotCropTune" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
+          <label>밝기 {view.brightness || 0}
+            <input type="range" min={-60} max={60} step={1} value={view.brightness || 0}
+              onChange={event => update({ ...viewRef.current, brightness: Number(event.target.value) })} />
+          </label>
+          <label>선명도 {Math.round(sharp * 100)}%
+            <input type="range" min={0} max={1} step={0.05} value={sharp}
+              onChange={event => update({ ...viewRef.current, sharpness: Number(event.target.value) })} />
+          </label>
+        </div>,
+        tuneHost
+      )}
+    </div>
+  );
+}
+
 function ImageSlot({
   slotKey,
   title,
@@ -3249,7 +3312,6 @@ function ImageSlot({
   value,
   onChange,
   onExpand,
-  onFit,
   onAddDetail,
   onPoolDrop,
   onSlotSwap,
@@ -3263,7 +3325,6 @@ function ImageSlot({
   value: SlotImage | null;
   onChange: (v: SlotImage | null) => void;
   onExpand: (url: string) => void;
-  onFit?: () => void;
   onAddDetail?: () => void;
   onPoolDrop?: (index: number) => void;
   onSlotSwap?: (sourceKey: string, targetKey: string) => void;
@@ -3272,6 +3333,7 @@ function ImageSlot({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const [tuneHost, setTuneHost] = useState<HTMLDivElement | null>(null);
   const pendingFileRevision = useRef(0);
   const displaySubtitle = slotKey.startsWith("opt:") ? filename : subtitle;
   useEffect(() => () => { pendingFileRevision.current += 1; }, []);
@@ -3286,20 +3348,21 @@ function ImageSlot({
   };
 
   return (
-    <div className={"imageSlot" + (value ? " imageSlotFilled" : " imageSlotEmpty") + (dragging ? " dragging" : "")}
-      draggable={Boolean(value)}
-      onDragStart={e => {
-        if (!value) return;
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("application/x-laura-slot-key", slotKey);
-      }}>
-      <div className="imageSlotHeader">
+    <div className={"imageSlot" + (value ? " imageSlotFilled" : " imageSlotEmpty") + (dragging ? " dragging" : "")}>
+      <div className="imageSlotHeader"
+        draggable={Boolean(value)}
+        title={value ? "제목을 끌어 다른 칸과 위치를 바꿀 수 있습니다." : undefined}
+        onDragStart={e => {
+          if (!value) return;
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("application/x-laura-slot-key", slotKey);
+        }}>
         <h3>{title}</h3>
         {displaySubtitle && <p className="slotAlias" title={displaySubtitle}>{displaySubtitle}</p>}
       </div>
       <div
-        className="slotDrop"
-        onClick={() => inputRef.current?.click()}
+        className={"slotDrop" + (value ? " slotDropEdit" : "")}
+        onClick={() => { if (!value) inputRef.current?.click(); }}
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={e => {
@@ -3320,7 +3383,7 @@ function ImageSlot({
         }}
       >
         {value ? (
-          <img src={value.dataUrl} alt={title} draggable={false} />
+          <SlotCropEditor key={value.fileName} value={value} title={title} onChange={onChange} tuneHost={tuneHost} />
         ) : (
           <div className="slotPlaceholder">
             <strong>{title}</strong>
@@ -3328,6 +3391,7 @@ function ImageSlot({
           </div>
         )}
       </div>
+      <div ref={setTuneHost} />
       <input
         ref={inputRef}
         type="file"
@@ -3339,7 +3403,6 @@ function ImageSlot({
         }}
       />
       <div className="slotActions">
-        {value && onFit && <button type="button" className="secondaryButton" onClick={onFit}>제품 크기·위치 맞춤</button>}
         {value && <button type="button" className="removeButton" onClick={() => { pendingFileRevision.current += 1; onChange(null); }}>삭제</button>}
         {onRemoveSlot && <button type="button" className="removeButton" onClick={onRemoveSlot}>칸 삭제</button>}
       </div>
