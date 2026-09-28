@@ -302,6 +302,9 @@ export default function Home() {
   const [detailHeader, setDetailHeader] = useState<SlotImage | null>(null);
   const [detailFooter, setDetailFooter] = useState<SlotImage | null>(null);
   const [detailPreview, setDetailPreview] = useState("");
+  const [approvedSquareImages, setApprovedSquareImages] = useState<SlotImage[]>([]);
+  const [squareImagesBusy, setSquareImagesBusy] = useState(false);
+  const [squareImagesMessage, setSquareImagesMessage] = useState("");
   const [detailMessage, setDetailMessage] = useState("");
   const [detailShareUrl, setDetailShareUrl] = useState("");
   const [detailShareLoading, setDetailShareLoading] = useState(false);
@@ -635,6 +638,7 @@ export default function Home() {
       restoringDraftRef.current = false;
       return;
     }
+    if (detailPreview) return;
     const automatic: DetailImage[] = [];
     const add = (id: string, name: string, slot: SlotImage | null | undefined) => {
       if (slot?.dataUrl) automatic.push({ id: `slot:${id}`, name, dataUrl: slot.dataUrl });
@@ -651,7 +655,7 @@ export default function Home() {
       return [...automatic, ...prev.filter(item => !item.id.startsWith("slot:"))];
     });
     setDetailPreview("");
-  }, [mainWear, allOptions, activeVariantThumbs, variants, detailCut, wear01, wear02, customSlots, draftRestoreRevision, reregisterModelName]);
+  }, [mainWear, allOptions, activeVariantThumbs, variants, detailCut, wear01, wear02, customSlots, draftRestoreRevision, reregisterModelName, detailPreview]);
 
   const update = (key: keyof Product, value: string) => {
     setProduct(prev => {
@@ -1003,7 +1007,55 @@ export default function Home() {
       return;
     }
     setDetailPreview(await readFile(file));
+    setApprovedSquareImages([]);
+    setSquareImagesMessage("");
     setDetailMessage(`완성된 상세페이지를 불러왔습니다: ${file.name}`);
+  };
+
+  const chooseApprovedThumbnail = (images: SlotImage[], selectedIndex: number) => {
+    const variant = variants[0];
+    if (!variant) throw new Error("상품 옵션을 먼저 확인해주세요.");
+    const selected = images[selectedIndex];
+    if (!selected) throw new Error("대표이미지를 선택해주세요.");
+    const extras = images.filter((_, index) => index !== selectedIndex);
+    variantUploadRevision.current[variant.key] = (variantUploadRevision.current[variant.key] || 0) + 1;
+    setVariantThumbs(previous => ({ ...previous, [variant.key]: selected }));
+    setAllOptions(extras[0] || null);
+    setDetailCut(extras[1] || null);
+    setWear01(extras[2] || null);
+    setWear02(extras[3] || null);
+    setCustomSlots(extras.slice(4).map((slot, index) => ({
+      id: `approved-square-${index + 5}`,
+      type: "detail" as const,
+      slot,
+    })));
+    setSquareImagesMessage(`${images.length}장을 등록 이미지에 넣었습니다. 대표이미지: ${selected.fileName}`);
+  };
+
+  const prepareApprovedSquareImages = async () => {
+    if (!detailPreview || squareImagesBusy) return;
+    setSquareImagesBusy(true);
+    setSquareImagesMessage("확정된 상세페이지에서 사진을 분리하고 있습니다...");
+    try {
+      if (variants.length !== 1) throw new Error("이 기능은 단일 옵션 상품에서 먼저 사용할 수 있습니다. 여러 옵션은 각각 다른 썸네일을 지정해주세요.");
+      if (!model) throw new Error("모델명을 먼저 확인해주세요.");
+      const sections = await splitDetailPage(detailPreview, detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER);
+      if (sections.length > 10) throw new Error(`사진 ${sections.length}장은 추가이미지 최대 9장에 모두 담을 수 없습니다. 상세페이지 사진을 10장 이하로 정리해주세요.`);
+      const images: SlotImage[] = [];
+      for (let index = 0; index < sections.length; index += 1) {
+        setSquareImagesMessage(`${sections.length}장 중 ${index + 1}장을 1000×1000으로 만드는 중...`);
+        images.push({
+          dataUrl: await fitToWhiteCanvas(sections[index].dataUrl, { ...defaultFitAdjust(), scale: 1.25, shadow: false }),
+          fileName: `${model}-detail-square-${String(index + 1).padStart(2, "0")}.jpg`,
+        });
+      }
+      setApprovedSquareImages(images);
+      chooseApprovedThumbnail(images, Math.max(0, images.length - 3));
+    } catch (error) {
+      setSquareImagesMessage(`오류: ${error instanceof Error ? error.message : "등록 이미지 생성 실패"}`);
+    } finally {
+      setSquareImagesBusy(false);
+    }
   };
 
   const selectUsableDetailSections = async (sections: QuickDetailSection[]) => {
@@ -1123,6 +1175,8 @@ export default function Home() {
     setWear02(null);
     setCustomSlots([]);
     setUploadPool([]);
+    setApprovedSquareImages([]);
+    setSquareImagesMessage("");
     setAiImageSource("");
     setAiImageCandidate(null);
     setAiImageMessage("");
@@ -1773,7 +1827,7 @@ export default function Home() {
         savedAt: Date.now(),
         data: {
           product, analysis, photos, mainWear, allOptions, optionThumbs, variantThumbs, detailCut, wear01, wear02, customSlots,
-          detailImages, detailHeader, detailFooter, detailPreview, sourcingUrls, sourcingUrlInputs, sourcingImages,
+          detailImages, detailHeader, detailFooter, detailPreview, approvedSquareImages, sourcingUrls, sourcingUrlInputs, sourcingImages,
           uploadPool, title, tags, sourcingAnalysis,
           labelManufactureYearMonth, labelManufacturerName, labelImporterName,
         },
@@ -1847,6 +1901,8 @@ export default function Home() {
     setDetailHeader(data.detailHeader || null);
     setDetailFooter(data.detailFooter || null);
     setDetailPreview(data.detailPreview || "");
+    setApprovedSquareImages(Array.isArray(data.approvedSquareImages) ? data.approvedSquareImages : []);
+    setSquareImagesMessage("");
     setSourcingUrls(Array.isArray(data.sourcingUrls) ? data.sourcingUrls : ["", "", ""]);
     setSourcingUrlInputs(Array.isArray(data.sourcingUrlInputs) ? data.sourcingUrlInputs : ["", "", ""]);
     setSourcingImages(Array.isArray(data.sourcingImages) ? data.sourcingImages : []);
@@ -2971,6 +3027,23 @@ export default function Home() {
         {detailMessage && <p className="detailMessage">{detailMessage}</p>}
         {detailPreview && (
           <div className="detailResult">
+            <div className="approvedSquarePanel">
+              <button type="button" className="purpleButton" disabled={squareImagesBusy} onClick={() => void prepareApprovedSquareImages()}>
+                {squareImagesBusy ? "1000×1000 등록 이미지 만드는 중..." : "확정 상세페이지 사진으로 등록 이미지 한 번에 만들기"}
+              </button>
+              <p className="detailMessage">상단 로고를 제외한 사진을 1000×1000으로 만들고, 대표·추가이미지 칸에 넣습니다. 아래에서 대표이미지만 선택하세요.</p>
+              {squareImagesMessage && <p className="detailMessage">{squareImagesMessage}</p>}
+              {!!approvedSquareImages.length && <div className="approvedSquareGrid">
+                {approvedSquareImages.map((image, index) => {
+                  const selected = variants[0] && activeVariantThumbs[variants[0].key]?.dataUrl === image.dataUrl;
+                  return <button key={image.fileName} type="button" className={`approvedSquareChoice${selected ? " selected" : ""}`}
+                    onClick={() => chooseApprovedThumbnail(approvedSquareImages, index)}>
+                    <img src={image.dataUrl} alt={`등록 이미지 ${index + 1}`} />
+                    <span>{selected ? "대표이미지 ✓" : `사진 ${index + 1} · 대표로 선택`}</span>
+                  </button>;
+                })}
+              </div>}
+            </div>
             <button type="button" className="secondaryButton" disabled={detailShareLoading} onClick={() => void shareDetailPreview()}>
               {detailShareLoading ? "모바일 링크 만드는 중..." : "모바일에서 볼 링크 만들기"}
             </button>
