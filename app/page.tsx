@@ -1357,17 +1357,33 @@ export default function Home() {
     }
   };
 
-  const generateRegistrationImage = async () => {
-    if (!model) return setAiImageMessage("모델명을 먼저 확인해주세요.");
-    const source = aiImageSource.startsWith("photo:")
-      ? photos[Number(aiImageSource.slice(6))]
-      : aiImageSource.startsWith("pool:")
-        ? uploadPool[Number(aiImageSource.slice(5))]
-        : aiImageSource.startsWith("detail:")
-          ? detailImages[Number(aiImageSource.slice(7))]
+  const selectedAiImageSource = aiImageSource.startsWith("photo:")
+    ? photos[Number(aiImageSource.slice(6))]
+    : aiImageSource.startsWith("pool:")
+      ? uploadPool[Number(aiImageSource.slice(5))]
+      : aiImageSource.startsWith("detail:")
+        ? detailImages[Number(aiImageSource.slice(7))]
         : aiImageSource.startsWith("slot:")
           ? getSlotValue(aiImageSource.slice(5))
           : null;
+
+  const applySelectedPhotoToSlot = () => {
+    const source = selectedAiImageSource;
+    if (!source?.dataUrl) return setAiImageMessage("등록칸에 사용할 사진을 먼저 선택해주세요.");
+    const sourceDetail = aiImageSource.startsWith("detail:") ? detailImages[Number(aiImageSource.slice(7))] : null;
+    const sourceName = "fileName" in source ? source.fileName : source.name;
+    setSlotValue(aiImageTarget, { dataUrl: source.dataUrl, fileName: sourceName });
+    if (sourceDetail && !sourceDetail.id.startsWith("slot:")) {
+      setDetailImages(prev => prev.filter(image => image.id !== sourceDetail.id));
+    }
+    setAiImageSource("");
+    setAiImageCandidate(null);
+    setAiImageMessage("선택한 원본 사진을 등록칸에 넣었습니다. 상세페이지 목록에는 한 번만 표시됩니다.");
+  };
+
+  const generateRegistrationImage = async () => {
+    if (!model) return setAiImageMessage("모델명을 먼저 확인해주세요.");
+    const source = selectedAiImageSource;
     if (!source?.dataUrl) return setAiImageMessage("생성에 사용할 제품 사진을 선택해주세요.");
     const sourceModel = model;
     const sourceCategory = product.category;
@@ -2530,7 +2546,7 @@ export default function Home() {
 
         <div className="inlineImageGenerator">
           <h3>AI 이미지 자동생성</h3>
-          <p className="note">현재 상품 사진 한 장을 선택해 제품컷 또는 착용컷을 만듭니다. 생성에는 이미지 AI 비용이 들며, 원본과 기존 등록 사진은 바뀌지 않습니다.</p>
+          <p className="note">현재 상품 사진을 등록칸에 그대로 넣거나 AI로 제품컷·착용컷을 만듭니다. 생성에는 이미지 AI 비용이 들며, 생성만으로 원본과 기존 등록 사진은 바뀌지 않습니다.</p>
           <div className="inlineImageGeneratorControls">
             <label>참고 사진
               <select value={aiImageSource} disabled={aiImageBusy} onChange={event => { setAiImageSource(event.target.value); setAiImageCandidate(null); }}>
@@ -2549,11 +2565,27 @@ export default function Home() {
               </select>
             </label>
             <label>만들 이미지
-              <select value={aiImageKind} disabled={aiImageBusy} onChange={event => { setAiImageKind(event.target.value as "product" | "wear"); setAiImageCandidate(null); }}>
+              <select value={aiImageKind} disabled={aiImageBusy} onChange={event => {
+                const kind = event.target.value as "product" | "wear";
+                setAiImageKind(kind);
+                setAiImageTarget(kind === "wear" ? "wear01" : "detail");
+                setAiImageCandidate(null);
+              }}>
                 <option value="product">제품컷 · 흰색 스튜디오</option>
                 <option value="wear">착용컷 · 기존 착용 사진 보정</option>
               </select>
             </label>
+            <label>사용할 등록 이미지 칸
+              <select value={aiImageTarget} onChange={event => setAiImageTarget(event.target.value)}>
+                <option value="detail">디테일컷</option>
+                <option value="mainWear">메인착용컷</option>
+                <option value="all">전체옵션 이미지</option>
+                <option value="wear01">착용컷 01</option>
+                <option value="wear02">착용컷 02</option>
+                {variants.map(variant => <option key={variant.key} value={`opt:${variant.key}`}>{variant.label} 썸네일</option>)}
+              </select>
+            </label>
+            <button type="button" disabled={aiImageBusy || !selectedAiImageSource} onClick={applySelectedPhotoToSlot}>선택 원본 그대로 사용</button>
             <button type="button" className="purpleButton" disabled={aiImageBusy || !aiImageSource || !model} onClick={() => void generateRegistrationImage()}>
               {aiImageBusy ? "이미지 생성 중..." : "선택 사진으로 생성"}
             </button>
@@ -2567,16 +2599,6 @@ export default function Home() {
             <div>
               <strong>생성 결과 · {usableGeneratedImage.fileName}</strong>
               <p className="note">제품 형태·색상·크기가 원본과 같은지 확인하세요. 등록 칸에 넣으면 상세페이지 목록에도 자동 반영됩니다. 고해상도 보정본이 있으면 그 사진을 우선 사용하세요.</p>
-              <label>사용할 등록 이미지 칸
-                <select value={aiImageTarget} onChange={event => setAiImageTarget(event.target.value)}>
-                  <option value="detail">디테일컷</option>
-                  <option value="mainWear">메인착용컷</option>
-                  <option value="all">전체옵션 이미지</option>
-                  <option value="wear01">착용컷 01</option>
-                  <option value="wear02">착용컷 02</option>
-                  {variants.map(variant => <option key={variant.key} value={`opt:${variant.key}`}>{variant.label} 썸네일</option>)}
-                </select>
-              </label>
               <div className="detailActions">
                 <button type="button" onClick={applyGeneratedImageToSlot}>선택한 등록 칸에 사용</button>
                 <button type="button" onClick={() => pushDetail("AI 생성 이미지", usableGeneratedImage.dataUrl)}>상세페이지에 추가</button>
