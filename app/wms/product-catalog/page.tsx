@@ -672,10 +672,10 @@ export default function ProductCatalogPage() {
   const dangerPillStyle: React.CSSProperties = { ...pillStyle, background: "#f6e3de", borderColor: "#dfbdb2", color: "#7f4032" };
 
   return (
-    <main style={{ maxWidth: 1180, margin: "0 auto", padding: "20px 16px 48px", fontFamily: "sans-serif" }}>
+    <main style={{ maxWidth: 1180, margin: "0 auto", padding: "16px 16px 32px", fontFamily: "sans-serif" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 18 }}>
         <div>
-          <h1 style={{ margin: "4px 0 6px", color: wmsColors.ink, fontSize: 26 }}>상품등록 사진선택</h1>
+          <h1 style={{ margin: 0, color: wmsColors.ink, fontSize: 26 }}>상품등록 사진선택</h1>
         </div>
         <Link href="/" style={{ display: "inline-flex", alignItems: "center", minHeight: 48, padding: "0 28px", borderRadius: 10, border: "1px solid #b9cbbc", background: "#e3ede6", color: "#3f574b", fontWeight: 800, fontSize: 20, textDecoration: "none", whiteSpace: "nowrap" }}>AI 상품등록</Link>
       </div>
@@ -686,7 +686,7 @@ export default function ProductCatalogPage() {
         {folderMessage && <p role="status">{folderMessage}</p>}
       </div>
 
-      <div style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: 14, marginBottom: 14 }}>
+      <div style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: 16, marginBottom: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
           {[["전체 행", summary.total], ["재등록 모델", summary.reregisterModels], ["재등록 후보 행", summary.reregisterCandidates], ["로켓 등록 증빙 확인", summary.rocketPending]].map(([label, value]) => (
             <div key={String(label)} style={{ background: wmsColors.surface, borderRadius: 10, padding: "10px 12px" }}><div style={{ color: wmsColors.muted, fontSize: 11 }}>{label}</div><strong style={{ color: wmsColors.ink, fontSize: 20 }}>{value}</strong></div>
@@ -706,7 +706,7 @@ export default function ProductCatalogPage() {
       {error && <div style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{error}</div>}
       {exclusionError && <div role="alert" style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{exclusionError}</div>}
 
-      {rejectedRows.length > 0 && <section style={{ border: `2px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 14, marginBottom: 14 }}>
+      {rejectedRows.length > 0 && <section style={{ border: `2px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 16 }}>
         <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 18 }}>반려 · 보완 후 재등록</div>
         <p style={{ margin: "6px 0 12px", color: wmsColors.ink, fontSize: 12 }}>제품DB의 기존 SKU 유무와 관계없이 독립적인 WIMS 등록건입니다. DB 행이 있다고 신규승인으로 판단하지 마세요.</p>
         <p style={{ margin: "0 0 12px", color: wmsColors.muted, fontSize: 12 }}>등록일은 반려일이 아닙니다. 상세 반려 사유와 반려일은 쿠팡 반려 안내에서 확인해 주세요.</p>
@@ -730,10 +730,10 @@ export default function ProductCatalogPage() {
       {/* 창을 다시 누를 때의 자동 새로고침은 목록을 그대로 둔 채 뒤에서 읽는다(처음 한 번만 로딩 화면). */}
       {loading && !items.length ? <p style={{ color: wmsColors.muted }}>상품 연결 대장을 읽는 중입니다.</p> : (
         <div style={{ display: "grid", gap: 10 }}>
-          {(status === "reregister" || reregistrationGroups.length > 0) && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 14, marginBottom: 2 }}>
+          {(status === "reregister" || reregistrationGroups.length > 0) && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 2 }}>
             <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>{status === "reregister" ? "재등록 작업 묶음" : "모델별 목록"} · {reregistrationGroups.length}개 모델</div>
             {!manualExclusions && <p style={{ fontSize: 12 }}>재등록 제외 목록을 확인하는 중입니다. 확인 전에는 등록 준비를 할 수 없습니다.</p>}
-            {manualExclusions && Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).length > 0 && <div style={{ margin: "10px 0", padding: 10, border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff" }}>
+            {manualExclusions && Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).length > 0 && <div style={{ margin: "8px 0 12px", padding: 12, border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff" }}>
               <strong style={{ fontSize: 12 }}>재등록 제외 모델</strong>
               {Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).map(entry => <div key={clean(entry.modelName)} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 7, fontSize: 12 }}><b>{entry.modelName}</b><span>사유: {entry.reason}</span><button type="button" onClick={() => void changeExclusion(entry.modelName, null)} disabled={Boolean(savingExclusion)} style={neutralPillStyle}>제외 해제</button></div>)}
             </div>}
@@ -753,7 +753,7 @@ export default function ProductCatalogPage() {
                   if (expanded || !visibleNames.has(name) || hit.selected) { visibleNames.add(name); return true; }
                   return false;
                 });
-                return <article key={group.key} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 10 }}>
+                return <article key={group.key} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 12 }}>
                   <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", gap: 10 }}>
                     <div>
                       <div style={{ color: wmsColors.ink, fontSize: 14, fontWeight: 800 }}>{resolveDisplayNameAndOption(group.productName || "", first.optionLabel).name || group.productName || group.modelName}</div>

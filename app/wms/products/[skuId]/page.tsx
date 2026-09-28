@@ -65,8 +65,8 @@ export default function WmsProductInfoPage() {
   }
 
   return (
-    <main className="wms-page-shell" style={{ paddingTop: "12px", paddingBottom: "calc(20px + env(safe-area-inset-bottom))", color: wmsColors.ink, fontFamily: "sans-serif" }}>
-      <button type="button" onClick={goBackToList} style={{ ...wmsGhostButton, marginBottom: "12px" }}>← 목록으로 돌아가기</button>
+    <main className="wms-page-shell" style={{ padding: "16px 16px calc(16px + env(safe-area-inset-bottom))", color: wmsColors.ink, fontFamily: "sans-serif" }}>
+      <button type="button" onClick={goBackToList} style={{ ...wmsGhostButton, marginBottom: "12px" }}>목록으로</button>
       <h1 style={{ margin: "0 0 4px", fontSize: "20px" }}>상품정보 확인·수정</h1>
       <p style={{ margin: "0 0 14px", color: wmsColors.muted, fontSize: "11px" }}>SKU {skuId} · 정확히 일치하는 제품DB 1개 행만 수정합니다.</p>
       {loading ? <p>불러오는 중...</p> : !item ? <p style={{ color: "#a33b2e" }}>제품DB에서 이 SKU를 찾지 못했습니다.</p> : <>

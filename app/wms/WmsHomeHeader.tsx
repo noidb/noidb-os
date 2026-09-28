@@ -67,7 +67,7 @@ export default function WmsHomeHeader() {
           max-width: ${WMS_DESKTOP_WIDTH}px;
           box-sizing: border-box;
           margin: 0 auto;
-          padding: calc(env(safe-area-inset-top) + 8px) 0 0;
+          padding: calc(env(safe-area-inset-top) + 16px) 0 0;
         }
         .wmsHomeHeaderRow {
           display: flex;
