@@ -1029,7 +1029,7 @@ export default function Home() {
         dataUrl: section.dataUrl,
       })));
       setDetailPreview("");
-      setDetailMessage(`${sections.length}개 구간 중 제품 사진 ${selected.length}장만 남겼습니다. 광고·설명·회사소개·UI 구간은 제외됐으며, 제품 사진 위 옵션명은 그대로 둡니다.`);
+      setDetailMessage(`${sections.length}개 구간 중 제품 사진 후보 ${selected.length}장을 남겼습니다. 작은 로고·문구가 사진에 함께 있을 수 있으니 각 컷을 확대해 확인하고 삭제해주세요.`);
     } catch (e) {
       setDetailMessage(`오류: ${e instanceof Error ? e.message : "기존 상세페이지 변환 실패"}`);
     } finally {
@@ -1445,6 +1445,24 @@ export default function Home() {
     ]);
     setDetailPreview("");
     setDetailMessage(`${name}을(를) 상세페이지 목록에 추가했습니다.`);
+  };
+
+  const addEditedDetailPhotos = async (files: FileList | null) => {
+    if (!files?.length) return;
+    try {
+      const accepted = [...files].filter(isAccepted).slice(0, 10);
+      if (!accepted.length) throw new Error("JPG/JPEG/PNG 사진을 선택해주세요.");
+      const added = await Promise.all(accepted.map(async file => ({
+        id: `${Date.now()}-${Math.random()}`,
+        name: `보정본 ${file.name}`,
+        dataUrl: await readFile(file),
+      })));
+      setDetailImages(prev => [...prev, ...added]);
+      setDetailPreview("");
+      setDetailMessage(`보정본 ${added.length}장을 원본 해상도로 추가했습니다. 제품 확대를 조절한 뒤 상세페이지를 다시 만드세요.`);
+    } catch (error) {
+      setDetailMessage(`오류: ${error instanceof Error ? error.message : "보정본 추가 실패"}`);
+    }
   };
 
   const changeDetailBrandImage = async (position: "header" | "footer", file: File | undefined) => {
@@ -2650,6 +2668,13 @@ export default function Home() {
             }} />
           <strong>{detailTransforming ? "기존 상세페이지 정리 중..." : "기존 상세페이지에서 제품 사진만 가져오기"}</strong>
           <span>상·하단 광고, 회사소개, 설명, UI는 빼고 제품 사진만 남긴 뒤 NOID-B 로고로 새 상세페이지를 만듭니다.</span>
+        </label>
+
+        <label className="multiUpload existingDetailUpload">
+          <input type="file" accept="image/jpeg,image/jpg,image/png" multiple hidden
+            onChange={event => { void addEditedDetailPhotos(event.target.files); event.target.value = ""; }} />
+          <strong>보정본 고해상도 사진 바로 추가</strong>
+          <span>썸네일 크기로 줄이지 않고 상세페이지에 사용합니다. 여러 장을 한 번에 선택할 수 있습니다.</span>
         </label>
 
         <p className="detailMessage">제품을 크게 보여줄 컷은 보정 폴더의 고해상도 사진을 사용하고, 아래 제품 확대를 약 200%로 맞춰 미리보기를 확인하세요. 기존 상세페이지에서 가져온 작은 사진을 확대하면 화질이 떨어집니다.</p>
