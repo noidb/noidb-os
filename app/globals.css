@@ -236,8 +236,7 @@
 .imageSlotHeader{height:72px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;overflow:hidden;text-align:center}
 .imageSlot h3{margin:0 0 4px;font-size:15px;text-align:center}
 .slotSpec{margin:0;font-size:12px;color:#6b7280;text-align:center}
-.slotAlias{margin:0 0 3px;min-height:15px;font-size:12px;color:#9a6b3f;font-weight:800;text-align:center}
-.slotFilename{margin:4px 0 8px;min-height:28px;font-size:11px;color:#047857;font-weight:700;text-align:center;word-break:break-all}
+.slotAlias{width:100%;min-width:0;margin:0 0 3px;min-height:15px;font-size:12px;color:#9a6b3f;font-weight:800;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .slotDrop{aspect-ratio:1;border-radius:10px;overflow:hidden;cursor:pointer;background:#fff;border:1px solid #e5e7eb}
 .slotDrop img{width:100%;height:100%;object-fit:contain;display:block}
 .slotPlaceholder{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:12px;text-align:center;color:#6b7280}
@@ -269,7 +268,6 @@
   .imageSlot h3{font-size:10.5px;line-height:1.2;min-height:25px;margin:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .slotSpec{display:none}
   .slotAlias{font-size:8.5px;line-height:1.2;margin:0;min-height:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .slotFilename{font-size:8px;line-height:1.2;margin:0;min-height:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;word-break:normal}
   .slotDrop{border-radius:6px;margin-top:6px}
   .slotPlaceholder{padding:4px;gap:2px}
   .slotPlaceholder strong{font-size:10px}

@@ -2772,7 +2772,6 @@ export default function Home() {
               slotKey={`opt:${variant.key}`}
               key={variant.key}
               title={`${variant.label} 썸네일`}
-              subtitle="이 옵션에 사용할 사진"
               filename={`${model || "모델명"}${variant.thumbFile}`}
               value={activeVariantThumbs[variant.key] || null}
               onChange={slot => void setOptionThumbCovered(variant.key, slot)}
@@ -3265,6 +3264,7 @@ function ImageSlot({
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const pendingFileRevision = useRef(0);
+  const displaySubtitle = slotKey.startsWith("opt:") ? filename : subtitle;
   useEffect(() => () => { pendingFileRevision.current += 1; }, []);
 
   const applyFile = async (file: File | undefined) => {
@@ -3286,9 +3286,8 @@ function ImageSlot({
       }}>
       <div className="imageSlotHeader">
         <h3>{title}</h3>
-        {subtitle && <p className="slotAlias">{subtitle}</p>}
+        {displaySubtitle && <p className="slotAlias" title={displaySubtitle}>{displaySubtitle}</p>}
       </div>
-      {slotKey.startsWith("opt:") && <p className="slotFilename" style={{ whiteSpace: "normal", overflow: "visible", overflowWrap: "anywhere" }}>{filename}</p>}
       <div
         className="slotDrop"
         onClick={() => inputRef.current?.click()}
