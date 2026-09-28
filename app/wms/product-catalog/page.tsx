@@ -738,7 +738,6 @@ export default function ProductCatalogPage() {
             <div style={{ display: "grid", gap: 8 }}>
               {reregistrationGroups.map(group => {
                 const first = group.items[0];
-                const groupLink = group.items.map(item => externalUrl(item.productLink)).find(Boolean) || "";
                 const photos = photoStates[group.modelName];
                 const detailHits = photos?.hits.filter(hit => hit.identity.kind === "detail" && !photos.hiddenIds?.includes(hit.id)) || [];
                 const groupKeyOf = (hit: PhotoHit) => photos?.visualGroups?.[hit.id] || `name:${hit.identity.duplicateName}`;
@@ -755,10 +754,7 @@ export default function ProductCatalogPage() {
                 return <article key={group.key} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 10 }}>
                   <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", gap: 10 }}>
                     <div>
-                      {groupLink
-                        ? <a href={groupLink} target="_blank" rel="noreferrer" title="제품링크 열기" style={{ color: wmsColors.ink, fontWeight: 800, textDecoration: "underline", textUnderlineOffset: 3, cursor: "pointer" }}>{group.modelName}</a>
-                        : <div style={{ color: wmsColors.ink, fontWeight: 800 }}>{group.modelName}</div>}
-                      <div style={{ color: wmsColors.ink, fontSize: 12, marginTop: 3 }}>{group.productName}</div>
+                      <div style={{ color: wmsColors.ink, fontSize: 14, fontWeight: 800 }}>{resolveDisplayNameAndOption(group.productName || "", first.optionLabel).name || group.productName || group.modelName}</div>
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
                       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}><Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={primaryPillStyle}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName || photos?.loading} style={{ ...pillStyle, cursor: photos?.loading ? "wait" : "pointer" }}>{photos?.loading ? "사진 검색 중…" : "사진검색"}</button>{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={neutralPillStyle}>사진 검색 초기화</button>}</div>
