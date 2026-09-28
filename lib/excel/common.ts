@@ -75,7 +75,7 @@ export function buildSkuRows(payload: {
       const sku = `${model}-${code}`;
       rows.push({
         color,
-        size: sizes[0] || "Free",
+        size: sizes[0] || "",
         colorCode: code,
         sku,
         thumbFile: `${sku}.jpg`,

@@ -33,8 +33,6 @@ import WimsRegistrationImportPanel from "@/app/product-registration/WimsRegistra
 import SupplyStatusAuditPanel from "@/app/product-registration/SupplyStatusAuditPanel";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 
-const REREGISTRATION_PREP_KEY = "noidb_reregistration_prep_v1";
-
 type Product = {
   supplier: string;
   category: string;
@@ -432,19 +430,10 @@ export default function Home() {
         if (!exclusionsResponse.ok) throw new Error("재등록 제외 목록을 확인하지 못했습니다.");
         const exclusions = await exclusionsResponse.json();
         if (exclusions.entries?.[requestedModel.toLowerCase()]) throw new Error(`${requestedModel}은 재등록 제외 모델입니다: ${exclusions.entries[requestedModel.toLowerCase()].reason}`);
-        let prepared: any = null;
-        try {
-          const raw = window.localStorage.getItem(REREGISTRATION_PREP_KEY);
-          const parsed = raw ? JSON.parse(raw) : null;
-          if (parsed && String(parsed.modelName || "").trim().toLowerCase() === requestedModel.toLowerCase()) prepared = parsed;
-        } catch { /* prepared data is optional */ }
-        let group = Array.isArray(prepared?.items) ? prepared.items : [];
-        if (!group.length) {
-          const response = await fetch("/api/wms/product-registration-catalog", { cache: "no-store" });
-          const data = await response.json();
-          if (!response.ok || !Array.isArray(data.items)) throw new Error(data?.error || "재등록 대상 조회 실패");
-          group = data.items.filter((item: any) => String(item.modelName || "").trim().toLowerCase() === requestedModel.toLowerCase());
-        }
+        const response = await fetch("/api/wms/product-registration-catalog", { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok || !Array.isArray(data.items)) throw new Error(data?.error || "재등록 대상 조회 실패");
+        const group = data.items.filter((item: any) => String(item.modelName || "").trim().toLowerCase() === requestedModel.toLowerCase());
         if (!group.length) throw new Error(`${requestedModel} 모델을 제품DB에서 찾지 못했습니다.`);
         if (group.some((item: any) => String(item.reregistrationTier || "").startsWith("영구제외"))) throw new Error(`${requestedModel}은 제품DB에서 영구제외된 모델입니다.`);
         if (active) setReregisterModelName(requestedModel);
