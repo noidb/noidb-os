@@ -8,15 +8,20 @@ import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { clearPhotoSearch, connectPhotoFolder, FOLDER_TIER_LABELS, loadPhotoSearch, loadSavedThumbnail, saveThumbnail, openPhotoFolders, openSavedPhotos, photoFolderName, photoFolderReady, savePhotoSearch, searchPhotoFolder, savePreparedPhotos, type FolderTier, type LocalPhoto } from "@/lib/image-search/browser-folder";
+import { savePreparedDetail } from "@/lib/image-search/browser-folder";
+import { identifyPhoto, photoPriority, type PhotoIdentity } from "@/lib/image-search/photo-kind";
+import { groupVisuallyIdentical } from "@/lib/image-search/visual-duplicates";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
+import type { ReregistrationExclusion } from "@/lib/wms/reregistration-exclusions";
 
-type PhotoHit = LocalPhoto & { fileName: string; preview: string; selected: boolean };
+type PhotoHit = LocalPhoto & { fileName: string; preview: string; selected: boolean; identity: PhotoIdentity };
 /**
  * analysisId: AI 분석용으로 지정한 사진 1장(선택한 사진 중 하나). source: 사진을 어디서 가져왔는지.
  * level: 어디까지 열었는지 — 1~3 = 연결표 폴더 단계(FolderTier), 4 = 사진 폴더 전체 검색.
  * grouped: 확정 폴더가 여러 모델 묶음 폴더인지(아니면 2·3차가 없다). hasFolders: 연결표 확정 폴더가 있는지.
  */
-type PhotoState = { loading: boolean; hits: PhotoHit[]; analysisId: string; level: number; grouped: boolean; hasFolders: boolean; source?: string; error?: string; note?: string };
+type PhotoDecision = { kind: "product" | "wear" | "exclude"; reason: string };
+type PhotoState = { loading: boolean; hits: PhotoHit[]; analysisId: string; level: number; grouped: boolean; hasFolders: boolean; hiddenIds?: string[]; visualGroups?: Record<string, string>; photoDecisions?: Record<string, PhotoDecision>; source?: string; error?: string; note?: string };
 type LinkTableResult = { folders: string[]; modelKeys: string[] };
 const FULL_SEARCH_LEVEL = 4;
 const THUMBNAIL_PAGE = 60;
@@ -100,6 +105,10 @@ export default function ProductCatalogPage() {
     return () => { photoUrls.current.forEach(url => URL.revokeObjectURL(url)); };
   }, []);
   const [items, setItems] = useState<ProductCatalogItem[]>([]);
+  const [manualExclusions, setManualExclusions] = useState<Record<string, ReregistrationExclusion> | null>(null);
+  const [exclusionError, setExclusionError] = useState("");
+  const [savingExclusion, setSavingExclusion] = useState("");
+  const [exclusionReasons, setExclusionReasons] = useState<Record<string, string>>({});
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [snapshot, setSnapshot] = useState<WimsRegistrationSnapshot | null>(null);
   const [query, setQuery] = useState("");
@@ -114,6 +123,11 @@ export default function ProductCatalogPage() {
   const [viewer, setViewer] = useState<{ model: string; index: number } | null>(null);
   /** 모델별로 화면에 그리는 사진 수. 큰 원본 사진을 한 번에 수백 장 그리면 느려서 60장씩 늘린다. */
   const [shownCounts, setShownCounts] = useState<Record<string, number>>({});
+  const [expandedPhotoNames, setExpandedPhotoNames] = useState<Record<string, boolean>>({});
+  const [detailChoices, setDetailChoices] = useState<Record<string, string>>({});
+  const [brokenPhotoIds, setBrokenPhotoIds] = useState<Set<string>>(new Set());
+  const [showHiddenPhotos, setShowHiddenPhotos] = useState<Record<string, boolean>>({});
+  const [tidyingModel, setTidyingModel] = useState("");
   const savedSearchJson = useRef<Record<string, string>>({});
 
   // 재등록 대상·영구제외는 모델 단위로 판단한다: 옵션 하나라도 1차·2차면 모델 전체 대상,
@@ -127,14 +141,50 @@ export default function ProductCatalogPage() {
       if (isReregistrationTier(item)) target.add(key);
       if (isPermanentlyExcluded(item)) excluded.add(key);
     }
+    for (const key of Object.keys(manualExclusions || {})) excluded.add(key);
     return { reregisterModelKeys: target, excludedModelKeys: excluded };
-  }, [items]);
+  }, [items, manualExclusions]);
 
   const isReregistrationTarget = useCallback((item: ProductCatalogItem) => {
     const key = namedModelGroupKey(item);
-    if (key && excludedModelKeys.has(key)) return false;
+    if (!manualExclusions || (key && excludedModelKeys.has(key))) return false;
     return key ? reregisterModelKeys.has(key) : isReregistrationTier(item);
-  }, [reregisterModelKeys, excludedModelKeys]);
+  }, [reregisterModelKeys, excludedModelKeys, manualExclusions]);
+
+  const loadExclusions = useCallback(async () => {
+    try {
+      const response = await fetch("/api/wms/reregistration-exclusions", { cache: "no-store" });
+      if (!response.ok) throw new Error("재등록 제외 목록을 읽지 못했습니다.");
+      const data = await response.json();
+      setManualExclusions(data.entries || {});
+      setExclusionError("");
+    } catch {
+      setManualExclusions(null);
+      setExclusionError("재등록 제외 목록을 읽지 못해 등록 준비를 중단했습니다. 새로고침해 주세요.");
+    }
+  }, []);
+
+  async function changeExclusion(modelName: string, reason: string | null) {
+    setSavingExclusion(modelName);
+    setExclusionError("");
+    try {
+      const response = await fetch("/api/wms/reregistration-exclusions", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelName, reason }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "재등록 제외 상태를 저장하지 못했습니다.");
+      setManualExclusions(data.entries);
+      if (reason !== null) {
+        try {
+          const prepared = JSON.parse(window.localStorage.getItem(REREGISTRATION_PREP_KEY) || "null");
+          if (clean(prepared?.modelName) === clean(modelName)) window.localStorage.removeItem(REREGISTRATION_PREP_KEY);
+        } catch {}
+      }
+    } catch (error) {
+      setExclusionError(error instanceof Error ? error.message : "재등록 제외 상태를 저장하지 못했습니다.");
+    } finally { setSavingExclusion(""); }
+  }
 
   const loadCatalog = useCallback(async (activeRef?: { current: boolean }) => {
     setLoading(true);
@@ -173,8 +223,9 @@ export default function ProductCatalogPage() {
   useEffect(() => {
     const active = { current: true };
     void loadCatalog(active);
+    void loadExclusions();
     return () => { active.current = false; };
-  }, [loadCatalog]);
+  }, [loadCatalog, loadExclusions]);
 
   useEffect(() => {
     let lastRefresh = 0;
@@ -248,12 +299,19 @@ export default function ProductCatalogPage() {
     });
   }, [filteredItems, items, status]);
 
-  function toHits(found: LocalPhoto[], selectedIds: Set<string>): PhotoHit[] {
-    return found.map(hit => {
+  async function toHits(found: LocalPhoto[], selectedIds: Set<string>): Promise<PhotoHit[]> {
+    const hits: PhotoHit[] = [];
+    for (const hit of found) {
       const preview = URL.createObjectURL(hit.file);
       photoUrls.current.push(preview);
-      return { ...hit, fileName: hit.name, preview, selected: selectedIds.has(hit.id) };
-    });
+      const identity = await identifyPhoto(hit.id, hit.file);
+      hits.push({ ...hit, fileName: hit.name, preview, selected: identity.kind !== "detail" && selectedIds.has(hit.id), identity });
+    }
+    return sortPhotoHits(hits);
+  }
+
+  function sortPhotoHits(hits: PhotoHit[]): PhotoHit[] {
+    return hits.sort((a, b) => photoPriority(a.identity.kind) - photoPriority(b.identity.kind) || a.id.localeCompare(b.id, "ko"));
   }
 
   // 저장해 둔 검색 결과(경로·선택·분석용·단계)를 검색 없이 다시 연다. 파일이 모두 사라졌으면 null.
@@ -267,13 +325,17 @@ export default function ProductCatalogPage() {
     const found = await openSavedPhotos(quick.length ? quick : saved.hits.slice(0, 60));
     if (!found.length) return null;
     const selectedIds = new Set(saved.selectedIds.slice(0, 10));
+    const hits = await toHits(found, selectedIds);
     return {
       loading: false,
-      hits: toHits(found, selectedIds),
-      analysisId: selectedIds.has(saved.analysisId) && found.some(hit => hit.id === saved.analysisId) ? saved.analysisId : "",
+      hits,
+      analysisId: hits.some(hit => hit.selected && hit.id === saved.analysisId) ? saved.analysisId : "",
       level: saved.hasFolders === false ? (saved.level ?? FULL_SEARCH_LEVEL) : 1,
       grouped: saved.grouped ?? true,
       hasFolders: saved.hasFolders ?? true,
+      hiddenIds: saved.hiddenIds || [],
+      visualGroups: saved.visualGroups || {},
+      photoDecisions: saved.photoDecisions || {},
       source: "저장된 검색 결과",
     };
   }, []);
@@ -282,7 +344,7 @@ export default function ProductCatalogPage() {
   useEffect(() => {
     for (const [model, state] of Object.entries(photoStates)) {
       if (state.loading || !state.hits.length) continue;
-      const saved = { hits: state.hits.map(hit => ({ id: hit.id, matchedBy: hit.matchedBy })), selectedIds: state.hits.filter(hit => hit.selected).map(hit => hit.id), analysisId: state.analysisId, level: state.level, grouped: state.grouped, hasFolders: state.hasFolders };
+      const saved = { hits: state.hits.map(hit => ({ id: hit.id, matchedBy: hit.matchedBy })), selectedIds: state.hits.filter(hit => hit.selected).map(hit => hit.id), analysisId: state.analysisId, level: state.level, grouped: state.grouped, hasFolders: state.hasFolders, hiddenIds: state.hiddenIds || [], visualGroups: state.visualGroups || {}, photoDecisions: state.photoDecisions || {} };
       const json = JSON.stringify(saved);
       if (savedSearchJson.current[model] === json) continue;
       savedSearchJson.current[model] = json;
@@ -387,11 +449,11 @@ export default function ProductCatalogPage() {
       const keepSelected = new Set((previous?.hits || []).filter(hit => hit.selected).map(hit => hit.id));
       const foundIds = new Set(found.map(hit => hit.id));
       const keptSelected = (previous?.hits || []).filter(hit => hit.selected && !foundIds.has(hit.id));
-      const hits = [...toHits(found, keepSelected), ...keptSelected];
+      const hits = sortPhotoHits([...await toHits(found, keepSelected), ...keptSelected]);
       const analysisId = hits.some(hit => hit.selected && hit.id === previous?.analysisId) ? previous!.analysisId : "";
       const recovered = found.some(photo => photo.matchedBy.includes("1차 · 이동된 모델 폴더"));
       const note = recovered ? "MYBOX 통합 후 이동된 모델 폴더에서 사진을 찾았습니다. 제품DB의 확정 폴더 경로는 옛 경로입니다." : hasFolders && !found.length ? "1차 확정 폴더에서 사진을 찾지 못했습니다. 아래 버튼으로 범위를 넓혀 주세요." : undefined;
-      setPhotoStates(current => ({ ...current, [key]: { loading: false, hits, analysisId, level, grouped, hasFolders, source: recovered ? "1차 · 이동된 모델 폴더" : levelSource(level, hasFolders), note } }));
+      setPhotoStates(current => ({ ...current, [key]: { loading: false, hits, analysisId, level, grouped, hasFolders, hiddenIds: previous?.hiddenIds || [], visualGroups: previous?.visualGroups || {}, photoDecisions: previous?.photoDecisions || {}, source: recovered ? "1차 · 이동된 모델 폴더" : levelSource(level, hasFolders), note } }));
     } catch (cause) {
       setPhotoStates(current => ({ ...current, [key]: { loading: false, hits: [], analysisId: "", level: 1, grouped: false, hasFolders: false, error: cause instanceof Error ? cause.message : "사진 후보를 찾지 못했습니다." } }));
     }
@@ -407,9 +469,9 @@ export default function ProductCatalogPage() {
     try {
       const link = fetchLinkTable(key.trim(), relatedItems);
       const result = await loadPhotoLevel(level, key.trim(), relatedItems, link, state.hits);
-      const added = toHits(result.photos, new Set());
+      const added = await toHits(result.photos, new Set());
       const note = added.length ? `${LEVEL_NAMES[level]}에서 ${added.length}장을 뒤에 추가했습니다.` : `${LEVEL_NAMES[level]}에는 추가할 사진이 없습니다.`;
-      setPhotoStates(current => ({ ...current, [key]: { ...current[key], loading: false, level, hits: [...current[key].hits, ...added], source: levelSource(level, current[key].hasFolders), note } }));
+      setPhotoStates(current => ({ ...current, [key]: { ...current[key], loading: false, level, hits: sortPhotoHits([...current[key].hits, ...added]), source: levelSource(level, current[key].hasFolders), note } }));
     } catch (cause) {
       setPhotoStates(current => ({ ...current, [key]: { ...current[key], loading: false, error: cause instanceof Error ? cause.message : "사진을 더 찾지 못했습니다." } }));
     }
@@ -431,7 +493,7 @@ export default function ProductCatalogPage() {
       const state = current[model];
       if (!state) return current;
       let room = 10 - state.hits.filter(photo => photo.selected).length;
-      return { ...current, [model]: { ...state, hits: state.hits.map(photo => photo.selected || room <= 0 ? photo : (room--, { ...photo, selected: true })) } };
+      return { ...current, [model]: { ...state, hits: state.hits.map(photo => photo.identity.kind === "detail" || state.hiddenIds?.includes(photo.id) || brokenPhotoIds.has(photo.id) || photo.selected || room <= 0 ? photo : (room--, { ...photo, selected: true })) } };
     });
   }
 
@@ -439,11 +501,90 @@ export default function ProductCatalogPage() {
     setPhotoStates(current => current[model] ? { ...current, [model]: { ...current[model], analysisId: "", hits: current[model].hits.map(photo => ({ ...photo, selected: false })) } } : current);
   }
 
+  function hidePhoto(model: string, photoId: string, hidden: boolean) {
+    setPhotoStates(current => {
+      const state = current[model];
+      if (!state) return current;
+      const ids = new Set(state.hiddenIds || []);
+      if (hidden) ids.add(photoId); else ids.delete(photoId);
+      return { ...current, [model]: { ...state, hiddenIds: [...ids], analysisId: hidden && state.analysisId === photoId ? "" : state.analysisId, hits: state.hits.map(hit => hit.id === photoId && hidden ? { ...hit, selected: false } : hit) } };
+    });
+  }
+
+  async function photoReviewBlob(hit: PhotoHit): Promise<Blob> {
+    let blob = await thumbnailBlob(hit.id, hit.file, () => true).catch(() => null);
+    if (blob) {
+      const decoded = await createImageBitmap(blob).catch(() => null);
+      decoded?.close();
+      if (!decoded) blob = null;
+    }
+    if (!blob) {
+      blob = await queueThumbnail(() => makeThumbnail(hit.file));
+      if (blob) void saveThumbnail(hit.id, hit.file, blob).catch(() => {});
+    }
+    if (!blob) throw new Error(`${hit.fileName} 미리보기를 만들지 못했습니다.`);
+    return blob;
+  }
+
+  async function blobDataUrl(blob: Blob): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function tidyPhotoCandidates(model: string) {
+    const state = photoStates[model];
+    if (!state || tidyingModel) return;
+    setTidyingModel(model);
+    try {
+      const reviewed: Array<{ hit: PhotoHit; image: Blob }> = [];
+      for (const hit of state.hits) {
+        if (hit.identity.kind === "detail") continue;
+        try { reviewed.push({ hit, image: await photoReviewBlob(hit) }); }
+        catch { /* 열 수 없는 사진은 유사판단·자동 제외에서 빼고 원본 목록에 남긴다. */ }
+      }
+      const groups = await groupVisuallyIdentical(reviewed.map(({ hit, image }) => ({ id: hit.id, image, width: hit.identity.width, height: hit.identity.height, detail: false })));
+      setPhotoStates(current => current[model] ? { ...current, [model]: { ...current[model], visualGroups: groups, note: "시각적으로 거의 같은 사진은 묶었습니다. 패키지·홍보컷을 분류하는 중입니다…" } } : current);
+      const candidates = reviewed.filter(({ hit }) => !state.hiddenIds?.includes(hit.id));
+      const decisions: Record<string, PhotoDecision> = {};
+      for (let offset = 0; offset < candidates.length; offset += 8) {
+        const batch = candidates.slice(offset, offset + 8);
+        const sections: { id: string; dataUrl: string }[] = [];
+        const requested = new Map<string, string>();
+        for (let index = 0; index < batch.length; index += 1) {
+          const id = `photo-${offset + index + 1}`;
+          requested.set(id, batch[index].hit.id);
+          sections.push({ id, dataUrl: await blobDataUrl(batch[index].image) });
+        }
+        if (!sections.length) continue;
+        const response = await fetch("/api/image-generator/quick-analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sections }) });
+        const data = await response.json() as { decisions?: Array<{ id: string; keep: boolean; kind: PhotoDecision["kind"]; reason: string }>; error?: string };
+        if (!response.ok || !Array.isArray(data.decisions)) throw new Error(data.error || "사진 자동 분류에 실패했습니다.");
+        for (const decision of data.decisions) {
+          const photoId = requested.get(decision.id);
+          if (photoId) decisions[photoId] = { kind: decision.keep ? decision.kind : "exclude", reason: decision.reason };
+        }
+      }
+      setPhotoStates(current => {
+        const latest = current[model];
+        if (!latest) return current;
+        const hidden = new Set(latest.hiddenIds || []);
+        for (const [id, decision] of Object.entries(decisions)) if (decision.kind === "exclude") hidden.add(id);
+        return { ...current, [model]: { ...latest, hiddenIds: [...hidden], photoDecisions: { ...latest.photoDecisions, ...decisions }, analysisId: hidden.has(latest.analysisId) ? "" : latest.analysisId, hits: latest.hits.map(hit => hidden.has(hit.id) ? { ...hit, selected: false } : hit), note: `사진 자동 정리 완료 · 시각적 묶음 ${new Set(Object.values(groups)).size}개 · 패키지·홍보 등 ${Object.values(decisions).filter(decision => decision.kind === "exclude").length}장 숨김 (언제든 다시 보기 가능)` } };
+      });
+    } catch (error) {
+      setPhotoStates(current => current[model] ? { ...current, [model]: { ...current[model], note: error instanceof Error ? error.message : "사진 자동 정리에 실패했습니다." } } : current);
+    } finally { setTidyingModel(""); }
+  }
+
   function setPhotoSelected(model: string, photoId: string, selected: boolean) {
     setPhotoStates(current => {
       const state = current[model];
       if (!state) return current;
-      if (selected && state.hits.filter(photo => photo.selected).length >= 10) return current;
+      if (brokenPhotoIds.has(photoId) || state.hiddenIds?.includes(photoId) || state.hits.find(photo => photo.id === photoId)?.identity.kind === "detail" || (selected && state.hits.filter(photo => photo.selected).length >= 10)) return current;
       return { ...current, [model]: { ...state, analysisId: !selected && state.analysisId === photoId ? "" : state.analysisId, hits: state.hits.map(photo => photo.id === photoId ? { ...photo, selected } : photo) } };
     });
   }
@@ -453,7 +594,7 @@ export default function ProductCatalogPage() {
     setPhotoStates(current => {
       const state = current[model];
       const target = state?.hits.find(photo => photo.id === photoId);
-      if (!state || !target) return current;
+      if (!state || !target || target.identity.kind === "detail" || state.hiddenIds?.includes(photoId) || brokenPhotoIds.has(photoId)) return current;
       if (!target.selected && state.hits.filter(photo => photo.selected).length >= 10) return current;
       return { ...current, [model]: { ...state, analysisId: photoId, hits: state.hits.map(photo => photo.id === photoId ? { ...photo, selected: true } : photo) } };
     });
@@ -493,8 +634,18 @@ export default function ProductCatalogPage() {
   }, [viewer]);
 
   async function prepareModel(modelName: string, groupItems: ProductCatalogItem[]) {
+    if (!manualExclusions || excludedModelKeys.has(clean(modelName))) {
+      setExclusionError("제외된 모델이거나 제외 목록을 확인하지 못해 등록 준비를 진행할 수 없습니다.");
+      return;
+    }
     const state = photoStates[modelName];
-    const selectedPhotos = (state?.hits || []).filter(hit => hit.selected);
+    if (!state || state.loading) {
+      setFolderMessage("먼저 이 모델 사진을 검색해 기존 상세페이지·보정본 여부를 확인해주세요.");
+      return;
+    }
+    const details = (state?.hits || []).filter(hit => hit.identity.kind === "detail" && !state?.hiddenIds?.includes(hit.id));
+    const chosenDetail = detailChoices[modelName] === "none" ? undefined : details.find(hit => hit.id === detailChoices[modelName]) || details[0];
+    const selectedPhotos = (state?.hits || []).filter(hit => hit.selected && !brokenPhotoIds.has(hit.id) && !state?.hiddenIds?.includes(hit.id));
     if (state && selectedPhotos.length && !selectedPhotos.some(hit => hit.id === state.analysisId)) {
       setPhotoStates(current => ({ ...current, [modelName]: { ...state, error: "AI 분석용 사진을 1장 지정해주세요. 제품만 정확히 나온 사진 아래 ‘분석용’ 버튼을 누르면 됩니다." } }));
       return;
@@ -503,6 +654,7 @@ export default function ProductCatalogPage() {
     setFolderMessage("");
     try {
       await savePreparedPhotos(modelName, selectedPhotos, state?.analysisId);
+      await savePreparedDetail(modelName, chosenDetail);
       window.localStorage.setItem(REREGISTRATION_PREP_KEY, JSON.stringify({ modelName, items: groupItems }));
       router.push(`/?reregisterModel=${encodeURIComponent(modelName)}`);
     } catch {
@@ -516,7 +668,7 @@ export default function ProductCatalogPage() {
         <div>
           <p style={{ margin: 0, color: wmsColors.muted, fontSize: 12, fontWeight: 700 }}>상품등록 · 연결 대장</p>
           <h1 style={{ margin: "4px 0 6px", color: wmsColors.ink, fontSize: 26 }}>모델·옵션·SKU·사진 연결</h1>
-          <p style={{ margin: 0, color: wmsColors.muted, fontSize: 13 }}>모델명은 상품군, 모델SKU는 옵션 키입니다. 이 화면은 읽기 전용입니다.</p>
+           <p style={{ margin: 0, color: wmsColors.muted, fontSize: 13 }}>모델명은 상품군, 모델SKU는 옵션 키입니다. 제품DB는 읽기 전용이며 재등록 제외 사유는 사이트에 따로 저장합니다.</p>
         </div>
         <Link href="/" style={{ color: wmsColors.ink, fontWeight: 800, fontSize: 13 }}>AI 상품등록으로 돌아가기</Link>
       </div>
@@ -546,6 +698,7 @@ export default function ProductCatalogPage() {
 
       {!configured && !loading && <div style={{ border: `1px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>Google Sheets 연결 설정이 없어 상품을 읽지 못했습니다.</div>}
       {error && <div style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{error}</div>}
+      {exclusionError && <div role="alert" style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{exclusionError}</div>}
       <p style={{ fontSize: 12, color: wmsColors.muted }}>제품DB의 공란만으로 쿠팡 승인 여부를 판단할 수 없습니다. {snapshot ? `이 브라우저·사이트에 저장된 WIMS ${snapshot.rows.length}건의 대조 후보를 함께 표시합니다. 재등록 이력 검증과 DB 반영은 별도입니다.` : "이 브라우저·사이트에서 읽을 수 있는 WIMS 자료가 없습니다. 다른 브라우저나 운영 사이트의 저장 자료는 여기와 공유되지 않습니다."} <Link href="/product-registration#wims-registration">WIMS 대조 화면 열기</Link></p>
       <p style={{ fontSize: 12, color: wmsColors.muted }}>제품페이지 주소가 비어 있는 행은 SKU ID를 임의로 URL로 바꾸지 않습니다. 쿠팡에서 내려받은 <b>쿠팡쇼핑몰 추출DB.xlsx</b>를 <Link href="/#coupang-data-import">작업센터의 ‘쿠팡 추출DB 업데이트’</Link>에 올리면 SKU ID/옵션ID로 기존 행의 제품링크만 연결할 수 있습니다.</p>
 
@@ -575,37 +728,65 @@ export default function ProductCatalogPage() {
         <div style={{ display: "grid", gap: 10 }}>
           {status === "reregister" && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 14, marginBottom: 2 }}>
             <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>재등록 작업 묶음 · {reregistrationGroups.length}개 모델</div>
+            {!manualExclusions && <p style={{ fontSize: 12 }}>재등록 제외 목록을 확인하는 중입니다. 확인 전에는 등록 준비를 할 수 없습니다.</p>}
+            {manualExclusions && Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).length > 0 && <div style={{ margin: "10px 0", padding: 10, border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff" }}>
+              <strong style={{ fontSize: 12 }}>재등록 제외 모델</strong>
+              {Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).map(entry => <div key={clean(entry.modelName)} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 7, fontSize: 12 }}><b>{entry.modelName}</b><span>사유: {entry.reason}</span><button type="button" onClick={() => void changeExclusion(entry.modelName, null)} disabled={Boolean(savingExclusion)} style={{ cursor: "pointer" }}>제외 해제</button></div>)}
+            </div>}
             <p style={{ color: wmsColors.ink, fontSize: 12, margin: "6px 0 12px" }}>모델 하나에 옵션이 여러 개 있어도 사진 폴더 검색은 한 번만 합니다. 아래 옵션 목록은 각각 별도 모델SKU로 유지됩니다.</p>
             <div style={{ display: "grid", gap: 8 }}>
               {reregistrationGroups.map(group => {
                 const first = group.items[0];
                 const photos = photoStates[group.modelName];
+                const detailHits = photos?.hits.filter(hit => hit.identity.kind === "detail" && !photos.hiddenIds?.includes(hit.id)) || [];
+                const editedCount = photos?.hits.filter(hit => hit.identity.kind === "edited" && !photos.hiddenIds?.includes(hit.id)).length || 0;
+                const groupKeyOf = (hit: PhotoHit) => photos?.visualGroups?.[hit.id] || `name:${hit.identity.duplicateName}`;
+                const nameCounts = new Map<string, number>();
+                for (const hit of photos?.hits || []) if (!photos?.hiddenIds?.includes(hit.id) || showHiddenPhotos[group.modelName]) nameCounts.set(groupKeyOf(hit), (nameCounts.get(groupKeyOf(hit)) || 0) + 1);
+                const visibleNames = new Set<string>();
+                const visibleHits = (photos?.hits || []).map((hit, index) => ({ hit, index })).filter(({ hit }) => {
+                  if (photos?.hiddenIds?.includes(hit.id) && !showHiddenPhotos[group.modelName]) return false;
+                  const name = groupKeyOf(hit);
+                  const expanded = expandedPhotoNames[`${group.key}|${name}`];
+                  if (expanded || !visibleNames.has(name) || hit.selected) { visibleNames.add(name); return true; }
+                  return false;
+                });
                 return <article key={group.key} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 10 }}>
                   <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", gap: 10 }}>
                     <div><div style={{ color: wmsColors.ink, fontWeight: 800 }}>{group.modelName}</div><div style={{ color: wmsColors.ink, fontSize: 12, marginTop: 3 }}>{group.productName}</div><div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 4 }}>{group.items.length}개 후보 행</div><div style={{ display: "grid", gap: 3, marginTop: 6, fontSize: 11 }}>{group.items.map((item, itemIndex) => { const itemLink = externalUrl(item.productLink); return <div key={`${item.skuId}|${item.modelSku}|${item.optionLabel}|${itemIndex}`} style={{ color: wmsColors.muted }}>모델SKU <b>{item.modelSku || "미확인"}</b> · 기존 SKU ID <b>{item.skuId || "미확인"}</b> · 바코드 <b>{item.barcode || "미확인"}</b> · 옵션 <b>{item.optionLabel || "미확인"}</b> · 누적입고 <b>{item.cumulativeInbound ? `${(Number(item.cumulativeInbound) || 0).toLocaleString()}개` : "미확인"}</b> · 발주가능상태 <b>{item.orderableStatus || "미확인"}</b>{itemLink ? <> · <a href={itemLink} target="_blank" rel="noreferrer" style={{ color: wmsColors.slate }}>제품페이지 열기 ↗</a></> : " · 제품주소 미등록"}</div>; })}</div></div>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}><Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={{ fontSize: 12, color: wmsColors.slate, fontWeight: 700 }}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName || photos?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: photos?.loading ? "wait" : "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "사진 검색 중…" : "이 모델 사진 검색"}</button>{photos && !photos.loading && photos.hits.length > 0 && <button type="button" onClick={() => void searchPhotos(first, group.items, true)} title="1차 확정 폴더부터 새로 찾습니다. 고른 사진과 분석용은 유지됩니다." style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.muted }}>다시 검색 (1차부터)</button>}{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.warnText }}>검색 초기화</button>}</div>
+                     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}><Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={{ fontSize: 12, color: wmsColors.slate, fontWeight: 700 }}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName || photos?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: photos?.loading ? "wait" : "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "사진 검색 중…" : "이 모델 사진 검색"}</button><select aria-label={`${group.modelName} 제외 사유`} value={exclusionReasons[group.key] || "가품 위험"} onChange={event => setExclusionReasons(current => ({ ...current, [group.key]: event.target.value }))}><option>가품 위험</option><option>상표·디자인 위험</option><option>재등록 불필요</option><option>기타</option></select><button type="button" onClick={() => void changeExclusion(group.modelName, exclusionReasons[group.key] || "가품 위험")} disabled={Boolean(savingExclusion)} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.warnText }}>재등록 제외</button>{photos && !photos.loading && photos.hits.length > 0 && <button type="button" onClick={() => void searchPhotos(first, group.items, true)} title="1차 확정 폴더부터 새로 찾습니다. 고른 사진과 분석용은 유지됩니다." style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.muted }}>다시 검색 (1차부터)</button>}{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.warnText }}>검색 초기화</button>}</div>
                   </div>
                   {!photos && savedHints[group.modelName] !== undefined && <div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 7 }}>저장된 사진 검색 결과가 있습니다(선택 {savedHints[group.modelName]}장). ‘이 모델 사진 검색’을 누르면 다시 검색하지 않고 바로 불러옵니다.</div>}
                   {photos?.error && <div style={{ color: wmsColors.warnText, fontSize: 11, marginTop: 7 }}>{photos.error}</div>}
+                  {photos && photos.hits.length > 0 && <div style={{ color: wmsColors.ink, fontSize: 12, marginTop: 8 }}>{detailHits.length ? `기존 상세페이지 후보 ${detailHits.length}장 우선 · 등록 준비 시 상세페이지 정리 화면으로 전달` : editedCount ? `기존 상세페이지 없음 · 보정본 폴더 ${editedCount}장 우선 표시` : "기존 상세페이지·보정본 폴더 없음 · 일반 사진의 보정 상태 확인 필요"}</div>}
+                  {photos && (photos.hiddenIds?.length || 0) > 0 && <button type="button" onClick={() => setShowHiddenPhotos(current => ({ ...current, [group.modelName]: !current[group.modelName] }))} style={{ marginTop: 6 }}>{showHiddenPhotos[group.modelName] ? "숨긴 사진 접기" : `패키지·기타로 숨긴 사진 ${photos.hiddenIds?.length}장 보기`}</button>}
+                  {detailHits.length > 0 && <div style={{ marginTop: 6, fontSize: 12 }}><label>상세페이지 후보: <select value={detailChoices[group.modelName] || detailHits[0].id} onChange={event => setDetailChoices(current => ({ ...current, [group.modelName]: event.target.value }))}>{detailHits.map(hit => <option key={hit.id} value={hit.id}>{hit.fileName} ({hit.identity.width}×{hit.identity.height})</option>)}<option value="none">사용하지 않음</option></select></label></div>}
                   {photos && photos.hits.length > 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+                    <button type="button" onClick={() => void tidyPhotoCandidates(group.modelName)} disabled={Boolean(tidyingModel)} style={{ border: `1px solid ${wmsColors.slate}`, borderRadius: 8, background: "#fff", padding: "7px 12px", cursor: tidyingModel ? "wait" : "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.slate }}>{tidyingModel === group.modelName ? "중복·패키지컷 정리 중…" : "AI로 중복·패키지컷 정리"}</button>
                     <button type="button" onClick={() => selectAllPhotos(group.modelName)} disabled={photos.hits.filter(hit => hit.selected).length >= 10} style={{ border: `1px solid ${wmsColors.slate}`, borderRadius: 8, background: "#fff", padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.slate }}>전체 선택 (최대 10장)</button>
                     <button type="button" onClick={() => clearPhotoSelection(group.modelName)} disabled={!photos.hits.some(hit => hit.selected)} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.ink }}>전체 해제</button>
                     <span style={{ color: wmsColors.muted, fontSize: 11 }}>전체 해제는 분석용 지정도 함께 풉니다.</span>
                   </div>}
                   {photos && photos.hits.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-                    {photos.hits.slice(0, shownCounts[group.modelName] || THUMBNAIL_PAGE).map((hit, hitIndex) => {
+                     {visibleHits.slice(0, shownCounts[group.modelName] || THUMBNAIL_PAGE).map(({ hit, index: hitIndex }) => {
                       const isAnalysis = photos.analysisId === hit.id;
                       const full = !hit.selected && photos.hits.filter(photo => photo.selected).length >= 10;
                       return <div key={hit.id} style={{ width: 104, fontSize: 11, overflowWrap: "anywhere", border: `2px solid ${isAnalysis ? wmsColors.greenDark : hit.selected ? wmsColors.slate : "transparent"}`, borderRadius: 8, padding: 2 }}>
                         <button type="button" onClick={() => setViewer({ model: group.modelName, index: hitIndex })} title="크게 보기" style={{ display: "block", padding: 0, border: 0, background: "none", cursor: "zoom-in" }}>
-                          <Thumbnail photoId={hit.id} file={hit.file} alt={hit.fileName} />
+                           <Thumbnail photoId={hit.id} file={hit.file} alt={hit.fileName} onBroken={() => setBrokenPhotoIds(current => new Set(current).add(hit.id))} />
                         </button>
-                        <label style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 3, padding: "5px 6px", border: `1px solid ${hit.selected ? wmsColors.slate : wmsColors.border}`, borderRadius: 6, background: hit.selected ? wmsColors.surface : "#fff", cursor: full ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={hit.selected} disabled={full} onChange={event => setPhotoSelected(group.modelName, hit.id, event.target.checked)} style={{ width: 20, height: 20, margin: 0, cursor: "inherit" }} />선택</label>
-                        <button type="button" onClick={() => setAnalysisPhoto(group.modelName, hit.id)} disabled={full && !isAnalysis} style={{ marginTop: 3, width: "100%", border: `1px solid ${isAnalysis ? wmsColors.greenDark : wmsColors.border}`, borderRadius: 6, background: isAnalysis ? wmsColors.greenDark : "#fff", color: isAnalysis ? "#fff" : wmsColors.ink, fontSize: 13, fontWeight: 700, padding: "6px 0", cursor: "pointer" }}>{isAnalysis ? "★ 분석용" : "분석용"}</button>
-                        <div>{hit.fileName}</div><div style={{ color: wmsColors.muted }}>검색: {hit.matchedBy.join(", ")}</div>
+                         <div style={{ fontWeight: 800, color: hit.identity.kind === "detail" ? wmsColors.warnText : wmsColors.slate }}>{hit.identity.label}</div>
+                         {hit.identity.kind !== "detail" && <><label style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 3, padding: "5px 6px", border: `1px solid ${hit.selected ? wmsColors.slate : wmsColors.border}`, borderRadius: 6, background: hit.selected ? wmsColors.surface : "#fff", cursor: full || brokenPhotoIds.has(hit.id) || photos.hiddenIds?.includes(hit.id) ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={hit.selected} disabled={full || brokenPhotoIds.has(hit.id) || photos.hiddenIds?.includes(hit.id)} onChange={event => setPhotoSelected(group.modelName, hit.id, event.target.checked)} style={{ width: 20, height: 20, margin: 0, cursor: "inherit" }} />선택</label>
+                         <button type="button" onClick={() => setAnalysisPhoto(group.modelName, hit.id)} disabled={(full && !isAnalysis) || brokenPhotoIds.has(hit.id) || photos.hiddenIds?.includes(hit.id)} style={{ marginTop: 3, width: "100%", border: `1px solid ${isAnalysis ? wmsColors.greenDark : wmsColors.border}`, borderRadius: 6, background: isAnalysis ? wmsColors.greenDark : "#fff", color: isAnalysis ? "#fff" : wmsColors.ink, fontSize: 13, fontWeight: 700, padding: "6px 0", cursor: "pointer" }}>{isAnalysis ? "★ 분석용 지정됨" : "AI 분석용으로 지정"}</button></>}
+                         {brokenPhotoIds.has(hit.id) && <div style={{ color: wmsColors.warnText }}>미리보기를 열지 못해 선택을 막았습니다.</div>}
+                         <div>{hit.fileName}</div><div style={{ color: wmsColors.muted }}>{hit.identity.folder} · {hit.identity.width && hit.identity.height ? `${hit.identity.width}×${hit.identity.height}` : "크기 미확인"}</div>
+                         <button type="button" onClick={() => hidePhoto(group.modelName, hit.id, !photos.hiddenIds?.includes(hit.id))} style={{ border: 0, background: "none", color: wmsColors.warnText, padding: 0, cursor: "pointer", textAlign: "left" }}>{photos.hiddenIds?.includes(hit.id) ? "다시 사용" : "패키지·기타 숨김"}</button>
+                         {photos.photoDecisions?.[hit.id] && <div style={{ color: wmsColors.muted }}>AI: {photos.photoDecisions[hit.id].kind === "product" ? "제품" : photos.photoDecisions[hit.id].kind === "wear" ? "착용" : "패키지·기타"} · {photos.photoDecisions[hit.id].reason}</div>}
+                         {(nameCounts.get(groupKeyOf(hit)) || 0) > 1 && <button type="button" onClick={() => setExpandedPhotoNames(current => ({ ...current, [`${group.key}|${groupKeyOf(hit)}`]: !current[`${group.key}|${groupKeyOf(hit)}`] }))} style={{ border: 0, background: "none", color: wmsColors.slate, padding: 0, cursor: "pointer", textAlign: "left" }}>{groupKeyOf(hit).startsWith("visual:") ? "시각적으로 유사" : "같은 파일명"} {nameCounts.get(groupKeyOf(hit))}장 {expandedPhotoNames[`${group.key}|${groupKeyOf(hit)}`] ? "접기" : "비교"}</button>}
+                         <details><summary style={{ cursor: "pointer", color: wmsColors.muted }}>저장 위치</summary><span>{hit.id}</span></details>
                       </div>;
                     })}
-                    {photos.hits.length > (shownCounts[group.modelName] || THUMBNAIL_PAGE) && <button type="button" onClick={() => setShownCounts(current => ({ ...current, [group.modelName]: (current[group.modelName] || THUMBNAIL_PAGE) + THUMBNAIL_PAGE }))} style={{ alignSelf: "center", border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "10px 14px", cursor: "pointer", fontWeight: 700, color: wmsColors.ink }}>사진 {Math.min(THUMBNAIL_PAGE, photos.hits.length - (shownCounts[group.modelName] || THUMBNAIL_PAGE))}장 더 표시 ({photos.hits.length - (shownCounts[group.modelName] || THUMBNAIL_PAGE)}장 남음)</button>}
+                     {visibleHits.length > (shownCounts[group.modelName] || THUMBNAIL_PAGE) && <button type="button" onClick={() => setShownCounts(current => ({ ...current, [group.modelName]: (current[group.modelName] || THUMBNAIL_PAGE) + THUMBNAIL_PAGE }))} style={{ alignSelf: "center", border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "10px 14px", cursor: "pointer", fontWeight: 700, color: wmsColors.ink }}>사진 {Math.min(THUMBNAIL_PAGE, visibleHits.length - (shownCounts[group.modelName] || THUMBNAIL_PAGE))}장 더 표시 ({visibleHits.length - (shownCounts[group.modelName] || THUMBNAIL_PAGE)}장 남음)</button>}
                     {photos.hits.length >= 400 && <p>사진이 많아 처음 400장만 표시합니다. 필요한 사진이 없으면 연결표의 사진폴더 지정을 고쳐야 하니 알려주세요.</p>}
                   </div>}
                   {photos?.note && <div style={{ color: wmsColors.ink, fontSize: 12, marginTop: 7 }}>{photos.note}</div>}
@@ -660,10 +841,10 @@ export default function ProductCatalogPage() {
           <button type="button" onClick={() => moveViewer(1)} disabled={viewer.index >= viewerState.hits.length - 1} aria-label="다음 사진" style={{ fontSize: 28, padding: "8px 14px", borderRadius: 8, border: 0, cursor: "pointer" }}>›</button>
         </div>
         <div onClick={event => event.stopPropagation()} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "center", marginTop: 12, color: "#fff", fontSize: 13 }}>
-          <span>{viewer.index + 1} / {viewerState.hits.length} · {viewerHit.fileName}</span>
-          <label style={{ display: "flex", gap: 6, alignItems: "center", padding: "6px 12px", borderRadius: 6, background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}><input type="checkbox" checked={viewerHit.selected} onChange={event => setPhotoSelected(viewer.model, viewerHit.id, event.target.checked)} style={{ width: 20, height: 20, margin: 0 }} />선택</label>
-          <button type="button" onClick={() => setAnalysisPhoto(viewer.model, viewerHit.id)} style={{ border: 0, borderRadius: 6, padding: "6px 12px", fontWeight: 700, cursor: "pointer", background: viewerState.analysisId === viewerHit.id ? wmsColors.greenDark : "#fff", color: viewerState.analysisId === viewerHit.id ? "#fff" : wmsColors.ink }}>{viewerState.analysisId === viewerHit.id ? "★ 분석용" : "분석용으로 지정"}</button>
-          <button type="button" onClick={() => downloadOriginal(viewerHit)} style={{ border: 0, borderRadius: 6, padding: "6px 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>원본저장 ({(viewerHit.file.size / 1024 / 1024).toFixed(1)}MB)</button>
+          <span>{viewer.index + 1} / {viewerState.hits.length} · {viewerHit.fileName} · {viewerHit.identity.label} · {viewerHit.identity.folder}</span>
+          {viewerHit.identity.kind !== "detail" && <><label style={{ display: "flex", gap: 6, alignItems: "center", padding: "6px 12px", borderRadius: 6, background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}><input type="checkbox" checked={viewerHit.selected} disabled={brokenPhotoIds.has(viewerHit.id) || viewerState.hiddenIds?.includes(viewerHit.id)} onChange={event => setPhotoSelected(viewer.model, viewerHit.id, event.target.checked)} style={{ width: 20, height: 20, margin: 0 }} />선택</label>
+          <button type="button" onClick={() => setAnalysisPhoto(viewer.model, viewerHit.id)} disabled={brokenPhotoIds.has(viewerHit.id) || viewerState.hiddenIds?.includes(viewerHit.id)} style={{ border: 0, borderRadius: 6, padding: "6px 12px", fontWeight: 700, cursor: "pointer", background: viewerState.analysisId === viewerHit.id ? wmsColors.greenDark : "#fff", color: viewerState.analysisId === viewerHit.id ? "#fff" : wmsColors.ink }}>{viewerState.analysisId === viewerHit.id ? "★ 분석용 지정됨" : "AI 분석용으로 지정"}</button></>}
+          <button type="button" onClick={() => downloadOriginal(viewerHit)} style={{ border: 0, borderRadius: 6, padding: "6px 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>이 파일 저장 ({(viewerHit.file.size / 1024 / 1024).toFixed(1)}MB)</button>
           <button type="button" onClick={() => setViewer(null)} style={{ border: 0, borderRadius: 6, padding: "6px 12px", cursor: "pointer" }}>닫기 (Esc)</button>
         </div>
       </div>}
@@ -823,22 +1004,33 @@ async function thumbnailBlob(photoId: string, file: File, stillWanted: () => boo
   return made;
 }
 
-function Thumbnail({ photoId, file, alt }: { photoId: string; file: File; alt: string }) {
+function Thumbnail({ photoId, file, alt, onBroken }: { photoId: string; file: File; alt: string; onBroken: () => void }) {
   const [url, setUrl] = useState(() => thumbnailCache.get(photoId) || "");
+  const [fallback, setFallback] = useState(0);
+  const [broken, setBroken] = useState(false);
   useEffect(() => {
     if (thumbnailCache.has(photoId)) { setUrl(thumbnailCache.get(photoId)!); return; }
     let alive = true;
     void thumbnailBlob(photoId, file, () => alive)
       .then(blob => {
-        if (!blob) return;
-        const made = URL.createObjectURL(blob);
+        const made = URL.createObjectURL(blob || file);
         thumbnailCache.set(photoId, made);
         if (alive) setUrl(made);
       })
       .catch(() => { if (alive) setUrl(URL.createObjectURL(file)); });
     return () => { alive = false; };
   }, [photoId, file]);
+  if (broken) return <div style={{ width: 100, height: 100, display: "flex", alignItems: "center", justifyContent: "center", background: wmsColors.surface, color: wmsColors.warnText, fontSize: 11 }}>미리보기 오류</div>;
   if (!url) return <div style={{ width: 100, height: 100, display: "flex", alignItems: "center", justifyContent: "center", background: wmsColors.surface, color: wmsColors.muted, fontSize: 11 }}>불러오는 중…</div>;
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src={url} alt={alt} style={{ width: 100, height: 100, objectFit: "contain" }} />;
+  return <img src={url} alt={alt} onError={() => {
+    thumbnailCache.delete(photoId);
+    if (fallback === 0) {
+      setFallback(1);
+      void queueThumbnail(() => makeThumbnail(file)).then(blob => setUrl(URL.createObjectURL(blob || file))).catch(() => setUrl(URL.createObjectURL(file)));
+    } else if (fallback === 1) {
+      setFallback(2);
+      setUrl(URL.createObjectURL(file));
+    } else { setBroken(true); onBroken(); }
+  }} style={{ width: 100, height: 100, objectFit: "contain" }} />;
 }
