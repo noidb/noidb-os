@@ -282,7 +282,6 @@ export default function ProductCatalogPage() {
   }), [items, isReregistrationTarget, reregisterModelKeys, excludedModelKeys]);
 
   const reregistrationGroups = useMemo(() => {
-    if (status !== "reregister") return [];
     const matchedKeys = new Set<string>();
     for (const item of filteredItems) {
       const key = namedModelGroupKey(item);
@@ -296,9 +295,13 @@ export default function ProductCatalogPage() {
         modelName: representative?.modelName || "모델명 없음",
         productName: representative ? resolveDisplayNameAndOption(representative.productName || "", representative.optionLabel).name : "상품명 없음",
         items: groupItems,
+        topInbound: Math.max(0, ...groupItems.map(item => Number(item.cumulativeInbound) || 0)),
       };
-    });
-  }, [filteredItems, items, status]);
+    }).sort((a, b) => b.topInbound - a.topInbound);
+  }, [filteredItems, items]);
+  const unnamedItems = useMemo(() => filteredItems.filter(item => !namedModelGroupKey(item)), [filteredItems]);
+  const [groupLimit, setGroupLimit] = useState(100);
+  useEffect(() => { setGroupLimit(100); }, [status, query]);
 
   async function toHits(found: LocalPhoto[], selectedIds: Set<string>): Promise<PhotoHit[]> {
     const hits: PhotoHit[] = [];
@@ -727,15 +730,15 @@ export default function ProductCatalogPage() {
       {/* 창을 다시 누를 때의 자동 새로고침은 목록을 그대로 둔 채 뒤에서 읽는다(처음 한 번만 로딩 화면). */}
       {loading && !items.length ? <p style={{ color: wmsColors.muted }}>상품 연결 대장을 읽는 중입니다.</p> : (
         <div style={{ display: "grid", gap: 10 }}>
-          {status === "reregister" && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 14, marginBottom: 2 }}>
-            <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>재등록 작업 묶음 · {reregistrationGroups.length}개 모델</div>
+          {(status === "reregister" || reregistrationGroups.length > 0) && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 14, marginBottom: 2 }}>
+            <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>{status === "reregister" ? "재등록 작업 묶음" : "모델별 목록"} · {reregistrationGroups.length}개 모델</div>
             {!manualExclusions && <p style={{ fontSize: 12 }}>재등록 제외 목록을 확인하는 중입니다. 확인 전에는 등록 준비를 할 수 없습니다.</p>}
             {manualExclusions && Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).length > 0 && <div style={{ margin: "10px 0", padding: 10, border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff" }}>
               <strong style={{ fontSize: 12 }}>재등록 제외 모델</strong>
               {Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).map(entry => <div key={clean(entry.modelName)} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 7, fontSize: 12 }}><b>{entry.modelName}</b><span>사유: {entry.reason}</span><button type="button" onClick={() => void changeExclusion(entry.modelName, null)} disabled={Boolean(savingExclusion)} style={neutralPillStyle}>제외 해제</button></div>)}
             </div>}
             <div style={{ display: "grid", gap: 8 }}>
-              {reregistrationGroups.map(group => {
+              {reregistrationGroups.slice(0, groupLimit).map(group => {
                 const first = group.items[0];
                 const photos = photoStates[group.modelName];
                 const detailHits = photos?.hits.filter(hit => hit.identity.kind === "detail" && !photos.hiddenIds?.includes(hit.id)) || [];
@@ -770,7 +773,7 @@ export default function ProductCatalogPage() {
                     const sku = item.modelSku || "미확인";
                     return <div key={`${item.skuId}|${item.modelSku}|${item.optionLabel}|${itemIndex}`} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px 12px", color: wmsColors.muted }}>
                       {itemLink ? <a href={itemLink} target="_blank" rel="noreferrer" title="제품링크 열기" style={{ color: wmsColors.ink, fontWeight: 800, whiteSpace: "nowrap", textDecoration: "underline", textUnderlineOffset: 2 }}>{sku}</a> : <b style={{ color: wmsColors.ink, whiteSpace: "nowrap" }}>{sku}</b>}
-                      {field("SKU ID", item.skuId || "미확인")}{field("바코드", item.barcode || "미확인")}{field("옵션", item.optionLabel || "미확인")}{field("누적입고", item.cumulativeInbound ? `${(Number(item.cumulativeInbound) || 0).toLocaleString()}개` : "미확인")}{field("발주가능상태", item.orderableStatus || "미확인")}
+                      {field("SKU ID", item.skuId || "미확인")}{field("바코드", item.barcode || "미확인")}{field("옵션", item.optionLabel || "미확인")}{field("누적입고", item.cumulativeInbound ? `${(Number(item.cumulativeInbound) || 0).toLocaleString()}개` : "미확인")}{field("발주가능상태", item.orderableStatus || "미확인")}{field("DB 상태", item.currentStatus || "미입력")}{item.skuId && <Link href={`/wms/products/${encodeURIComponent(item.skuId)}`} style={{ color: wmsColors.slate, fontWeight: 700, whiteSpace: "nowrap", textDecoration: "underline", textUnderlineOffset: 2 }}>상세 보기</Link>}
                     </div>;
                   })}</div>
                   {photos?.error && <div style={{ color: wmsColors.warnText, fontSize: 11, marginTop: 7 }}>{photos.error}</div>}
@@ -808,8 +811,9 @@ export default function ProductCatalogPage() {
                 </article>;
               })}
             </div>
+            {reregistrationGroups.length > groupLimit && <button type="button" onClick={() => setGroupLimit(current => current + 100)} style={{ ...neutralPillStyle, marginTop: 10 }}>모델 100개 더 보기 ({reregistrationGroups.length - groupLimit}개 남음)</button>}
           </section>}
-          {filteredItems.slice(0, 200).map((item, index) => {
+          {status !== "reregister" && unnamedItems.slice(0, 200).map((item, index) => {
             const rowKey = `${item.skuId}|${item.modelSku}|${item.modelName}|${index}`;
             const wims = snapshot ? findWimsRow(item, snapshot.rows) : null;
             const photoKey = item.modelName || item.modelSku || item.productName;
@@ -843,8 +847,8 @@ export default function ProductCatalogPage() {
               {photos && photos.hits.length > 0 && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 6, marginTop: 10 }}>{photos.hits.slice(0, 8).map(hit => <div key={hit.id} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, padding: 7, fontSize: 10, overflow: "hidden" }}><div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{hit.fileName}</div><div style={{ color: wmsColors.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{hit.id}</div></div>)}</div>}
             </article>;
           })}
-          {filteredItems.length > 200 && <p style={{ color: wmsColors.muted, fontSize: 12 }}>검색 결과가 많아 처음 200개만 표시합니다. 검색어를 좁혀 주세요.</p>}
-          {filteredItems.length === 0 && <p style={{ color: wmsColors.muted }}>조건에 맞는 상품이 없습니다.</p>}
+          {status !== "reregister" && unnamedItems.length > 200 && <p style={{ color: wmsColors.muted, fontSize: 12 }}>검색 결과가 많아 처음 200개만 표시합니다. 검색어를 좁혀 주세요.</p>}
+          {status !== "reregister" && filteredItems.length === 0 && <p style={{ color: wmsColors.muted }}>조건에 맞는 상품이 없습니다.</p>}
         </div>
       )}
       {viewerHit && viewerState && viewer && <div role="dialog" aria-modal="true" aria-label="사진 크게 보기" onClick={() => setViewer(null)} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.82)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16 }}>

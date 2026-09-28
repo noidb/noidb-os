@@ -49,7 +49,7 @@ export default function WmsProductInfoPage() {
 
   async function save() {
     if (!item) return;
-    const fields = [...EDIT_FIELDS.map(([field]) => field), "imageUrl"];
+    const fields = [...EDIT_FIELDS.map(([field]) => field).filter(field => field !== "barcode"), "imageUrl"];
     const patch = Object.fromEntries(fields.filter(field => values[field] !== String(item[field as keyof ProductCatalogItem] || "")).map(field => [field, values[field]]));
     if (!Object.keys(patch).length) { setMessage("변경된 항목이 없습니다."); return; }
     setSaving(true); setMessage("");
@@ -73,16 +73,15 @@ export default function WmsProductInfoPage() {
         <div style={{ display: "flex", gap: "12px", padding: "12px", border: `1px solid ${wmsColors.border}`, borderRadius: "12px", background: "#fff", marginBottom: "12px" }}>
           {values.imageUrl ? <img src={getWmsDisplayImageUrl(values.imageUrl)} alt={item.productName} width={96} height={96} style={{ width: "96px", height: "96px", borderRadius: "10px", objectFit: "contain", background: wmsColors.surfaceBeige }} /> : <div style={{ width: "96px", height: "96px", borderRadius: "10px", display: "grid", placeItems: "center", background: wmsColors.surfaceBeige, color: wmsColors.muted, fontSize: "11px" }}>이미지 없음</div>}
           <div style={{ minWidth: 0, flex: 1 }}>
-            <strong style={{ fontSize: "14px", lineHeight: 1.4 }}>{item.productName}</strong>
+            {values.productLink ? <a href={values.productLink} target="_blank" rel="noopener noreferrer" title="제품링크 열기" style={{ fontSize: "14px", lineHeight: 1.4, fontWeight: 700, color: wmsColors.ink, textDecoration: "underline", textUnderlineOffset: 3 }}>{item.productName}</a> : <strong style={{ fontSize: "14px", lineHeight: 1.4 }}>{item.productName}</strong>}
             <div style={{ marginTop: "4px", fontSize: "12px", color: wmsColors.muted }}>거래처 {values.vendorName || "거래처 미등록"}</div>
             <button type="button" onClick={() => setImageEditOpen(true)} style={{ ...wmsSecondaryButton, minHeight: "36px", marginTop: "8px", fontSize: "12px" }}>{values.imageUrl ? "이미지 변경" : "이미지 등록"}</button>
           </div>
         </div>
         {EDIT_FIELDS.map(([field, label]) => <label key={field} style={{ display: "block", marginBottom: "10px" }}>
           <span style={{ display: "block", fontSize: "11px", color: wmsColors.muted, marginBottom: "4px" }}>{label}</span>
-          <input value={values[field] || ""} onChange={event => setValues(previous => ({ ...previous, [field]: event.target.value }))} style={{ width: "100%", minHeight: "42px", boxSizing: "border-box", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "9px", padding: "8px 10px", fontSize: "14px" }} />
+          <input value={values[field] || ""} readOnly={field === "barcode"} title={field === "barcode" ? "바코드는 고유 키라서 이 화면에서 수정할 수 없습니다." : undefined} onChange={event => setValues(previous => ({ ...previous, [field]: event.target.value }))} style={{ width: "100%", minHeight: "42px", boxSizing: "border-box", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "9px", padding: "8px 10px", fontSize: "14px", ...(field === "barcode" ? { background: "#ece8e2", color: wmsColors.muted, cursor: "not-allowed" } : {}) }} />
         </label>)}
-        {values.productLink ? <a href={values.productLink} target="_blank" rel="noopener noreferrer" style={{ display: "block", textAlign: "center", textDecoration: "none", ...wmsSecondaryButton, marginBottom: "10px" }}>제품페이지 열기 ↗</a> : <div style={{ textAlign: "center", color: wmsColors.muted, fontSize: "12px", marginBottom: "10px" }}>제품링크 없음</div>}
         {message && <p role="status" style={{ fontSize: "12px", color: message.includes("저장했습니다") ? wmsColors.greenDark : "#a33b2e" }}>{message}</p>}
         <button type="button" disabled={saving} onClick={save} style={{ ...wmsPrimaryButton, width: "100%", minHeight: "48px", opacity: saving ? 0.6 : 1 }}>{saving ? "저장 중..." : "제품DB에 저장"}</button>
         {imageEditOpen && <ImageEditSheet skuId={skuId} currentImageUrl={values.imageUrl} onClose={() => setImageEditOpen(false)} onSaved={url => { setValues(previous => ({ ...previous, imageUrl: url })); setImageEditOpen(false); }} />}
