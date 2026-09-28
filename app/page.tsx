@@ -1523,6 +1523,12 @@ export default function Home() {
     setAdjustResult("");
   };
 
+  const correctedPhotoSource = (slot: SlotImage) => {
+    const sourceName = slot.fileName.replace(/\s+/g, "").toLowerCase();
+    return detailImages.find(image => image.name.startsWith("보정본 ")
+      && image.name.slice(4).replace(/\s+/g, "").toLowerCase() === sourceName)?.dataUrl || slot.dataUrl;
+  };
+
   const previewAdjust = async () => {
     if (!adjustPreview) return;
     try {
@@ -1540,6 +1546,9 @@ export default function Home() {
     if (adjustKey.startsWith("opt:")) {
       setOptionThumb(adjustKey.slice(4), slot);
     } else if (adjustKey === "all") setAllOptions(slot);
+    else if (adjustKey === "detail") setDetailCut(slot);
+    else if (adjustKey === "wear01") setWear01(slot);
+    else if (adjustKey === "wear02") setWear02(slot);
     setAdjustKey("");
     setAdjustPreview("");
     setAdjustResult("");
@@ -2694,7 +2703,7 @@ export default function Home() {
             onPoolDrop={index => assignPoolItem(index, setAllOptions)}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
-            onFit={() => allOptions && openAdjust("all", allOptions.dataUrl)}
+            onFit={() => allOptions && openAdjust("all", correctedPhotoSource(allOptions))}
             onAddDetail={
               includeAllOptionsInDetail && allOptions
                 ? () => pushDetail("전체옵션", allOptions.dataUrl)
@@ -2718,11 +2727,11 @@ export default function Home() {
               onFit={() => {
                 const s = activeVariantThumbs[variant.key];
                 if (!s) return;
-                const correctedPhotos = detailImages.filter(image => image.name.startsWith("보정본 "));
-                const sourceName = s.fileName.replace(/\s+/g, "").toLowerCase();
-                const correctedSource = correctedPhotos.find(image => image.name.slice(4).replace(/\s+/g, "").toLowerCase() === sourceName)
-                  || (variants.length === 1 ? correctedPhotos[0] : undefined);
-                openAdjust(`opt:${variant.key}`, correctedSource?.dataUrl || s.dataUrl);
+                const matchedSource = correctedPhotoSource(s);
+                const fallbackSource = variants.length === 1
+                  ? detailImages.find(image => image.name.startsWith("보정본 "))?.dataUrl
+                  : undefined;
+                openAdjust(`opt:${variant.key}`, matchedSource === s.dataUrl ? fallbackSource || s.dataUrl : matchedSource);
               }}
               onAddDetail={
                 activeVariantThumbs[variant.key]
@@ -2742,6 +2751,7 @@ export default function Home() {
             onPoolDrop={index => assignPoolItem(index, setDetailCut)}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
+            onFit={() => detailCut && openAdjust("detail", correctedPhotoSource(detailCut))}
             onAddDetail={detailCut ? () => pushDetail("디테일컷", detailCut.dataUrl) : undefined}
           />
           <ImageSlot
@@ -2754,6 +2764,7 @@ export default function Home() {
             onPoolDrop={index => assignPoolItem(index, setWear01)}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
+            onFit={() => wear01 && openAdjust("wear01", correctedPhotoSource(wear01))}
             onAddDetail={wear01 ? () => pushDetail("착용컷 01", wear01.dataUrl) : undefined}
           />
           <ImageSlot
@@ -2766,6 +2777,7 @@ export default function Home() {
             onPoolDrop={index => assignPoolItem(index, setWear02)}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
+            onFit={() => wear02 && openAdjust("wear02", correctedPhotoSource(wear02))}
             onAddDetail={wear02 ? () => pushDetail("착용컷 02", wear02.dataUrl) : undefined}
           />
           {customSlots.map((item, index) => (
@@ -2791,15 +2803,15 @@ export default function Home() {
             {adjustPreview && <img src={adjustResult || adjustPreview} alt="조정 미리보기" className="adjustPreviewImg" />}
             <div className="cropControls">
               <label>확대 <input type="range" min={0.5} max={3.5} step={0.01} value={adjust.scale}
-                onChange={e => setAdjust(a => ({ ...a, scale: Number(e.target.value) }))} /></label>
+                onChange={e => { setAdjust(a => ({ ...a, scale: Number(e.target.value) })); setAdjustResult(""); }} /></label>
               <label>좌우 <input type="range" min={-200} max={200} value={adjust.offsetX}
-                onChange={e => setAdjust(a => ({ ...a, offsetX: Number(e.target.value) }))} /></label>
+                onChange={e => { setAdjust(a => ({ ...a, offsetX: Number(e.target.value) })); setAdjustResult(""); }} /></label>
               <label>상하 <input type="range" min={-200} max={200} value={adjust.offsetY}
-                onChange={e => setAdjust(a => ({ ...a, offsetY: Number(e.target.value) }))} /></label>
+                onChange={e => { setAdjust(a => ({ ...a, offsetY: Number(e.target.value) })); setAdjustResult(""); }} /></label>
               <label>밝기 <input type="range" min={-40} max={40} value={adjust.brightness}
-                onChange={e => setAdjust(a => ({ ...a, brightness: Number(e.target.value) }))} /></label>
+                onChange={e => { setAdjust(a => ({ ...a, brightness: Number(e.target.value) })); setAdjustResult(""); }} /></label>
               <label>대비 <input type="range" min={0.7} max={1.4} step={0.01} value={adjust.contrast}
-                onChange={e => setAdjust(a => ({ ...a, contrast: Number(e.target.value) }))} /></label>
+                onChange={e => { setAdjust(a => ({ ...a, contrast: Number(e.target.value) })); setAdjustResult(""); }} /></label>
             </div>
             <div className="detailActions">
               <button type="button" className="secondaryButton" onClick={() => void previewAdjust()}>미리보기 적용</button>
