@@ -63,7 +63,7 @@ type Analysis = {
 type ProductPhoto = { id: string; name: string; dataUrl: string };
 type SlotImage = { dataUrl: string; fileName: string };
 type VariantOption = SkuRow & { key: string; label: string };
-type DetailImage = { id: string; name: string; dataUrl: string };
+type DetailImage = { id: string; name: string; dataUrl: string; zoom?: number };
 type CustomSlot = { id: string; type: "all" | "detail" | "wear"; slot: SlotImage | null };
 type QuoteQueueRecord = { model: string; gender: string; category: string; skuCount: number; savedAt: number | string; payload: any };
 type PendingReplacementCleanup = { model: string; legacySku: string; oldRows: number; matchedOptions: number };
@@ -990,8 +990,8 @@ export default function Home() {
 
   const selectUsableDetailSections = async (sections: QuickDetailSection[]) => {
     const selected: QuickDetailSection[] = [];
-    for (let offset = 0; offset < sections.length; offset += 8) {
-      const batch = sections.slice(offset, offset + 8);
+    for (let offset = 0; offset < sections.length; offset += 4) {
+      const batch = sections.slice(offset, offset + 4);
       setDetailMessage(`${sections.length}개 구간에서 제품 사진만 고르고 있습니다...`);
       const response = await fetch("/api/image-generator/quick-analyze", {
         method: "POST",
@@ -1473,7 +1473,11 @@ export default function Home() {
       detailImages.map(async item => {
         const img = await loadImage(item.dataUrl);
         const height = Math.max(1, Math.round((img.height / img.width) * width));
-        return { img, height };
+        const zoom = Math.max(1, Math.min(2.5, item.zoom || 1));
+        if (img.width / zoom < width) {
+          throw new Error(`${item.name}: 확대하면 화질이 낮아집니다. 보정 폴더의 고해상도 사진을 사용해주세요.`);
+        }
+        return { img, height, zoom };
       })
     );
     const totalHeight =
@@ -1488,11 +1492,14 @@ export default function Home() {
     ctx.drawImage(header, 0, 0, width, headerHeight);
     let y = headerHeight + gap;
     for (const item of prepared) {
-      ctx.drawImage(item.img, 0, y, width, item.height);
+      const sourceWidth = item.img.width / item.zoom;
+      const sourceHeight = item.img.height / item.zoom;
+      ctx.drawImage(item.img, (item.img.width - sourceWidth) / 2, (item.img.height - sourceHeight) / 2,
+        sourceWidth, sourceHeight, 0, y, width, item.height);
       y += item.height + gap;
     }
     if (footer) ctx.drawImage(footer, 0, y, width, footerHeight);
-    return { dataUrl: canvas.toDataURL("image/jpeg", 0.94), totalHeight };
+    return { dataUrl: canvas.toDataURL("image/jpeg", 0.97), totalHeight };
   };
 
   const buildDetailPage = async () => {
@@ -2645,6 +2652,7 @@ export default function Home() {
           <span>상·하단 광고, 회사소개, 설명, UI는 빼고 제품 사진만 남긴 뒤 NOID-B 로고로 새 상세페이지를 만듭니다.</span>
         </label>
 
+        <p className="detailMessage">제품을 크게 보여줄 컷은 보정 폴더의 고해상도 사진을 사용하고, 아래 제품 확대를 약 200%로 맞춰 미리보기를 확인하세요. 기존 상세페이지에서 가져온 작은 사진을 확대하면 화질이 떨어집니다.</p>
         <div className="detailList">
           {detailImages.map((item, index) => (
             <div
@@ -2668,6 +2676,14 @@ export default function Home() {
               <img src={item.dataUrl} alt={item.name} />
               <div className="detailItemInfo">
                 <strong>{item.name}</strong>
+                <label>제품 확대 {Math.round((item.zoom || 1) * 100)}%
+                  <input type="range" min="1" max="2.5" step="0.1" value={item.zoom || 1}
+                    onChange={event => {
+                      const zoom = Number(event.target.value);
+                      setDetailImages(prev => prev.map(image => image.id === item.id ? { ...image, zoom } : image));
+                      setDetailPreview("");
+                    }} />
+                </label>
                 <div className="detailItemButtons">
                   <button type="button" onClick={() => setLightbox(item.dataUrl)}>확대</button>
                   <button type="button" className="removeButton"

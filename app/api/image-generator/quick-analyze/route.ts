@@ -51,19 +51,19 @@ keep=true로 남길 것:
 
 keep=false로 제외할 것:
 - 포장 상자, 파우치, 보증서, 쇼핑백 등 패키지가 중심인 사진
-- 브랜드 소개, 브랜드 로고, 설명 글, 가격표, 치수표, 옵션표, 주문 안내, 배송 안내 중심 구간
-- 제품 사진이 함께 있어도 큰 홍보 문구, 설명문, 광고 디자인, 회사 소개, UI가 들어간 구간
+- 사진 사이에 삽입된 영문, 브랜드 로고, SINCE 2017 ®, 설명 글, 가격표, 치수표, 옵션표, 주문 안내, 배송 안내 구간. 상단 로고는 별도로 붙이므로 중간 로고는 남기지 마세요.
+- 제품 사진이 함께 있어도 옵션명 이외의 문구, 홍보 문구, 광고 디자인, 회사 소개, UI가 한 군데라도 보이는 구간
 - 글자만 있거나 제품이 너무 작고 불분명한 구간
 - 주얼리 제품과 무관한 장면
 
-패키지 옆에 제품이 아주 작게 놓인 경우도 제외하세요. 제품 또는 착용 모습이 구간의 핵심이고 작은 옵션명 외의 문구나 디자인이 없어야 유지하세요.
+패키지 옆에 제품이 아주 작게 놓인 경우도 제외하세요. 작은 글씨와 사진 하단의 배지도 자세히 확인하세요. 문구가 있는 제품컷은 자동으로 지우지 말고 구간 전체를 제외하세요. 제품 또는 착용 모습이 구간의 핵심이고 작은 옵션명 외의 문구나 디자인이 없어야 유지하세요.
 각 입력 id를 빠짐없이 아래 JSON 배열 하나로만 답하세요.
 [{"id":"quick-1","keep":true,"kind":"product","reason":"제품 단독컷"}]
 kind는 product, wear, exclude 중 하나입니다.`;
     const content: Array<Record<string, unknown>> = [{ type: "input_text", text: prompt }];
     sections.forEach(section => {
       content.push({ type: "input_text", text: `구간 id: ${section.id}` });
-      content.push({ type: "input_image", image_url: section.dataUrl, detail: "low" });
+      content.push({ type: "input_image", image_url: section.dataUrl, detail: "high" });
     });
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
