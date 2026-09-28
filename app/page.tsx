@@ -1596,7 +1596,7 @@ export default function Home() {
         const img = await loadImage(item.dataUrl);
         const naturalHeight = Math.max(1, Math.round((img.height / img.width) * width));
         const height = item.frameHeight ? Math.max(width, Math.min(1300, item.frameHeight)) : naturalHeight;
-        const zoom = Math.max(1, Math.min(2.5, item.zoom || 1));
+        const zoom = Math.max(1, Math.min(3, item.zoom || 1));
         const sourceWidth = img.width / zoom;
         const sourceHeight = sourceWidth * height / width;
         if (sourceWidth < width || sourceHeight > img.height + 2) {
@@ -2897,7 +2897,7 @@ export default function Home() {
               <div className="detailItemInfo">
                 <strong>{item.name}</strong>
                 <label>제품 확대 {Math.round((item.zoom || 1) * 100)}%
-                  <input type="range" min="1" max="2.5" step="0.1" value={item.zoom || 1}
+                  <input type="range" min="1" max={item.name.startsWith("보정본") ? "3" : "2.5"} step="0.1" value={item.zoom || 1}
                     onChange={event => {
                       const zoom = Number(event.target.value);
                       setDetailImages(prev => prev.map(image => image.id === item.id ? { ...image, zoom } : image));
