@@ -1599,10 +1599,10 @@ export default function Home() {
         const zoom = Math.max(1, Math.min(2.5, item.zoom || 1));
         const sourceWidth = img.width / zoom;
         const sourceHeight = sourceWidth * height / width;
-        if (sourceWidth < width || sourceHeight > img.height) {
+        if (sourceWidth < width || sourceHeight > img.height + 2) {
           throw new Error(`${item.name}: 확대하면 화질이 낮아집니다. 보정 폴더의 고해상도 사진을 사용해주세요.`);
         }
-        return { img, height, sourceWidth, sourceHeight,
+        return { img, height, sourceWidth, sourceHeight: Math.min(img.height, sourceHeight),
           focusX: Math.max(0, Math.min(1, item.focusX ?? 0.5)),
           focusY: Math.max(0, Math.min(1, item.focusY ?? 0.5)) };
       })
