@@ -389,8 +389,9 @@ export default function ProductCatalogPage() {
       const keptSelected = (previous?.hits || []).filter(hit => hit.selected && !foundIds.has(hit.id));
       const hits = [...toHits(found, keepSelected), ...keptSelected];
       const analysisId = hits.some(hit => hit.selected && hit.id === previous?.analysisId) ? previous!.analysisId : "";
-      const note = hasFolders && !found.length ? "1차 확정 폴더에서 사진을 찾지 못했습니다. 아래 버튼으로 범위를 넓혀 주세요." : undefined;
-      setPhotoStates(current => ({ ...current, [key]: { loading: false, hits, analysisId, level, grouped, hasFolders, source: levelSource(level, hasFolders), note } }));
+      const recovered = found.some(photo => photo.matchedBy.includes("1차 · 이동된 모델 폴더"));
+      const note = recovered ? "MYBOX 통합 후 이동된 모델 폴더에서 사진을 찾았습니다. 제품DB의 확정 폴더 경로는 옛 경로입니다." : hasFolders && !found.length ? "1차 확정 폴더에서 사진을 찾지 못했습니다. 아래 버튼으로 범위를 넓혀 주세요." : undefined;
+      setPhotoStates(current => ({ ...current, [key]: { loading: false, hits, analysisId, level, grouped, hasFolders, source: recovered ? "1차 · 이동된 모델 폴더" : levelSource(level, hasFolders), note } }));
     } catch (cause) {
       setPhotoStates(current => ({ ...current, [key]: { loading: false, hits: [], analysisId: "", level: 1, grouped: false, hasFolders: false, error: cause instanceof Error ? cause.message : "사진 후보를 찾지 못했습니다." } }));
     }
