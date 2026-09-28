@@ -9,6 +9,7 @@ import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { clearPhotoSearch, connectPhotoFolder, FOLDER_TIER_LABELS, loadPhotoSearch, loadSavedThumbnail, saveThumbnail, openPhotoFolders, openSavedPhotos, photoFolderName, photoFolderReady, savePhotoSearch, searchPhotoFolder, savePreparedPhotos, type FolderTier, type LocalPhoto } from "@/lib/image-search/browser-folder";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
+import type { ReregistrationExclusion } from "@/lib/wms/reregistration-exclusions";
 
 type PhotoHit = LocalPhoto & { fileName: string; preview: string; selected: boolean };
 /**
@@ -100,6 +101,10 @@ export default function ProductCatalogPage() {
     return () => { photoUrls.current.forEach(url => URL.revokeObjectURL(url)); };
   }, []);
   const [items, setItems] = useState<ProductCatalogItem[]>([]);
+  const [manualExclusions, setManualExclusions] = useState<Record<string, ReregistrationExclusion> | null>(null);
+  const [exclusionError, setExclusionError] = useState("");
+  const [savingExclusion, setSavingExclusion] = useState("");
+  const [exclusionReasons, setExclusionReasons] = useState<Record<string, string>>({});
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [snapshot, setSnapshot] = useState<WimsRegistrationSnapshot | null>(null);
   const [query, setQuery] = useState("");
@@ -127,14 +132,50 @@ export default function ProductCatalogPage() {
       if (isReregistrationTier(item)) target.add(key);
       if (isPermanentlyExcluded(item)) excluded.add(key);
     }
+    for (const key of Object.keys(manualExclusions || {})) excluded.add(key);
     return { reregisterModelKeys: target, excludedModelKeys: excluded };
-  }, [items]);
+  }, [items, manualExclusions]);
 
   const isReregistrationTarget = useCallback((item: ProductCatalogItem) => {
     const key = namedModelGroupKey(item);
-    if (key && excludedModelKeys.has(key)) return false;
+    if (!manualExclusions || (key && excludedModelKeys.has(key))) return false;
     return key ? reregisterModelKeys.has(key) : isReregistrationTier(item);
-  }, [reregisterModelKeys, excludedModelKeys]);
+  }, [reregisterModelKeys, excludedModelKeys, manualExclusions]);
+
+  const loadExclusions = useCallback(async () => {
+    try {
+      const response = await fetch("/api/wms/reregistration-exclusions", { cache: "no-store" });
+      if (!response.ok) throw new Error("재등록 제외 목록을 읽지 못했습니다.");
+      const data = await response.json();
+      setManualExclusions(data.entries || {});
+      setExclusionError("");
+    } catch {
+      setManualExclusions(null);
+      setExclusionError("재등록 제외 목록을 읽지 못해 등록 준비를 중단했습니다. 새로고침해 주세요.");
+    }
+  }, []);
+
+  async function changeExclusion(modelName: string, reason: string | null) {
+    setSavingExclusion(modelName);
+    setExclusionError("");
+    try {
+      const response = await fetch("/api/wms/reregistration-exclusions", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelName, reason }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "재등록 제외 상태를 저장하지 못했습니다.");
+      setManualExclusions(data.entries);
+      if (reason !== null) {
+        try {
+          const prepared = JSON.parse(window.localStorage.getItem(REREGISTRATION_PREP_KEY) || "null");
+          if (clean(prepared?.modelName) === clean(modelName)) window.localStorage.removeItem(REREGISTRATION_PREP_KEY);
+        } catch {}
+      }
+    } catch (error) {
+      setExclusionError(error instanceof Error ? error.message : "재등록 제외 상태를 저장하지 못했습니다.");
+    } finally { setSavingExclusion(""); }
+  }
 
   const loadCatalog = useCallback(async (activeRef?: { current: boolean }) => {
     setLoading(true);
@@ -173,8 +214,9 @@ export default function ProductCatalogPage() {
   useEffect(() => {
     const active = { current: true };
     void loadCatalog(active);
+    void loadExclusions();
     return () => { active.current = false; };
-  }, [loadCatalog]);
+  }, [loadCatalog, loadExclusions]);
 
   useEffect(() => {
     let lastRefresh = 0;
@@ -493,6 +535,10 @@ export default function ProductCatalogPage() {
   }, [viewer]);
 
   async function prepareModel(modelName: string, groupItems: ProductCatalogItem[]) {
+    if (!manualExclusions || excludedModelKeys.has(clean(modelName))) {
+      setExclusionError("제외된 모델이거나 제외 목록을 확인하지 못해 등록 준비를 진행할 수 없습니다.");
+      return;
+    }
     const state = photoStates[modelName];
     const selectedPhotos = (state?.hits || []).filter(hit => hit.selected);
     if (state && selectedPhotos.length && !selectedPhotos.some(hit => hit.id === state.analysisId)) {
@@ -516,7 +562,7 @@ export default function ProductCatalogPage() {
         <div>
           <p style={{ margin: 0, color: wmsColors.muted, fontSize: 12, fontWeight: 700 }}>상품등록 · 연결 대장</p>
           <h1 style={{ margin: "4px 0 6px", color: wmsColors.ink, fontSize: 26 }}>모델·옵션·SKU·사진 연결</h1>
-          <p style={{ margin: 0, color: wmsColors.muted, fontSize: 13 }}>모델명은 상품군, 모델SKU는 옵션 키입니다. 이 화면은 읽기 전용입니다.</p>
+           <p style={{ margin: 0, color: wmsColors.muted, fontSize: 13 }}>모델명은 상품군, 모델SKU는 옵션 키입니다. 제품DB는 읽기 전용이며 재등록 제외 사유는 사이트에 따로 저장합니다.</p>
         </div>
         <Link href="/" style={{ color: wmsColors.ink, fontWeight: 800, fontSize: 13 }}>AI 상품등록으로 돌아가기</Link>
       </div>
@@ -546,6 +592,7 @@ export default function ProductCatalogPage() {
 
       {!configured && !loading && <div style={{ border: `1px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>Google Sheets 연결 설정이 없어 상품을 읽지 못했습니다.</div>}
       {error && <div style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{error}</div>}
+      {exclusionError && <div role="alert" style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{exclusionError}</div>}
       <p style={{ fontSize: 12, color: wmsColors.muted }}>제품DB의 공란만으로 쿠팡 승인 여부를 판단할 수 없습니다. {snapshot ? `이 브라우저·사이트에 저장된 WIMS ${snapshot.rows.length}건의 대조 후보를 함께 표시합니다. 재등록 이력 검증과 DB 반영은 별도입니다.` : "이 브라우저·사이트에서 읽을 수 있는 WIMS 자료가 없습니다. 다른 브라우저나 운영 사이트의 저장 자료는 여기와 공유되지 않습니다."} <Link href="/product-registration#wims-registration">WIMS 대조 화면 열기</Link></p>
       <p style={{ fontSize: 12, color: wmsColors.muted }}>제품페이지 주소가 비어 있는 행은 SKU ID를 임의로 URL로 바꾸지 않습니다. 쿠팡에서 내려받은 <b>쿠팡쇼핑몰 추출DB.xlsx</b>를 <Link href="/#coupang-data-import">작업센터의 ‘쿠팡 추출DB 업데이트’</Link>에 올리면 SKU ID/옵션ID로 기존 행의 제품링크만 연결할 수 있습니다.</p>
 
@@ -575,6 +622,11 @@ export default function ProductCatalogPage() {
         <div style={{ display: "grid", gap: 10 }}>
           {status === "reregister" && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 14, marginBottom: 2 }}>
             <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>재등록 작업 묶음 · {reregistrationGroups.length}개 모델</div>
+            {!manualExclusions && <p style={{ fontSize: 12 }}>재등록 제외 목록을 확인하는 중입니다. 확인 전에는 등록 준비를 할 수 없습니다.</p>}
+            {manualExclusions && Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).length > 0 && <div style={{ margin: "10px 0", padding: 10, border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff" }}>
+              <strong style={{ fontSize: 12 }}>재등록 제외 모델</strong>
+              {Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).map(entry => <div key={clean(entry.modelName)} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 7, fontSize: 12 }}><b>{entry.modelName}</b><span>사유: {entry.reason}</span><button type="button" onClick={() => void changeExclusion(entry.modelName, null)} disabled={Boolean(savingExclusion)} style={{ cursor: "pointer" }}>제외 해제</button></div>)}
+            </div>}
             <p style={{ color: wmsColors.ink, fontSize: 12, margin: "6px 0 12px" }}>모델 하나에 옵션이 여러 개 있어도 사진 폴더 검색은 한 번만 합니다. 아래 옵션 목록은 각각 별도 모델SKU로 유지됩니다.</p>
             <div style={{ display: "grid", gap: 8 }}>
               {reregistrationGroups.map(group => {
@@ -583,7 +635,7 @@ export default function ProductCatalogPage() {
                 return <article key={group.key} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 10 }}>
                   <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", gap: 10 }}>
                     <div><div style={{ color: wmsColors.ink, fontWeight: 800 }}>{group.modelName}</div><div style={{ color: wmsColors.ink, fontSize: 12, marginTop: 3 }}>{group.productName}</div><div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 4 }}>{group.items.length}개 후보 행</div><div style={{ display: "grid", gap: 3, marginTop: 6, fontSize: 11 }}>{group.items.map((item, itemIndex) => { const itemLink = externalUrl(item.productLink); return <div key={`${item.skuId}|${item.modelSku}|${item.optionLabel}|${itemIndex}`} style={{ color: wmsColors.muted }}>모델SKU <b>{item.modelSku || "미확인"}</b> · 기존 SKU ID <b>{item.skuId || "미확인"}</b> · 바코드 <b>{item.barcode || "미확인"}</b> · 옵션 <b>{item.optionLabel || "미확인"}</b> · 누적입고 <b>{item.cumulativeInbound ? `${(Number(item.cumulativeInbound) || 0).toLocaleString()}개` : "미확인"}</b> · 발주가능상태 <b>{item.orderableStatus || "미확인"}</b>{itemLink ? <> · <a href={itemLink} target="_blank" rel="noreferrer" style={{ color: wmsColors.slate }}>제품페이지 열기 ↗</a></> : " · 제품주소 미등록"}</div>; })}</div></div>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}><Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={{ fontSize: 12, color: wmsColors.slate, fontWeight: 700 }}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName || photos?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: photos?.loading ? "wait" : "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "사진 검색 중…" : "이 모델 사진 검색"}</button>{photos && !photos.loading && photos.hits.length > 0 && <button type="button" onClick={() => void searchPhotos(first, group.items, true)} title="1차 확정 폴더부터 새로 찾습니다. 고른 사진과 분석용은 유지됩니다." style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.muted }}>다시 검색 (1차부터)</button>}{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.warnText }}>검색 초기화</button>}</div>
+                     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}><Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={{ fontSize: 12, color: wmsColors.slate, fontWeight: 700 }}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName || photos?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: photos?.loading ? "wait" : "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "사진 검색 중…" : "이 모델 사진 검색"}</button><select aria-label={`${group.modelName} 제외 사유`} value={exclusionReasons[group.key] || "가품 위험"} onChange={event => setExclusionReasons(current => ({ ...current, [group.key]: event.target.value }))}><option>가품 위험</option><option>상표·디자인 위험</option><option>재등록 불필요</option><option>기타</option></select><button type="button" onClick={() => void changeExclusion(group.modelName, exclusionReasons[group.key] || "가품 위험")} disabled={Boolean(savingExclusion)} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.warnText }}>재등록 제외</button>{photos && !photos.loading && photos.hits.length > 0 && <button type="button" onClick={() => void searchPhotos(first, group.items, true)} title="1차 확정 폴더부터 새로 찾습니다. 고른 사진과 분석용은 유지됩니다." style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.muted }}>다시 검색 (1차부터)</button>}{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontSize: 12, color: wmsColors.warnText }}>검색 초기화</button>}</div>
                   </div>
                   {!photos && savedHints[group.modelName] !== undefined && <div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 7 }}>저장된 사진 검색 결과가 있습니다(선택 {savedHints[group.modelName]}장). ‘이 모델 사진 검색’을 누르면 다시 검색하지 않고 바로 불러옵니다.</div>}
                   {photos?.error && <div style={{ color: wmsColors.warnText, fontSize: 11, marginTop: 7 }}>{photos.error}</div>}
