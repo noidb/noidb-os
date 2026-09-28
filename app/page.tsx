@@ -295,6 +295,7 @@ export default function Home() {
   const [adjustKey, setAdjustKey] = useState("");
   const [adjust, setAdjust] = useState<FitAdjust>(defaultFitAdjust());
   const [adjustPreview, setAdjustPreview] = useState("");
+  const [adjustResult, setAdjustResult] = useState("");
   const [lightbox, setLightbox] = useState("");
 
   const [detailImages, setDetailImages] = useState<DetailImage[]>([]);
@@ -1519,13 +1520,20 @@ export default function Home() {
     setAdjustKey(key);
     setAdjust(defaultFitAdjust());
     setAdjustPreview(dataUrl);
+    setAdjustResult("");
+  };
+
+  const correctedPhotoSource = (slot: SlotImage) => {
+    const sourceName = slot.fileName.replace(/\s+/g, "").toLowerCase();
+    return detailImages.find(image => image.name.startsWith("보정본 ")
+      && image.name.slice(4).replace(/\s+/g, "").toLowerCase() === sourceName)?.dataUrl || slot.dataUrl;
   };
 
   const previewAdjust = async () => {
     if (!adjustPreview) return;
     try {
       const out = await fitToWhiteCanvas(adjustPreview, adjust);
-      setAdjustPreview(out);
+      setAdjustResult(out);
     } catch {
       /* ignore */
     }
@@ -1538,8 +1546,12 @@ export default function Home() {
     if (adjustKey.startsWith("opt:")) {
       setOptionThumb(adjustKey.slice(4), slot);
     } else if (adjustKey === "all") setAllOptions(slot);
+    else if (adjustKey === "detail") setDetailCut(slot);
+    else if (adjustKey === "wear01") setWear01(slot);
+    else if (adjustKey === "wear02") setWear02(slot);
     setAdjustKey("");
     setAdjustPreview("");
+    setAdjustResult("");
   };
 
   const pushDetail = (name: string, dataUrl: string) => {
@@ -2691,7 +2703,7 @@ export default function Home() {
             onPoolDrop={index => assignPoolItem(index, setAllOptions)}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
-            onFit={() => allOptions && openAdjust("all", allOptions.dataUrl)}
+            onFit={() => allOptions && openAdjust("all", correctedPhotoSource(allOptions))}
             onAddDetail={
               includeAllOptionsInDetail && allOptions
                 ? () => pushDetail("전체옵션", allOptions.dataUrl)
@@ -2714,7 +2726,12 @@ export default function Home() {
               onExpand={setLightbox}
               onFit={() => {
                 const s = activeVariantThumbs[variant.key];
-                if (s) openAdjust(`opt:${variant.key}`, s.dataUrl);
+                if (!s) return;
+                const matchedSource = correctedPhotoSource(s);
+                const fallbackSource = variants.length === 1
+                  ? detailImages.find(image => image.name.startsWith("보정본 "))?.dataUrl
+                  : undefined;
+                openAdjust(`opt:${variant.key}`, matchedSource === s.dataUrl ? fallbackSource || s.dataUrl : matchedSource);
               }}
               onAddDetail={
                 activeVariantThumbs[variant.key]
@@ -2734,6 +2751,7 @@ export default function Home() {
             onPoolDrop={index => assignPoolItem(index, setDetailCut)}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
+            onFit={() => detailCut && openAdjust("detail", correctedPhotoSource(detailCut))}
             onAddDetail={detailCut ? () => pushDetail("디테일컷", detailCut.dataUrl) : undefined}
           />
           <ImageSlot
@@ -2746,6 +2764,7 @@ export default function Home() {
             onPoolDrop={index => assignPoolItem(index, setWear01)}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
+            onFit={() => wear01 && openAdjust("wear01", correctedPhotoSource(wear01))}
             onAddDetail={wear01 ? () => pushDetail("착용컷 01", wear01.dataUrl) : undefined}
           />
           <ImageSlot
@@ -2758,6 +2777,7 @@ export default function Home() {
             onPoolDrop={index => assignPoolItem(index, setWear02)}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
+            onFit={() => wear02 && openAdjust("wear02", correctedPhotoSource(wear02))}
             onAddDetail={wear02 ? () => pushDetail("착용컷 02", wear02.dataUrl) : undefined}
           />
           {customSlots.map((item, index) => (
@@ -2780,23 +2800,23 @@ export default function Home() {
         {adjustKey && (
           <div className="adjustPanel">
             <h3>흰 배경 캔버스 맞춤 (형태 변경 없음)</h3>
-            {adjustPreview && <img src={adjustPreview} alt="조정 미리보기" className="adjustPreviewImg" />}
+            {adjustPreview && <img src={adjustResult || adjustPreview} alt="조정 미리보기" className="adjustPreviewImg" />}
             <div className="cropControls">
-              <label>확대 <input type="range" min={0.5} max={1.5} step={0.01} value={adjust.scale}
-                onChange={e => setAdjust(a => ({ ...a, scale: Number(e.target.value) }))} /></label>
+              <label>확대 <input type="range" min={0.5} max={3.5} step={0.01} value={adjust.scale}
+                onChange={e => { setAdjust(a => ({ ...a, scale: Number(e.target.value) })); setAdjustResult(""); }} /></label>
               <label>좌우 <input type="range" min={-200} max={200} value={adjust.offsetX}
-                onChange={e => setAdjust(a => ({ ...a, offsetX: Number(e.target.value) }))} /></label>
+                onChange={e => { setAdjust(a => ({ ...a, offsetX: Number(e.target.value) })); setAdjustResult(""); }} /></label>
               <label>상하 <input type="range" min={-200} max={200} value={adjust.offsetY}
-                onChange={e => setAdjust(a => ({ ...a, offsetY: Number(e.target.value) }))} /></label>
+                onChange={e => { setAdjust(a => ({ ...a, offsetY: Number(e.target.value) })); setAdjustResult(""); }} /></label>
               <label>밝기 <input type="range" min={-40} max={40} value={adjust.brightness}
-                onChange={e => setAdjust(a => ({ ...a, brightness: Number(e.target.value) }))} /></label>
+                onChange={e => { setAdjust(a => ({ ...a, brightness: Number(e.target.value) })); setAdjustResult(""); }} /></label>
               <label>대비 <input type="range" min={0.7} max={1.4} step={0.01} value={adjust.contrast}
-                onChange={e => setAdjust(a => ({ ...a, contrast: Number(e.target.value) }))} /></label>
+                onChange={e => { setAdjust(a => ({ ...a, contrast: Number(e.target.value) })); setAdjustResult(""); }} /></label>
             </div>
             <div className="detailActions">
               <button type="button" className="secondaryButton" onClick={() => void previewAdjust()}>미리보기 적용</button>
               <button type="button" className="green" onClick={() => void confirmAdjust()}>확정</button>
-              <button type="button" className="secondaryButton" onClick={() => { setAdjustKey(""); setAdjustPreview(""); }}>취소</button>
+              <button type="button" className="secondaryButton" onClick={() => { setAdjustKey(""); setAdjustPreview(""); setAdjustResult(""); }}>취소</button>
             </div>
           </div>
         )}
@@ -3238,6 +3258,7 @@ function ImageSlot({
         }}
       />
       <div className="slotActions">
+        {value && onFit && <button type="button" className="secondaryButton" onClick={onFit}>제품 크기·위치 맞춤</button>}
         {value && <button type="button" className="removeButton" onClick={() => { pendingFileRevision.current += 1; onChange(null); }}>삭제</button>}
         {onRemoveSlot && <button type="button" className="removeButton" onClick={onRemoveSlot}>칸 삭제</button>}
       </div>
