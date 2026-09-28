@@ -222,18 +222,18 @@ export async function splitDetailPage(sourceUrl: string, headerUrl: string): Pro
     const sourceEnd = Math.min(source.naturalHeight, Math.round(boundaries[index + 1] / scanScale));
     const height = sourceEnd - sourceY;
     if (height < source.naturalWidth * 0.25) continue;
+    // Keep the source section's aspect ratio and available pixels. Baking every
+    // section into a 1024px square added side margins and softened product shots.
     const canvas = document.createElement("canvas");
-    canvas.width = 1024;
-    canvas.height = 1024;
+    const scale = Math.min(1, 1560 / source.naturalWidth);
+    canvas.width = Math.max(1, Math.round(source.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("상세페이지 사진을 구분하지 못했습니다.");
-    ctx.fillStyle = "#FFFFFF";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const scale = Math.min(1024 / source.naturalWidth, 1024 / height);
-    const outputWidth = Math.round(source.naturalWidth * scale);
-    const outputHeight = Math.round(height * scale);
-    ctx.drawImage(source, 0, sourceY, source.naturalWidth, height, Math.round((1024 - outputWidth) / 2), Math.round((1024 - outputHeight) / 2), outputWidth, outputHeight);
-    sections.push({ id: `quick-${index + 1}`, dataUrl: canvas.toDataURL("image/jpeg", 0.92) });
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(source, 0, sourceY, source.naturalWidth, height, 0, 0, canvas.width, canvas.height);
+    sections.push({ id: `quick-${index + 1}`, dataUrl: canvas.toDataURL("image/jpeg", 0.97) });
   }
   if (!sections.length) throw new Error("상세페이지 안에서 변형할 사진을 찾지 못했습니다.");
   return sections;
