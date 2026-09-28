@@ -1,6 +1,7 @@
 // The photo root is local to this browser. No files are uploaded or moved.
 export type LocalPhoto = { id: string; name: string; file: File; matchedBy: string[] };
 export type PreparedPhoto = { id: string; name: string; dataUrl: string };
+export type PreparedDetail = { id: string; name: string; file: File };
 const DB = "noidb-photo-folder";
 
 async function database() {
@@ -193,7 +194,7 @@ export async function openSavedPhotos(saved: { id: string; matchedBy: string[] }
 
 /** 모델별 사진 검색 결과·선택 상태. 사진 파일이 아니라 경로만 이 브라우저에 저장한다. */
 /** level: 어디까지 열었는지(1~3 = 연결표 폴더 단계, 4 = 사진 폴더 전체 검색). 예전 저장본에는 없다. */
-export type SavedPhotoSearch = { hits: { id: string; matchedBy: string[] }[]; selectedIds: string[]; analysisId: string; savedAt: string; level?: number; grouped?: boolean; hasFolders?: boolean };
+export type SavedPhotoSearch = { hits: { id: string; matchedBy: string[] }[]; selectedIds: string[]; analysisId: string; savedAt: string; level?: number; grouped?: boolean; hasFolders?: boolean; hiddenIds?: string[] };
 
 export async function savePhotoSearch(model: string, state: SavedPhotoSearch) {
   await write(`search-v2:${model}`, state);
@@ -306,4 +307,13 @@ export async function savePreparedPhotos(model: string, photos: LocalPhoto[], an
 export async function loadPreparedPhotos(model: string): Promise<PreparedPhoto[]> {
   const saved = await read<{ model: string; photos: PreparedPhoto[] }>("prepared");
   return saved?.model === model ? saved.photos : [];
+}
+
+export async function savePreparedDetail(model: string, detail?: LocalPhoto) {
+  await write("prepared-detail", { model, detail: detail ? { id: detail.id, name: detail.name, file: detail.file } : null });
+}
+
+export async function loadPreparedDetail(model: string): Promise<PreparedDetail | null> {
+  const saved = await read<{ model: string; detail: PreparedDetail | null }>("prepared-detail");
+  return saved?.model === model ? saved.detail : null;
 }

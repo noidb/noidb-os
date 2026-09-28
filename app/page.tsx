@@ -25,7 +25,7 @@ import { compressImageDataUrl } from "@/lib/image/compress";
 import { splitDetailPage, type QuickDetailSection } from "@/lib/image-generator/quick-detail";
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
-import { loadPreparedPhotos } from "@/lib/image-search/browser-folder";
+import { loadPreparedDetail, loadPreparedPhotos, type PreparedDetail } from "@/lib/image-search/browser-folder";
 import { coverSquareCanvas, defaultFitAdjust, fitToWhiteCanvas, type FitAdjust } from "@/lib/thumbnail/fit";
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
@@ -304,6 +304,7 @@ export default function Home() {
   const [detailPreview, setDetailPreview] = useState("");
   const [detailMessage, setDetailMessage] = useState("");
   const [detailTransforming, setDetailTransforming] = useState(false);
+  const [preparedDetail, setPreparedDetail] = useState<PreparedDetail | null>(null);
   const [dragDetailIndex, setDragDetailIndex] = useState<number | null>(null);
 
   const [sourcingUrls, setSourcingUrls] = useState(["", "", ""]);
@@ -424,10 +425,13 @@ export default function Home() {
   useEffect(() => {
     const requestedModel = new URLSearchParams(window.location.search).get("reregisterModel")?.trim() || "";
     if (!requestedModel) return;
-    setReregisterModelName(requestedModel);
     let active = true;
     void (async () => {
       try {
+        const exclusionsResponse = await fetch("/api/wms/reregistration-exclusions", { cache: "no-store" });
+        if (!exclusionsResponse.ok) throw new Error("재등록 제외 목록을 확인하지 못했습니다.");
+        const exclusions = await exclusionsResponse.json();
+        if (exclusions.entries?.[requestedModel.toLowerCase()]) throw new Error(`${requestedModel}은 재등록 제외 모델입니다: ${exclusions.entries[requestedModel.toLowerCase()].reason}`);
         let prepared: any = null;
         try {
           const raw = window.localStorage.getItem(REREGISTRATION_PREP_KEY);
@@ -442,6 +446,8 @@ export default function Home() {
           group = data.items.filter((item: any) => String(item.modelName || "").trim().toLowerCase() === requestedModel.toLowerCase());
         }
         if (!group.length) throw new Error(`${requestedModel} 모델을 제품DB에서 찾지 못했습니다.`);
+        if (group.some((item: any) => String(item.reregistrationTier || "").startsWith("영구제외"))) throw new Error(`${requestedModel}은 제품DB에서 영구제외된 모델입니다.`);
+        if (active) setReregisterModelName(requestedModel);
         const first = group[0];
         const optionText = group.map((item: any) => {
           const label = String(item.optionLabel || "").split("|").pop()?.trim() || "";
@@ -467,6 +473,8 @@ export default function Home() {
           keyword: "", searchTags: "", replacementSku: "",
         });
         setReregistrationMessage(`재등록 준비: ${requestedModel} · 후보 ${group.length}행. 기존 모델SKU: ${group.map((item: any) => item.modelSku || "미확인").join(" · ")}. 색상·사이즈·소재·가격을 확인해주세요. 기존 DB는 변경하지 않았습니다.`);
+        const existingDetail = await loadPreparedDetail(requestedModel).catch(() => null);
+        if (active) setPreparedDetail(existingDetail);
         const selectedPhotos = await loadPreparedPhotos(requestedModel).catch(() => []);
         if (!active) return;
         if (selectedPhotos.length) {
@@ -2588,6 +2596,11 @@ export default function Home() {
       {/* 6. 상세페이지 */}
       <section className="card full">
         <h2>6. 상세페이지</h2>
+        {preparedDetail && <div className="detailMessage" style={{ marginBottom: 12 }}>
+          MYBOX에서 기존 상세페이지 후보 <b>{preparedDetail.name}</b>을 찾았습니다. 이 파일을 먼저 정리해 사용하세요.
+          <button type="button" className="secondaryButton" disabled={detailTransforming} onClick={() => void convertExistingDetail(preparedDetail.file)} style={{ marginLeft: 8 }}>기존 상세페이지 정리하여 사용</button>
+        </div>}
+        {reregisterModelName && !preparedDetail && <p className="detailMessage">기존 상세페이지 후보가 없으면 보정본 폴더의 사진을 먼저 선택해 새 상세페이지를 만드세요. 일반 폴더 사진은 보정 상태를 확인한 뒤 사용하세요.</p>}
         <div className="detailBrandImages">
           <div className="detailBrandBlock">
             <strong>상단 로고 이미지</strong>
