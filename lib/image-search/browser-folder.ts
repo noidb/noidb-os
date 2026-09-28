@@ -114,7 +114,7 @@ export const FOLDER_TIER_LABELS: Record<FolderTier, string> = {
 export async function openPhotoFolders(folderPaths: string[], modelKeys: string[] = [], tier: FolderTier = 1, existing: LocalPhoto[] = []): Promise<{ photos: LocalPhoto[]; grouped: boolean }> {
   const root = await connectedRoot();
   const matches = termMatcher(modelKeys);
-  const label = FOLDER_TIER_LABELS[tier];
+  let label = FOLDER_TIER_LABELS[tier];
   const found: LocalPhoto[] = [];
   const seen = new Set(existing.map(photo => duplicateKey(photo.file)));
   const existingIds = new Set(existing.map(photo => photo.id));
@@ -156,6 +156,21 @@ export async function openPhotoFolders(folderPaths: string[], modelKeys: string[
         }
       }
       break;
+    }
+  }
+  // MYBOX 통합 후 예전 확정 경로가 사라졌다면, 새 분류 위치의 정확한 모델 폴더만 확인한다.
+  // 폴더명에 모델번호가 섞여 있는 묶음 자료는 다른 제품 사진이 들어갈 수 있어 자동 선택하지 않는다.
+  if (tier === 1 && !found.length && root.name === "★전체제품사진") {
+    const exactNames = new Set(modelKeys.map(key => key.trim().toLowerCase()).filter(Boolean));
+    for (const segments of [["01", "_제품별"], ["02", "_복합촬영·작업자료"]]) {
+      const parent = await descend(root, segments).catch(() => null);
+      if (!parent) continue;
+      for await (const [name, entry] of (parent as any).entries()) {
+        if (entry.kind !== "directory" || !exactNames.has(name.toLowerCase())) continue;
+        label = "1차 · 이동된 모델 폴더";
+        await collect(entry, [root.name, ...segments, name].join("/"));
+      }
+      if (found.length) break;
     }
   }
   return { photos: found.sort((a, b) => a.id.localeCompare(b.id, "ko")), grouped };
