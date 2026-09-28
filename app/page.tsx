@@ -63,7 +63,7 @@ type Analysis = {
 type ProductPhoto = { id: string; name: string; dataUrl: string };
 type SlotImage = { dataUrl: string; fileName: string };
 type VariantOption = SkuRow & { key: string; label: string };
-type DetailImage = { id: string; name: string; dataUrl: string; zoom?: number };
+type DetailImage = { id: string; name: string; dataUrl: string; zoom?: number; focusX?: number; focusY?: number; frameHeight?: number };
 type GeneratedImageCandidate = { model: string; category: string; kind: "product" | "wear"; dataUrl: string; fileName: string };
 type CustomSlot = { id: string; type: "all" | "detail" | "wear"; slot: SlotImage | null };
 type QuoteQueueRecord = { model: string; gender: string; category: string; skuCount: number; savedAt: number | string; payload: any };
@@ -1594,12 +1594,17 @@ export default function Home() {
     const prepared = await Promise.all(
       detailImages.map(async item => {
         const img = await loadImage(item.dataUrl);
-        const height = Math.max(1, Math.round((img.height / img.width) * width));
+        const naturalHeight = Math.max(1, Math.round((img.height / img.width) * width));
+        const height = item.frameHeight ? Math.max(width, Math.min(1300, item.frameHeight)) : naturalHeight;
         const zoom = Math.max(1, Math.min(2.5, item.zoom || 1));
-        if (img.width / zoom < width) {
+        const sourceWidth = img.width / zoom;
+        const sourceHeight = sourceWidth * height / width;
+        if (sourceWidth < width || sourceHeight > img.height) {
           throw new Error(`${item.name}: 확대하면 화질이 낮아집니다. 보정 폴더의 고해상도 사진을 사용해주세요.`);
         }
-        return { img, height, zoom };
+        return { img, height, sourceWidth, sourceHeight,
+          focusX: Math.max(0, Math.min(1, item.focusX ?? 0.5)),
+          focusY: Math.max(0, Math.min(1, item.focusY ?? 0.5)) };
       })
     );
     const totalHeight =
@@ -1614,10 +1619,9 @@ export default function Home() {
     ctx.drawImage(header, 0, 0, width, headerHeight);
     let y = headerHeight + gap;
     for (const item of prepared) {
-      const sourceWidth = item.img.width / item.zoom;
-      const sourceHeight = item.img.height / item.zoom;
-      ctx.drawImage(item.img, (item.img.width - sourceWidth) / 2, (item.img.height - sourceHeight) / 2,
-        sourceWidth, sourceHeight, 0, y, width, item.height);
+      const sourceX = Math.max(0, Math.min(item.img.width - item.sourceWidth, item.img.width * item.focusX - item.sourceWidth / 2));
+      const sourceY = Math.max(0, Math.min(item.img.height - item.sourceHeight, item.img.height * item.focusY - item.sourceHeight / 2));
+      ctx.drawImage(item.img, sourceX, sourceY, item.sourceWidth, item.sourceHeight, 0, y, width, item.height);
       y += item.height + gap;
     }
     if (footer) ctx.drawImage(footer, 0, y, width, footerHeight);
@@ -2900,6 +2904,32 @@ export default function Home() {
                       setDetailPreview("");
                     }} />
                 </label>
+                {item.name.startsWith("보정본") && <>
+                  <label>가로 중심 {Math.round((item.focusX ?? 0.5) * 100)}%
+                    <input type="range" min="0.2" max="0.8" step="0.01" value={item.focusX ?? 0.5}
+                      onChange={event => {
+                        const focusX = Number(event.target.value);
+                        setDetailImages(prev => prev.map(image => image.id === item.id ? { ...image, focusX } : image));
+                        setDetailPreview("");
+                      }} />
+                  </label>
+                  <label>세로 중심 {Math.round((item.focusY ?? 0.5) * 100)}%
+                    <input type="range" min="0.2" max="0.8" step="0.01" value={item.focusY ?? 0.5}
+                      onChange={event => {
+                        const focusY = Number(event.target.value);
+                        setDetailImages(prev => prev.map(image => image.id === item.id ? { ...image, focusY } : image));
+                        setDetailPreview("");
+                      }} />
+                  </label>
+                  <label>컷 높이 {item.frameHeight || 780}px
+                    <input type="range" min="780" max="1300" step="20" value={item.frameHeight || 780}
+                      onChange={event => {
+                        const frameHeight = Number(event.target.value);
+                        setDetailImages(prev => prev.map(image => image.id === item.id ? { ...image, frameHeight } : image));
+                        setDetailPreview("");
+                      }} />
+                  </label>
+                </>}
                 <div className="detailItemButtons">
                   <button type="button" onClick={() => setLightbox(item.dataUrl)}>확대</button>
                   <button type="button" className="removeButton"
