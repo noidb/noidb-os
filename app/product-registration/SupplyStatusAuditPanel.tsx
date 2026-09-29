@@ -130,7 +130,7 @@ export default function SupplyStatusAuditPanel() {
         </button>
       </div>
       <a href="/downloads/noidb-supplier-sync.zip" download style={{ ...wmsGhostButton, minHeight: "34px", marginTop: "9px", padding: "0 11px", display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
-        상품공급상태 자동수집 확장 기능 v1.2 업데이트
+        상품공급상태 자동수집 확장 기능 v1.3 받기
       </a>
 
       {error && <p style={{ color: "#c0392b", fontSize: "12px", margin: "10px 0 0" }}>{error}</p>}

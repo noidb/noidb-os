@@ -94,6 +94,7 @@ const MAX_PHOTOS = 20;
 const ACCEPTED = ["image/jpeg", "image/jpg", "image/png"];
 const DEFAULT_DETAIL_HEADER = "/노이드비-상단이미지.jpg";
 const DRAFT_STORAGE_KEY = "noidb-product-draft";
+const PRODUCT_DB_PATH_KEY = "noidb-product-db-path";
 const LAURA_DRAFT_STORAGE_KEY = "laura-product-draft";
 const LEGACY_DRAFT_STORAGE_KEY = ["noi", "db-product-draft"].join("");
 const DEFAULT_LABEL_YEAR_MONTH = (() => {
@@ -361,6 +362,7 @@ export default function Home() {
   const [dbSupported, setDbSupported] = useState(false);
   const [dbHandle, setDbHandle] = useState<FileSystemDirectoryHandle | null>(null);
   const [dbFolderName, setDbFolderName] = useState("");
+  const [folderPathMessage, setFolderPathMessage] = useState("");
   const [dbStatus, setDbStatus] = useState("");
   const [dbSavedFiles, setDbSavedFiles] = useState<string[]>([]);
   const [registrationUploadReady, setRegistrationUploadReady] = useState<{ model: string; files: string[] } | null>(null);
@@ -994,6 +996,33 @@ export default function Home() {
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       setSourcingSaveStatus(`오류: ${e instanceof Error ? e.message : "폴더 열기 실패"}`);
+    }
+  };
+
+  // 웹페이지는 윈도우 탐색기를 직접 열 수 없어서, 모델 폴더의 전체 경로를 복사해 탐색기·업로드 창 주소칸에 붙여넣게 한다.
+  // 브라우저는 선택한 상품DB 폴더의 전체 경로를 알려주지 않으므로 처음 한 번만 사용자가 입력한다.
+  const copyModelFolderPath = async () => {
+    if (!model || !product.category) return setFolderPathMessage("카테고리와 모델명을 먼저 확인해주세요.");
+    let base = "";
+    try { base = localStorage.getItem(PRODUCT_DB_PATH_KEY) || ""; } catch { /* 저장공간을 못 쓰면 매번 입력 */ }
+    const matchesFolder = (path: string) => !dbFolderName || path.split(/[\\/]/).pop() === dbFolderName;
+    if (!base || !matchesFolder(base)) {
+      const entered = window.prompt(
+        `상품DB 폴더(${dbFolderName || "연결한 폴더"})의 전체 경로를 한 번만 입력해주세요.\n탐색기에서 그 폴더를 열고 주소칸을 복사해 붙여넣으면 됩니다.\n예: G:\\내 드라이브\\상품이미지DB`,
+        base,
+      );
+      const cleaned = String(entered || "").trim().replace(/^"|"$/g, "").replace(/[\\/]+$/, "");
+      if (!cleaned) return;
+      if (!matchesFolder(cleaned)) return setFolderPathMessage(`입력한 경로의 마지막 폴더가 연결된 상품DB 폴더(${dbFolderName})와 다릅니다. 다시 눌러 입력해주세요.`);
+      base = cleaned;
+      try { localStorage.setItem(PRODUCT_DB_PATH_KEY, base); } catch { /* 이번만 사용 */ }
+    }
+    const fullPath = `${base}\\${product.category}\\${model}`;
+    try {
+      await navigator.clipboard.writeText(fullPath);
+      setFolderPathMessage(`경로를 복사했습니다: ${fullPath} · 업로드 창이나 탐색기(Win+E) 주소칸에 붙여넣으세요.`);
+    } catch {
+      setFolderPathMessage(`복사하지 못했습니다. 이 경로를 직접 복사해주세요: ${fullPath}`);
     }
   };
 
@@ -2745,7 +2774,6 @@ export default function Home() {
           </button>
         </div>
         {batchMode === "actual" && modelDuplicate && !modelReregisterable && <p className="dangerAlert">기존 모델입니다. 판매중지 상태가 아닌 모델의 일괄 등록은 차단됩니다.</p>}
-        {batchMode === "actual" && modelReregisterable && <p className="saveExplain">판매중지 제품의 기존 행을 맨 위로 옮기고 새 입력값만 갱신합니다. 누적입고·창고번호 등 미입력 정보는 보존하며, SKU ID·바코드·발주가능상태·제품링크·노출상품ID·옵션ID는 새 승인 전까지 비웁니다. 선택한 상품 폴더의 같은 이름 파일은 새 파일로 갱신합니다.</p>}
         <button className="batchSaveButton" type="button" disabled={batchBusy} onClick={batchSave}>
           {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP 생성" : "실제 등록파일 일괄 생성 및 저장"}
         </button>
@@ -2762,9 +2790,10 @@ export default function Home() {
               <span>다음은 Supplier Hub에서 등록파일과 견적서를 올린 뒤 최종 제출하는 단계입니다.</span>
             </div>
             <div className="registrationNextActions">
-              {dbSupported && <button type="button" className="secondaryButton" onClick={() => void openModelFolder()}>저장 폴더 열기</button>}
+              <button type="button" className="secondaryButton" onClick={() => void copyModelFolderPath()}>폴더 경로 복사</button>
               <a href="https://supplier.coupang.com/qvt/registration" target="_blank" rel="noreferrer">Supplier Hub 대량상품등록 열기</a>
             </div>
+            {folderPathMessage && <span className="registrationPathMessage">{folderPathMessage}</span>}
           </div>
         )}
         <div className="quoteQueuePanel">

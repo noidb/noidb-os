@@ -651,3 +651,4 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 .detailBrandActions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 button.detailBrandUpload{font:inherit;font-weight:750;color:inherit}
 button.detailBrandUpload:disabled{opacity:.5;cursor:default}
+.registrationNextStep .registrationPathMessage{flex-basis:100%;word-break:break-all}
