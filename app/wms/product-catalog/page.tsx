@@ -568,12 +568,26 @@ export default function ProductCatalogPage() {
   async function prepareModel(modelName: string, groupItems: ProductCatalogItem[]) {
     if (!manualExclusions || excludedModelKeys.has(clean(modelName))) {
       setExclusionError("제외된 모델이거나 제외 목록을 확인하지 못해 등록 준비를 진행할 수 없습니다.");
+      window.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
-    const state = photoStates[modelName];
-    if (!state || state.loading) {
-      setFolderMessage("먼저 이 모델 사진을 검색해 기존 상세페이지·보정본 여부를 확인해주세요.");
-      return;
+    let state = photoStates[modelName];
+    if (state?.loading) return;
+    // 새로고침 뒤에는 화면의 검색 결과가 비어 있으므로, 이 브라우저에 저장해 둔 검색 결과·선택을 먼저 되살린다.
+    if (!state) {
+      setPreparing(modelName);
+      let restoreError = "";
+      const restored = await restoreSavedSearch(modelName).catch(error => { restoreError = error instanceof Error ? error.message : ""; return null; });
+      setPreparing("");
+      if (!restored) {
+        setFolderMessage(restoreError
+          ? `${modelName}: ${restoreError}`
+          : `${modelName}: 저장된 사진 검색 결과가 없습니다. 먼저 "사진검색"을 눌러 기존 상세페이지·보정본 여부를 확인해주세요.`);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+      state = restored;
+      setPhotoStates(current => ({ ...current, [modelName]: restored }));
     }
     const details = (state?.hits || []).filter(hit => hit.identity.kind === "detail" && !state?.hiddenIds?.includes(hit.id));
     const chosenDetail = detailChoices[modelName] === "none" ? undefined : details.find(hit => hit.id === detailChoices[modelName]) || details[0];
@@ -588,6 +602,7 @@ export default function ProductCatalogPage() {
       router.push(`/?reregisterModel=${encodeURIComponent(modelName)}`);
     } catch {
       setFolderMessage("등록 준비를 저장하지 못했습니다. 브라우저 저장공간과 선택한 사진을 확인해주세요.");
+      window.scrollTo({ top: 0, behavior: "smooth" });
     } finally { setPreparing(""); }
   }
 

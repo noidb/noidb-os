@@ -477,8 +477,6 @@ export default function Home() {
           warehouse: String(first.warehouseNumber || ""),
           keyword: "", searchTags: "", replacementSku: "",
         });
-        const existingDetail = await loadPreparedDetail(requestedModel).catch(() => null);
-        if (active) setPreparedDetail(existingDetail);
         const selectedPhotos = await loadPreparedPhotos(requestedModel).catch(() => []);
         if (!active) return;
         if (selectedPhotos.length) {
@@ -510,6 +508,18 @@ export default function Home() {
     })();
     return () => { active = false; };
   }, []);
+
+  // 재등록 모델이 정해지면(재등록 목록에서 열었거나 재등록 임시저장을 불러왔을 때) 사진선택에서
+  // 골라 둔 기존 상세페이지를 다시 찾아 "기존상세페이지 사용" 버튼을 보여준다.
+  useEffect(() => {
+    setPreparedDetail(null);
+    if (!reregisterModelName) return;
+    let active = true;
+    void loadPreparedDetail(reregisterModelName)
+      .then(detail => { if (active) setPreparedDetail(detail); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [reregisterModelName]);
 
   useEffect(() => {
     void (async () => {
