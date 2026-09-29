@@ -485,7 +485,7 @@ export default function Home() {
           const preparedSlots = selectedPhotos.map(photo => ({ dataUrl: photo.dataUrl, fileName: photo.name }));
           setPhotos([{ id: selectedPhotos[0].id, name: selectedPhotos[0].name, dataUrl: selectedPhotos[0].dataUrl }]);
           setUploadPool(preparedSlots);
-          setPhotoMessage("재등록 사진을 준비했습니다. AI 분석에는 분석용으로 지정한 1장만 쓰고, 선택한 사진 전체는 아래 쿠팡 등록이미지 업로드 풀에 넣었습니다. 슬롯은 직접 지정해주세요.");
+          setPhotoMessage("");
           return;
         }
         const imageUrl = getWmsDisplayImageUrl(String(first.imageUrl || ""));

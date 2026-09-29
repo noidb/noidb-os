@@ -26,6 +26,25 @@ type Props = {
   onAddToList: (items: Array<{ fileName: string; dataUrl: string; source: string }>) => void;
 };
 
+async function cropDataUrl(dataUrl: string, top: number, bottom: number): Promise<string> {
+  if (top <= 0 && bottom >= 1) return dataUrl;
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => reject(new Error("상세페이지를 불러오지 못했습니다."));
+    element.src = dataUrl;
+  });
+  const y = Math.round(image.naturalHeight * top);
+  const h = Math.max(1, Math.round(image.naturalHeight * bottom) - y);
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
+  ctx.drawImage(image, 0, y, image.naturalWidth, h, 0, 0, image.naturalWidth, h);
+  return canvas.toDataURL("image/jpeg", 0.97);
+}
+
 function newDraftId() {
   return `quick-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -98,7 +117,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     try {
       const dataUrl = await readImageFile(file);
       setCut({ dataUrl, name: file.name, top: 0, bottom: 1, mode: "top", history: [] });
-      setMessage("자를 부분이 있으면 위·아래 위치를 클릭해 정하고, 없으면 '자르지 않고 사용'을 누르세요.");
+      setMessage("자를 부분이 있으면 위·아래 위치를 클릭해 정한 뒤, 그대로 상세페이지에 쓸지 사진별로 나눌지 선택하세요.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "이미지를 불러오지 못했습니다.");
     }
@@ -119,54 +138,49 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     return sections.map(section => ({ ...section, kind: kinds.get(section.id)?.kind || ("product" as const), reason: kinds.get(section.id)?.reason || "직접 확인해주세요." }));
   }
 
-  async function confirmCut(mode: "replace" | "append" = "replace") {
+  // 사진별로 나눠서 등록이미지·AI 새로 만들기에 쓴다. 자를 때마다 이전에 나눠 둔 사진은 새 사진으로 바뀐다.
+  async function confirmCutForSplit() {
     if (!cut || cut.bottom - cut.top < 0.02) {
       setMessage("사용할 구간이 너무 좁습니다. 위·아래 자를 위치를 다시 정해주세요.");
       return;
     }
     setBusy(true);
     try {
-      let usable = cut.dataUrl;
-      if (cut.top > 0 || cut.bottom < 1) {
-        const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const element = new Image();
-          element.onload = () => resolve(element);
-          element.onerror = () => reject(new Error("상세페이지를 불러오지 못했습니다."));
-          element.src = cut.dataUrl;
-        });
-        const y = Math.round(image.naturalHeight * cut.top);
-        const h = Math.max(1, Math.round(image.naturalHeight * cut.bottom) - y);
-        const canvas = document.createElement("canvas");
-        canvas.width = image.naturalWidth;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
-        ctx.drawImage(image, 0, y, image.naturalWidth, h, 0, 0, image.naturalWidth, h);
-        usable = canvas.toDataURL("image/jpeg", 0.97);
-      }
+      const usable = await cropDataUrl(cut.dataUrl, cut.top, cut.bottom);
       const found = await splitDetailPage(usable, headerUrl);
       const classified = await classifyKinds(found);
-      // 나중에 추가한 구간과 아이디가 겹치지 않게 가져온 묶음마다 표시를 붙인다.
       const stamp = Date.now().toString(36);
       const sections = classified.map(section => ({ ...section, id: `${stamp}-${section.id}` }));
-      if (mode === "append" && originalSections.length) {
-        setOriginalSections(current => [...current, ...sections]);
-        setSectionActions(current => ({ ...current, ...Object.fromEntries(sections.map(section => [section.id, "edit" as const])) }));
-        invalidateResult();
-        setScanSummary(current => ({ found: (current?.found || 0) + found.length, kept: (current?.kept || 0) + sections.length, excluded: 0 }));
-      } else {
-        setDraftId(newDraftId());
-        setSource(usable);
-        setSourceName(cut.name);
-        resetWork();
-        setOriginalSections(sections);
-        setSectionActions(Object.fromEntries(sections.map(section => [section.id, "edit"])));
-        setScanSummary({ found: found.length, kept: sections.length, excluded: 0 });
-      }
+      setDraftId(newDraftId());
+      setSource(usable);
+      setSourceName(cut.name);
+      resetWork();
+      setOriginalSections(sections);
+      setSectionActions(Object.fromEntries(sections.map(section => [section.id, "edit"])));
+      setScanSummary({ found: found.length, kept: sections.length, excluded: 0 });
       setCut(null);
-      setMessage(mode === "append" ? `${sections.length}장을 뒤에 추가했습니다. ◀ ▶ 로 순서를 바꿀 수 있습니다.` : `${sections.length}장을 가져왔습니다. 제품컷·착용컷 구분을 확인하고 새로 만들기를 누르세요.`);
+      setMessage(`${sections.length}장을 가져왔습니다. 제품컷·착용컷 구분을 확인하고 새로 만들기를 누르세요.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "상세페이지를 나누지 못했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // 이미 완성된 상세페이지를 위·아래만 자르고 손대지 않은 채 그대로 상세페이지 칸에 넣는다.
+  async function useCroppedAsDetailPage() {
+    if (!cut || cut.bottom - cut.top < 0.02) {
+      setMessage("사용할 구간이 너무 좁습니다. 위·아래 자를 위치를 다시 정해주세요.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const usable = await cropDataUrl(cut.dataUrl, cut.top, cut.bottom);
+      onComplete({ dataUrl: usable, sections: [] });
+      setCut(null);
+      setMessage("자른 상세페이지를 그대로 아래 상세페이지 칸에 넣었습니다.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "상세페이지를 자르지 못했습니다.");
     } finally {
       setBusy(false);
     }
@@ -386,14 +400,8 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         <div className="detailActions">
           <button type="button" className={cut.mode === "top" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "top" })}>위쪽 자를 위치 정하기</button>
           <button type="button" className={cut.mode === "bottom" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "bottom" })}>아래쪽 자를 위치 정하기</button>
-          {originalSections.length > 0 ? (
-            <>
-              <button type="button" className="purpleButton" disabled={busy} onClick={() => void confirmCut("append")}>{cut.top > 0 || cut.bottom < 1 ? "이 구간 뒤에 추가" : "자르지 않고 뒤에 추가"}</button>
-              <button type="button" className="secondaryButton" disabled={busy} onClick={() => void confirmCut("replace")}>기존 사진 지우고 이 구간으로 시작</button>
-            </>
-          ) : (
-            <button type="button" className="purpleButton" disabled={busy} onClick={() => void confirmCut("replace")}>{cut.top > 0 || cut.bottom < 1 ? "이 구간 사용" : "자르지 않고 사용"}</button>
-          )}
+          <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPage()} title="자른 상세페이지를 손대지 않고 그대로 상세페이지 칸에 넣습니다.">상세페이지 사용</button>
+          <button type="button" className="secondaryButton" disabled={busy} onClick={() => void confirmCutForSplit()} title="사진별로 나눠서 등록이미지에 추가하거나 AI로 새로 만들 때 씁니다.">사진별로 나누기</button>
           <button type="button" className="secondaryButton" disabled={!cut.history.length} onClick={() => setCut(c => c && c.history.length ? { ...c, ...c.history[c.history.length - 1], history: c.history.slice(0, -1) } : c)}>되돌리기</button>
           <button type="button" className="secondaryButton" disabled={cut.top === 0 && cut.bottom === 1} onClick={() => setCut(c => c && { ...c, top: 0, bottom: 1, history: [...c.history, { top: c.top, bottom: c.bottom }] })}>초기화</button>
           <button type="button" className="secondaryButton" onClick={() => setCut(null)}>닫기</button>
