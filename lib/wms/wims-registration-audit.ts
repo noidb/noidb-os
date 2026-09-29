@@ -182,15 +182,26 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
   const reregistrations = parseReregistrationHistory(historyRows);
   const matchedSheetRows = new Set<number>();
   const rows: WimsAuditResultRow[] = [];
-  for (const wims of wimsRows) {
-    if (wims.skuId && reregistrations.retiredSkuIds.has(identityKey(wims.skuId))) {
-      rows.push({ type: "unmatched", wims, message: "재등록 이력에서 교체된 이전 SKU입니다. 현재 상품에 다시 연결하지 않습니다." });
-      continue;
-    }
+  const retired = (wims: WimsRegistrationRow) => Boolean(wims.skuId && reregistrations.retiredSkuIds.has(identityKey(wims.skuId)));
+  const directMatches = (wims: WimsRegistrationRow) => {
     const skuMatches = wims.skuId ? bySkuId.get(identityKey(wims.skuId)) || [] : [];
     const modelMatches = wims.modelSku ? byModelSku.get(identityKey(wims.modelSku)) || [] : [];
     const rejectedNameMatches = wims.status === "rejected" ? byProductName.get(normalizeProductName(wims.productName, wims.modelSku)) || [] : [];
-    const matches = skuMatches.length > 0 ? skuMatches : modelMatches.length > 0 ? modelMatches : rejectedNameMatches;
+    return { modelMatches, matches: skuMatches.length > 0 ? skuMatches : modelMatches.length > 0 ? modelMatches : rejectedNameMatches };
+  };
+  const modelFallback = rejectedModelFallback(
+    wimsRows.filter(wims => wims.status === "rejected" && !retired(wims) && directMatches(wims).matches.length === 0),
+    products, headers,
+  );
+  for (const wims of wimsRows) {
+    if (retired(wims)) {
+      rows.push({ type: "unmatched", wims, message: "재등록 이력에서 교체된 이전 SKU입니다. 현재 상품에 다시 연결하지 않습니다." });
+      continue;
+    }
+    const direct = directMatches(wims);
+    const fallback = modelFallback.get(wims);
+    const modelMatches = direct.modelMatches;
+    const matches = direct.matches.length > 0 || !fallback ? direct.matches : [fallback];
     if (matches.length !== 1) {
       rows.push({ type: matches.length > 1 ? "conflict" : "unmatched", wims, message: matches.length > 1 ? `제품DB 후보가 ${matches.length}행이라 자동 연결할 수 없습니다.` : "제품DB에서 동일 SKU ID 또는 모델SKU 행을 찾지 못했습니다." });
       continue;
@@ -204,6 +215,11 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
       continue;
     }
     matchedSheetRows.add(product.sheetRowNumber);
+    if (fallback && matches[0] === fallback) {
+      // 반려 건만: 옛 모델SKU 표기(예: SG/SS)로 남은 승인대기 행을 같은 모델명·옵션으로 연결해 반려 처리 버튼만 제공한다.
+      rows.push({ ...base, type: "rejected", message: "WIMS 반려 건입니다. 제품DB 모델SKU 표기가 달라 같은 모델명·옵션으로 연결했습니다. SKU·바코드는 반영하지 않습니다." });
+      continue;
+    }
     if ((wims.modelSku && identityKey(product.modelSku) !== identityKey(wims.modelSku))
       || modelMatches.some(match => match.sheetRowNumber !== product.sheetRowNumber)
       || (product.skuId && wims.skuId && identityKey(product.skuId) !== identityKey(wims.skuId))
@@ -258,6 +274,46 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
     pendingNotInWims,
   };
   return { ...auditWithoutToken, dryRunToken: createHash("sha256").update(JSON.stringify(auditWithoutToken)).digest("hex") };
+}
+
+/**
+ * 모델SKU·SKU ID·상품명으로 연결되지 않은 WIMS 반려 행을 같은 모델명의 승인대기 행과 짝짓는다.
+ * 예전 방식으로 승인대기가 된 행은 모델SKU가 옛 표기(mn011236SG)라 새 표기(mn011236-GO) 반려 건과 이어지지 않는다.
+ * 모델 단위로 반려 행 수와 승인대기 행 수가 같고, 옵션(색상)이 1:1로 정확히 갈릴 때만 연결한다.
+ */
+function rejectedModelFallback(
+  rejected: WimsRegistrationRow[],
+  products: { row: string[]; sheetRowNumber: number; status: string; modelSku: string; skuId: string; barcode: string; productName: string }[],
+  headers: string[],
+): Map<WimsRegistrationRow, (typeof products)[number]> {
+  const result = new Map<WimsRegistrationRow, (typeof products)[number]>();
+  const modelNameIndex = headerIndex(headers, ["모델명/품번", "모델명"]);
+  const colorIndex = headerIndex(headers, ["색상"]);
+  if (modelNameIndex < 0 || !rejected.length) return result;
+  const eligibleStatus = new Set([...PENDING, ...REJECTION_DECISIONS]);
+  const groups = new Map<string, WimsRegistrationRow[]>();
+  for (const wims of rejected) {
+    const model = baseModelKey(wims.modelSku);
+    if (model) groups.set(model, [...(groups.get(model) || []), wims]);
+  }
+  // 옵션명은 "모델SKU | 색상" 형태일 수 있어 마지막 조각만 쓴다.
+  const colorOf = (product: (typeof products)[number]) => colorIndex < 0 ? "" : normalize(String(product.row[colorIndex] ?? "").split("|").pop());
+  for (const [model, group] of groups) {
+    const candidates = products.filter(product => identityKey(product.row[modelNameIndex]) === model && eligibleStatus.has(product.status));
+    if (!candidates.length || candidates.length !== group.length) continue;
+    if (group.length === 1) {
+      result.set(group[0], candidates[0]);
+      continue;
+    }
+    const pairs = group.map(wims => candidates.filter(product => {
+      const color = colorOf(product);
+      return color && normalize(wims.productName).includes(color);
+    }));
+    const chosen = pairs.map(list => list.length === 1 ? list[0] : null);
+    if (chosen.some(product => !product) || new Set(chosen.map(product => product!.sheetRowNumber)).size !== group.length) continue;
+    group.forEach((wims, index) => result.set(wims, chosen[index]!));
+  }
+  return result;
 }
 
 export async function applyWimsRejectionDecision(
