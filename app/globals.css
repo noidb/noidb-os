@@ -652,3 +652,12 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 button.detailBrandUpload{font:inherit;font-weight:750;color:inherit}
 button.detailBrandUpload:disabled{opacity:.5;cursor:default}
 .registrationNextStep .registrationPathMessage{flex-basis:100%;word-break:break-all}
+
+/* 7. 마지막 저장: 임시저장 · 전체 파일 저장 두 버튼을 같은 크기로 나란히 (브랜드 색) */
+.finalSaveActions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px}
+.finalSaveActions button{min-height:48px;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;transition:background .15s}
+.finalSaveDraft{background:#e3ede6;border:1px solid #b9cbbc;color:#3f574b}
+.finalSaveDraft:hover:not(:disabled){background:#d3e3d9}
+.finalSaveAll{background:var(--brand-sage);border:1px solid var(--brand-sage);color:#fff}
+.finalSaveAll:hover:not(:disabled){background:var(--brand-sage-dark);border-color:var(--brand-sage-dark)}
+.finalSaveActions button:disabled{opacity:.6;cursor:wait}

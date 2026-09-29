@@ -338,8 +338,6 @@ export default function Home() {
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchStatus, setBatchStatus] = useState("");
   const [batchMode, setBatchMode] = useState<"practice" | "actual">("actual");
-  const [coupangImportBusy, setCoupangImportBusy] = useState("");
-  const [coupangImportMessage, setCoupangImportMessage] = useState("");
   const [quoteQueue, setQuoteQueue] = useState<QuoteQueueRecord[]>([]);
   const [quoteQueueBusy, setQuoteQueueBusy] = useState("");
   const [drafts, setDrafts] = useState<ListedProductDraft[]>([]);
@@ -1130,56 +1128,6 @@ export default function Home() {
     localStorage.removeItem(LAURA_DRAFT_STORAGE_KEY);
     localStorage.removeItem(LEGACY_DRAFT_STORAGE_KEY);
     setMessage("전체 입력값을 기본값으로 초기화했습니다.");
-  };
-
-  const importCoupangData = async (mode: "skuMaster" | "inboundHistory" | "poList" | "coupangExtract", fileList: FileList | null) => {
-    if (!fileList?.length) return;
-    const label = mode === "skuMaster" ? "SKU 전체 목록"
-      : mode === "inboundHistory" ? "입고상세내역"
-      : mode === "coupangExtract" ? "쿠팡 추출DB"
-      : "발주 SKU 목록";
-    setCoupangImportBusy(mode);
-    setCoupangImportMessage(`${label}을 Google 상품DB에 반영하고 있습니다...`);
-    try {
-      const form = new FormData();
-      form.set("mode", mode);
-      Array.from(fileList).forEach(file => form.append("files", file));
-      const response = await fetch("/api/coupang-data", { method: "POST", body: form });
-      const responseText = await response.text();
-      let data: any;
-      try { data = JSON.parse(responseText); }
-      catch {
-        throw new Error(response.status === 504
-          ? "서버 처리 시간이 초과됐습니다. 잠시 후 다시 시도해주세요."
-          : `서버 처리 중 오류가 발생했습니다. (${response.status || "응답 없음"})`);
-      }
-      if (!response.ok || !data.ok) throw new Error(data.error || "가져오기 실패");
-      if (mode === "skuMaster") {
-        const safetyText = ` · 제품DB 신규행 0 · 기존 SKU는 상품명·바코드·발주가능상태만 갱신 · 업로드 S바코드 제외 ${Number(data.excluded || 0).toLocaleString()} · 기준목록 S바코드 정리 ${Number(data.removedNonRocket || 0).toLocaleString()} · 구 SKU 재추가 방지 ${Number(data.retiredSkipped || 0).toLocaleString()}`;
-        setCoupangImportMessage(data.baseline
-          ? `SKU 기준목록 ${data.parsed?.toLocaleString?.() || data.parsed}개 생성 완료 · 최초 업로드는 승인대기 자동연결 없음${safetyText}`
-          : `SKU 전체 목록 ${data.parsed?.toLocaleString?.() || data.parsed}개 반영 완료 · 직전 업로드 이후 새 SKU ${data.newSkus || 0} · 승인대기 자동연결 ${data.matched || 0} · 확인필요 ${data.review || 0} · 수정 ${data.updated || 0}${safetyText}`);
-      } else if (mode === "inboundHistory") {
-        setCoupangImportMessage(data.skipped
-          ? `이미 반영한 동일한 입고 파일 ${data.files}개라서 중복 적용하지 않았습니다.`
-          : `입고상세내역 ${data.files}개 반영 완료 · 실제 입고 ${Number(data.totalInbound || 0).toLocaleString()} · 누적입고 갱신 SKU ${Number(data.cumulativeInboundUpdated || 0).toLocaleString()} · 미입고 재계산 SKU ${Number(data.missingUpdated || 0).toLocaleString()}`);
-      } else if (mode === "coupangExtract") {
-        setCoupangImportMessage(`쿠팡 추출DB 반영 완료 · 기존 행 매칭 ${Number(data.matched || 0).toLocaleString()} · 상품링크 갱신 ${Number(data.productLinkUpdated || 0).toLocaleString()} · 쿠팡 노출가 갱신 ${Number(data.exposurePriceUpdated || 0).toLocaleString()} · 재고현황 갱신 ${Number(data.stockStatusUpdated || 0).toLocaleString()} · 미연결 ${Number(data.missing || 0).toLocaleString()} · 제품DB 신규행 0 · 그 외 정보 수정 없음`);
-      } else {
-        setCoupangImportMessage(`발주 ${data.parsed?.toLocaleString?.() || data.parsed}행 반영 완료 · 최근발주일 ${Number(data.recentOrderDatesUpdated || 0).toLocaleString()}개 SKU 갱신 · 미입고 ${Number(data.missingUpdated || 0).toLocaleString()}개 SKU 재계산 · 합배송 ${data.shippingGroups || 0}묶음 · 발주서 출력 ${data.pickingRows || 0}행 · 쉽먼트전송 ${data.shipmentRows || 0}행 · 창고번호 미등록 ${data.missingWarehouse || 0}`);
-      }
-    } catch (error) {
-      setCoupangImportMessage(`오류: ${error instanceof Error ? error.message : "쿠팡 데이터 가져오기 실패"}`);
-    } finally {
-      setCoupangImportBusy("");
-    }
-  };
-
-  const dropCoupangFiles = (mode: "skuMaster" | "inboundHistory" | "poList" | "coupangExtract", event: React.DragEvent<HTMLElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (coupangImportBusy || !event.dataTransfer.files.length) return;
-    void importCoupangData(mode, event.dataTransfer.files);
   };
 
   const loadQuoteQueue = async () => {
@@ -2730,15 +2678,13 @@ export default function Home() {
       <section className="card full dbSetupCard">
         <h2>7. 상품DB · 등록파일 일괄 생성</h2>
         <div className="exportActions">
-          <button className="secondaryButton" type="button" disabled={draftSaving} onClick={() => void saveDraft()}>{draftSaving ? "임시저장 중..." : "임시저장"}</button>
           {dbSupported && <button className="dark" type="button" onClick={pickFolder}>상품DB 폴더 선택</button>}
           <button className="secondaryButton" type="button" onClick={() => void createSourcingFolder()}>모델명 폴더 생성</button>
           <button className="green" type="button" onClick={() => void saveSourcingImages()}>이미지 저장</button>
           {dbSupported && <button className="secondaryButton" type="button" onClick={() => void openModelFolder()}>폴더 바로가기</button>}
         </div>
         {sourcingSaveStatus && <p className="detailMessage">{sourcingSaveStatus}</p>}
-        {draftStatus && <p className="detailMessage">{draftStatus}</p>}
-        {dbFolderName && <p className="detailMessage">연결: {dbFolderName}</p>}
+        {dbFolderName &&<p className="detailMessage">연결: {dbFolderName}</p>}
         <div className="labelQuickPanel">
           <strong>라벨 정보</strong>
           <p>현재 상품 정보를 기본값으로 사용합니다. 바꿔야 하는 항목만 수정하세요.</p>
@@ -2765,37 +2711,6 @@ export default function Home() {
           </button>
         </div>
         {exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
-        <div className="batchModePanel" role="group" aria-label="일괄 생성 용도">
-          <button type="button" className={batchMode === "actual" ? "selected" : ""} onClick={() => setBatchMode("actual")}>
-            <strong>실제 등록용</strong><span>새 모델 등록 · 판매중지 모델은 기존 행 재사용</span>
-          </button>
-          <button type="button" className={batchMode === "practice" ? "selected" : ""} onClick={() => setBatchMode("practice")}>
-            <strong>테스트·교육용</strong><span>ZIP만 생성 · 폴더와 제품DB 변경 없음</span>
-          </button>
-        </div>
-        {batchMode === "actual" && modelDuplicate && !modelReregisterable && <p className="dangerAlert">기존 모델입니다. 판매중지 상태가 아닌 모델의 일괄 등록은 차단됩니다.</p>}
-        <button className="batchSaveButton" type="button" disabled={batchBusy} onClick={batchSave}>
-          {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP 생성" : "실제 등록파일 일괄 생성 및 저장"}
-        </button>
-        {!dbSupported && <p className="saveExplain">모바일에서는 상품DB ZIP이 다운로드됩니다. 다운로드 완료 후 공유 또는 파일 앱에서 Google Drive에 저장하세요.</p>}
-        {batchStatus && <p className={batchStatus.startsWith("오류") ? "error" : "detailMessage"}>{batchStatus}</p>}
-        {dbSavedFiles.length > 0 && (
-          <div className="dbFileList"><h3>저장된 파일</h3><ul>{dbSavedFiles.slice(0, 40).map(f => <li key={f}>{f}</li>)}</ul></div>
-        )}
-        {registrationUploadReady?.model === model && (
-          <div className="registrationNextStep" role="status">
-            <div>
-              <strong>실제 등록파일 준비 완료</strong>
-              <span>{model} · {registrationUploadReady.files.length.toLocaleString()}개 파일 · Google 제품DB 반영 완료</span>
-              <span>다음은 Supplier Hub에서 등록파일과 견적서를 올린 뒤 최종 제출하는 단계입니다.</span>
-            </div>
-            <div className="registrationNextActions">
-              <button type="button" className="secondaryButton" onClick={() => void copyModelFolderPath()}>폴더 경로 복사</button>
-              <a href="https://supplier.coupang.com/qvt/registration" target="_blank" rel="noreferrer">Supplier Hub 대량상품등록 열기</a>
-            </div>
-            {folderPathMessage && <span className="registrationPathMessage">{folderPathMessage}</span>}
-          </div>
-        )}
         <div className="quoteQueuePanel">
           <div className="quoteQueueHeader">
             <div><h3>카테고리별 묶음 견적서</h3><p>등록할 때 자동 누적되며 같은 성별·카테고리끼리 최대 1,000 SKU행으로 나뉩니다.</p></div>
@@ -2836,28 +2751,43 @@ export default function Home() {
           </div>
         </div>
         {dbStatus && <p className="note">{dbStatus}</p>}
-        <details id="coupang-data-import" className="advancedPanel coupangDataPanel">
-          <summary>기타 쿠팡 데이터 수동 업데이트</summary>
-          <div className="coupangImportGrid">
-            <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("inboundHistory", e)}>
-              <strong>입고상세내역 다운로드</strong>
-              <span>파일명: Coupang_Stocked_Data_List</span>
-              <input type="file" accept=".xlsx" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("inboundHistory", e.target.files); e.target.value = ""; }} />
-            </label>
-            <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("poList", e)}>
-              <strong>발주SKU 리스트 다운로드</strong>
-              <span>파일명: PO_SKU_LIST</span>
-              <input type="file" accept=".csv,.xlsx" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("poList", e.target.files); e.target.value = ""; }} />
-            </label>
-            <label className="coupangImportItem" onDragOver={e => e.preventDefault()} onDrop={e => dropCoupangFiles("coupangExtract", e)}>
-              <strong>쿠팡 추출DB 업데이트</strong>
-              <span>쿠팡쇼핑몰 추출DB.xlsx 1개 또는 광고센터 상품링크 JSON 여러 개</span>
-              <span>제품DB 행 추가 없음 · 기존 행의 상품링크/쿠팡 노출가/재고현황만 갱신</span>
-              <input type="file" accept=".xlsx,.json,application/json" multiple disabled={Boolean(coupangImportBusy)} onChange={e => { void importCoupangData("coupangExtract", e.target.files); e.target.value = ""; }} />
-            </label>
+        <div className="batchModePanel" role="group" aria-label="일괄 생성 용도">
+          <button type="button" className={batchMode === "actual" ? "selected" : ""} onClick={() => setBatchMode("actual")}>
+            <strong>실제 등록용</strong><span>새 모델 등록 · 판매중지 모델은 기존 행 재사용</span>
+          </button>
+          <button type="button" className={batchMode === "practice" ? "selected" : ""} onClick={() => setBatchMode("practice")}>
+            <strong>테스트·교육용</strong><span>ZIP만 생성 · 폴더와 제품DB 변경 없음</span>
+          </button>
+        </div>
+        {batchMode === "actual" && modelDuplicate && !modelReregisterable && <p className="dangerAlert">기존 모델입니다. 판매중지 상태가 아닌 모델의 일괄 등록은 차단됩니다.</p>}
+        <div className="finalSaveActions">
+          <button className="finalSaveDraft" type="button" disabled={draftSaving} onClick={() => void saveDraft()}>
+            {draftSaving ? "임시저장 중..." : "임시저장"}
+          </button>
+          <button className="finalSaveAll" type="button" disabled={batchBusy} onClick={batchSave}>
+            {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP 생성" : "전체 파일 저장"}
+          </button>
+        </div>
+        {draftStatus && <p className="detailMessage" role="status" aria-live="polite">{draftStatus}</p>}
+        {!dbSupported && <p className="saveExplain">모바일에서는 상품DB ZIP이 다운로드됩니다. 다운로드 완료 후 공유 또는 파일 앱에서 Google Drive에 저장하세요.</p>}
+        {batchStatus && <p className={batchStatus.startsWith("오류") ? "error" : "detailMessage"}>{batchStatus}</p>}
+        {dbSavedFiles.length > 0 && (
+          <div className="dbFileList"><h3>저장된 파일</h3><ul>{dbSavedFiles.slice(0, 40).map(f => <li key={f}>{f}</li>)}</ul></div>
+        )}
+        {registrationUploadReady?.model === model && (
+          <div className="registrationNextStep" role="status">
+            <div>
+              <strong>실제 등록파일 준비 완료</strong>
+              <span>{model} · {registrationUploadReady.files.length.toLocaleString()}개 파일 · Google 제품DB 반영 완료</span>
+              <span>다음은 Supplier Hub에서 등록파일과 견적서를 올린 뒤 최종 제출하는 단계입니다.</span>
+            </div>
+            <div className="registrationNextActions">
+              <button type="button" className="secondaryButton" onClick={() => void copyModelFolderPath()}>폴더 경로 복사</button>
+              <a href="https://supplier.coupang.com/qvt/registration" target="_blank" rel="noreferrer">Supplier Hub 대량상품등록 열기</a>
+            </div>
+            {folderPathMessage && <span className="registrationPathMessage">{folderPathMessage}</span>}
           </div>
-          {coupangImportMessage && <p className={coupangImportMessage.startsWith("오류") ? "error" : "detailMessage"}>{coupangImportMessage}</p>}
-        </details>
+        )}
       </section>
 
       <section id="product-registration-status" className="card full">
@@ -2869,20 +2799,6 @@ export default function Home() {
           <WimsRegistrationImportPanel />
           <SupplyStatusAuditPanel />
         </div>
-      </section>
-
-      <section id="product-draft-save" className="card full">
-        <h2>임시저장</h2>
-        <p className="note">작성 중인 상품과 이미지를 이 기기에 저장합니다. 저장한 상품은 임시저장 목록에서 이어서 작업할 수 있습니다.</p>
-        <button className="batchSaveButton" type="button" disabled={draftSaving} onClick={() => void saveDraft()}>
-          {draftSaving ? "임시저장 중..." : "임시저장 목록에 저장"}
-        </button>
-        {draftStatus && <p className="detailMessage" role="status" aria-live="polite">{draftStatus}</p>}
-        <button className="secondaryButton draftListShortcut" type="button" onClick={() => {
-          setShowDrafts(true);
-          void refreshDrafts();
-          window.setTimeout(() => document.getElementById("product-draft-list")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
-        }}>임시저장 목록 보기</button>
       </section>
 
       {lightbox && (
