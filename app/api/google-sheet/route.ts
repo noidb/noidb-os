@@ -134,11 +134,13 @@ export async function POST(req: NextRequest) {
       title: payload.title, color: formatCoupangOptionName(sku.sku, sku.color), size: sku.size, dimension, cost, sale, supply,
       sourcingUrl: payload.sourcingUrl || "",
     }));
+    // 등록화면은 옵션(SKU)별 썸네일을 skuImages(모델SKU 기준)로 보낸다. 예전 방식(optionImages, 색상 기준)도 계속 받는다.
     const productImages = skus.flatMap(sku => {
-      const dataUrl = payload.optionImages?.[sku.color];
+      const dataUrl = payload.skuImages !== undefined ? payload.skuImages?.[sku.sku] : payload.optionImages?.[sku.color];
       return dataUrl?.startsWith("data:image/") ? [{ filename: sku.thumbFile, dataUrl }] : [];
     });
-    const quotePayload: ExportPayload = { ...payload, optionImages: {} };
+    // 견적서 대기목록에는 이미지가 필요 없고, 시트 셀 용량을 넘지 않도록 이미지 데이터는 빼고 저장한다.
+    const quotePayload: ExportPayload = { ...payload, optionImages: {}, skuImages: undefined };
 
     const called = await callWebhook({
       secret: process.env.GOOGLE_SHEETS_WEBHOOK_SECRET || "",
