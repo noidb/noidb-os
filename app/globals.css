@@ -646,3 +646,8 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 .heroUtilityActions{margin-top:8px;gap:8px}
 
 .balancedShell>:last-child{margin-bottom:0!important}
+
+/* 6. 상단 로고 칸: 이미지 변경하기 · 상세페이지 사용 두 버튼을 같은 크기로 나란히 */
+.detailBrandActions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+button.detailBrandUpload{font:inherit;font-weight:750;color:inherit}
+button.detailBrandUpload:disabled{opacity:.5;cursor:default}

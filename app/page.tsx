@@ -24,7 +24,7 @@ import { dataUrlToBlob } from "@/lib/product-db/files";
 import { buildProductDbZip } from "@/lib/product-db/zip";
 import { compressImageDataUrl } from "@/lib/image/compress";
 import { splitDetailPage, type QuickDetailSection } from "@/lib/image-generator/quick-detail";
-import QuickDetailRemake from "./QuickDetailRemake";
+import QuickDetailRemake, { prependHeader } from "./QuickDetailRemake";
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { loadPreparedDetail, loadPreparedPhotos, type PreparedDetail } from "@/lib/image-search/browser-folder";
@@ -303,6 +303,8 @@ export default function Home() {
   const [detailHeader, setDetailHeader] = useState<SlotImage | null>(null);
   const [detailFooter, setDetailFooter] = useState<SlotImage | null>(null);
   const [detailPreview, setDetailPreview] = useState("");
+  // 상단 로고를 붙인 결과 그대로면 같은 로고가 두 번 붙지 않게 버튼을 막는다.
+  const [logoAppliedPreview, setLogoAppliedPreview] = useState("");
   const [squareImagesBusy, setSquareImagesBusy] = useState(false);
   const [squareImagesMessage, setSquareImagesMessage] = useState("");
   const [detailMessage, setDetailMessage] = useState("");
@@ -1600,7 +1602,7 @@ export default function Home() {
           product, analysis, photos, mainWear, allOptions, optionThumbs, variantThumbs, detailCut, wear01, wear02, customSlots,
           detailImages, detailHeader, detailFooter, detailPreview, sourcingUrls, sourcingUrlInputs, sourcingImages,
           uploadPool, title, tags, sourcingAnalysis,
-          labelManufactureYearMonth, labelManufacturerName, labelImporterName,
+          labelManufactureYearMonth, labelManufacturerName, labelImporterName, reregisterModelName, logoAppliedPreview,
         },
       };
     try {
@@ -1630,7 +1632,7 @@ export default function Home() {
           model: record.model,
           savedAt: record.savedAt,
           data: { product, analysis, sourcingUrls, sourcingUrlInputs, title, tags, sourcingAnalysis,
-            labelManufactureYearMonth, labelManufacturerName, labelImporterName, cloudOnly: true },
+            labelManufactureYearMonth, labelManufacturerName, labelImporterName, reregisterModelName, cloudOnly: true },
         },
       }, AbortSignal.timeout(15000));
       const cloudResult = await readDraftResponse(cloudResponse);
@@ -1672,6 +1674,13 @@ export default function Home() {
     setDetailHeader(data.detailHeader || null);
     setDetailFooter(data.detailFooter || null);
     setDetailPreview(data.detailPreview || "");
+    setLogoAppliedPreview(data.logoAppliedPreview && data.logoAppliedPreview === data.detailPreview ? data.detailPreview : "");
+    // 재등록 화면에서 저장한 임시저장은 불러와도 재등록 화면(모델명 고정)을 유지한다.
+    // 예전 임시저장에는 이 값이 없으므로, 재등록 목록에서 연 같은 모델이면 현재 재등록 표시를 그대로 둔다.
+    const draftModel = String(data.product?.modelName || record.model || "").trim().toLowerCase();
+    setReregisterModelName(prev => data.reregisterModelName
+      ? String(data.reregisterModelName)
+      : prev && prev.trim().toLowerCase() === draftModel ? prev : "");
     setSquareImagesMessage("");
     setSourcingUrls(Array.isArray(data.sourcingUrls) ? data.sourcingUrls : ["", "", ""]);
     setSourcingUrlInputs(Array.isArray(data.sourcingUrlInputs) ? data.sourcingUrlInputs : ["", "", ""]);
@@ -2566,12 +2575,28 @@ export default function Home() {
           <div className="detailBrandBlock">
             <strong>상단 로고 이미지</strong>
             <img src={detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER} alt="상단 로고 이미지" />
-            <label className="detailBrandUpload"
-              onDragOver={event => event.preventDefault()}
-              onDrop={event => { event.preventDefault(); void changeDetailBrandImage("header", event.dataTransfer.files?.[0]); }}>
-              다른 브랜드 로고 올리기
-              <input type="file" accept="image/jpeg,image/jpg,image/png" onChange={event => { void changeDetailBrandImage("header", event.target.files?.[0]); event.target.value = ""; }} />
-            </label>
+            <div className="detailBrandActions">
+              <label className="detailBrandUpload"
+                onDragOver={event => event.preventDefault()}
+                onDrop={event => { event.preventDefault(); void changeDetailBrandImage("header", event.dataTransfer.files?.[0]); }}>
+                이미지 변경하기
+                <input type="file" accept="image/jpeg,image/jpg,image/png" onChange={event => { void changeDetailBrandImage("header", event.target.files?.[0]); event.target.value = ""; }} />
+              </label>
+              <button type="button" className="detailBrandUpload"
+                disabled={!detailPreview || detailPreview === logoAppliedPreview}
+                title={!detailPreview ? "아래 상세페이지 칸에 상세페이지가 있어야 합니다." : detailPreview === logoAppliedPreview ? "이미 상단 로고를 붙였습니다." : "아래 상세페이지 맨 위에 이 상단 로고를 붙입니다."}
+                onClick={async () => {
+                  try {
+                    const next = await prependHeader(detailPreview, detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER);
+                    setDetailPreview(next);
+                    setLogoAppliedPreview(next);
+                    setSquareImagesMessage("");
+                    setDetailMessage("상세페이지 맨 위에 상단 로고를 붙였습니다.");
+                  } catch (error) {
+                    setDetailMessage(`오류: ${error instanceof Error ? error.message : "상단 로고를 붙이지 못했습니다."}`);
+                  }
+                }}>상세페이지 사용</button>
+            </div>
             {detailHeader && <button type="button" className="secondaryButton" onClick={() => { setDetailHeader(null); setDetailPreview(""); }}>NOID-B 기본 로고로 되돌리기</button>}
           </div>
           <div className="detailBrandBlock">
