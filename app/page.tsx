@@ -542,22 +542,11 @@ export default function Home() {
       return;
     }
     const timer = window.setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/google-sheet?model=${encodeURIComponent(model)}`, { cache: "no-store" });
-        const data = await res.json();
-        if (!active) return;
-        if (!res.ok || data.error) throw new Error(data.error || "중복확인 실패");
-        setModelDuplicate(Boolean(data.duplicate));
-        setModelReregisterable(Boolean(data.reregisterable));
-        setModelCheckMessage(
-          data.reregisterable ? "기존 행 재등록 가능" : data.duplicate ? (data.reason || "중복번호") : data.configured === false ? "Google DB 연결 후 중복확인" : "사용 가능한 모델명"
-        );
-      } catch {
-        if (!active) return;
-        setModelDuplicate(false);
-        setModelReregisterable(false);
-        setModelCheckMessage("중복확인 실패");
-      }
+      const result = await checkModelInGoogleDb(model);
+      if (!active) return;
+      setModelDuplicate(result.duplicate);
+      setModelReregisterable(result.reregisterable);
+      setModelCheckMessage(result.message);
     }, 450);
     return () => { active = false; window.clearTimeout(timer); };
   }, [model]);
@@ -1870,11 +1859,22 @@ export default function Home() {
       return;
     }
 
-    if (isActual && modelDuplicate && !modelReregisterable) {
+    let check = { duplicate: modelDuplicate, reregisterable: modelReregisterable, message: modelCheckMessage };
+    // 화면에 뜬 중복확인이 Google 일시 오류로 실패했다면, 실제 저장 전에 한 번 더 조회한다.
+    if (isActual && check.message.startsWith("중복확인 실패")) {
+      setBatchStatus("Google DB에서 모델명을 다시 확인하고 있습니다...");
+      check = await checkModelInGoogleDb(model);
+      setModelDuplicate(check.duplicate);
+      setModelReregisterable(check.reregisterable);
+      setModelCheckMessage(check.message);
+    }
+    const reregisterable = check.reregisterable;
+
+    if (isActual && check.duplicate && !reregisterable) {
       setBatchStatus("기존 모델의 일괄 저장은 안전을 위해 차단했습니다. 필요한 파일만 개별 다운로드하세요.");
       return;
     }
-    if (isActual && modelCheckMessage !== "사용 가능한 모델명" && !modelReregisterable) {
+    if (isActual && check.message !== "사용 가능한 모델명" && !reregisterable) {
       setBatchStatus("실제 등록은 Google DB에서 사용 가능한 모델명 확인이 끝난 뒤에만 저장할 수 있습니다.");
       return;
     }
@@ -1921,10 +1921,10 @@ export default function Home() {
         setBatchStatus("테스트·교육용 ZIP 생성 완료 · 실제 상품 폴더와 Google 제품DB는 변경하지 않았습니다.");
       } else if (dbHandle) {
         // 파일 충돌 여부를 Google 시트 변경보다 먼저 확인하여 기존 상품과 시트가 모두 보존되게 한다.
-        if (!modelReregisterable) await assertProductDbFilesWritable(dbHandle, product.category, model, files);
+        if (!reregisterable) await assertProductDbFilesWritable(dbHandle, product.category, model, files);
         const sync = await syncProductDbToGoogleSheet((await buildCollectInput(preview)));
         if (!sync.ok) throw new Error(`${sync.message} · 상품 폴더는 변경하지 않았습니다.`);
-        const saved = await writeProductDbFiles(dbHandle, product.category, model, files, { overwriteExisting: modelReregisterable });
+        const saved = await writeProductDbFiles(dbHandle, product.category, model, files, { overwriteExisting: reregisterable });
         const fileSkips = skipped.filter(item => !item.startsWith("Google 시트"));
         setDbSavedFiles(saved);
         setBatchStatus(
@@ -2399,13 +2399,6 @@ export default function Home() {
             ))}
           </div>
         )}
-        <div className="exportActions">
-          {dbSupported && <button className="dark" type="button" onClick={pickFolder}>상품DB 폴더 선택</button>}
-          <button className="secondaryButton" type="button" onClick={() => void createSourcingFolder()}>모델명 폴더 생성</button>
-          <button className="green" type="button" onClick={() => void saveSourcingImages()}>이미지 저장</button>
-          {dbSupported && <button className="secondaryButton" type="button" onClick={() => void openModelFolder()}>폴더 바로가기</button>}
-        </div>
-        {sourcingSaveStatus && <p className="detailMessage">{sourcingSaveStatus}</p>}
       </section>
 
       {/* 5. 쿠팡 등록 이미지 */}
@@ -2677,8 +2670,12 @@ export default function Home() {
         <h2>7. 상품DB · 등록파일 일괄 생성</h2>
         <div className="exportActions">
           <button className="secondaryButton" type="button" disabled={draftSaving} onClick={() => void saveDraft()}>{draftSaving ? "임시저장 중..." : "임시저장"}</button>
+          {dbSupported && <button className="dark" type="button" onClick={pickFolder}>상품DB 폴더 선택</button>}
+          <button className="secondaryButton" type="button" onClick={() => void createSourcingFolder()}>모델명 폴더 생성</button>
+          <button className="green" type="button" onClick={() => void saveSourcingImages()}>이미지 저장</button>
           {dbSupported && <button className="secondaryButton" type="button" onClick={() => void openModelFolder()}>폴더 바로가기</button>}
         </div>
+        {sourcingSaveStatus && <p className="detailMessage">{sourcingSaveStatus}</p>}
         {draftStatus && <p className="detailMessage">{draftStatus}</p>}
         {dbFolderName && <p className="detailMessage">연결: {dbFolderName}</p>}
         <div className="labelQuickPanel">
@@ -2847,6 +2844,30 @@ function Result({ label, value, status, alert }: { label: string; value: string;
       <strong className={alert ? "dangerAlert" : status === undefined ? "" : status ? "good" : "warn"}>{value}</strong>
     </div>
   );
+}
+
+// Google DB(Apps Script)는 가끔 일시적으로 404·지연을 내므로 한 번 더 시도한 뒤 실패로 본다.
+async function checkModelInGoogleDb(model: string): Promise<{ duplicate: boolean; reregisterable: boolean; message: string }> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(`/api/google-sheet?model=${encodeURIComponent(model)}`, { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "중복확인 실패");
+      return {
+        duplicate: Boolean(data.duplicate),
+        reregisterable: Boolean(data.reregisterable),
+        message: data.reregisterable ? "기존 행 재등록 가능" : data.duplicate ? (data.reason || "중복번호") : data.configured === false ? "Google DB 연결 후 중복확인" : "사용 가능한 모델명",
+      };
+    } catch (error) {
+      if (attempt < 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 1500));
+        continue;
+      }
+      // Apps Script 오류 본문(HTML)은 길어서 첫 구간만 보여준다.
+      const detail = error instanceof Error ? error.message.split(" · ")[0].trim() : "";
+      return { duplicate: false, reregisterable: false, message: detail && detail !== "중복확인 실패" ? `중복확인 실패 · ${detail}` : "중복확인 실패" };
+    }
+  }
 }
 
 function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage; title: string; onChange: (v: SlotImage | null) => void; tuneHost: HTMLElement | null }) {
@@ -3026,6 +3047,12 @@ function ImageSlot({
       <div
         className={"slotDrop" + (value && !value.locked ? " slotDropEdit" : "")}
         onClick={() => { if (!value) inputRef.current?.click(); }}
+        draggable={Boolean(value?.locked)}
+        onDragStart={e => {
+          if (!value?.locked) return;
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("application/x-laura-slot-key", slotKey);
+        }}
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={e => {

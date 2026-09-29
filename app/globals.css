@@ -612,7 +612,7 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 .pageCutFrame img{display:block;width:100%;height:auto}
 .pageCutShade{position:absolute;left:0;right:0;background:rgba(0,0,0,.55);pointer-events:none}
 .pageCutLine{position:absolute;left:0;right:0;height:0;border-top:2px solid #e11d48;pointer-events:none;color:#e11d48;font-size:11px;font-weight:700}
-.slotCropFrame[title^="저장됨"]{cursor:default}
+.slotCropFrame[title^="저장됨"]{cursor:grab}
 
 .sectionTitleRow{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px}
 .sectionTitleRow h2{margin:0}
