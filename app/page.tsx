@@ -336,7 +336,7 @@ export default function Home() {
   const [labelImporterName, setLabelImporterName] = useState("프리스타일");
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchStatus, setBatchStatus] = useState("");
-  const [batchMode, setBatchMode] = useState<"practice" | "actual">("practice");
+  const [batchMode, setBatchMode] = useState<"practice" | "actual">("actual");
   const [coupangImportBusy, setCoupangImportBusy] = useState("");
   const [coupangImportMessage, setCoupangImportMessage] = useState("");
   const [quoteQueue, setQuoteQueue] = useState<QuoteQueueRecord[]>([]);
@@ -539,9 +539,9 @@ export default function Home() {
     return product.modelName?.trim() || buildAutoModel(product);
   }, [product.category, product.gender, product.modelNo, product.modelName]);
 
-  // 실제 등록은 한 상품에만 쓰는 1회성 선택이다. 다른 상품으로 바뀌면 연습 모드로 자동 복귀한다.
+  // 대부분 실제 등록이므로 기본은 실제 등록용이다. 테스트·교육용은 그 상품에서만 쓰고, 다른 상품으로 바뀌면 실제 등록용으로 돌아간다.
   useEffect(() => {
-    setBatchMode("practice");
+    setBatchMode("actual");
   }, [model, product.category]);
 
   useEffect(() => {
@@ -1095,7 +1095,7 @@ export default function Home() {
     setSourcingSaveStatus("");
     setExportMessage("");
     setBatchStatus("");
-    setBatchMode("practice");
+    setBatchMode("actual");
     setDbSavedFiles([]);
     localStorage.removeItem(DRAFT_STORAGE_KEY);
     localStorage.removeItem(LAURA_DRAFT_STORAGE_KEY);
@@ -1860,11 +1860,7 @@ export default function Home() {
 
   const batchSave = async () => {
     const isActual = batchMode === "actual";
-    // 실제 등록 버튼을 누른 뒤 성공·실패·검증 차단 여부와 무관하게 다음 실행은 연습 모드다.
-    if (isActual) {
-      setBatchMode("practice");
-      setRegistrationUploadReady(null);
-    }
+    if (isActual) setRegistrationUploadReady(null);
     if (pendingReplacementCleanup) {
       setBatchStatus("SKU 이관 결과 확인이 끝나지 않았습니다. 기존행 삭제 또는 연결 취소를 먼저 선택해주세요.");
       return;
@@ -1879,8 +1875,9 @@ export default function Home() {
     }
 
     let check = { duplicate: modelDuplicate, reregisterable: modelReregisterable, message: modelCheckMessage };
-    // 화면에 뜬 중복확인이 Google 일시 오류로 실패했다면, 실제 저장 전에 한 번 더 조회한다.
-    if (isActual && check.message.startsWith("중복확인 실패")) {
+    // 화면의 중복확인은 모델명이 정해진 뒤 몇 초 늦게 끝나거나 Google 일시 오류로 실패할 수 있다.
+    // 확인이 아직 안 끝났거나 실패한 상태로 저장을 누르면 막지 않고, 저장 직전에 Google DB를 다시 조회한다.
+    if (isActual && (!check.message || check.message.startsWith("중복확인 실패") || check.message.endsWith("..."))) {
       setBatchStatus("Google DB에서 모델명을 다시 확인하고 있습니다...");
       check = await checkModelInGoogleDb(model);
       setModelDuplicate(check.duplicate);
@@ -2740,11 +2737,11 @@ export default function Home() {
         </div>
         {exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
         <div className="batchModePanel" role="group" aria-label="일괄 생성 용도">
-          <button type="button" className={batchMode === "practice" ? "selected" : ""} onClick={() => setBatchMode("practice")}>
-            <strong>테스트·교육용</strong><span>ZIP만 생성 · 폴더와 제품DB 변경 없음</span>
-          </button>
           <button type="button" className={batchMode === "actual" ? "selected" : ""} onClick={() => setBatchMode("actual")}>
             <strong>실제 등록용</strong><span>새 모델 등록 · 판매중지 모델은 기존 행 재사용</span>
+          </button>
+          <button type="button" className={batchMode === "practice" ? "selected" : ""} onClick={() => setBatchMode("practice")}>
+            <strong>테스트·교육용</strong><span>ZIP만 생성 · 폴더와 제품DB 변경 없음</span>
           </button>
         </div>
         {batchMode === "actual" && modelDuplicate && !modelReregisterable && <p className="dangerAlert">기존 모델입니다. 판매중지 상태가 아닌 모델의 일괄 등록은 차단됩니다.</p>}
