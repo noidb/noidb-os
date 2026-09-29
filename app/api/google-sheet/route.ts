@@ -154,6 +154,8 @@ export async function POST(req: NextRequest) {
       },
       replacementSku: payload.product.replacementSku || "",
       syncMode: raw.syncMode || "upsert",
+      // Apps Script는 재등록(reregisterStopped) 요청마다 중복 실행 방지용 작업번호를 요구한다.
+      operationId: String(raw.operationId || ""),
     });
     return NextResponse.json({
       configured: called.configured,

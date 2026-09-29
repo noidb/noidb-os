@@ -45,6 +45,31 @@ async function cropDataUrl(dataUrl: string, top: number, bottom: number): Promis
   return canvas.toDataURL("image/jpeg", 0.97);
 }
 
+// 위를 잘라 로고가 없어진 상세페이지 맨 위에 6번 상단 로고 이미지를 같은 폭으로 붙인다.
+async function prependHeader(dataUrl: string, headerUrl: string): Promise<string> {
+  const load = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => reject(new Error("상단 로고 이미지를 불러오지 못했습니다."));
+    element.src = src;
+  });
+  const [page, header] = await Promise.all([load(dataUrl), load(headerUrl)]);
+  const width = page.naturalWidth;
+  const headerHeight = Math.round(header.naturalHeight * (width / header.naturalWidth));
+  // 새로 만드는 상세페이지와 같은 비율(780px 기준 90px)로 로고 아래 여백을 둔다.
+  const gap = Math.round(width * 90 / 780);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = headerHeight + gap + page.naturalHeight;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(header, 0, 0, width, headerHeight);
+  ctx.drawImage(page, 0, headerHeight + gap);
+  return canvas.toDataURL("image/jpeg", 0.97);
+}
+
 function newDraftId() {
   return `quick-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -168,17 +193,18 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   }
 
   // 이미 완성된 상세페이지를 위·아래만 자르고 손대지 않은 채 그대로 상세페이지 칸에 넣는다.
-  async function useCroppedAsDetailPage() {
+  async function useCroppedAsDetailPage(withHeader = false) {
     if (!cut || cut.bottom - cut.top < 0.02) {
       setMessage("사용할 구간이 너무 좁습니다. 위·아래 자를 위치를 다시 정해주세요.");
       return;
     }
     setBusy(true);
     try {
-      const usable = await cropDataUrl(cut.dataUrl, cut.top, cut.bottom);
+      const cropped = await cropDataUrl(cut.dataUrl, cut.top, cut.bottom);
+      const usable = withHeader ? await prependHeader(cropped, headerUrl) : cropped;
       onComplete({ dataUrl: usable, sections: [] });
       setCut(null);
-      setMessage("자른 상세페이지를 그대로 아래 상세페이지 칸에 넣었습니다.");
+      setMessage(withHeader ? "자른 상세페이지 위에 상단 로고를 붙여 아래 상세페이지 칸에 넣었습니다." : "자른 상세페이지를 그대로 아래 상세페이지 칸에 넣었습니다.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "상세페이지를 자르지 못했습니다.");
     } finally {
@@ -401,6 +427,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
           <button type="button" className={cut.mode === "top" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "top" })}>위쪽 자를 위치 정하기</button>
           <button type="button" className={cut.mode === "bottom" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "bottom" })}>아래쪽 자를 위치 정하기</button>
           <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPage()} title="자른 상세페이지를 손대지 않고 그대로 상세페이지 칸에 넣습니다.">상세페이지 사용</button>
+          <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPage(true)} title="위를 잘라 로고가 없어졌을 때, 위의 상단 로고 이미지를 맨 위에 붙여 상세페이지 칸에 넣습니다.">상단 로고 붙여서 사용</button>
           <button type="button" className="secondaryButton" disabled={busy} onClick={() => void confirmCutForSplit()} title="사진별로 나눠서 등록이미지에 추가하거나 AI로 새로 만들 때 씁니다.">사진별로 나누기</button>
           <button type="button" className="secondaryButton" disabled={!cut.history.length} onClick={() => setCut(c => c && c.history.length ? { ...c, ...c.history[c.history.length - 1], history: c.history.slice(0, -1) } : c)}>되돌리기</button>
           <button type="button" className="secondaryButton" disabled={cut.top === 0 && cut.bottom === 1} onClick={() => setCut(c => c && { ...c, top: 0, bottom: 1, history: [...c.history, { top: c.top, bottom: c.bottom }] })}>초기화</button>
