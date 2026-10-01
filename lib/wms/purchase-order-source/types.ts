@@ -48,6 +48,8 @@ export interface PurchaseOrderIndex {
   duplicateFiles: PurchaseOrderDuplicate[];
   identicalDuplicates: PurchaseOrderDuplicate[];
   conflicts: PurchaseOrderDuplicate[];
+  /** 내용이 달랐지만 최신 파일로 자동 선택된 발주. */
+  resolvedConflicts?: PurchaseOrderDuplicate[];
   parseErrors: PurchaseOrderParseError[];
   sourceContainerCount: number;
   sourceEntryCount: number;

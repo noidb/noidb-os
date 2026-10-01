@@ -45,13 +45,17 @@ async function loadInputs(fresh: boolean): Promise<{ containers: number; parsed:
   }
   if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
     const files = (await listDriveFilesFromEnv("GOOGLE_DRIVE_COUPANG_PURCHASE_ORDER_FOLDER_ID"))
-      .filter(file => /\.(zip|xlsx)$/i.test(file.name));
+      .filter(file => /\.(zip|xlsx)$/i.test(file.name))
+      // 오래된 파일 → 최신 파일 순으로 읽어, 같은 발주가 다시 내려받아진 경우 최신 파일이 마지막에 오게 한다.
+      .sort((a, b) => String(a.modifiedTime || "").localeCompare(String(b.modifiedTime || "")));
     for (const file of files) parsed.push(await load(file.name, [file.id, file.name, file.modifiedTime, file.size], () => downloadDriveFile(file.id)));
     return { containers: files.length, parsed };
   }
   const names = (await readdir(LOCAL_SOURCE_DIR)).filter(name => /\.(zip|xlsx)$/i.test(name));
-  for (const name of names) {
-    const filePath = path.join(LOCAL_SOURCE_DIR, name), info = await stat(filePath);
+  const infos = await Promise.all(names.map(async name => ({ name, info: await stat(path.join(LOCAL_SOURCE_DIR, name)) })));
+  infos.sort((a, b) => a.info.mtimeMs - b.info.mtimeMs);
+  for (const { name, info } of infos) {
+    const filePath = path.join(LOCAL_SOURCE_DIR, name);
     parsed.push(await load(name, [filePath, info.mtimeMs, info.size], () => readFile(filePath)));
   }
   return { containers: names.length, parsed };
@@ -89,6 +93,7 @@ export async function buildPurchaseOrderIndex(inputs?: PurchaseOrderBinaryInput[
   const duplicateFiles: PurchaseOrderDuplicate[] = [];
   const identicalDuplicates: PurchaseOrderDuplicate[] = [];
   const conflicts: PurchaseOrderDuplicate[] = [];
+  const resolvedConflicts: PurchaseOrderDuplicate[] = [];
   for (const [po, documents] of documentsByPo) {
     if (documents.length === 1) { byPurchaseOrderNumber.set(po, documents[0]); continue; }
     const info = duplicate(po, documents);
@@ -97,10 +102,13 @@ export async function buildPurchaseOrderIndex(inputs?: PurchaseOrderBinaryInput[
       identicalDuplicates.push(info);
       byPurchaseOrderNumber.set(po, documents[0]);
     } else {
-      conflicts.push(info);
+      // 같은 발주가 내용이 다른 파일로 여러 번 들어온 경우: 쿠팡에서 가장 최근에 내려받은 파일을 기준으로 쓴다.
+      // (발주확정 후 다시 내려받으면 수량 등이 바뀌는 것이 정상이라 매번 막지 않는다.)
+      byPurchaseOrderNumber.set(po, documents[documents.length - 1]);
+      resolvedConflicts.push(info);
     }
   }
-  return { byPurchaseOrderNumber, duplicateFiles, identicalDuplicates, conflicts, parseErrors, sourceContainerCount: loaded.containers, sourceEntryCount: loaded.parsed.reduce((sum, item) => sum + item.entries, 0) };
+  return { byPurchaseOrderNumber, duplicateFiles, identicalDuplicates, conflicts, resolvedConflicts, parseErrors, sourceContainerCount: loaded.containers, sourceEntryCount: loaded.parsed.reduce((sum, item) => sum + item.entries, 0) };
 }
 
 /** 검색·미리보기에서 같은 Drive 원본을 버튼마다 다시 내려받지 않도록 하는 짧은 서버 캐시.
