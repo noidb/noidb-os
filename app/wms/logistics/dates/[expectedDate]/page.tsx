@@ -83,7 +83,9 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
   }
 
   const purchaseOrderNumbers = useMemo(() => (groups || []).flatMap(group => group.purchaseOrderNumbers), [groups]);
-  const invoiceGroups = useMemo(() => mergeInvoiceGroupsByCenter(groups || []), [groups]);
+  /** 같은 센터 합배송 송장 단위. 쉽먼트도 이 단위로 1건이므로 쉽먼트번호도 이 단위로 하나만 입력한다. */
+  const shipmentBins = useMemo(() => mergeGroupsByCenter(groups || []), [groups]);
+  const invoiceGroups = useMemo(() => shipmentBins.map(bin => bin.flatMap(group => group.purchaseOrderNumbers)), [shipmentBins]);
   const fulfillmentCenters = useMemo(() => [...new Set((groups || []).map(group => group.fulfillmentCenter))], [groups]);
   const skuCount = useMemo(() => (groups || []).reduce((sum, group) => sum + group.skuCount, 0), [groups]);
   const totalQuantity = useMemo(() => (groups || []).reduce((sum, group) => sum + group.totalQuantity, 0), [groups]);
@@ -300,10 +302,15 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
 
   async function handleSaveShipmentNumbers() {
     if (savingShipmentNumbers || !groups) return;
-    const values = groups.map(group => ({ group, value: (shipmentNumberDrafts[group.id] ?? group.shipmentNumbers[0] ?? "").trim() }));
+    // 같은 센터로 합배송되는 발주묶음들은 쉽먼트 1건 → 같은 쉽먼트번호를 함께 저장한다.
+    const binValues = shipmentBins.map(bin => [...new Set(bin.map(group => (shipmentNumberDrafts[group.id] ?? group.shipmentNumbers[0] ?? "").trim()).filter(Boolean))]);
+    const mixedBin = binValues.findIndex(list => list.length > 1);
+    if (mixedBin >= 0) { setShipmentNumberSaveMessage(null); setShipmentNumberSaveError(`${shipmentBins[mixedBin][0].fulfillmentCenter} 합배송 묶음에 서로 다른 쉽먼트번호가 있습니다. 하나로 맞춰 주세요. 저장하지 않았습니다.`); return; }
+    const binIndexByGroupId = new Map(shipmentBins.flatMap((bin, index) => bin.map(group => [group.id, index] as const)));
+    const values = groups.map(group => ({ group, value: binValues[binIndexByGroupId.get(group.id) ?? -1]?.[0] ?? "" }));
     const invalid = values.find(entry => !/^\d{8}$/.test(entry.value));
     if (invalid) { setShipmentNumberSaveMessage(null); setShipmentNumberSaveError(`${invalid.group.fulfillmentCenter} 쉽먼트번호를 8자리 숫자로 입력해 주세요. 저장하지 않았습니다.`); return; }
-    if (new Set(values.map(entry => entry.value)).size !== values.length) { setShipmentNumberSaveMessage(null); setShipmentNumberSaveError("같은 쉽먼트번호를 서로 다른 물류센터 묶음에 저장할 수 없습니다. 저장하지 않았습니다."); return; }
+    if (new Set(binValues.map(list => list[0])).size !== binValues.length) { setShipmentNumberSaveMessage(null); setShipmentNumberSaveError("같은 쉽먼트번호를 서로 다른 물류센터 묶음에 저장할 수 없습니다. 저장하지 않았습니다."); return; }
     const pending = values.filter(({ group, value }) => group.shipmentNumbers[0] !== value || !group.shipmentRegisteredAt);
     if (!pending.length) { setShipmentNumberSaveError(null); setShipmentNumberSaveMessage("변경된 쉽먼트번호가 없습니다. 이미 저장된 기록을 유지합니다."); return; }
     setSavingShipmentNumbers(true);
@@ -520,22 +527,29 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
           쉽먼트번호는 Supplier Hub에 쉽먼트를 등록해야 발급됩니다. 각 묶음의 8자리 번호를 입력한 뒤 아래에서 전체 저장하면 출력세트를 만들 수 있습니다.
         </p>
         <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-          {groups.map(group => (
-            <div key={group.id} style={{ padding: "8px 10px", border: `1px solid ${wmsColors.border}`, borderRadius: "9px", fontSize: "11px", color: wmsColors.muted }}>
-              <strong style={{ color: wmsColors.ink }}>{group.fulfillmentCenter}</strong> · 발주 {group.purchaseOrderNumbers.join(", ")} · 상태 {missingInvoiceGroupDispatchRequirements(group).length === 0 ? "출고준비 완료" : INVOICE_GROUP_STAGE_LABEL[group.stage]}
-              <p style={{ margin: "8px 0", fontSize: "11px" }}>한진 송장번호 {group.shipmentInvoiceNumbers.length}/{group.purchaseOrderNumbers.length}건은 쉽먼트 파일 생성 결과에서 PO·날짜·센터를 검증한 뒤 자동 기록됩니다.</p>
+          {shipmentBins.map(bin => {
+            const first = bin[0];
+            const purchaseOrders = bin.flatMap(group => group.purchaseOrderNumbers);
+            const savedNumber = bin.map(group => group.shipmentNumbers[0]).find(Boolean) ?? "";
+            const ready = bin.every(group => missingInvoiceGroupDispatchRequirements(group).length === 0);
+            const trackingCount = bin.reduce((sum, group) => sum + group.shipmentInvoiceNumbers.length, 0);
+            return (
+            <div key={first.id} style={{ padding: "8px 10px", border: `1px solid ${wmsColors.border}`, borderRadius: "9px", fontSize: "11px", color: wmsColors.muted }}>
+              <strong style={{ color: wmsColors.ink }}>{first.fulfillmentCenter}</strong>{bin.length > 1 ? ` · 합배송 ${bin.length}묶음` : ""} · 발주 {purchaseOrders.join(", ")} · 상태 {ready ? "출고준비 완료" : INVOICE_GROUP_STAGE_LABEL[first.stage]}
+              <p style={{ margin: "8px 0", fontSize: "11px" }}>한진 송장번호 {trackingCount}/{purchaseOrders.length}건은 쉽먼트 파일 생성 결과에서 PO·날짜·센터를 검증한 뒤 자동 기록됩니다.</p>
               <div style={{ marginTop: "6px" }}>
                 <input
                   type="text"
-                  value={shipmentNumberDrafts[group.id] ?? group.shipmentNumbers[0] ?? ""}
+                  value={shipmentNumberDrafts[first.id] ?? savedNumber}
                   placeholder="쉽먼트번호 입력"
                   disabled={savingShipmentNumbers}
-                  onChange={event => setShipmentNumberDrafts(previous => ({ ...previous, [group.id]: event.target.value }))}
+                  onChange={event => { const value = event.target.value; setShipmentNumberDrafts(previous => ({ ...previous, ...Object.fromEntries(bin.map(group => [group.id, value])) })); }}
                   style={{ width: "100%", minHeight: "36px", boxSizing: "border-box", border: `1px solid ${wmsColors.borderStrong}`, borderRadius: "7px", padding: "0 8px", fontSize: "12px" }}
                 />
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
         {shipmentNumberSaveError && <p style={{ color: "#c0392b", fontSize: "12px", margin: "10px 0 0" }}>{shipmentNumberSaveError}</p>}
         {shipmentNumberSaveMessage && <p style={{ color: wmsColors.greenDark, fontSize: "12px", margin: "10px 0 0" }}>{shipmentNumberSaveMessage}</p>}
@@ -551,18 +565,22 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
 
 /** 같은 입고예정일·같은 물류센터의 발주묶음은 나중에 추가로 확정된 것까지 한 송장(합배송)으로 합친다.
  *  송장 1건당 총수량 250개를 넘으면 넘지 않는 단위로만 나눠 담는다(발주묶음 단위, 큰 것부터 first-fit). */
-function mergeInvoiceGroupsByCenter(list: readonly { fulfillmentCenter: string; totalQuantity: number; purchaseOrderNumbers: string[] }[], max = 250): string[][] {
-  const byCenter = new Map<string, typeof list[number][]>();
+function mergeInvoiceGroupsByCenter(list: readonly InvoiceGroup[], max = 250): string[][] {
+  return mergeGroupsByCenter(list, max).map(bin => bin.flatMap(group => group.purchaseOrderNumbers));
+}
+
+function mergeGroupsByCenter(list: readonly InvoiceGroup[], max = 250): InvoiceGroup[][] {
+  const byCenter = new Map<string, InvoiceGroup[]>();
   for (const group of list) byCenter.set(group.fulfillmentCenter, [...(byCenter.get(group.fulfillmentCenter) || []), group]);
-  const result: string[][] = [];
+  const result: InvoiceGroup[][] = [];
   for (const centerGroups of byCenter.values()) {
-    const bins: { quantity: number; purchaseOrderNumbers: string[] }[] = [];
+    const bins: { quantity: number; groups: InvoiceGroup[] }[] = [];
     for (const group of [...centerGroups].sort((a, b) => b.totalQuantity - a.totalQuantity)) {
       const bin = bins.find(item => item.quantity + group.totalQuantity <= max);
-      if (bin) { bin.quantity += group.totalQuantity; bin.purchaseOrderNumbers.push(...group.purchaseOrderNumbers); }
-      else bins.push({ quantity: group.totalQuantity, purchaseOrderNumbers: [...group.purchaseOrderNumbers] });
+      if (bin) { bin.quantity += group.totalQuantity; bin.groups.push(group); }
+      else bins.push({ quantity: group.totalQuantity, groups: [group] });
     }
-    result.push(...bins.map(bin => bin.purchaseOrderNumbers));
+    result.push(...bins.map(bin => bin.groups));
   }
   return result;
 }
