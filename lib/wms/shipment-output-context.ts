@@ -95,7 +95,8 @@ export async function buildShipmentOutputContext(
   }
   const oversizedPurchaseOrderNumbers: string[] = [];
   const destinationByPo = new Map([...destinationGroups].flatMap(([key, entries]) => entries.map(entry => [entry.document.purchaseOrderNumber, key] as const)));
-  const manualGroups = options.invoiceGroups === undefined ? null : validateInvoiceGroups(options.invoiceGroups, documents, destinationByPo);
+  // 원본 미매칭/충돌 발주가 있으면 수동 묶음 검증 대신 아래 blockingReasons로 정확한 원인을 보여준다.
+  const manualGroups = options.invoiceGroups === undefined || missing.length || conflicts.length ? null : validateInvoiceGroups(options.invoiceGroups, documents, destinationByPo);
   const groups: ShipmentOutputGroup[] = [];
   for (const [destinationKey, entries] of destinationGroups) {
     const entryByPo = new Map(entries.map(entry => [entry.document.purchaseOrderNumber, entry]));
