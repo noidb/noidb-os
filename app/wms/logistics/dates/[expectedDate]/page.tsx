@@ -83,7 +83,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
   }
 
   const purchaseOrderNumbers = useMemo(() => (groups || []).flatMap(group => group.purchaseOrderNumbers), [groups]);
-  const invoiceGroups = useMemo(() => (groups || []).map(group => group.purchaseOrderNumbers), [groups]);
+  const invoiceGroups = useMemo(() => mergeInvoiceGroupsByCenter(groups || []), [groups]);
   const fulfillmentCenters = useMemo(() => [...new Set((groups || []).map(group => group.fulfillmentCenter))], [groups]);
   const skuCount = useMemo(() => (groups || []).reduce((sum, group) => sum + group.skuCount, 0), [groups]);
   const totalQuantity = useMemo(() => (groups || []).reduce((sum, group) => sum + group.totalQuantity, 0), [groups]);
@@ -91,7 +91,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
   async function handlePreview(targetGroups = groups) {
     const requestId = loadRequestId.current;
     const targetPurchaseOrderNumbers = (targetGroups || []).flatMap(group => group.purchaseOrderNumbers);
-    const targetInvoiceGroups = (targetGroups || []).map(group => group.purchaseOrderNumbers);
+    const targetInvoiceGroups = mergeInvoiceGroupsByCenter(targetGroups || []);
     if (!targetPurchaseOrderNumbers.length) { setPreview(null); return; }
     if (fixtureMode) {
       setPreview({ requestedPurchaseOrderCount: targetPurchaseOrderNumbers.length, matchedPurchaseOrderCount: targetPurchaseOrderNumbers.length, missingPurchaseOrderNumbers: [], duplicatePurchaseOrderCount: 0, conflictPurchaseOrderNumbers: [], fulfillmentCenterCount: new Set((targetGroups || []).map(group => group.fulfillmentCenter)).size, shippingGroupCount: targetGroups?.length || 0, shippingGroups: [], expectedInvoiceRowCount: targetGroups?.length || 0, missingAddressPurchaseOrders: [], missingPhonePurchaseOrders: [], missingPostalCodeCenters: [], destinationResolutions: [], missingSkuRows: [], missingBarcodeRows: [], quantityErrorRows: [], oversizedPurchaseOrderNumbers: [], sourceRecordCount: (targetGroups || []).reduce((sum, group) => sum + group.skuCount, 0), totalOrderedQuantity: (targetGroups || []).reduce((sum, group) => sum + group.totalQuantity, 0), blockingReasons: [], canGenerate: true });
@@ -547,4 +547,22 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
       </a>
     </main>
   );
+}
+
+/** 같은 입고예정일·같은 물류센터의 발주묶음은 나중에 추가로 확정된 것까지 한 송장(합배송)으로 합친다.
+ *  송장 1건당 총수량 250개를 넘으면 넘지 않는 단위로만 나눠 담는다(발주묶음 단위, 큰 것부터 first-fit). */
+function mergeInvoiceGroupsByCenter(list: readonly { fulfillmentCenter: string; totalQuantity: number; purchaseOrderNumbers: string[] }[], max = 250): string[][] {
+  const byCenter = new Map<string, typeof list[number][]>();
+  for (const group of list) byCenter.set(group.fulfillmentCenter, [...(byCenter.get(group.fulfillmentCenter) || []), group]);
+  const result: string[][] = [];
+  for (const centerGroups of byCenter.values()) {
+    const bins: { quantity: number; purchaseOrderNumbers: string[] }[] = [];
+    for (const group of [...centerGroups].sort((a, b) => b.totalQuantity - a.totalQuantity)) {
+      const bin = bins.find(item => item.quantity + group.totalQuantity <= max);
+      if (bin) { bin.quantity += group.totalQuantity; bin.purchaseOrderNumbers.push(...group.purchaseOrderNumbers); }
+      else bins.push({ quantity: group.totalQuantity, purchaseOrderNumbers: [...group.purchaseOrderNumbers] });
+    }
+    result.push(...bins.map(bin => bin.purchaseOrderNumbers));
+  }
+  return result;
 }
