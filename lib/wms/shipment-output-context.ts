@@ -121,7 +121,12 @@ export async function buildShipmentOutputContext(
   }
   const blockingReasons: string[] = [];
   if (missing.length) blockingReasons.push(`원본 미매칭 발주번호 ${missing.length}개`);
-  if (conflicts.length) blockingReasons.push(`원본 충돌 발주번호 ${conflicts.length}개`);
+  if (conflicts.length) {
+    const sourcesByPo = new Map(index.conflicts.map(item => [normalizeSkuId(item.purchaseOrderNumber), item.sources] as const));
+    const detail = conflicts.map(po => `${po} (내용이 다른 원본: ${[...new Set((sourcesByPo.get(po) || []).map(source => source.split(" :: ")[0]))].join(", ")})`).join(" / ");
+    blockingReasons.push(`원본 충돌 발주번호 ${conflicts.length}개 — ${detail}`);
+  }
+  if (missing.length) blockingReasons.push(`원본에서 찾지 못한 발주번호: ${missing.join(", ")}`);
   if (missingAddress.length) blockingReasons.push(`주소 누락 ${missingAddress.length}개`);
   if (missingPhone.length) blockingReasons.push(`전화번호 누락 ${missingPhone.length}개`);
   if (options.requireDestination !== false && missingPostalCodeCenters.size) blockingReasons.push(`우편번호 미등록 센터 ${missingPostalCodeCenters.size}곳`);
