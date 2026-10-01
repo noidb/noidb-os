@@ -7,7 +7,7 @@ import type { ShipmentOutputPreview } from "@/lib/wms/shipment-output-context";
 import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsGhostButton, wmsPrimaryButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
 import ShipmentWorkflowStepCard from "../../ShipmentWorkflowStepCard";
-import { loadShipmentPrintGroupsByDate } from "@/lib/wms/load-shipment-print-groups";
+import { loadShipmentPrintGroupsByDate, detectShipmentNumbersByDate } from "@/lib/wms/load-shipment-print-groups";
 import { buildFourUpLabelPdf, buildLogisticsBarTenderWorkbook, buildMergedManifestPdf, buildShipmentPrintZip } from "@/lib/wms/shipment-print-client";
 
 /**
@@ -49,6 +49,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
   const [generatingOutputSet, setGeneratingOutputSet] = useState(false);
   const [outputSetMessage, setOutputSetMessage] = useState<string | null>(null);
   const [outputSetError, setOutputSetError] = useState<string | null>(null);
+  const [detectingShipmentNumbers, setDetectingShipmentNumbers] = useState(false);
 
   const [advancing, setAdvancing] = useState(false);
   const [advanceError, setAdvanceError] = useState<string | null>(null);
@@ -331,6 +332,34 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     } finally { setSavingShipmentNumbers(false); }
   }
 
+  /** 저장해 둔 Label PDF에서 합배송 송장(센터)별 쉽먼트번호를 읽어 입력칸을 채운다. 저장은 사용자가 누른다. */
+  async function handleDetectShipmentNumbers() {
+    if (detectingShipmentNumbers || !groups) return;
+    const shipmentFileName = groups.find(group => group.shipmentFileName)?.shipmentFileName;
+    if (!shipmentFileName) { setShipmentNumberSaveMessage(null); setShipmentNumberSaveError("먼저 쉽먼트 업로드파일을 생성해 주세요."); return; }
+    setDetectingShipmentNumbers(true);
+    setShipmentNumberSaveMessage(null);
+    setShipmentNumberSaveError(null);
+    try {
+      const byPo = await detectShipmentNumbersByDate(expectedDate, purchaseOrderNumbers, shipmentFileName);
+      const drafts: Record<string, string> = {};
+      const missingCenters: string[] = [];
+      const mixedCenters: string[] = [];
+      for (const bin of shipmentBins) {
+        const found = [...new Set(bin.flatMap(group => group.purchaseOrderNumbers).map(po => byPo.get(po)).filter((value): value is string => Boolean(value)))];
+        if (found.length === 1) for (const group of bin) drafts[group.id] = found[0];
+        else (found.length ? mixedCenters : missingCenters).push(bin[0].fulfillmentCenter);
+      }
+      setShipmentNumberDrafts(previous => ({ ...previous, ...drafts }));
+      const filled = shipmentBins.length - missingCenters.length - mixedCenters.length;
+      const problems = [missingCenters.length ? `Label에서 찾지 못함: ${missingCenters.join(", ")}` : "", mixedCenters.length ? `번호가 여러 개: ${mixedCenters.join(", ")}` : ""].filter(Boolean).join(" · ");
+      if (problems) setShipmentNumberSaveError(`${filled}/${shipmentBins.length}곳 자동 입력 · ${problems} — 이 칸은 직접 입력해 주세요.`);
+      setShipmentNumberSaveMessage(filled ? `Label PDF에서 쉽먼트번호 ${filled}곳을 채웠습니다. 확인 후 "이 날짜 쉽먼트번호 전체 저장"을 눌러 주세요.` : null);
+    } catch (error) {
+      setShipmentNumberSaveError(error instanceof Error ? error.message : "Label PDF에서 쉽먼트번호를 읽지 못했습니다.");
+    } finally { setDetectingShipmentNumbers(false); }
+  }
+
   async function handleGenerateBarcode() {
     if (generatingBarcode || !groups?.every(group => group.shipmentNumbers.some(value => value.trim()))) return;
     if (fixtureMode) { setBarcodeError("개발용 데이터에서는 실제 파일 생성 API를 호출하지 않습니다. ‘테스트 단계 기록 채우기’를 사용하세요."); return; }
@@ -526,6 +555,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
         <p style={{ fontSize: "11px", color: wmsColors.muted, lineHeight: 1.6, margin: "6px 0" }}>
           쉽먼트번호는 Supplier Hub에 쉽먼트를 등록해야 발급됩니다. 각 묶음의 8자리 번호를 입력한 뒤 아래에서 전체 저장하면 출력세트를 만들 수 있습니다.
         </p>
+        <button type="button" disabled={detectingShipmentNumbers || savingShipmentNumbers} onClick={() => void handleDetectShipmentNumbers()} style={{ ...wmsSecondaryButton, width: "100%", margin: "4px 0 8px", opacity: detectingShipmentNumbers || savingShipmentNumbers ? 0.5 : 1 }}>{detectingShipmentNumbers ? "Label PDF 읽는 중..." : "다운로드한 Label PDF에서 쉽먼트번호 자동 채우기"}</button>
         <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
           {shipmentBins.map(bin => {
             const first = bin[0];

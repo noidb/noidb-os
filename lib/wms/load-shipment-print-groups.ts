@@ -111,6 +111,28 @@ export async function loadShipmentPrintGroupsByDate(
   return { groups, workbookName: workbook.name };
 }
 
+/**
+ * 저장해 둔 Supplier Hub Label PDF에서 발주번호별 쉽먼트번호를 읽어 온다(쉽먼트번호 자동 채우기용).
+ * 출력세트 생성과 같은 원본 조회 API를 쓰며, 파일은 만들지 않고 번호만 돌려준다.
+ */
+export async function detectShipmentNumbersByDate(expectedDate: string, purchaseOrderNumbers: string[], shipmentFileName: string): Promise<Map<string, string>> {
+  const expected = new Set(purchaseOrderNumbers.map(String));
+  const dateToken = expectedDate.replace(/-/g, "");
+  const sourceResponse = await fetch("/api/wms/shipment-print/auto-source", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ waveId: `date:${expectedDate}`, dateTokens: [dateToken], expectedPurchaseOrderNumbers: [...expected], expectedWorkbookName: shipmentFileName }),
+  });
+  const source = await sourceResponse.json();
+  if (!sourceResponse.ok || source.error) throw new Error(source.error || "Label PDF를 불러오지 못했습니다.");
+  const labels = await inspectSources(source.labels as EncodedSource[], "label", createShipmentPrintLoadCache());
+  const byPo = new Map<string, string>();
+  for (const label of labels) {
+    if (!/^\d{8}$/.test(label.shipmentNumber)) continue;
+    for (const po of label.purchaseOrderNumbers) if (expected.has(po)) byPo.set(po, label.shipmentNumber);
+  }
+  return byPo;
+}
+
 export async function loadShipmentPrintGroups(waveId: string, items: PickingWaveItem[], activeGeneration: ShipmentOutputGeneration, options: { forPacking?: boolean; cache?: ShipmentPrintLoadCache } = {}) {
     const expected = new Set(activeGeneration.purchaseOrderNumbers.map(String));
     const expectedDateTokens = [...new Set(items.flatMap(item => item.sources)
