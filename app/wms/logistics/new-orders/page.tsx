@@ -106,7 +106,9 @@ export default function WmsNewOrdersPage() {
   const inProgressGroupsByDate = useMemo(() => {
     const map = new Map<string, InvoiceGroup[]>();
     for (const group of inProgressGroups) map.set(group.expectedDate, [...(map.get(group.expectedDate) || []), group]);
-    return [...map.entries()];
+    // 2026-10-02 사용자 요청: 이미 출고준비완료(출력세트까지 끝남)인 날짜는 여기서 빼서 헷갈리지 않게 한다.
+    // 그 날짜의 출고완료·SKU리스트는 입고센터 첫 화면 카드에서 처리한다. 아직 "신규" 묶음이 남은 날짜만 보여준다.
+    return [...map.entries()].filter(([, dateGroups]) => dateGroups.some(group => group.stage === "new"));
   }, [inProgressGroups]);
 
   const visibleOrders = useMemo(() => (orders || []).filter(order => !closedPoNumbers.has(order.purchaseOrderNumber) && !excludedPoNumbers.has(order.purchaseOrderNumber) && !isAsideCompletedDispatchPurchaseOrder(order.purchaseOrderNumber)), [orders, closedPoNumbers, excludedPoNumbers]);
@@ -378,7 +380,7 @@ export default function WmsNewOrdersPage() {
         </>
       )}
 
-      {orders && ungroupedOrders.length === 0 && inProgressGroups.length === 0 && !loadError && <p style={{ color: wmsColors.muted, fontSize: "13px" }}>표시할 발주서가 없습니다.</p>}
+      {orders && ungroupedOrders.length === 0 && inProgressGroupsByDate.length === 0 && !loadError && <p style={{ color: wmsColors.muted, fontSize: "13px" }}>표시할 발주서가 없습니다.</p>}
     </main>
   );
 }
