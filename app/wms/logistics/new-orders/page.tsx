@@ -58,9 +58,10 @@ export default function WmsNewOrdersPage() {
   const [createdMessage, setCreatedMessage] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
 
-  // 2026-10-02 사용자 요청: 들어올 때마다 다시 조회하지 않는다. 마지막으로 불러온 발주서 목록을
-  // 브라우저에 저장해 두고 그대로 보여준다. 발주묶음·제외목록도 사이트가 저장해 둔 로컬 미러를 쓴다.
-  // 서버 조회는 "발주서리스트 파일 불러오기"를 누를 때만 한다.
+  // 2026-10-02 사용자 요청: 들어올 때마다 발주서를 다시 조회·검색하지 않는다.
+  // ① 이 기기에 저장된 마지막 목록을 즉시 보여주고 ② 뒤에서 조용히 서버 공유 저장본(다른 기기에서
+  // 불러온 목록)과 최신 발주묶음 상태만 가볍게 읽어, 더 새 것이 있으면 화면만 갱신한다 — 회사 PC·집 PC·
+  // 모바일이 같은 화면을 이어 본다. 발주서 파일 가져오기·조회는 "발주서리스트 파일 불러오기"를 누를 때만.
   useEffect(() => {
     if (process.env.NODE_ENV === "development" && new URLSearchParams(window.location.search).get("logisticsFixture") === "1") return;
     try {
@@ -71,9 +72,37 @@ export default function WmsNewOrdersPage() {
         setImportResult(saved.importResult ?? null);
         setLastLoadedAt(saved.savedAt ?? null);
       }
-    } catch { /* 저장된 목록이 없거나 깨졌으면 예전처럼 버튼을 눌러 불러온다 */ }
+    } catch { /* 저장된 목록이 없거나 깨졌으면 서버 저장본을 기다리거나 버튼을 눌러 불러온다 */ }
     setExistingGroups(readLocalInvoiceGroupSnapshot());
-    void new LocalInvoiceGroupRepository().listExcludedPurchaseOrderNumbers().then(list => setExcludedPoNumbers(new Set(list)));
+    const localRepository = new LocalInvoiceGroupRepository();
+    void localRepository.listExcludedPurchaseOrderNumbers().then(list => setExcludedPoNumbers(new Set(list)));
+
+    let cancelled = false;
+    // 서버 공유 저장본 — 이 기기 것보다 새로우면 교체.
+    void fetch("/api/wms/logistics/new-orders-last-view", { cache: "no-store" })
+      .then(response => response.json())
+      .then((data: { ok?: boolean; view?: { orders: SupplierHubPurchaseOrder[]; importResult: ImportLatestResult | null; savedAt: string } | null }) => {
+        const view = data.ok ? data.view : null;
+        if (cancelled || !view || !Array.isArray(view.orders)) return;
+        let localSavedAt = "";
+        try { localSavedAt = JSON.parse(window.localStorage.getItem(NEW_ORDERS_LAST_VIEW_KEY) || "{}").savedAt || ""; } catch { /* 없음 */ }
+        if (localSavedAt && localSavedAt >= view.savedAt) return;
+        setOrders(view.orders);
+        setImportResult(view.importResult ?? null);
+        setLastLoadedAt(view.savedAt);
+        try { window.localStorage.setItem(NEW_ORDERS_LAST_VIEW_KEY, JSON.stringify(view)); } catch { /* 저장 공간 부족 — 다음에도 서버에서 받으면 됨 */ }
+      })
+      .catch(() => { /* 오프라인 등 — 이 기기 저장본으로 계속 */ });
+    // 최신 발주묶음 상태(다른 기기에서 발주확정·출고완료 등을 했을 수 있음). 이 호출이 로컬 미러도 갱신한다.
+    void invoiceGroupRepository.list()
+      .then(async groups => {
+        if (cancelled) return;
+        setExistingGroups(groups);
+        setExcludedPoNumbers(new Set(await localRepository.listExcludedPurchaseOrderNumbers()));
+      })
+      .catch(() => { /* 오프라인 등 — 로컬 미러로 계속 */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadOrders() {
@@ -101,8 +130,11 @@ export default function WmsNewOrdersPage() {
   function saveLastView(list: SupplierHubPurchaseOrder[], result: ImportLatestResult | null) {
     const savedAt = new Date().toISOString();
     setLastLoadedAt(savedAt);
-    try { window.localStorage.setItem(NEW_ORDERS_LAST_VIEW_KEY, JSON.stringify({ orders: list, importResult: result, savedAt })); }
-    catch { /* 저장 공간이 부족하면 다음에 들어올 때 다시 불러오면 된다 */ }
+    const view = { orders: list, importResult: result, savedAt };
+    try { window.localStorage.setItem(NEW_ORDERS_LAST_VIEW_KEY, JSON.stringify(view)); }
+    catch { /* 저장 공간이 부족해도 서버 저장본으로 이어진다 */ }
+    // 다른 기기(집 PC·모바일)도 같은 목록을 보도록 서버에도 저장한다. 실패해도 화면 작업은 계속.
+    void fetch("/api/wms/logistics/new-orders-last-view", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(view) }).catch(() => undefined);
   }
 
   async function handleLoadWorkspace(latestImportResult: ImportLatestResult | null = importResult) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { wmsColors } from "@/lib/wms/ui-tokens";
 import AppNavigation from "@/app/AppNavigation";
@@ -95,24 +95,42 @@ function groupInProgressByDate(all: InvoiceGroup[]): Array<[string, InvoiceGroup
   return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
 }
 
-function InProgressOrdersSection() {
-  const { repository: invoiceGroupRepository, ready, fixture } = useInvoiceGroupRepositoryState();
-  const [groupsByDate, setGroupsByDate] = useState<Array<[string, InvoiceGroup[]]> | null>(null);
+/**
+ * 입고센터 첫 화면 공용 발주묶음 상태 (2026-10-02 — 사용자 요청: 회사 PC·집 PC·모바일 이어보기).
+ * ① 이 기기에 남은 마지막 상태(로컬 미러)를 즉시 보여주고 ② 뒤에서 서버 최신본을 한 번만 가볍게
+ * 읽어 다른 기기에서 바뀐 게 있으면 화면만 갱신한다. "불러오는 중"으로 화면을 막지 않는다.
+ * 진행 중 발주 칸과 쉽먼트마감 배너가 이 한 번의 조회를 같이 쓴다.
+ */
+function useInvoiceGroupsLive() {
+  const { repository, ready, fixture } = useInvoiceGroupRepositoryState();
+  const [groups, setGroups] = useState<InvoiceGroup[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  // 2026-10-02 사용자 요청: 화면을 열 때 서버를 다시 조회하지 않는다. 사이트 어디서든 발주묶음을
-  // 조회·저장할 때마다 브라우저에 남는 마지막 상태(로컬 미러)를 그대로 즉시 보여준다.
-  // 서버 재조회는 사용자가 "새로 조회"를 누를 때만 한다.
   useEffect(() => {
     if (!ready) return;
-    if (fixture) { void invoiceGroupRepository.list().then(all => setGroupsByDate(groupInProgressByDate(all))); return; }
-    setGroupsByDate(groupInProgressByDate(readLocalInvoiceGroupSnapshot()));
-  }, [ready, fixture, invoiceGroupRepository]);
+    if (!fixture) setGroups(readLocalInvoiceGroupSnapshot());
+    let cancelled = false;
+    setRefreshing(true);
+    repository.list()
+      .then(latest => { if (!cancelled) setGroups(latest); })
+      .catch(() => { /* 오프라인 등 — 이 기기 저장본으로 계속 */ })
+      .finally(() => { if (!cancelled) setRefreshing(false); });
+    return () => { cancelled = true; };
+  }, [ready, fixture, repository]);
 
   async function refresh() {
     setRefreshing(true);
-    try { setGroupsByDate(groupInProgressByDate(await invoiceGroupRepository.list())); } finally { setRefreshing(false); }
+    try { setGroups(await repository.list()); } catch { /* 이 기기 저장본 유지 */ } finally { setRefreshing(false); }
   }
+
+  return { repository, fixture, groups, setGroups, refreshing, refresh };
+}
+
+type InvoiceGroupsLive = ReturnType<typeof useInvoiceGroupsLive>;
+
+function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
+  const { repository: invoiceGroupRepository, fixture, refreshing, refresh } = live;
+  const groupsByDate = useMemo(() => (live.groups ? groupInProgressByDate(live.groups) : null), [live.groups]);
 
   const [dispatchingDate, setDispatchingDate] = useState<string | null>(null);
   const [dispatchError, setDispatchError] = useState<{ date: string; message: string } | null>(null);
@@ -131,7 +149,7 @@ function InProgressOrdersSection() {
       if (latest.some(group => !canMarkInvoiceGroupDispatched(group))) throw new Error("아직 출고준비완료가 아닌 발주묶음이 있습니다.");
       const now = new Date().toISOString();
       for (const group of latest) await invoiceGroupRepository.save({ ...group, stage: "dispatched", updatedAt: now });
-      setGroupsByDate(groupInProgressByDate(fixture ? await invoiceGroupRepository.list() : readLocalInvoiceGroupSnapshot()));
+      live.setGroups(fixture ? await invoiceGroupRepository.list() : readLocalInvoiceGroupSnapshot());
     } catch (error) {
       setDispatchError({ date: expectedDate, message: error instanceof Error ? error.message : "출고완료로 기록하지 못했습니다." });
     } finally {
@@ -141,14 +159,7 @@ function InProgressOrdersSection() {
 
   if (!groupsByDate) return null;
 
-  if (groupsByDate.length === 0) return (
-    <section className={styles.section} aria-labelledby="in-progress-orders-title">
-      <h2 id="in-progress-orders-title">진행 중 발주</h2>
-      <button type="button" className={styles.primaryPink} disabled={refreshing} onClick={() => void refresh()}>
-        {refreshing ? "조회 중…" : "진행 중 발주 조회"}
-      </button>
-    </section>
-  );
+  if (groupsByDate.length === 0) return null;
 
   return (
     <section className={styles.section} aria-labelledby="in-progress-orders-title">
@@ -156,7 +167,7 @@ function InProgressOrdersSection() {
         <h2 id="in-progress-orders-title">진행 중 발주 · {groupsByDate.length}개</h2>
         <button type="button" disabled={refreshing} onClick={() => void refresh()}
           style={{ border: "none", background: "none", padding: 0, fontSize: "12px", color: wmsColors.ink, textDecoration: "underline", cursor: "pointer" }}>
-          {refreshing ? "조회 중…" : "새로 조회"}
+          {refreshing ? "최신 확인 중…" : "새로 조회"}
         </button>
       </div>
       <div className={styles.workGrid}>
@@ -214,17 +225,9 @@ function InProgressOrdersSection() {
  * 처리" 카드가 실제로 무엇을 가리키는지 여기서 개수로 명시한다. 새 화면을 만들지 않고 기존
  * /wms/vendor-orders(구형 3카드 허브)로 그대로 연결한다 — 그 화면 자체를 바꾸는 건 별도 작업.
  */
-function ShipmentClosedGroupsBanner() {
-  const { repository: invoiceGroupRepository, ready, fixture } = useInvoiceGroupRepositoryState();
-  const [count, setCount] = useState<number | null>(null);
-
-  // 2026-10-02: 진행 중 발주와 같은 방식 — 화면 열 때 서버 재조회 없이 마지막 상태(로컬 미러)를 읽는다.
-  useEffect(() => {
-    if (!ready) return;
-    const countClosed = (all: InvoiceGroup[]) => all.filter(group => !group.supersededByGroupId && group.stage === "shipment_closed").length;
-    if (fixture) { void invoiceGroupRepository.list().then(all => setCount(countClosed(all))); return; }
-    setCount(countClosed(readLocalInvoiceGroupSnapshot()));
-  }, [ready, fixture, invoiceGroupRepository]);
+function ShipmentClosedGroupsBanner({ groups }: { groups: InvoiceGroup[] | null }) {
+  // 2026-10-02: 진행 중 발주 칸과 같은 공용 상태(useInvoiceGroupsLive)를 쓴다 — 서버를 따로 부르지 않는다.
+  const count = (groups || []).filter(group => !group.supersededByGroupId && group.stage === "shipment_closed").length;
 
   if (!count) return null;
 
@@ -239,11 +242,12 @@ function ShipmentClosedGroupsBanner() {
 }
 
 export default function WmsWorkCenterPage() {
+  const live = useInvoiceGroupsLive();
   return (
     <main className={`shell wms-work-center-shell ${styles.shell}`} style={{ fontFamily: "sans-serif" }}>
       <AppNavigation active="work-center" />
-      <InProgressOrdersSection />
-      <ShipmentClosedGroupsBanner />
+      <InProgressOrdersSection live={live} />
+      <ShipmentClosedGroupsBanner groups={live.groups} />
 
       {/* 상단 메뉴 4개 — 예전 "오늘 할 일" 화면의 .tasks(태스크 카드) 패턴 재사용. 첫 카드는
        *  .task:first-child 규칙으로 자동으로 전체폭이 된다(기존 CSS 그대로, 새로 안 건드림). */}
