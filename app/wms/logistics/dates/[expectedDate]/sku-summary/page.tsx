@@ -6,6 +6,7 @@ import { readLocalInvoiceGroupSnapshot } from "@/lib/wms/invoice-group/local-rep
 import type { InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
+import ProductThumb from "../ProductThumb";
 import { WMS_MOBILE_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
 import type { SkuSummaryRow } from "@/app/api/wms/logistics/sku-summary/route";
 
@@ -100,14 +101,7 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
               const display = resolveDisplayNameAndOption(row.productName, row.optionName);
               return (
                 <li key={row.skuId || row.barcode} style={{ display: "grid", gridTemplateColumns: "72px 1fr auto", gap: "10px", alignItems: "center", padding: "10px", borderRadius: "14px", background: "#fff", border: "1px solid #e5dace" }}>
-                  {catalog?.imageUrl ? (
-                    <a href={catalog.imageUrl} target="_blank" rel="noreferrer">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={catalog.imageUrl} alt={display.name} loading="lazy" style={{ width: "72px", height: "72px", objectFit: "cover", borderRadius: "10px", display: "block" }} />
-                    </a>
-                  ) : (
-                    <div style={{ width: "72px", height: "72px", borderRadius: "10px", background: "#f2f2f2", fontSize: "11px", color: wmsColors.muted, display: "grid", placeItems: "center" }}>이미지 없음</div>
-                  )}
+                  <ProductThumb key={row.skuId} catalog={catalog} skuId={row.skuId} alt={display.name} />
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: "13px", fontWeight: 700, lineHeight: 1.35 }}>{display.name}{display.option ? ` · ${display.option}` : ""}</div>
                     <div style={{ fontSize: "12px", color: wmsColors.muted, marginTop: "3px" }}>SKU {row.skuId || "-"} · 발주 {row.purchaseOrderCount}건 · 센터 {row.fulfillmentCenters.length}곳</div>

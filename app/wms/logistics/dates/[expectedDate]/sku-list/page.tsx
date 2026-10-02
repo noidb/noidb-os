@@ -7,6 +7,7 @@ import type { InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { loadShipmentPrintGroupsByDate } from "@/lib/wms/load-shipment-print-groups";
 import type { ShipmentPrintGroup } from "@/lib/wms/shipment-print-client";
+import ProductThumb from "../ProductThumb";
 import { WMS_MOBILE_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
 
 /**
@@ -104,14 +105,7 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
                     return (
                       <li key={`${row.purchaseOrderNumber}-${row.skuId}-${row.sourceRowNumber}`} style={{ display: "grid", gridTemplateColumns: "24px 72px 1fr auto", gap: "10px", alignItems: "center", padding: "10px", borderRadius: "14px", background: "#fff", border: `1px solid #e5dace` }}>
                         <span style={{ fontSize: "12px", color: wmsColors.muted, textAlign: "center" }}>{order}</span>
-                        {catalog?.imageUrl ? (
-                          <a href={catalog.imageUrl} target="_blank" rel="noreferrer">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={catalog.imageUrl} alt={row.productName} loading="lazy" style={{ width: "72px", height: "72px", objectFit: "cover", borderRadius: "10px", display: "block" }} />
-                          </a>
-                        ) : (
-                          <div style={{ width: "72px", height: "72px", borderRadius: "10px", background: "#f2f2f2", fontSize: "11px", color: wmsColors.muted, display: "grid", placeItems: "center" }}>이미지 없음</div>
-                        )}
+                        <ProductThumb key={row.skuId} catalog={catalog} skuId={row.skuId} alt={row.productName} />
                         <div style={{ minWidth: 0 }}>
                           <div style={{ fontSize: "13px", fontWeight: 700, lineHeight: 1.35 }}>{row.productName}{row.optionLabel ? ` · ${row.optionLabel}` : ""}</div>
                           <div style={{ fontSize: "12px", color: wmsColors.muted, marginTop: "3px" }}>SKU {row.skuId}{row.warehouseNumber ? ` · 번호 ${row.warehouseNumber}` : ""}</div>
