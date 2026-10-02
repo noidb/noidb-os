@@ -186,9 +186,15 @@ function InProgressOrdersSection() {
                   </Link>
                 </div>
               ) : (
-                <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}`} className={styles.primaryPink}>
-                  발주확정 및 쉽먼트생성 →
-                </Link>
+                <>
+                  <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}`} className={styles.primaryPink}>
+                    발주확정 및 쉽먼트생성 →
+                  </Link>
+                  {/* 2026-10-02: 쉽먼트 생성 전이라 쉽먼트별 목록 대신 발주 SKU별 총수량을 본다. */}
+                  <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}/sku-summary`} className={styles.taskButtonGrayWhite} style={{ marginTop: "8px" }}>
+                    SKU별 총수량 보기
+                  </Link>
+                </>
               )}
               {dispatchError?.date === expectedDate && <p style={{ margin: "8px 0 0", fontSize: "12px", color: wmsColors.warn }}>{dispatchError.message}</p>}
             </div>
