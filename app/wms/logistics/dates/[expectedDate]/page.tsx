@@ -532,25 +532,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
         </button>
       </ShipmentWorkflowStepCard>
 
-      <ShipmentWorkflowStepCard step={4} title="출력세트 생성" subtitle="Supplier Hub 물류>쉽먼트에서 Label·내역서를 먼저 다운로드해 지정 폴더에 저장한 뒤 눌러 주세요. 부착문서·동봉내역서·바코드가 함께 생성됩니다." status={outputSetGeneratedForAll ? "done" : groups.every(group => group.shipmentNumbers.some(value => /^\d{8}$/.test(value.trim()))) ? "current" : "blocked"}>
-        {outputSetError && <p style={{ color: "#c0392b", fontSize: "12px", whiteSpace: "pre-wrap" }}>{outputSetError}</p>}
-        {outputSetMessage && <p style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{outputSetMessage}</p>}
-        <button type="button" disabled={generatingOutputSet || hasUnsavedShipmentNumbers || !groups.every(group => group.shipmentNumbers.some(value => /^\d{8}$/.test(value.trim())))} onClick={() => void handleGenerateOutputSet()} style={{ ...wmsPrimaryButton, width: "100%", opacity: generatingOutputSet || hasUnsavedShipmentNumbers || !groups.every(group => group.shipmentNumbers.some(value => /^\d{8}$/.test(value.trim()))) ? 0.5 : 1 }}>
-          {generatingOutputSet ? "생성 중..." : outputSetGeneratedForAll ? "출력세트 다시 생성" : "이 날짜 출력세트 한 번에 생성"}
-        </button>
-      </ShipmentWorkflowStepCard>
-
-      {advanceError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{advanceError}</p>}
-      {hasUnsavedShipmentNumbers && <p style={{ color: "#c0392b", fontSize: "12px" }}>변경한 쉽먼트번호를 전체 저장해주세요.</p>}
-      {readyForDispatchCount > 0 && <p style={{ color: wmsColors.greenDark, fontSize: "12px" }}>출고 준비 기록 {readyForDispatchCount}/{groups.length}건</p>}
-      {groups.some(group => group.stage !== "dispatched") && (
-        <button type="button" disabled={advancing || hasUnsavedShipmentNumbers || !canDispatchAll} onClick={() => void handleMarkDispatched()} style={{ ...wmsPrimaryButton, width: "100%", marginTop: "8px", opacity: advancing || hasUnsavedShipmentNumbers || !canDispatchAll ? 0.6 : 1 }}>
-          {advancing ? "기록 중..." : "실제 출고 확인 후 이 날짜 전체 출고완료로 기록"}
-        </button>
-      )}
-      {groups.every(group => group.stage === "dispatched") && <p style={{ textAlign: "center", color: wmsColors.greenDark, fontSize: "13px", fontWeight: 800, marginTop: "10px" }}>이 날짜 전체 출고완료 기록</p>}
-
-      <details style={{ marginTop: "14px" }} open>
+      <details style={{ margin: "14px 0" }} open>
         <summary style={{ cursor: "pointer", fontSize: "12px", color: wmsColors.muted }}>물류센터별 묶음 상세 · 쉽먼트번호 입력 ({groups.length}개)</summary>
         <p style={{ fontSize: "11px", color: wmsColors.muted, lineHeight: 1.6, margin: "6px 0" }}>
           쉽먼트번호는 Supplier Hub에 쉽먼트를 등록해야 발급됩니다. 각 묶음의 8자리 번호를 입력한 뒤 아래에서 전체 저장하면 출력세트를 만들 수 있습니다.
@@ -585,6 +567,24 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
         {shipmentNumberSaveMessage && <p style={{ color: wmsColors.greenDark, fontSize: "12px", margin: "10px 0 0" }}>{shipmentNumberSaveMessage}</p>}
         <button type="button" disabled={savingShipmentNumbers} onClick={() => void handleSaveShipmentNumbers()} style={{ ...wmsSecondaryButton, width: "100%", marginTop: "10px", opacity: savingShipmentNumbers ? 0.5 : 1 }}>{savingShipmentNumbers ? "쉽먼트번호 전체 저장 중..." : "이 날짜 쉽먼트번호 전체 저장"}</button>
       </details>
+
+      <ShipmentWorkflowStepCard step={4} title="출력세트 생성" subtitle="Supplier Hub 물류>쉽먼트에서 Label·내역서를 먼저 다운로드해 지정 폴더에 저장한 뒤 눌러 주세요. 부착문서·동봉내역서·바코드가 함께 생성됩니다." status={outputSetGeneratedForAll ? "done" : groups.every(group => group.shipmentNumbers.some(value => /^\d{8}$/.test(value.trim()))) ? "current" : "blocked"}>
+        {outputSetError && <p style={{ color: "#c0392b", fontSize: "12px", whiteSpace: "pre-wrap" }}>{outputSetError}</p>}
+        {outputSetMessage && <p style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{outputSetMessage}</p>}
+        <button type="button" disabled={generatingOutputSet || hasUnsavedShipmentNumbers || !groups.every(group => group.shipmentNumbers.some(value => /^\d{8}$/.test(value.trim())))} onClick={() => void handleGenerateOutputSet()} style={{ ...wmsPrimaryButton, width: "100%", opacity: generatingOutputSet || hasUnsavedShipmentNumbers || !groups.every(group => group.shipmentNumbers.some(value => /^\d{8}$/.test(value.trim()))) ? 0.5 : 1 }}>
+          {generatingOutputSet ? "생성 중..." : outputSetGeneratedForAll ? "출력세트 다시 생성" : "이 날짜 출력세트 한 번에 생성"}
+        </button>
+      </ShipmentWorkflowStepCard>
+
+      {advanceError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{advanceError}</p>}
+      {hasUnsavedShipmentNumbers && <p style={{ color: "#c0392b", fontSize: "12px" }}>변경한 쉽먼트번호를 전체 저장해주세요.</p>}
+      {readyForDispatchCount > 0 && <p style={{ color: wmsColors.greenDark, fontSize: "12px" }}>출고 준비 기록 {readyForDispatchCount}/{groups.length}건</p>}
+      {groups.some(group => group.stage !== "dispatched") && (
+        <button type="button" disabled={advancing || hasUnsavedShipmentNumbers || !canDispatchAll} onClick={() => void handleMarkDispatched()} style={{ ...wmsPrimaryButton, width: "100%", marginTop: "8px", opacity: advancing || hasUnsavedShipmentNumbers || !canDispatchAll ? 0.6 : 1 }}>
+          {advancing ? "기록 중..." : "실제 출고 확인 후 이 날짜 전체 출고완료로 기록"}
+        </button>
+      )}
+      {groups.every(group => group.stage === "dispatched") && <p style={{ textAlign: "center", color: wmsColors.greenDark, fontSize: "13px", fontWeight: 800, marginTop: "10px" }}>이 날짜 전체 출고완료 기록</p>}
 
       <a href={`/wms/logistics/new-orders${fixtureMode ? "?logisticsFixture=1" : ""}`} style={{ display: "block", marginTop: "16px" }}>
         <button type="button" style={{ ...wmsGhostButton, width: "100%" }}>신규발주서 검색으로</button>
