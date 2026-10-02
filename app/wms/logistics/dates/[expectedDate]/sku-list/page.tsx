@@ -29,6 +29,7 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
   const [catalogBySku, setCatalogBySku] = useState<Map<string, ProductCatalogItem>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [openShipment, setOpenShipment] = useState<string | null>(null);
 
   useEffect(() => {
     if (!ready) return;
@@ -75,7 +76,7 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
     <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "12px 12px 32px", fontFamily: "sans-serif", color: wmsColors.ink, background: wmsColors.background, minHeight: "100vh" }}>
       <a href="/wms/work-center" style={{ color: wmsColors.slateDark, fontSize: "13px" }}>← 입고센터</a>
       <h1 style={{ margin: "10px 0 2px", fontSize: "20px" }}>쉽먼트별 SKU리스트</h1>
-      <p style={{ margin: "0 0 12px", color: wmsColors.muted, fontSize: "12px" }}>입고예정일 {expectedDate} · 동봉내역서와 같은 순서</p>
+      <p style={{ margin: "0 0 12px", color: wmsColors.muted, fontSize: "12px" }}>입고예정일 {expectedDate} · 동봉내역서와 같은 순서{shipments ? ` · 쉽먼트 ${shipments.length}개` : ""} · 쉽먼트를 누르면 열립니다</p>
 
       {error && <p style={{ padding: "12px", borderRadius: "12px", background: wmsColors.warnSoft, color: wmsColors.warn, fontSize: "13px", whiteSpace: "pre-wrap" }}>{error}</p>}
       {!error && !shipments && <p style={{ color: wmsColors.muted, fontSize: "13px" }}>동봉내역서 원본을 읽는 중…</p>}
@@ -90,15 +91,26 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
             style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: "12px", border: `1px solid #ddd8cd`, fontSize: "14px", marginBottom: "12px" }}
           />
           {visibleShipments.length === 0 && <p style={{ color: wmsColors.muted, fontSize: "13px" }}>찾는 상품이 없습니다.</p>}
-          {visibleShipments.map(({ group, rows }) => {
+          {visibleShipments.map(({ group, rows }, shipmentIndex) => {
             const total = group.barcodeRows.reduce((sum, row) => sum + row.quantity, 0);
+            // 검색 중이면 찾은 쉽먼트를 모두 펼친다. 아니면 누른 쉽먼트만 펼친다.
+            const open = normalizedQuery ? true : openShipment === group.shipmentNumber;
             return (
-              <section key={group.shipmentNumber} style={{ marginBottom: "18px" }}>
-                <div style={{ position: "sticky", top: 0, zIndex: 1, background: wmsColors.background, padding: "8px 0" }}>
-                  <div style={{ fontSize: "15px", fontWeight: 800 }}>쉽먼트 {group.shipmentNumber} · {group.fulfillmentCenter}</div>
-                  <div style={{ fontSize: "12px", color: wmsColors.muted }}>SKU {group.barcodeRows.length}종 · 총 {total}개 · 발주 {group.purchaseOrderNumbers.join(", ")}</div>
-                </div>
-                <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "8px" }}>
+              <section key={group.shipmentNumber} style={{ marginBottom: "8px" }}>
+                <button
+                  type="button"
+                  aria-expanded={open}
+                  onClick={() => setOpenShipment(open ? null : group.shipmentNumber)}
+                  style={{ position: open ? "sticky" : "static", top: 0, zIndex: 1, width: "100%", textAlign: "left", cursor: "pointer", display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: "8px", padding: "12px 14px", borderRadius: "14px", border: `1px solid ${open ? "#e3c0c8" : "#e5dace"}`, background: open ? "#f6e2e6" : "#faf8f4", color: wmsColors.ink, fontFamily: "inherit" }}
+                >
+                  <span>
+                    <span style={{ display: "block", fontSize: "15px", fontWeight: 800 }}>{shipmentIndex + 1}. {group.fulfillmentCenter} · {group.shipmentNumber}</span>
+                    <span style={{ display: "block", fontSize: "12px", color: wmsColors.muted, marginTop: "2px" }}>SKU {group.barcodeRows.length}종 · 총 {total}개 · 발주 {group.purchaseOrderNumbers.length}건</span>
+                  </span>
+                  <span style={{ fontSize: "13px", fontWeight: 700 }}>{open ? "접기 ▲" : "열기 ▼"}</span>
+                </button>
+                {open && (
+                <ol style={{ listStyle: "none", margin: "8px 0 14px", padding: 0, display: "grid", gap: "8px" }}>
                   {rows.map(row => {
                     const order = group.barcodeRows.indexOf(row) + 1;
                     const catalog = catalogBySku.get(row.skuId);
@@ -119,6 +131,7 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
                     );
                   })}
                 </ol>
+                )}
               </section>
             );
           })}
