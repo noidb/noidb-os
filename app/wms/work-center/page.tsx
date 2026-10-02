@@ -7,8 +7,9 @@ import AppNavigation from "@/app/AppNavigation";
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import { UNASSIGNED_VENDOR_NAME } from "@/lib/wms/vendor-order/types";
-import { useInvoiceGroupRepository } from "@/lib/wms/invoice-group/context";
-import { INVOICE_GROUP_STAGE_LABEL, INVOICE_GROUP_STAGE_ORDER, type InvoiceGroup } from "@/lib/wms/invoice-group/types";
+import { useInvoiceGroupRepositoryState } from "@/lib/wms/invoice-group/context";
+import { readLocalInvoiceGroupSnapshot } from "@/lib/wms/invoice-group/local-repository";
+import { INVOICE_GROUP_STAGE_LABEL, INVOICE_GROUP_STAGE_ORDER, canMarkInvoiceGroupDispatched, missingInvoiceGroupDispatchRequirements, type InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import styles from "./work-center.module.css";
 
 /**
@@ -87,29 +88,77 @@ function formatInboundDateTitle(expectedDate: string): string {
   return `${Number(match[2])}월 ${Number(match[3])}일입고`;
 }
 
-function InProgressOrdersSection() {
-  const invoiceGroupRepository = useInvoiceGroupRepository();
-  const [groupsByDate, setGroupsByDate] = useState<Array<[string, InvoiceGroup[]]> | null>(null);
+function groupInProgressByDate(all: InvoiceGroup[]): Array<[string, InvoiceGroup[]]> {
+  const inProgress = all.filter(group => !group.supersededByGroupId && group.stage !== "shipment_closed" && group.stage !== "dispatched");
+  const map = new Map<string, InvoiceGroup[]>();
+  for (const group of inProgress) map.set(group.expectedDate, [...(map.get(group.expectedDate) || []), group]);
+  return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
+}
 
-  async function load() {
-    const all = await invoiceGroupRepository.list();
-    const inProgress = all.filter(group => !group.supersededByGroupId && group.stage !== "shipment_closed" && group.stage !== "dispatched");
-    const map = new Map<string, InvoiceGroup[]>();
-    for (const group of inProgress) map.set(group.expectedDate, [...(map.get(group.expectedDate) || []), group]);
-    setGroupsByDate([...map.entries()].sort(([a], [b]) => a.localeCompare(b)));
+function InProgressOrdersSection() {
+  const { repository: invoiceGroupRepository, ready, fixture } = useInvoiceGroupRepositoryState();
+  const [groupsByDate, setGroupsByDate] = useState<Array<[string, InvoiceGroup[]]> | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // 2026-10-02 사용자 요청: 화면을 열 때 서버를 다시 조회하지 않는다. 사이트 어디서든 발주묶음을
+  // 조회·저장할 때마다 브라우저에 남는 마지막 상태(로컬 미러)를 그대로 즉시 보여준다.
+  // 서버 재조회는 사용자가 "새로 조회"를 누를 때만 한다.
+  useEffect(() => {
+    if (!ready) return;
+    if (fixture) { void invoiceGroupRepository.list().then(all => setGroupsByDate(groupInProgressByDate(all))); return; }
+    setGroupsByDate(groupInProgressByDate(readLocalInvoiceGroupSnapshot()));
+  }, [ready, fixture, invoiceGroupRepository]);
+
+  async function refresh() {
+    setRefreshing(true);
+    try { setGroupsByDate(groupInProgressByDate(await invoiceGroupRepository.list())); } finally { setRefreshing(false); }
   }
 
-  if (!groupsByDate) return (
+  const [dispatchingDate, setDispatchingDate] = useState<string | null>(null);
+  const [dispatchError, setDispatchError] = useState<{ date: string; message: string } | null>(null);
+
+  /** 출고완료 — 날짜 처리 화면의 "이 날짜 전체 출고완료"와 같은 규칙(필수기록 검사 후 묶음별 저장). */
+  async function markDispatched(expectedDate: string) {
+    if (dispatchingDate) return;
+    if (!window.confirm(`${formatInboundDateTitle(expectedDate)} 발주를 출고완료로 기록할까요?`)) return;
+    setDispatchingDate(expectedDate);
+    setDispatchError(null);
+    try {
+      // 저장 직전에만 서버 최신본으로 확인한다(다른 PC에서 바뀐 내용을 덮어쓰지 않도록).
+      const latest = (await invoiceGroupRepository.list()).filter(group => !group.supersededByGroupId && group.expectedDate === expectedDate && group.stage !== "dispatched" && group.stage !== "shipment_closed");
+      const missing = [...new Set(latest.flatMap(missingInvoiceGroupDispatchRequirements))];
+      if (missing.length) throw new Error(`출고완료에 필요한 기록이 없습니다: ${missing.join(", ")}`);
+      if (latest.some(group => !canMarkInvoiceGroupDispatched(group))) throw new Error("아직 출고준비완료가 아닌 발주묶음이 있습니다.");
+      const now = new Date().toISOString();
+      for (const group of latest) await invoiceGroupRepository.save({ ...group, stage: "dispatched", updatedAt: now });
+      setGroupsByDate(groupInProgressByDate(fixture ? await invoiceGroupRepository.list() : readLocalInvoiceGroupSnapshot()));
+    } catch (error) {
+      setDispatchError({ date: expectedDate, message: error instanceof Error ? error.message : "출고완료로 기록하지 못했습니다." });
+    } finally {
+      setDispatchingDate(null);
+    }
+  }
+
+  if (!groupsByDate) return null;
+
+  if (groupsByDate.length === 0) return (
     <section className={styles.section} aria-labelledby="in-progress-orders-title">
       <h2 id="in-progress-orders-title">진행 중 발주</h2>
-      <button type="button" className={styles.primaryPink} onClick={() => void load()}>진행 중 발주 조회</button>
+      <button type="button" className={styles.primaryPink} disabled={refreshing} onClick={() => void refresh()}>
+        {refreshing ? "조회 중…" : "진행 중 발주 조회"}
+      </button>
     </section>
   );
-  if (groupsByDate.length === 0) return null;
 
   return (
     <section className={styles.section} aria-labelledby="in-progress-orders-title">
-      <h2 id="in-progress-orders-title">진행 중 발주 · {groupsByDate.length}개</h2>
+      <div className={styles.row}>
+        <h2 id="in-progress-orders-title">진행 중 발주 · {groupsByDate.length}개</h2>
+        <button type="button" disabled={refreshing} onClick={() => void refresh()}
+          style={{ border: "none", background: "none", padding: 0, fontSize: "12px", color: wmsColors.ink, textDecoration: "underline", cursor: "pointer" }}>
+          {refreshing ? "조회 중…" : "새로 조회"}
+        </button>
+      </div>
       <div className={styles.workGrid}>
         {groupsByDate.map(([expectedDate, groups]) => {
           const poCount = groups.reduce((sum, group) => sum + group.purchaseOrderNumbers.length, 0);
@@ -125,9 +174,23 @@ function InProgressOrdersSection() {
               </div>
               <p className={styles.metrics}>발주 {poCount}건 · SKU {skuCount}종 · 총수량 {totalQuantity}개 · 센터 {centers.length}곳</p>
               <p className={styles.muted}>입고예정일 {expectedDate}</p>
-              <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}`} className={styles.primaryPink}>
-                발주확정 및 쉽먼트생성 →
-              </Link>
+              {currentStage === "shipment_completed" ? (
+                // 2026-10-02: 출력세트까지 끝난(출고준비완료) 날짜는 처리 화면으로 갈 필요 없이
+                // 여기서 바로 출고완료 처리 + 피킹용 쉽먼트별 SKU리스트를 연다.
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "12px" }}>
+                  <button type="button" className={styles.primaryPink} disabled={dispatchingDate === expectedDate} onClick={() => void markDispatched(expectedDate)}>
+                    {dispatchingDate === expectedDate ? "기록 중…" : "출고완료"}
+                  </button>
+                  <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}/sku-list`} className={styles.taskButtonGrayWhite}>
+                    쉽먼트별 SKU리스트
+                  </Link>
+                </div>
+              ) : (
+                <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}`} className={styles.primaryPink}>
+                  발주확정 및 쉽먼트생성 →
+                </Link>
+              )}
+              {dispatchError?.date === expectedDate && <p style={{ margin: "8px 0 0", fontSize: "12px", color: wmsColors.warn }}>{dispatchError.message}</p>}
             </div>
           );
         })}
@@ -146,15 +209,16 @@ function InProgressOrdersSection() {
  * /wms/vendor-orders(구형 3카드 허브)로 그대로 연결한다 — 그 화면 자체를 바꾸는 건 별도 작업.
  */
 function ShipmentClosedGroupsBanner() {
-  const invoiceGroupRepository = useInvoiceGroupRepository();
+  const { repository: invoiceGroupRepository, ready, fixture } = useInvoiceGroupRepositoryState();
   const [count, setCount] = useState<number | null>(null);
 
+  // 2026-10-02: 진행 중 발주와 같은 방식 — 화면 열 때 서버 재조회 없이 마지막 상태(로컬 미러)를 읽는다.
   useEffect(() => {
-    (async () => {
-      const all = await invoiceGroupRepository.list();
-      setCount(all.filter(group => !group.supersededByGroupId && group.stage === "shipment_closed").length);
-    })();
-  }, [invoiceGroupRepository]);
+    if (!ready) return;
+    const countClosed = (all: InvoiceGroup[]) => all.filter(group => !group.supersededByGroupId && group.stage === "shipment_closed").length;
+    if (fixture) { void invoiceGroupRepository.list().then(all => setCount(countClosed(all))); return; }
+    setCount(countClosed(readLocalInvoiceGroupSnapshot()));
+  }, [ready, fixture, invoiceGroupRepository]);
 
   if (!count) return null;
 
