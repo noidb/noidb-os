@@ -9,6 +9,7 @@ import { groupPurchaseOrdersForShipping, toggleExpectedDateSelection } from "@/l
 import { buildInvoiceGroupDrafts, type InvoiceGroupDraft } from "@/lib/wms/invoice-group/build-groups";
 import { isAsideCompletedDispatchPurchaseOrder } from "@/lib/wms/logistics-aside-dispatch";
 import { useInvoiceGroupRepository } from "@/lib/wms/invoice-group/context";
+import { LocalInvoiceGroupRepository, readLocalInvoiceGroupSnapshot } from "@/lib/wms/invoice-group/local-repository";
 import { INVOICE_GROUP_STAGE_LABEL, type InvoiceGroup, type InvoiceGroupStage } from "@/lib/wms/invoice-group/types";
 import { wmsColors, wmsGhostButton, wmsPrimaryButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
 import styles from "../../work-center/work-center.module.css";
@@ -29,6 +30,14 @@ import styles from "../../work-center/work-center.module.css";
  * 발주서 조회/가져오기 API(/api/wms/supplier-hub-orders, /api/wms/import-latest-purchase-orders)는
  * 기존 work-center/NewPurchaseOrdersUpdateButton.tsx와 동일하게 그대로 재사용한다 — 바꾼 적 없다.
  */
+const NEW_ORDERS_LAST_VIEW_KEY = "noidb_new_orders_last_view";
+
+function formatLoadedAt(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${date.getMonth() + 1}월 ${date.getDate()}일 ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 export default function WmsNewOrdersPage() {
   const invoiceGroupRepository = useInvoiceGroupRepository();
 
@@ -47,6 +56,25 @@ export default function WmsNewOrdersPage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createdMessage, setCreatedMessage] = useState<string | null>(null);
+  const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
+
+  // 2026-10-02 사용자 요청: 들어올 때마다 다시 조회하지 않는다. 마지막으로 불러온 발주서 목록을
+  // 브라우저에 저장해 두고 그대로 보여준다. 발주묶음·제외목록도 사이트가 저장해 둔 로컬 미러를 쓴다.
+  // 서버 조회는 "발주서리스트 파일 불러오기"를 누를 때만 한다.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "development" && new URLSearchParams(window.location.search).get("logisticsFixture") === "1") return;
+    try {
+      const raw = window.localStorage.getItem(NEW_ORDERS_LAST_VIEW_KEY);
+      const saved = raw ? JSON.parse(raw) as { orders?: SupplierHubPurchaseOrder[]; importResult?: ImportLatestResult | null; savedAt?: string } : null;
+      if (saved && Array.isArray(saved.orders)) {
+        setOrders(saved.orders);
+        setImportResult(saved.importResult ?? null);
+        setLastLoadedAt(saved.savedAt ?? null);
+      }
+    } catch { /* 저장된 목록이 없거나 깨졌으면 예전처럼 버튼을 눌러 불러온다 */ }
+    setExistingGroups(readLocalInvoiceGroupSnapshot());
+    void new LocalInvoiceGroupRepository().listExcludedPurchaseOrderNumbers().then(list => setExcludedPoNumbers(new Set(list)));
+  }, []);
 
   async function loadOrders() {
     try {
@@ -56,6 +84,7 @@ export default function WmsNewOrdersPage() {
       const list = (data.orders as SupplierHubPurchaseOrder[]).slice().sort((a, b) => a.expectedDate.localeCompare(b.expectedDate) || a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber));
       setOrders(list);
       setLoadError(null);
+      return list;
     } catch {
       setLoadError("발주서를 불러오지 못했습니다.");
     }
@@ -69,11 +98,21 @@ export default function WmsNewOrdersPage() {
     try { setExcludedPoNumbers(new Set(await invoiceGroupRepository.listExcludedPurchaseOrderNumbers())); } catch { /* 목록 필터링용 — 실패해도 조회 자체는 계속 진행 */ }
   }
 
-  async function handleLoadWorkspace() {
+  function saveLastView(list: SupplierHubPurchaseOrder[], result: ImportLatestResult | null) {
+    const savedAt = new Date().toISOString();
+    setLastLoadedAt(savedAt);
+    try { window.localStorage.setItem(NEW_ORDERS_LAST_VIEW_KEY, JSON.stringify({ orders: list, importResult: result, savedAt })); }
+    catch { /* 저장 공간이 부족하면 다음에 들어올 때 다시 불러오면 된다 */ }
+  }
+
+  async function handleLoadWorkspace(latestImportResult: ImportLatestResult | null = importResult) {
     if (loadingWorkspace) return;
     setLoadingWorkspace(true);
     setLoadError(null);
-    try { await Promise.all([loadOrders(), loadExistingGroups(), loadExcludedPoNumbers()]); }
+    try {
+      const [list] = await Promise.all([loadOrders(), loadExistingGroups(), loadExcludedPoNumbers()]);
+      if (list && !fixtureMode) saveLastView(list, latestImportResult);
+    }
     finally { setLoadingWorkspace(false); }
   }
 
@@ -86,7 +125,7 @@ export default function WmsNewOrdersPage() {
       const data = await response.json();
       if (!response.ok) { setImportError(data.error || "최신 발주서를 불러오지 못했습니다."); return; }
       setImportResult(data as ImportLatestResult);
-      await handleLoadWorkspace();
+      await handleLoadWorkspace(data as ImportLatestResult);
     } catch {
       setImportError("최신 발주서를 불러오지 못했습니다.");
     } finally {
@@ -220,7 +259,7 @@ export default function WmsNewOrdersPage() {
       {importError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{importError}</p>}
       {importResult && (
         <div style={{ background: wmsColors.surfaceBeige, border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "10px 12px", marginBottom: "12px", fontSize: "12px" }}>
-          원본: {importResult.sourceFileName} · 신규 {importResult.addedPurchaseOrderNumbers.length}건 추가
+          {lastLoadedAt && `${formatLoadedAt(lastLoadedAt)} 불러옴 · `}원본: {importResult.sourceFileName} · 신규 {importResult.addedPurchaseOrderNumbers.length}건 추가
           {(importResult.updatedPurchaseOrderNumbers?.length ?? 0) > 0 && ` · 입고예정일/물류센터 ${importResult.updatedPurchaseOrderNumbers.length}건 업데이트`}
         </div>
       )}
