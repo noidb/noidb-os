@@ -2442,6 +2442,14 @@ export default function Home() {
             ))}
           </div>
         )}
+        <div className="exportActions" style={{ marginTop: 12 }}>
+          {dbSupported && !dbHandle && <button className="dark" type="button" onClick={pickFolder}>상품DB 폴더 선택</button>}
+          <button className="secondaryButton" type="button" onClick={() => void createSourcingFolder()}>모델명 폴더 생성</button>
+          <button className="green" type="button" onClick={() => void saveSourcingImages()}>이미지 저장</button>
+          {dbSupported && <button className="secondaryButton" type="button" onClick={() => void openModelFolder()}>폴더 바로가기</button>}
+        </div>
+        <p className="note">위에 추가한 참고 사진을 상품DB의 카테고리/모델명/원본 폴더에 수집이미지로 저장합니다.</p>
+        {sourcingSaveStatus && <p className="detailMessage">{sourcingSaveStatus}</p>}
       </section>
 
       {/* 5. 쿠팡 등록 이미지 */}
@@ -2738,11 +2746,7 @@ export default function Home() {
         <h2>7. 상품DB · 등록파일 일괄 생성</h2>
         <div className="exportActions">
           {dbSupported && <button className="dark" type="button" onClick={pickFolder}>상품DB 폴더 선택</button>}
-          <button className="secondaryButton" type="button" onClick={() => void createSourcingFolder()}>모델명 폴더 생성</button>
-          <button className="green" type="button" onClick={() => void saveSourcingImages()}>이미지 저장</button>
-          {dbSupported && <button className="secondaryButton" type="button" onClick={() => void openModelFolder()}>폴더 바로가기</button>}
         </div>
-        {sourcingSaveStatus && <p className="detailMessage">{sourcingSaveStatus}</p>}
         {dbFolderName &&<p className="detailMessage">연결: {dbFolderName}</p>}
         {dbStatus && <p className="note">{dbStatus}</p>}
         <div className="batchModePanel" role="group" aria-label="일괄 생성 용도">
