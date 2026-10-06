@@ -2739,6 +2739,49 @@ export default function Home() {
         </div>
         {sourcingSaveStatus && <p className="detailMessage">{sourcingSaveStatus}</p>}
         {dbFolderName &&<p className="detailMessage">연결: {dbFolderName}</p>}
+        {dbStatus && <p className="note">{dbStatus}</p>}
+        <div className="batchModePanel" role="group" aria-label="일괄 생성 용도">
+          <button type="button" className={batchMode === "actual" ? "selected" : ""} onClick={() => setBatchMode("actual")}>
+            <strong>실제 등록용</strong><span>새 모델 등록 · 판매중지 모델은 기존 행 재사용</span>
+          </button>
+          <button type="button" className={batchMode === "practice" ? "selected" : ""} onClick={() => setBatchMode("practice")}>
+            <strong>테스트·교육용</strong><span>ZIP만 생성 · 폴더와 제품DB 변경 없음</span>
+          </button>
+        </div>
+        {batchMode === "actual" && modelDuplicate && !modelReregisterable && <p className="dangerAlert">기존 모델입니다. 판매중지 상태가 아닌 모델의 일괄 등록은 차단됩니다.</p>}
+        <div className="finalSaveActions">
+          <button className="finalSaveDraft" type="button" disabled={draftSaving} onClick={() => void saveDraft()}>
+            {draftSaving ? "임시저장 중..." : "임시저장"}
+          </button>
+          <button className="finalSaveAll" type="button" disabled={batchBusy} onClick={batchSave}>
+            {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP 생성" : "전체 파일 저장"}
+          </button>
+        </div>
+        {draftStatus && <p className="detailMessage" role="status" aria-live="polite">{draftStatus}</p>}
+        {!dbSupported && <p className="saveExplain">모바일에서는 상품DB ZIP이 다운로드됩니다. 다운로드 완료 후 공유 또는 파일 앱에서 Google Drive에 저장하세요.</p>}
+        {batchStatus && <p className={batchStatus.startsWith("오류") ? "error" : "detailMessage"}>{batchStatus}</p>}
+        {dbSavedFiles.length > 0 && (
+          <div className="dbFileList"><h3>저장된 파일</h3><ul>{dbSavedFiles.slice(0, 40).map(f => <li key={f}>{f}</li>)}</ul></div>
+        )}
+        {registrationUploadReady?.model === model && (
+          <div className="registrationNextStep" role="status">
+            <div>
+              <strong>실제 등록파일 준비 완료</strong>
+              <span>{model} · {registrationUploadReady.files.length.toLocaleString()}개 파일 · Google 제품DB 반영 완료</span>
+              <span>다음은 Supplier Hub에서 등록파일과 견적서를 올린 뒤 최종 제출하는 단계입니다.</span>
+            </div>
+            <div className="registrationNextActions">
+              <button type="button" className="secondaryButton" onClick={() => void copyModelFolderPath()}>폴더 경로 복사</button>
+              <a href="https://supplier.coupang.com/qvt/registration" target="_blank" rel="noreferrer">Supplier Hub 대량상품등록 열기</a>
+            </div>
+            {folderPathMessage && <span className="registrationPathMessage">{folderPathMessage}</span>}
+          </div>
+        )}
+      </section>
+
+      {/* 8. 기타 파일 생성 */}
+      <section className="card full dbSetupCard">
+        <h2>8. 기타 파일 생성</h2>
         <div className="labelQuickPanel">
           <strong>라벨 정보</strong>
           <p>현재 상품 정보를 기본값으로 사용합니다. 바꿔야 하는 항목만 수정하세요.</p>
@@ -2804,49 +2847,11 @@ export default function Home() {
             ))}
           </div>
         </div>
-        {dbStatus && <p className="note">{dbStatus}</p>}
-        <div className="batchModePanel" role="group" aria-label="일괄 생성 용도">
-          <button type="button" className={batchMode === "actual" ? "selected" : ""} onClick={() => setBatchMode("actual")}>
-            <strong>실제 등록용</strong><span>새 모델 등록 · 판매중지 모델은 기존 행 재사용</span>
-          </button>
-          <button type="button" className={batchMode === "practice" ? "selected" : ""} onClick={() => setBatchMode("practice")}>
-            <strong>테스트·교육용</strong><span>ZIP만 생성 · 폴더와 제품DB 변경 없음</span>
-          </button>
-        </div>
-        {batchMode === "actual" && modelDuplicate && !modelReregisterable && <p className="dangerAlert">기존 모델입니다. 판매중지 상태가 아닌 모델의 일괄 등록은 차단됩니다.</p>}
-        <div className="finalSaveActions">
-          <button className="finalSaveDraft" type="button" disabled={draftSaving} onClick={() => void saveDraft()}>
-            {draftSaving ? "임시저장 중..." : "임시저장"}
-          </button>
-          <button className="finalSaveAll" type="button" disabled={batchBusy} onClick={batchSave}>
-            {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP 생성" : "전체 파일 저장"}
-          </button>
-        </div>
-        {draftStatus && <p className="detailMessage" role="status" aria-live="polite">{draftStatus}</p>}
-        {!dbSupported && <p className="saveExplain">모바일에서는 상품DB ZIP이 다운로드됩니다. 다운로드 완료 후 공유 또는 파일 앱에서 Google Drive에 저장하세요.</p>}
-        {batchStatus && <p className={batchStatus.startsWith("오류") ? "error" : "detailMessage"}>{batchStatus}</p>}
-        {dbSavedFiles.length > 0 && (
-          <div className="dbFileList"><h3>저장된 파일</h3><ul>{dbSavedFiles.slice(0, 40).map(f => <li key={f}>{f}</li>)}</ul></div>
-        )}
-        {registrationUploadReady?.model === model && (
-          <div className="registrationNextStep" role="status">
-            <div>
-              <strong>실제 등록파일 준비 완료</strong>
-              <span>{model} · {registrationUploadReady.files.length.toLocaleString()}개 파일 · Google 제품DB 반영 완료</span>
-              <span>다음은 Supplier Hub에서 등록파일과 견적서를 올린 뒤 최종 제출하는 단계입니다.</span>
-            </div>
-            <div className="registrationNextActions">
-              <button type="button" className="secondaryButton" onClick={() => void copyModelFolderPath()}>폴더 경로 복사</button>
-              <a href="https://supplier.coupang.com/qvt/registration" target="_blank" rel="noreferrer">Supplier Hub 대량상품등록 열기</a>
-            </div>
-            {folderPathMessage && <span className="registrationPathMessage">{folderPathMessage}</span>}
-          </div>
-        )}
       </section>
 
       <section id="product-registration-status" className="card full">
         <div className="wms-section-heading" style={{ marginTop: 0 }}>
-          <div><span>PRODUCT REGISTRATION</span><h2>8. 등록 진행상황 · 상품 운영정보</h2></div>
+          <div><span>PRODUCT REGISTRATION</span><h2>9. 등록 진행상황 · 상품 운영정보</h2></div>
           <p>WIMS 승인 확인 → SKU 연결 → 상품공급상태 갱신</p>
         </div>
         <div className="wms-automation-grid">
