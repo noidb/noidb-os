@@ -2283,6 +2283,11 @@ export default function Home() {
           </Field>
           <Field label="사이즈">
             <input value={product.sizes} onChange={e => updateSizes(e.target.value)} />
+            {product.category === "목걸이" && (
+              <small style={{ color: "#d92d20", fontWeight: 700 }}>
+                필수입력{product.sizes.trim() ? "" : " · 목걸이는 사이즈가 비어 있으면 쿠팡에서 반려됩니다."}
+              </small>
+            )}
           </Field>
           <Field label="치수">
             <input value={product.dimension} onChange={e => update("dimension", e.target.value)}
