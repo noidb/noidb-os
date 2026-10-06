@@ -93,6 +93,67 @@ function findWimsRow(item: ProductCatalogItem, rows: WimsRegistrationRow[]): Wim
   return matches.length === 1 ? matches[0] : null;
 }
 
+type ModelGroup = { key: string; modelName: string; productName: string; items: ProductCatalogItem[]; topInbound: number };
+/** 위쪽 진행 섹션에 올라간 모델. 여기 있는 모델은 아래 재등록 목록에서 빠진다. */
+type StagedGroup = { group: ModelGroup; kind: "rejected" | "progress"; step: number; label: string; wimsRows: WimsRegistrationRow[]; dbStatuses: string[] };
+
+/** 등록파일을 만들었지만 아직 WIMS 검수 결과가 없는 상태. */
+const FILE_CREATED_STATUSES = new Set(["재등록파일생성", "등록파일생성"]);
+/** WIMS에 올려 검수(승인)를 기다리는 상태. */
+const AWAITING_APPROVAL_STATUSES = new Set(["기존상품승인대기", "신상승인대기"]);
+/** 반려를 받고 제품DB에 처리 결과를 적어 둔 상태. */
+const REJECTED_DB_STATUSES = new Set(["재등록시도", "등록불가"]);
+const PROGRESS_STEPS = ["등록파일 생성", "WIMS 검수중(승인대기)", "WIMS 승인완료"];
+
+function compactSku(value: string): string {
+  return String(value || "").trim().toUpperCase().replace(/[\s_-]+/g, "");
+}
+
+/** 모델번호 부분만: mn011236SG · mn011236-GO → MN011236. 옵션 표기가 달라도 같은 모델로 잇는다. */
+function modelNumberOf(value: string): string {
+  const match = String(value || "").trim().match(/^[A-Za-z]{1,8}\d{3,}/);
+  return match ? match[0].toUpperCase() : "";
+}
+
+function registeredStamp(row: WimsRegistrationRow): number {
+  const match = String(row.registeredAt || "").trim().match(/^(\d{4})[\/.-](\d{2})[\/.-](\d{2})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!match) return 0;
+  const stamp = Date.parse(`${match[1]}-${match[2]}-${match[3]}T${match[4] || "00"}:${match[5] || "00"}:${match[6] || "00"}+09:00`);
+  return Number.isFinite(stamp) ? stamp : 0;
+}
+
+/** 모델의 가장 최근 WIMS 등록 건(같은 날 여러 옵션이 올라가면 그 묶음 전체). */
+function latestWimsBatch(rows: WimsRegistrationRow[]): WimsRegistrationRow[] {
+  if (!rows.length) return [];
+  const top = Math.max(...rows.map(registeredStamp));
+  const day = (row: WimsRegistrationRow) => String(row.registeredAt || "").slice(0, 10);
+  const topRow = rows.find(row => registeredStamp(row) === top) || rows[0];
+  return rows.filter(row => day(row) === day(topRow));
+}
+
+/**
+ * 제품DB 현재상태와 WIMS 등록 결과로 모델이 지금 어디까지 왔는지 판단한다.
+ * - 최근 WIMS 건이 반려이거나 DB가 재등록시도·등록불가 → 반려 · 보완 후 재등록
+ * - 반려 뒤 다시 등록파일을 만들었으면(재등록파일생성) → 진행 중 1단계
+ * - 승인대기 → 진행 중 2단계, 최근 WIMS 건이 검수완료면 3단계(제품DB 반영 필요)
+ */
+function stageOf(group: ModelGroup, wimsRows: WimsRegistrationRow[]): StagedGroup | null {
+  const dbStatuses = [...new Set(group.items.map(item => String(item.currentStatus || "").trim()).filter(Boolean))];
+  const latest = latestWimsBatch(wimsRows);
+  const latestRejected = latest.some(row => row.status === "rejected");
+  const base = { group, wimsRows, dbStatuses };
+  if (dbStatuses.some(value => FILE_CREATED_STATUSES.has(value))) {
+    return { ...base, kind: "progress", step: 0, label: latestRejected ? "반려 후 보완 등록파일 생성 · WIMS 등록 대기" : "등록파일 생성 · WIMS 등록 대기" };
+  }
+  if (latestRejected) return { ...base, kind: "rejected", step: -1, label: "WIMS 반려" };
+  if (dbStatuses.some(value => REJECTED_DB_STATUSES.has(value))) return { ...base, kind: "rejected", step: -1, label: `제품DB ${dbStatuses.filter(value => REJECTED_DB_STATUSES.has(value)).join("·")}` };
+  if (dbStatuses.some(value => AWAITING_APPROVAL_STATUSES.has(value))) {
+    if (latest.length && latest.every(row => row.status === "approved")) return { ...base, kind: "progress", step: 2, label: "WIMS 승인완료 · 제품DB 반영 필요" };
+    return { ...base, kind: "progress", step: 1, label: latest.some(row => row.status === "reviewing") ? "WIMS 검수중" : "승인대기 · WIMS 결과 미확인" };
+  }
+  return null;
+}
+
 export default function ProductCatalogPage() {
   const router = useRouter();
   const [folderName, setFolderName] = useState("");
@@ -264,39 +325,79 @@ export default function ProductCatalogPage() {
       || Number(isReregistrationTarget(b)) - Number(isReregistrationTarget(a)));
   }, [items, query, snapshot, status, isReregistrationTarget]);
 
-  const rejectedRows = useMemo(() => {
+  /** 모델명 기준 전체 모델 묶음(검색·상태 필터와 무관). */
+  const allModelGroups = useMemo(() => {
+    const map = new Map<string, ProductCatalogItem[]>();
+    for (const item of items) {
+      const key = namedModelGroupKey(item);
+      if (key) map.set(key, [...(map.get(key) || []), item]);
+    }
+    return new Map([...map].map(([key, groupItems]) => {
+      const representative = groupItems[0];
+      return [key, {
+        key,
+        modelName: representative?.modelName || "모델명 없음",
+        productName: representative ? resolveDisplayNameAndOption(representative.productName || "", representative.optionLabel).name : "상품명 없음",
+        items: groupItems,
+        topInbound: Math.max(0, ...groupItems.map(item => Number(item.cumulativeInbound) || 0)),
+      } satisfies ModelGroup];
+    }));
+  }, [items]);
+
+  // 반려·진행 중인 모델은 위쪽 섹션에만 띄우고 아래 목록에서는 뺀다(위아래 중복 방지).
+  const { stagedGroups, stagedKeys, unmatchedRejectedRows } = useMemo(() => {
+    const groups = [...allModelGroups.values()];
+    const wimsByGroup = new Map<string, WimsRegistrationRow[]>();
+    const unmatched: WimsRegistrationRow[] = [];
+    for (const row of snapshot?.rows || []) {
+      const exact = groups.filter(group => compactSku(row.modelSku) && group.items.some(item => compactSku(item.modelSku) === compactSku(row.modelSku)));
+      const number = modelNumberOf(row.modelSku);
+      const targets = exact.length ? exact : number ? groups.filter(group => modelNumberOf(group.modelName) === number || group.items.some(item => modelNumberOf(item.modelSku) === number)) : [];
+      if (!targets.length) { if (row.status === "rejected") unmatched.push(row); continue; }
+      for (const group of targets) wimsByGroup.set(group.key, [...(wimsByGroup.get(group.key) || []), row]);
+    }
     const needle = clean(query);
-    return (snapshot?.rows || []).filter(row => row.status === "rejected" && (!needle || [row.productName, row.modelSku].map(clean).join(" ").includes(needle)));
-  }, [snapshot, query]);
+    const matchesQuery = (group: ModelGroup, rows: WimsRegistrationRow[]) => !needle
+      || group.items.some(item => [item.modelName, item.modelSku, item.skuId, item.barcode, item.productName, item.optionLabel].map(clean).join(" ").includes(needle))
+      || rows.some(row => [row.productName, row.modelSku].map(clean).join(" ").includes(needle));
+    const staged: StagedGroup[] = [];
+    const keys = new Set<string>();
+    for (const group of groups) {
+      if (excludedModelKeys.has(group.key)) continue;
+      const stage = stageOf(group, wimsByGroup.get(group.key) || []);
+      if (!stage) continue;
+      keys.add(group.key);
+      if (matchesQuery(group, stage.wimsRows)) staged.push(stage);
+    }
+    staged.sort((a, b) => a.step - b.step || b.group.topInbound - a.group.topInbound);
+    return {
+      stagedGroups: staged,
+      stagedKeys: keys,
+      unmatchedRejectedRows: unmatched.filter(row => !needle || [row.productName, row.modelSku].map(clean).join(" ").includes(needle)),
+    };
+  }, [allModelGroups, snapshot, query, excludedModelKeys]);
+  const rejectedGroups = useMemo(() => stagedGroups.filter(stage => stage.kind === "rejected"), [stagedGroups]);
+  const progressGroups = useMemo(() => stagedGroups.filter(stage => stage.kind === "progress"), [stagedGroups]);
 
   const summary = useMemo(() => ({
     total: items.length,
     issued: items.filter(item => item.skuId).length,
     pending: items.filter(item => !item.skuId).length,
     models: new Set(items.map(item => item.modelName).filter(Boolean)).size,
-    reregisterModels: [...reregisterModelKeys].filter(key => !excludedModelKeys.has(key)).length,
+    reregisterModels: [...reregisterModelKeys].filter(key => !excludedModelKeys.has(key) && !stagedKeys.has(key)).length,
     reregisterCandidates: items.filter(item => isReregistrationTarget(item)).length,
     rocketPending: items.filter(item => !isRocketRegistered(item)).length,
-  }), [items, isReregistrationTarget, reregisterModelKeys, excludedModelKeys]);
+  }), [items, isReregistrationTarget, reregisterModelKeys, excludedModelKeys, stagedKeys]);
 
   const reregistrationGroups = useMemo(() => {
     const matchedKeys = new Set<string>();
     for (const item of filteredItems) {
       const key = namedModelGroupKey(item);
-      if (key) matchedKeys.add(key);
+      if (key && !stagedKeys.has(key)) matchedKeys.add(key);
     }
-    return [...matchedKeys].map(key => {
-      const groupItems = items.filter(item => namedModelGroupKey(item) === key);
-      const representative = groupItems[0];
-      return {
-        key,
-        modelName: representative?.modelName || "모델명 없음",
-        productName: representative ? resolveDisplayNameAndOption(representative.productName || "", representative.optionLabel).name : "상품명 없음",
-        items: groupItems,
-        topInbound: Math.max(0, ...groupItems.map(item => Number(item.cumulativeInbound) || 0)),
-      };
-    }).sort((a, b) => b.topInbound - a.topInbound);
-  }, [filteredItems, items]);
+    return [...matchedKeys].map(key => allModelGroups.get(key)).filter((group): group is ModelGroup => Boolean(group))
+      .sort((a, b) => b.topInbound - a.topInbound);
+  }, [filteredItems, allModelGroups, stagedKeys]);
   const unnamedItems = useMemo(() => filteredItems.filter(item => !namedModelGroupKey(item)), [filteredItems]);
   const [groupLimit, setGroupLimit] = useState(100);
   useEffect(() => { setGroupLimit(100); }, [status, query]);
@@ -611,74 +712,8 @@ export default function ProductCatalogPage() {
   const neutralPillStyle: React.CSSProperties = { ...pillStyle, background: "#f4f1ec", borderColor: "#d8d3cc", color: "#4b4744" };
   const dangerPillStyle: React.CSSProperties = { ...pillStyle, background: "#f6e3de", borderColor: "#dfbdb2", color: "#7f4032" };
 
-  return (
-    <main style={{ maxWidth: 1180, margin: "0 auto", padding: "16px 16px 32px", fontFamily: "sans-serif" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 18 }}>
-        <div>
-          <h1 style={{ margin: 0, color: wmsColors.ink, fontSize: 26 }}>상품등록 사진선택</h1>
-        </div>
-        <Link href="/" style={{ display: "inline-flex", alignItems: "center", minHeight: 48, padding: "0 28px", borderRadius: 10, border: "1px solid #b9cbbc", background: "#e3ede6", color: "#3f574b", fontWeight: 800, fontSize: 20, textDecoration: "none", whiteSpace: "nowrap" }}>AI 상품등록</Link>
-      </div>
-
-      <div style={{ marginBottom: 14 }}>
-        <button type="button" onClick={() => void connectPhotoFolder().then(name => { setFolderName(name); setFolderMessage(""); }).catch(error => { if (error?.name !== "AbortError") setFolderMessage(error instanceof Error ? error.message : "사진 폴더 연결 실패"); })}>사진 원본 폴더 연결</button>
-        <span style={{ marginLeft: 8, fontSize: 12 }}>{folderName ? `연결: ${folderName}` : "PC에서 MYBOX 동기화 사진 폴더를 한 번 선택해주세요."}</span>
-        {folderMessage && <p role="status">{folderMessage}</p>}
-      </div>
-
-      <div style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: 16, marginBottom: 16 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
-          {[["전체 행", summary.total], ["재등록 모델", summary.reregisterModels], ["재등록 후보 행", summary.reregisterCandidates], ["로켓 등록 증빙 확인", summary.rocketPending]].map(([label, value]) => (
-            <div key={String(label)} style={{ background: wmsColors.surface, borderRadius: 10, padding: "10px 12px" }}><div style={{ color: wmsColors.muted, fontSize: 11 }}>{label}</div><strong style={{ color: wmsColors.ink, fontSize: 20 }}>{value}</strong></div>
-          ))}
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="모델명·모델SKU·SKU ID·바코드·상품명 검색" style={{ flex: "1 1 340px", minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px" }} />
-          {query && <button type="button" onClick={() => { setQuery(""); try { window.sessionStorage.setItem(VIEW_KEY, JSON.stringify({ status, query: "" })); } catch {} }} title="검색어를 지웁니다." style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>검색 초기화</button>}
-          <button type="button" onClick={() => void loadCatalog()} disabled={loading} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "새로 읽는 중…" : "제품DB 새로고침"}</button>
-          <select value={status} onChange={event => setStatus(event.target.value)} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 10px", background: "#fff" }}>
-            <option value="all">전체 상태</option><option value="reregister">재등록 필요(모델 전체)</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
-          </select>
-        </div>
-      </div>
-
-      {!configured && !loading && <div style={{ border: `1px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>Google Sheets 연결 설정이 없어 상품을 읽지 못했습니다.</div>}
-      {error && <div style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{error}</div>}
-      {exclusionError && <div role="alert" style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{exclusionError}</div>}
-
-      {rejectedRows.length > 0 && <section style={{ border: `2px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 16 }}>
-        <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 18 }}>반려 · 보완 후 재등록</div>
-        <p style={{ margin: "6px 0 12px", color: wmsColors.ink, fontSize: 12 }}>제품DB의 기존 SKU 유무와 관계없이 독립적인 WIMS 등록건입니다. DB 행이 있다고 신규승인으로 판단하지 마세요.</p>
-        <p style={{ margin: "0 0 12px", color: wmsColors.muted, fontSize: 12 }}>등록일은 반려일이 아닙니다. 상세 반려 사유와 반려일은 쿠팡 반려 안내에서 확인해 주세요.</p>
-        <div style={{ display: "grid", gap: 8 }}>
-          {rejectedRows.map((row, index) => <article key={`${row.modelSku}|${row.estimateId}|${index}`} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 10 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "start" }}>
-              <div style={{ color: wmsColors.ink, fontWeight: 800 }}>{row.productName || "상품명 미확인"}</div>
-              <span style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 13 }}>반려</span>
-            </div>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8, color: wmsColors.muted, fontSize: 12 }}>
-              <span>WIMS모델SKU: <b>{row.modelSku || "-"}</b></span>
-              <span>견적서ID: <b>{row.estimateId || "-"}</b></span>
-              <span>등록일: <b>{row.registeredAt || "미확인"}</b></span>
-              <span>반려일: <b>미확인</b></span>
-            </div>
-            <div style={{ marginTop: 7, color: wmsColors.ink, fontSize: 12 }}>상태: <b>{row.statusLabel || ""}</b></div>
-          </article>)}
-        </div>
-      </section>}
-
-      {/* 창을 다시 누를 때의 자동 새로고침은 목록을 그대로 둔 채 뒤에서 읽는다(처음 한 번만 로딩 화면). */}
-      {loading && !items.length ? <p style={{ color: wmsColors.muted }}>상품 연결 대장을 읽는 중입니다.</p> : (
-        <div style={{ display: "grid", gap: 10 }}>
-          {(status === "reregister" || reregistrationGroups.length > 0) && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 2 }}>
-            <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>{status === "reregister" ? "재등록 작업 묶음" : "모델별 목록"} · {reregistrationGroups.length}개 모델</div>
-            {!manualExclusions && <p style={{ fontSize: 12 }}>재등록 제외 목록을 확인하는 중입니다. 확인 전에는 등록 준비를 할 수 없습니다.</p>}
-            {manualExclusions && Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).length > 0 && <div style={{ margin: "8px 0 12px", padding: 12, border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff" }}>
-              <strong style={{ fontSize: 12 }}>재등록 제외 모델</strong>
-              {Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).map(entry => <div key={clean(entry.modelName)} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 7, fontSize: 12 }}><b>{entry.modelName}</b><span>사유: {entry.reason}</span><button type="button" onClick={() => void changeExclusion(entry.modelName, null)} disabled={Boolean(savingExclusion)} style={neutralPillStyle}>제외 해제</button></div>)}
-            </div>}
-            <div style={{ display: "grid", gap: 8 }}>
-              {reregistrationGroups.slice(0, groupLimit).map(group => {
+  /** 모델 카드(제목·등록 준비·사진검색·재등록 제외·사진 선택). 목록과 위쪽 반려·진행 섹션이 같은 카드를 쓴다. */
+  const renderGroupCard = (group: ModelGroup, extra?: React.ReactNode, borderColor?: string) => {
                 const first = group.items[0];
                 const photos = photoStates[group.modelName];
                 const detailHits = photos?.hits.filter(hit => hit.identity.kind === "detail" && !photos.hiddenIds?.includes(hit.id)) || [];
@@ -720,7 +755,7 @@ export default function ProductCatalogPage() {
                        {photos.hiddenIds?.includes(hit.id) && <button type="button" onClick={() => hidePhoto(group.modelName, hit.id, false)} style={{ border: 0, background: "none", color: wmsColors.warnText, padding: 0, cursor: "pointer", textAlign: "left" }}>다시 사용</button>}
                     </div>;
                 };
-                return <article key={group.key} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 12 }}>
+                return <article key={group.key} style={{ border: `1px solid ${borderColor || wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 12 }}>
                   <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", gap: 10 }}>
                     <div>
                       <div style={{ color: wmsColors.ink, fontSize: 14, fontWeight: 800 }}>{resolveDisplayNameAndOption(group.productName || "", first.optionLabel).name || group.productName || group.modelName}</div>
@@ -734,6 +769,7 @@ export default function ProductCatalogPage() {
                       </div>
                     </div>
                   </div>
+                  {extra}
                   <div style={{ display: "grid", gap: 4, marginTop: 6, fontSize: 12 }}>{group.items.map((item, itemIndex) => {
                     const itemLink = externalUrl(item.productLink);
                     const field = (label: string, value: string) => <span style={{ whiteSpace: "nowrap" }}>{label} <b>{value}</b></span>;
@@ -763,7 +799,79 @@ export default function ProductCatalogPage() {
                   {photos && !photos.error && nextPhotoLevel(photos) > 0 && <div style={{ marginTop: 8 }}><button type="button" onClick={() => void expandPhotos(first, group.items)} disabled={photos.loading} style={{ border: `1px solid ${wmsColors.slate}`, borderRadius: 8, background: "#fff", padding: "8px 12px", cursor: photos.loading ? "wait" : "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.slate }}>{photos.loading ? "사진 찾는 중…" : `${LEVEL_BUTTON_LABELS[nextPhotoLevel(photos)]} →`}</button></div>}
                   {photos && !photos.loading && <div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 7 }}>사진 후보 {photos.hits.length}개{photos.source ? ` · ${photos.source}` : ""} · 선택 {photos.hits.filter(hit => hit.selected).length}/{MAX_SELECTED_PHOTOS}장</div>}
                 </article>;
-              })}
+  };
+
+  return (
+    <main style={{ maxWidth: 1180, margin: "0 auto", padding: "16px 16px 32px", fontFamily: "sans-serif" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 18 }}>
+        <div>
+          <h1 style={{ margin: 0, color: wmsColors.ink, fontSize: 26 }}>상품등록 사진선택</h1>
+        </div>
+        <Link href="/" style={{ display: "inline-flex", alignItems: "center", minHeight: 48, padding: "0 28px", borderRadius: 10, border: "1px solid #b9cbbc", background: "#e3ede6", color: "#3f574b", fontWeight: 800, fontSize: 20, textDecoration: "none", whiteSpace: "nowrap" }}>AI 상품등록</Link>
+      </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <button type="button" onClick={() => void connectPhotoFolder().then(name => { setFolderName(name); setFolderMessage(""); }).catch(error => { if (error?.name !== "AbortError") setFolderMessage(error instanceof Error ? error.message : "사진 폴더 연결 실패"); })}>사진 원본 폴더 연결</button>
+        <span style={{ marginLeft: 8, fontSize: 12 }}>{folderName ? `연결: ${folderName}` : "PC에서 MYBOX 동기화 사진 폴더를 한 번 선택해주세요."}</span>
+        {folderMessage && <p role="status">{folderMessage}</p>}
+      </div>
+
+      <div style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: 16, marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
+          {[["전체 행", summary.total], ["재등록 모델", summary.reregisterModels], ["재등록 후보 행", summary.reregisterCandidates], ["로켓 등록 증빙 확인", summary.rocketPending]].map(([label, value]) => (
+            <div key={String(label)} style={{ background: wmsColors.surface, borderRadius: 10, padding: "10px 12px" }}><div style={{ color: wmsColors.muted, fontSize: 11 }}>{label}</div><strong style={{ color: wmsColors.ink, fontSize: 20 }}>{value}</strong></div>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="모델명·모델SKU·SKU ID·바코드·상품명 검색" style={{ flex: "1 1 340px", minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px" }} />
+          {query && <button type="button" onClick={() => { setQuery(""); try { window.sessionStorage.setItem(VIEW_KEY, JSON.stringify({ status, query: "" })); } catch {} }} title="검색어를 지웁니다." style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>검색 초기화</button>}
+          <button type="button" onClick={() => void loadCatalog()} disabled={loading} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "새로 읽는 중…" : "제품DB 새로고침"}</button>
+          <select value={status} onChange={event => setStatus(event.target.value)} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 10px", background: "#fff" }}>
+            <option value="all">전체 상태</option><option value="reregister">재등록 필요(모델 전체)</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
+          </select>
+        </div>
+      </div>
+
+      {!configured && !loading && <div style={{ border: `1px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>Google Sheets 연결 설정이 없어 상품을 읽지 못했습니다.</div>}
+      {error && <div style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{error}</div>}
+      {exclusionError && <div role="alert" style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{exclusionError}</div>}
+
+      {(rejectedGroups.length > 0 || unmatchedRejectedRows.length > 0) && <section style={{ border: `2px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 16 }}>
+        <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 18 }}>반려 · 보완 후 재등록 · {rejectedGroups.length + unmatchedRejectedRows.length}건</div>
+        <p style={{ margin: "6px 0 4px", color: wmsColors.ink, fontSize: 12 }}>여기 있는 모델은 아래 재등록 목록에서 빠집니다. 이 카드에서 바로 등록 준비·사진검색·재등록 제외를 하세요.</p>
+        <p style={{ margin: "0 0 12px", color: wmsColors.muted, fontSize: 12 }}>등록일은 반려일이 아닙니다. 상세 반려 사유와 반려일은 쿠팡 반려 안내에서 확인해 주세요.</p>
+        <div style={{ display: "grid", gap: 8 }}>
+          {rejectedGroups.map(stage => renderGroupCard(stage.group, <StageInfo stage={stage} />, wmsColors.warn))}
+          {unmatchedRejectedRows.map((row, index) => <article key={`${row.modelSku}|${row.estimateId}|${index}`} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "start" }}>
+              <div style={{ color: wmsColors.ink, fontWeight: 800 }}>{row.productName || "상품명 미확인"}</div>
+              <span style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 13 }}>반려 · 제품DB 모델 미연결</span>
+            </div>
+            <WimsRowLine row={row} />
+          </article>)}
+        </div>
+      </section>}
+
+      {progressGroups.length > 0 && <section style={{ border: `2px solid ${wmsColors.slate}`, background: wmsColors.surface, borderRadius: 14, padding: 16, marginBottom: 16 }}>
+        <div style={{ color: wmsColors.ink, fontWeight: 900, fontSize: 18 }}>등록 진행 중 · {progressGroups.length}개 모델</div>
+        <p style={{ margin: "6px 0 12px", color: wmsColors.muted, fontSize: 12 }}>이미 등록파일을 만들었거나 WIMS 승인을 기다리는 모델입니다. 아래 재등록 목록에는 나오지 않습니다. 진행 상태는 제품DB 현재상태와 마지막으로 가져온 WIMS 등록 결과 기준입니다.</p>
+        <div style={{ display: "grid", gap: 8 }}>
+          {progressGroups.map(stage => renderGroupCard(stage.group, <StageInfo stage={stage} />, wmsColors.slate))}
+        </div>
+      </section>}
+
+      {/* 창을 다시 누를 때의 자동 새로고침은 목록을 그대로 둔 채 뒤에서 읽는다(처음 한 번만 로딩 화면). */}
+      {loading && !items.length ? <p style={{ color: wmsColors.muted }}>상품 연결 대장을 읽는 중입니다.</p> : (
+        <div style={{ display: "grid", gap: 10 }}>
+          {(status === "reregister" || reregistrationGroups.length > 0) && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 2 }}>
+            <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>{status === "reregister" ? "재등록 작업 묶음" : "모델별 목록"} · {reregistrationGroups.length}개 모델</div>
+            {!manualExclusions && <p style={{ fontSize: 12 }}>재등록 제외 목록을 확인하는 중입니다. 확인 전에는 등록 준비를 할 수 없습니다.</p>}
+            {manualExclusions && Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).length > 0 && <div style={{ margin: "8px 0 12px", padding: 12, border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff" }}>
+              <strong style={{ fontSize: 12 }}>재등록 제외 모델</strong>
+              {Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).map(entry => <div key={clean(entry.modelName)} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 7, fontSize: 12 }}><b>{entry.modelName}</b><span>사유: {entry.reason}</span><button type="button" onClick={() => void changeExclusion(entry.modelName, null)} disabled={Boolean(savingExclusion)} style={neutralPillStyle}>제외 해제</button></div>)}
+            </div>}
+            <div style={{ display: "grid", gap: 8 }}>
+              {reregistrationGroups.slice(0, groupLimit).map(group => renderGroupCard(group))}
             </div>
             {reregistrationGroups.length > groupLimit && <button type="button" onClick={() => setGroupLimit(current => current + 100)} style={{ ...neutralPillStyle, marginTop: 10 }}>모델 100개 더 보기 ({reregistrationGroups.length - groupLimit}개 남음)</button>}
           </section>}
@@ -820,6 +928,36 @@ export default function ProductCatalogPage() {
       </div>}
     </main>
   );
+}
+
+function WimsRowLine({ row }: { row: WimsRegistrationRow }) {
+  const tone = row.status === "rejected" ? wmsColors.warnText : row.status === "approved" ? wmsColors.greenDark : wmsColors.ink;
+  return <div style={{ display: "flex", gap: "2px 12px", flexWrap: "wrap", marginTop: 4, color: wmsColors.muted, fontSize: 12 }}>
+    <span style={{ whiteSpace: "nowrap" }}>WIMS <b style={{ color: tone }}>{row.statusLabel || "상태 미확인"}</b></span>
+    <span style={{ whiteSpace: "nowrap" }}>모델SKU <b>{row.modelSku || "-"}</b></span>
+    <span style={{ whiteSpace: "nowrap" }}>견적서ID <b>{row.estimateId || "-"}</b></span>
+    {row.skuId && <span style={{ whiteSpace: "nowrap" }}>SKU ID <b>{row.skuId}</b></span>}
+    <span style={{ whiteSpace: "nowrap" }}>등록일 <b>{row.registeredAt || "미확인"}</b></span>
+  </div>;
+}
+
+/** 위쪽 반려·진행 카드에 붙는 진행 단계와 WIMS 등록 건. */
+function StageInfo({ stage }: { stage: StagedGroup }) {
+  const rows = [...stage.wimsRows].sort((a, b) => registeredStamp(b) - registeredStamp(a));
+  return <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 8, background: stage.kind === "rejected" ? wmsColors.warnSoft : wmsColors.surface }}>
+    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
+      {stage.kind === "rejected"
+        ? <b style={{ color: wmsColors.warnText }}>반려 · {stage.label}</b>
+        : PROGRESS_STEPS.map((name, index) => <span key={name} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          {index > 0 && <span style={{ color: wmsColors.muted }}>→</span>}
+          <span style={{ padding: "3px 8px", borderRadius: 999, fontWeight: 800, background: index === stage.step ? wmsColors.slate : index < stage.step ? "#e3ede6" : "#fff", color: index === stage.step ? "#fff" : index < stage.step ? "#3f574b" : wmsColors.muted, border: `1px solid ${index === stage.step ? wmsColors.slate : wmsColors.border}` }}>{index + 1}. {name}</span>
+        </span>)}
+      {stage.kind === "progress" && <span style={{ color: wmsColors.ink, fontWeight: 700 }}>· {stage.label}</span>}
+      <span style={{ color: wmsColors.muted }}>· 제품DB 상태 {stage.dbStatuses.join(", ") || "미입력"}</span>
+    </div>
+    {rows.slice(0, 6).map((row, index) => <WimsRowLine key={`${row.modelSku}|${row.estimateId}|${index}`} row={row} />)}
+    {rows.length > 6 && <div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 4 }}>이전 WIMS 등록 {rows.length - 6}건 더 있음</div>}
+  </div>;
 }
 
 /**

@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import { backupSheetWithinSpreadsheet, fetchSheetRows, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
 import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
+import { buildReregistrationDoneUpdates } from "./reregistration-tier";
 import { collectRetiredSkuIds, fetchSkuReplacementHistory, skuRetirementKey } from "./sku-retirement";
 import { coupangSupplyMatchPriority } from "../coupang-option-name";
 import {
@@ -925,6 +926,9 @@ export async function applySupplyStatusAudit(expectedDryRunToken: string, captur
   if (!rechecked || rechecked.audit.dryRunToken !== result.audit.dryRunToken) throw new SupplyStatusPreviewChangedError();
 
   const cellUpdates = buildSafeSupplyStatusCellUpdates(rechecked.headerIndex, rechecked.updates);
+  // 신규 승인(완료)된 재등록 건은 재등록구분(1차·2차)을 재등록완료로 바꿔 재등록 필요 목록에서 뺀다.
+  const approvedRows = rechecked.updates.filter(update => update.kind === "new_approval").map(update => update.sheetRowNumber);
+  if (approvedRows.length) cellUpdates.push(...buildReregistrationDoneUpdates(await fetchSheetRows(PRODUCT_DB_SHEET_NAME), approvedRows));
 
   await updateSheetCells(PRODUCT_DB_SHEET_NAME, cellUpdates);
   const newApprovalCount = rechecked.updates.filter(update => update.kind === "new_approval").length;
@@ -999,6 +1003,8 @@ export async function applySupplyStatusUpdate(expectedDryRunToken: string): Prom
       cellUpdates.push({ row: r.sheetRowNumber, col: headerIndex.orderAvailability + 1, value: r.downloadOrderAvailability });
     }
   }
+  // 완료로 바뀌는 재등록 건은 재등록구분(1차·2차)을 재등록완료로 바꿔 재등록 필요 목록에서 뺀다.
+  cellUpdates.push(...buildReregistrationDoneUpdates(await fetchSheetRows(PRODUCT_DB_SHEET_NAME), toWrite.map(r => r.sheetRowNumber)));
 
   await updateSheetCells(PRODUCT_DB_SHEET_NAME, cellUpdates);
 

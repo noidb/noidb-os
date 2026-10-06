@@ -4,6 +4,7 @@ import { backupSheetWithinSpreadsheet, updateSheetCells, type SheetCellUpdate } 
 import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
 import { collectRetiredSkuIds, fetchSkuReplacementHistory as readReregistrationHistory } from "./sku-retirement";
 import type { WimsRegistrationRow } from "./wims-registration";
+import { buildReregistrationDoneUpdates } from "./reregistration-tier";
 
 export type WimsAuditResultType = "approved_candidate" | "reviewing" | "rejected" | "already_linked" | "conflict" | "unmatched";
 
@@ -382,6 +383,7 @@ export function buildWimsRegistrationCellUpdates(
   };
   if (Object.values(idx).some(index => index < 0)) throw new Error("최종 확인에서 제품DB 필수 열을 찾지 못했습니다.");
   const cellUpdates: SheetCellUpdate[] = [];
+  const approvedRows: number[] = [];
   const seen = new Set<number>();
   for (const candidate of audit.rows) {
     const approved = candidate.type === "approved_candidate";
@@ -408,7 +410,10 @@ export function buildWimsRegistrationCellUpdates(
       { row, col: idx.barcode + 1, value: candidate.wims.barcode },
       { row, col: idx.productName + 1, value: candidate.wims.productName }
     );
+    approvedRows.push(row);
   }
+  // 승인된 재등록 건은 재등록구분(1차·2차)을 재등록완료로 바꿔 재등록 필요 목록에서 뺀다.
+  cellUpdates.push(...buildReregistrationDoneUpdates(sheetRows, approvedRows));
   return cellUpdates.filter(update => String(sheetRows[update.row - 1]?.[update.col - 1] ?? "") !== update.value);
 }
 
