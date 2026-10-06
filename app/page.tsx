@@ -1259,11 +1259,24 @@ export default function Home() {
     }
   };
 
-  const assignPoolItem = (index: number, setter: (slot: SlotImage | null) => void) => {
+  /** 칸에서 빠진 사진(삭제·덮어쓰기·칸 삭제)은 지우지 않고 위쪽 이미지 목록으로 되돌린다. */
+  const returnToPool = (slot: SlotImage | null | undefined) => {
+    if (!slot?.dataUrl) return;
+    const { locked: _locked, ...rest } = slot;
+    setUploadPool(prev => prev.some(item => item.dataUrl === rest.dataUrl) ? prev : [...prev, rest]);
+  };
+
+  const assignPoolItem = (index: number, key: string) => {
     const slot = uploadPool[index];
     if (!slot) return;
-    setter(slot);
-    setUploadPool(prev => prev.filter((_, i) => i !== index));
+    const previous = getSlotValue(key);
+    setSlotValue(key, slot);
+    setUploadPool(prev => {
+      const next = prev.filter((_, i) => i !== index);
+      if (!previous?.dataUrl || next.some(item => item.dataUrl === previous.dataUrl)) return next;
+      const { locked: _locked, ...rest } = previous;
+      return [...next, rest];
+    });
   };
 
   const getSlotValue = (key: string): SlotImage | null => {
@@ -2450,7 +2463,8 @@ export default function Home() {
             filename=""
             value={mainWear}
             onChange={setMainWear}
-            onPoolDrop={index => assignPoolItem(index, setMainWear)}
+            onPoolDrop={index => assignPoolItem(index, "mainWear")}
+            onReturnToPool={returnToPool}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
           />
@@ -2461,7 +2475,8 @@ export default function Home() {
             filename={model ? `${model}-01.jpg` : "모델명-01.jpg"}
             value={allOptions}
             onChange={setAllOptions}
-            onPoolDrop={index => assignPoolItem(index, setAllOptions)}
+            onPoolDrop={index => assignPoolItem(index, "all")}
+            onReturnToPool={returnToPool}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
             onAddDetail={
@@ -2479,7 +2494,8 @@ export default function Home() {
               filename={`${model || "모델명"}${variant.thumbFile}`}
               value={activeVariantThumbs[variant.key] || null}
               onChange={slot => void setOptionThumbCovered(variant.key, slot)}
-              onPoolDrop={index => assignPoolItem(index, slot => void setOptionThumbCovered(variant.key, slot))}
+              onPoolDrop={index => assignPoolItem(index, `opt:${variant.key}`)}
+              onReturnToPool={returnToPool}
               coverSquare
               onSlotSwap={swapSlots}
               onExpand={setLightbox}
@@ -2498,7 +2514,8 @@ export default function Home() {
             filename={model ? `${model}-02.jpg` : "모델명-02.jpg"}
             value={detailCut}
             onChange={setDetailCut}
-            onPoolDrop={index => assignPoolItem(index, setDetailCut)}
+            onPoolDrop={index => assignPoolItem(index, "detail")}
+            onReturnToPool={returnToPool}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
             onAddDetail={detailCut ? () => pushDetail("디테일컷", detailCut.dataUrl) : undefined}
@@ -2510,7 +2527,8 @@ export default function Home() {
             filename={model ? `${model}-03.jpg` : "모델명-03.jpg"}
             value={wear01}
             onChange={setWear01}
-            onPoolDrop={index => assignPoolItem(index, setWear01)}
+            onPoolDrop={index => assignPoolItem(index, "wear01")}
+            onReturnToPool={returnToPool}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
             onAddDetail={wear01 ? () => pushDetail("착용컷 01", wear01.dataUrl) : undefined}
@@ -2522,7 +2540,8 @@ export default function Home() {
             filename={model ? `${model}-04.jpg` : "모델명-04.jpg"}
             value={wear02}
             onChange={setWear02}
-            onPoolDrop={index => assignPoolItem(index, setWear02)}
+            onPoolDrop={index => assignPoolItem(index, "wear02")}
+            onReturnToPool={returnToPool}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
             onAddDetail={wear02 ? () => pushDetail("착용컷 02", wear02.dataUrl) : undefined}
@@ -2536,10 +2555,11 @@ export default function Home() {
               filename={model ? `${model}-${String(index + 5).padStart(2, "0")}.jpg` : `모델명-${String(index + 5).padStart(2, "0")}.jpg`}
               value={item.slot}
               onChange={slot => setSlotValue(`custom:${item.id}`, slot)}
-              onPoolDrop={poolIndex => assignPoolItem(poolIndex, slot => setSlotValue(`custom:${item.id}`, slot))}
+              onPoolDrop={poolIndex => assignPoolItem(poolIndex, `custom:${item.id}`)}
+              onReturnToPool={returnToPool}
               onSlotSwap={swapSlots}
               onExpand={setLightbox}
-              onRemoveSlot={() => setCustomSlots(prev => prev.filter(slot => slot.id !== item.id))}
+              onRemoveSlot={() => { returnToPool(item.slot); setCustomSlots(prev => prev.filter(slot => slot.id !== item.id)); }}
             />
           ))}
         </div>
@@ -2975,6 +2995,7 @@ function ImageSlot({
   onExpand,
   onAddDetail,
   onPoolDrop,
+  onReturnToPool,
   onSlotSwap,
   onRemoveSlot,
   coverSquare = false,
@@ -2988,6 +3009,8 @@ function ImageSlot({
   onExpand: (url: string) => void;
   onAddDetail?: () => void;
   onPoolDrop?: (index: number) => void;
+  /** 칸에서 빠지는 사진을 이미지 목록으로 되돌린다. */
+  onReturnToPool?: (slot: SlotImage) => void;
   onSlotSwap?: (sourceKey: string, targetKey: string) => void;
   onRemoveSlot?: () => void;
   coverSquare?: boolean;
@@ -3005,7 +3028,9 @@ function ImageSlot({
     const revision = ++pendingFileRevision.current;
     const sourceDataUrl = await readFile(file);
     const dataUrl = coverSquare ? await coverSquareCanvas(sourceDataUrl) : sourceDataUrl;
-    if (pendingFileRevision.current === revision) onChange({ dataUrl, fileName: file.name });
+    if (pendingFileRevision.current !== revision) return;
+    if (value) onReturnToPool?.(value);
+    onChange({ dataUrl, fileName: file.name });
   };
 
   return (
@@ -3071,7 +3096,7 @@ function ImageSlot({
       />
       <div className="slotActions">
         {value && <button type="button" className={value.locked ? "secondaryButton" : "green"} onClick={() => onChange({ ...value, locked: !value.locked })}>{value.locked ? "수정" : "저장"}</button>}
-        {value && <button type="button" className="removeButton" onClick={() => { pendingFileRevision.current += 1; onChange(null); }}>삭제</button>}
+        {value && <button type="button" className="removeButton" onClick={() => { pendingFileRevision.current += 1; onReturnToPool?.(value); onChange(null); }} title="칸에서 빼서 위쪽 이미지 목록으로 되돌립니다.">삭제</button>}
         {onRemoveSlot && <button type="button" className="removeButton" onClick={onRemoveSlot}>칸 삭제</button>}
       </div>
     </div>
