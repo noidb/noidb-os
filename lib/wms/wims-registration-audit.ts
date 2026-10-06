@@ -93,6 +93,8 @@ function parseReregistrationHistory(rows: string[][]): ParsedReregistrationHisto
   const oldSkuIndex = headerIndex(headers, ["이전 SKU ID"]);
   const originalIndex = headerIndex(headers, ["기존행전체정보"]);
   const targetIndex = headerIndex(headers, ["새행연결전정보"]);
+  const newModelIndex = headerIndex(headers, ["새모델명"]);
+  const oldModelIndex = headerIndex(headers, ["이전모델명"]);
   const retiredSkuIds = collectRetiredSkuIds(rows);
   const histories = new Map<string, ReregistrationHistory>();
   for (const row of rows.slice(1)) {
@@ -108,7 +110,10 @@ function parseReregistrationHistory(rows: string[][]): ParsedReregistrationHisto
       // 중복정리 시각은 실제 업로드보다 늦을 수 있으므로 등록일 하한으로 쓰지 않는다.
       const registeredAt = isDuplicateCleanup ? 0 : Date.parse(String(row[dateIndex] || ""));
       if (!modelSku || !Number.isFinite(registeredAt)) continue;
-      const history = histories.get(modelSku) || { latestAt: registeredAt, previousSkuIds: new Set<string>(), modelSku, baseModelKey: baseModelKey(modelSku) };
+      // 옛 모델SKU는 하이픈 없이 색상코드가 붙어 있어(mn011589S) SKU를 잘라서는 모델명을 알 수 없다.
+      // 이력 행에 기록된 모델명(mn011589)을 우선 기준으로 삼는다.
+      const historyModel = identityKey((newModelIndex >= 0 ? row[newModelIndex] : "") || (oldModelIndex >= 0 ? row[oldModelIndex] : ""));
+      const history = histories.get(modelSku) || { latestAt: registeredAt, previousSkuIds: new Set<string>(), modelSku, baseModelKey: historyModel || baseModelKey(modelSku) };
       history.latestAt = Math.max(history.latestAt, registeredAt);
       if (previousSkuId) history.previousSkuIds.add(previousSkuId);
       histories.set(modelSku, history);
