@@ -291,6 +291,30 @@ function isPackageProductDbRow_(row) {
   return Boolean(packageValue) || /패키지|랜덤발송|세트/.test(name);
 }
 
+/**
+ * 옛 모델SKU 표기(mn011589S, mn011589SS, mn011236SG)와 새 표기(mn011589-SI, mn011236-GO)를
+ * 같은 옵션으로 비교하기 위한 키. 색상만 붙은 꼬리만 바꿔 읽고 나머지는 그대로 둔다.
+ * 정확 일치가 없을 때, 후보가 정확히 1건일 때만 사용한다. (lib/wms/sku-normalize.ts와 같은 규칙)
+ */
+function legacySkuKey_(sku, model) {
+  const text = String(sku == null ? '' : sku).trim().toUpperCase().replace(/\s+/g, '');
+  if (!text) return '';
+  const modelKey = String(model == null ? '' : model).trim().toUpperCase().replace(/\s+/g, '');
+  let base = '';
+  let tail = '';
+  if (modelKey && text.indexOf(modelKey) === 0) { base = modelKey; tail = text.slice(modelKey.length); }
+  else if (text.indexOf('-') >= 0) { base = text.slice(0, text.indexOf('-')); tail = text.slice(text.indexOf('-') + 1); }
+  else {
+    const match = text.match(/^([A-Z]+\d+)(.*)$/);
+    if (!match) return text;
+    base = match[1]; tail = match[2];
+  }
+  tail = tail.replace(/^[-_]/, '');
+  const legacy = { S: 'SI', SS: 'SI', SI: 'SI', SG: 'GO', GO: 'GO' };
+  tail = legacy[tail] || tail;
+  return tail ? base + '-' + tail : base;
+}
+
 function updateExistingModelRowsAtomic_(db, model, newRows, existingItems) {
   assertUniqueProductKeys_(newRows, '기존상품 갱신 옵션');
   if (!Array.isArray(newRows) || !newRows.length) throw new Error(model + ': 저장할 옵션이 없습니다. 기존 행은 변경하지 않았습니다.');
@@ -310,9 +334,18 @@ function updateExistingModelRowsAtomic_(db, model, newRows, existingItems) {
     while (next.length < PRODUCT_DB_HEADERS.length) next.push('');
     if (isPackageProductDbRow_(next)) throw new Error(model + ': 패키지/랜덤발송/세트 행은 기본 옵션 갱신에 포함할 수 없습니다.');
     const key = String(next[modelSkuColumn] || '').trim().toUpperCase();
-    const matches = key ? (byModelSku[key] || []) : [];
+    let matches = key ? (byModelSku[key] || []) : [];
+    let legacyMatched = false;
+    if (key && !matches.length) {
+      // 기존 행이 옛 표기(mn011236SG)로 남아 있으면 같은 옵션 1행만 연결한다.
+      const legacyKey = legacySkuKey_(key, model);
+      const legacy = existingBasic.filter(item => legacySkuKey_(item.values[modelSkuColumn], model) === legacyKey);
+      if (legacy.length === 1) { matches = legacy; legacyMatched = true; }
+    }
     if (matches.length !== 1) throw new Error(model + ' / ' + (key || '(빈 모델SKU)') + ': 대상 행이 ' + matches.length + '건입니다. 기존 행은 변경하지 않았습니다.');
     const old = matches[0];
+    // 쿠팡에 이미 옛 표기로 등록된 상품이므로 기존 모델SKU는 바꾸지 않는다.
+    if (legacyMatched) next[modelSkuColumn] = old.formulas[modelSkuColumn] || old.values[modelSkuColumn];
     protectedNames.forEach(name => {
       const column = dbColumn_(name);
       next[column] = old.formulas[column] || old.values[column];
@@ -2774,6 +2807,20 @@ function reregistrationOptionMatches_(model, existing, columns, newRows, sourceC
     const separated = item.key.slice(modelKey.length).charAt(0) === '-';
     const alternate = byKey[modelKey + (separated ? '' : '-') + item.tail] || [];
     if (alternate.length === 1) reserve(index, alternate[0], 'separator');
+  });
+  // Pass 3: 옛 색상코드 표기(S/SS→SI, SG→GO). 같은 옵션 후보가 정확히 1행이고 색상·사이즈 근거가 어긋나지 않을 때만.
+  sourceEvidence.forEach((item, index) => {
+    if (matches[index] || item.conflict) return;
+    const key = legacySkuKey_(item.key, model);
+    const candidates = oldEvidence.map((old, i) => legacySkuKey_(old.key, model) === key ? i : -1).filter(i => i >= 0);
+    if (candidates.length !== 1 || reserved[candidates[0]] !== undefined) return;
+    const old = oldEvidence[candidates[0]];
+    if (old.conflict) return;
+    if (item.color && old.color && item.color !== old.color) return;
+    if (item.color && old.titleColor && item.color !== old.titleColor) return;
+    const sizeOf = value => value && value !== 'FREE' ? value : '';
+    if (sizeOf(item.size) || sizeOf(old.size) || sizeOf(old.titleSize)) return;
+    reserve(index, candidates[0], 'legacy-code');
   });
   const hasOtherSizes = sourceEvidence.concat(oldEvidence).some(item => (item.size && item.size !== 'FREE') || (item.titleSize && item.titleSize !== 'FREE'));
   sourceEvidence.forEach((item, index) => {

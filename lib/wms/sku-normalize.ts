@@ -19,3 +19,35 @@ export function normalizeSkuId(value: string | undefined): string {
 export function normalizeModelSkuKey(value: string | undefined): string {
   return String(value ?? "").trim().toLowerCase();
 }
+
+/**
+ * 옛 모델SKU 표기와 새 표기를 같은 옵션으로 비교하기 위한 키 (2026-10-06).
+ * 예전 SKU는 하이픈 없이 색상을 옛 코드로 붙였다: mn011589S, mn011589SS(실버), mn011236SG(골드).
+ * 지금은 mn011589-SI, mn011236-GO 형식이다. 색상만 붙은 꼬리(사이즈 없음)만 바꿔 읽고,
+ * 그 밖의 꼬리는 그대로 둔다. 비교는 반드시 "정확 일치 실패 후, 후보가 정확히 1건일 때만" 쓴다.
+ */
+const LEGACY_COLOR_TAILS: Record<string, string> = { S: "SI", SS: "SI", SI: "SI", SG: "GO", GO: "GO" };
+
+export function legacyModelSkuKey(modelSku: string | undefined, modelName?: string | undefined): string {
+  const sku = String(modelSku ?? "").trim().toUpperCase().replace(/\s+/g, "");
+  if (!sku) return "";
+  const model = String(modelName ?? "").trim().toUpperCase().replace(/\s+/g, "");
+  let base = "";
+  let tail = "";
+  if (model && sku.startsWith(model)) {
+    base = model;
+    tail = sku.slice(model.length);
+  } else if (sku.includes("-")) {
+    const at = sku.indexOf("-");
+    base = sku.slice(0, at);
+    tail = sku.slice(at + 1);
+  } else {
+    const match = sku.match(/^([A-Z]+\d+)(.*)$/);
+    if (!match) return sku;
+    base = match[1];
+    tail = match[2];
+  }
+  tail = tail.replace(/^[-_]/, "");
+  tail = LEGACY_COLOR_TAILS[tail] || tail;
+  return tail ? `${base}-${tail}` : base;
+}

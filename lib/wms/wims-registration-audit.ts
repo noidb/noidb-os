@@ -5,6 +5,7 @@ import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
 import { collectRetiredSkuIds, fetchSkuReplacementHistory as readReregistrationHistory } from "./sku-retirement";
 import type { WimsRegistrationRow } from "./wims-registration";
 import { buildReregistrationDoneUpdates } from "./reregistration-tier";
+import { legacyModelSkuKey } from "./sku-normalize";
 
 export type WimsAuditResultType = "approved_candidate" | "reviewing" | "rejected" | "already_linked" | "conflict" | "unmatched";
 
@@ -134,6 +135,8 @@ function findReregistrationHistory(modelSku: string, history: ParsedReregistrati
   if (exact) return exact;
   const normalized = history.byNormalizedModelSku.get(normalize(modelSku)) || [];
   if (normalized.length === 1) return normalized[0];
+  const legacy = [...history.byModelSku.values()].filter(item => legacyModelSkuKey(item.modelSku, item.baseModelKey) === legacyModelSkuKey(modelSku, item.baseModelKey));
+  if (legacy.length === 1) return legacy[0];
   // 구형 단일옵션 코드는 현재 옵션 접미사가 달라질 수 있다(예: S → SI).
   // 같은 기본 모델에 이력이 하나일 때만 fallback으로 인정해 다옵션 오연결을 막는다.
   const baseMatches = history.byBaseModel.get(baseModelKey(modelSku)) || [];
@@ -167,9 +170,11 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
   const missing = Object.entries(idx).filter(([, value]) => value < 0).map(([key]) => key);
   if (missing.length > 0) throw new Error(`제품DB 필수 열을 찾지 못했습니다: ${missing.join(", ")}`);
 
+  const modelNameIdx = headerIndex(headers, ["모델명/품번", "모델명"]);
   const products = sheetRows.slice(1).map((row, index) => ({
     row,
     sheetRowNumber: index + 2,
+    legacyKey: legacyModelSkuKey(String(row[idx.modelSku] ?? ""), modelNameIdx >= 0 ? String(row[modelNameIdx] ?? "") : ""),
     status: String(row[idx.status] ?? "").trim(),
     modelSku: String(row[idx.modelSku] ?? "").trim(),
     skuId: String(row[idx.skuId] ?? "").trim(),
@@ -179,7 +184,9 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
   const byModelSku = new Map<string, typeof products>();
   const bySkuId = new Map<string, typeof products>();
   const byProductName = new Map<string, typeof products>();
+  const byLegacyKey = new Map<string, typeof products>();
   for (const product of products) {
+    if (product.legacyKey) byLegacyKey.set(product.legacyKey, [...(byLegacyKey.get(product.legacyKey) || []), product]);
     if (identityKey(product.modelSku)) byModelSku.set(identityKey(product.modelSku), [...(byModelSku.get(identityKey(product.modelSku)) || []), product]);
     if (identityKey(product.skuId)) bySkuId.set(identityKey(product.skuId), [...(bySkuId.get(identityKey(product.skuId)) || []), product]);
     if (normalizeProductName(product.productName)) byProductName.set(normalizeProductName(product.productName), [...(byProductName.get(normalizeProductName(product.productName)) || []), product]);
@@ -193,7 +200,11 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
     const skuMatches = wims.skuId ? bySkuId.get(identityKey(wims.skuId)) || [] : [];
     const modelMatches = wims.modelSku ? byModelSku.get(identityKey(wims.modelSku)) || [] : [];
     const rejectedNameMatches = wims.status === "rejected" ? byProductName.get(normalizeProductName(wims.productName, wims.modelSku)) || [] : [];
-    return { modelMatches, matches: skuMatches.length > 0 ? skuMatches : modelMatches.length > 0 ? modelMatches : rejectedNameMatches };
+    // 제품DB에 옛 표기(mn011236SG)로 남은 행: 정확 일치가 없을 때만, 같은 옵션 후보가 정확히 1행이면 연결한다.
+    const legacyMatches = !skuMatches.length && !modelMatches.length && wims.modelSku
+      ? (byLegacyKey.get(legacyModelSkuKey(wims.modelSku)) || []) : [];
+    const legacyMatch = legacyMatches.length === 1 ? legacyMatches : [];
+    return { modelMatches, matches: skuMatches.length > 0 ? skuMatches : modelMatches.length > 0 ? modelMatches : legacyMatch.length > 0 ? legacyMatch : rejectedNameMatches };
   };
   const modelFallback = rejectedModelFallback(
     wimsRows.filter(wims => wims.status === "rejected" && !retired(wims) && directMatches(wims).matches.length === 0),
@@ -226,7 +237,8 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
       rows.push({ ...base, type: "rejected", message: "WIMS 반려 건입니다. 제품DB 모델SKU 표기가 달라 같은 모델명·옵션으로 연결했습니다. SKU·바코드는 반영하지 않습니다." });
       continue;
     }
-    if ((wims.modelSku && identityKey(product.modelSku) !== identityKey(wims.modelSku))
+    if ((wims.modelSku && identityKey(product.modelSku) !== identityKey(wims.modelSku)
+        && product.legacyKey !== legacyModelSkuKey(wims.modelSku))
       || modelMatches.some(match => match.sheetRowNumber !== product.sheetRowNumber)
       || (product.skuId && wims.skuId && identityKey(product.skuId) !== identityKey(wims.skuId))
       || (product.barcode && wims.barcode && identityKey(product.barcode) !== identityKey(wims.barcode))) {
@@ -289,7 +301,7 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
  */
 function rejectedModelFallback(
   rejected: WimsRegistrationRow[],
-  products: { row: string[]; sheetRowNumber: number; status: string; modelSku: string; skuId: string; barcode: string; productName: string }[],
+  products: { row: string[]; sheetRowNumber: number; status: string; modelSku: string; skuId: string; barcode: string; productName: string; legacyKey: string }[],
   headers: string[],
 ): Map<WimsRegistrationRow, (typeof products)[number]> {
   const result = new Map<WimsRegistrationRow, (typeof products)[number]>();
