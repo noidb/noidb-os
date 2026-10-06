@@ -2788,6 +2788,16 @@ function reregistrationOptionMatches_(model, existing, columns, newRows, sourceC
       if (!item.conflict && !old.conflict && !old.color && !old.size && !old.titleColor && !old.titleSize && !knownTail) {
         reserve(index, 0, 'single-unknown'); return;
       }
+      // 옵션이 하나뿐인 색상 단일 상품: 예전 모델SKU는 색상을 옛 코드(실버 S/SS, 골드 SG)로 붙이고
+      // 색상·사이즈 칸을 비워 둔 경우가 많다. 새 입력에 사이즈가 없고 기존 행에도 다른 색상·사이즈 근거가 없으면 같은 옵션으로 본다.
+      const legacyColorTails = { SI: ['SI', 'SS', 'S'], GO: ['GO', 'SG'] };
+      const legacyTails = legacyColorTails[item.color] || [];
+      const noSize = value => !value || value === 'FREE';
+      if (!item.conflict && !old.conflict && item.tail === item.color && legacyTails.indexOf(old.tail) >= 0
+        && noSize(item.size) && noSize(old.size) && noSize(old.titleSize)
+        && (!old.color || old.color === item.color) && (!old.titleColor || old.titleColor === item.color)) {
+        reserve(index, 0, 'single-legacy-color'); return;
+      }
     }
     fail(index, item.conflict || oldEvidence.find(old => old.conflict)?.conflict || '모델SKU가 정확히 한 행에 대응하지 않습니다. 색상·사이즈 근거가 부족하거나 서로 다릅니다.');
   });

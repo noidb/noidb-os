@@ -347,6 +347,12 @@ export default function Home() {
   const draftSavingRef = useRef(false);
   const draftRefreshRef = useRef(0);
   const restoringDraftRef = useRef(false);
+  const detailImagesRef = useRef<DetailImage[]>([]);
+  detailImagesRef.current = detailImages;
+  const detailPreviewRef = useRef("");
+  detailPreviewRef.current = detailPreview;
+  // 상세페이지 목록에서 사용자가 지운 5번 칸 사진(id → 그때의 이미지). 같은 사진은 자동으로 다시 넣지 않는다.
+  const dismissedDetailSlotsRef = useRef(new Map<string, string>());
   const [draftRestoreRevision, setDraftRestoreRevision] = useState(0);
   const [modelDuplicate, setModelDuplicate] = useState(false);
   const [modelCheckMessage, setModelCheckMessage] = useState("");
@@ -634,7 +640,6 @@ export default function Home() {
       restoringDraftRef.current = false;
       return;
     }
-    if (detailPreview) return;
     const automatic: DetailImage[] = [];
     const add = (id: string, name: string, slot: SlotImage | null | undefined) => {
       if (slot?.dataUrl) automatic.push({ id: `slot:${id}`, name, dataUrl: slot.dataUrl });
@@ -646,12 +651,37 @@ export default function Home() {
     add("wear01", "착용컷 01", wear01);
     add("wear02", "착용컷 02", wear02);
     customSlots.forEach((item, index) => add(`custom:${item.id}`, `${item.type === "all" ? "전체옵션" : item.type === "detail" ? "디테일컷" : "착용컷"} 추가 ${index + 1}`, item.slot));
-    setDetailImages(prev => {
-      if (reregisterModelName && prev.some(item => !item.id.startsWith("slot:"))) return prev;
-      return [...automatic, ...prev.filter(item => !item.id.startsWith("slot:"))];
-    });
-    setDetailPreview("");
-  }, [mainWear, allOptions, activeVariantThumbs, variants, detailCut, wear01, wear02, customSlots, draftRestoreRevision, reregisterModelName, detailPreview]);
+    // 상세페이지를 한 번 만든 뒤에도 5번 칸에 새로 넣은 사진이 목록에 들어오도록 항상 동기화한다.
+    // 사용자가 정한 순서는 유지하고, 새 사진만 뒤에 붙이며, 사용자가 목록에서 지운 사진은 다시 넣지 않는다.
+    const prev = detailImagesRef.current;
+    if (reregisterModelName && prev.some(item => !item.id.startsWith("slot:"))) return;
+    let changed = false;
+    {
+      const byId = new Map(automatic.map(item => [item.id, item]));
+      const kept: DetailImage[] = [];
+      prev.forEach(item => {
+        if (!item.id.startsWith("slot:")) { kept.push(item); return; }
+        const current = byId.get(item.id);
+        if (!current) { changed = true; return; }
+        if (current.dataUrl !== item.dataUrl || current.name !== item.name) {
+          changed = true;
+          kept.push({ ...item, name: current.name, dataUrl: current.dataUrl });
+        } else kept.push(item);
+      });
+      const existing = new Set(prev.map(item => item.id));
+      const added = automatic.filter(item =>
+        !existing.has(item.id) && dismissedDetailSlotsRef.current.get(item.id) !== item.dataUrl);
+      if (added.length) changed = true;
+      if (changed) {
+        const next = [...kept, ...added];
+        detailImagesRef.current = next;
+        setDetailImages(next);
+      }
+    }
+    if (changed && detailPreviewRef.current) {
+      setDetailMessage("상세페이지 사진 목록이 바뀌었습니다. 반영하려면 780px 상세페이지 만들기를 다시 눌러주세요.");
+    }
+  }, [mainWear, allOptions, activeVariantThumbs, variants, detailCut, wear01, wear02, customSlots, draftRestoreRevision, reregisterModelName]);
 
   const update = (key: keyof Product, value: string) => {
     setProduct(prev => {
@@ -1113,6 +1143,7 @@ export default function Home() {
     setAnalysis({});
     resetCoupangImages();
     setDetailImages([]);
+    dismissedDetailSlotsRef.current.clear();
     setDetailMessage("");
     setSourcingUrls(["", "", ""]);
     setSourcingUrlInputs(["", "", ""]);
@@ -1671,6 +1702,7 @@ export default function Home() {
     setWear02(data.wear02 || null);
     setCustomSlots(Array.isArray(data.customSlots) ? data.customSlots : []);
     setDetailImages(Array.isArray(data.detailImages) ? data.detailImages : []);
+    dismissedDetailSlotsRef.current.clear();
     setDetailHeader(data.detailHeader || null);
     setDetailFooter(data.detailFooter || null);
     setDetailPreview(data.detailPreview || "");
@@ -2559,6 +2591,7 @@ export default function Home() {
               onReturnToPool={returnToPool}
               onSlotSwap={swapSlots}
               onExpand={setLightbox}
+              onAddDetail={item.slot ? () => pushDetail(customSlotTitle(item, index), item.slot!.dataUrl) : undefined}
               onRemoveSlot={() => { returnToPool(item.slot); setCustomSlots(prev => prev.filter(slot => slot.id !== item.id)); }}
             />
           ))}
@@ -2659,6 +2692,7 @@ export default function Home() {
                   <button type="button" onClick={() => setLightbox(item.dataUrl)}>확대</button>
                   <button type="button" className="removeButton"
                     onClick={() => {
+                      if (item.id.startsWith("slot:")) dismissedDetailSlotsRef.current.set(item.id, item.dataUrl);
                       setDetailImages(prev => prev.filter(d => d.id !== item.id));
                       setDetailPreview("");
                     }}>삭제</button>
