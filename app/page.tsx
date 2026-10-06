@@ -159,10 +159,10 @@ function defaultRingSizes(gender: string) {
 
 function defaultSizes(gender: string, category: string) {
   if (category === "반지") return defaultRingSizes(gender);
-  if (gender === "여성" && category === "목걸이") return "약 40~46cm";
+  // 목걸이는 쿠팡에서 사이즈 필수 → 성별과 관계없이 FREE로 시작한다(길이는 치수 칸에 적는다).
+  if (category === "목걸이") return "FREE";
   if (gender === "여성" && category === "발찌") return "약 20~26cm";
   if (gender === "여성" && category === "팔찌") return "약 16~21cm";
-  if (gender === "남성" && category === "목걸이") return "약 60cm";
   if (gender === "남성" && category === "팔찌") return "약 22cm";
   return "";
 }
