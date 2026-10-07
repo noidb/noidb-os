@@ -15,8 +15,8 @@ const knownSkus = new Set(rows.map(row => row.skuId));
 const MODEL_PATTERN = /^[a-z]{1,4}\d{3,7}[a-z]{0,3}$/;
 
 /**
- * 로켓 미등록 상품(제품DB에 없는 상품공급상태 SKU) 목록.
- * data/rocket-pending.json(scripts/build-rocket-pending.py로 만든 Wing 모델번호 연결) 위에
+ * 로켓 미등록 상품(쿠팡 Wing에만 있고 로켓 Supplier Hub에는 없는 상품) 목록. skuId는 "wing:옵션ID".
+ * data/rocket-pending.json(scripts/build-rocket-pending.py) 위에
  * 사용자가 화면에서 직접 넣거나 고친 모델명·카테고리·성별(SKU ID 기준)을 덮어쓴다.
  */
 export async function GET(request: NextRequest) {

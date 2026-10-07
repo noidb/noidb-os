@@ -866,7 +866,7 @@ export default function ProductCatalogPage() {
                     <div>
                       <div style={{ color: wmsColors.ink, fontSize: 14, fontWeight: 800 }}>{resolveDisplayNameAndOption(group.productName || "", first.optionLabel).name || group.productName || group.modelName}</div>
                       {group.items.some(isRocketPendingItem) && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4, fontSize: 11 }}>
-                        <span style={{ padding: "2px 8px", borderRadius: 999, background: "#e9ddcf", color: "#4b4744", fontWeight: 800 }}>로켓 미등록 · {group.modelName} · SKU {group.items.length}개</span>
+                        <span style={{ padding: "2px 8px", borderRadius: 999, background: "#e9ddcf", color: "#4b4744", fontWeight: 800 }}>로켓 미등록 · {group.modelName} · 옵션 {group.items.length}개</span>
                         {group.items.some(item => isRocketPendingItem(item) && item.modelSource.includes("확인 필요")) && <span style={{ padding: "2px 8px", borderRadius: 999, background: "#f2dfd8", color: "#7f4032", fontWeight: 800 }} title="Wing에서 상품명이 비슷한 상품의 모델번호로 이었습니다. 사진이 이 상품이 맞는지 확인하세요.">확인 필요</span>}
                         {group.items.some(item => isRocketPendingItem(item) && item.modelSource === "직접 입력") && <span style={{ padding: "2px 8px", borderRadius: 999, background: "#e3ede6", color: "#3f574b", fontWeight: 800 }}>직접 입력</span>}
                       </div>}
@@ -885,10 +885,10 @@ export default function ProductCatalogPage() {
                   <div style={{ display: "grid", gap: 4, marginTop: 6, fontSize: 12 }}>{group.items.map((item, itemIndex) => {
                     const itemLink = externalUrl(item.productLink);
                     const field = (label: string, value: string) => <span style={{ whiteSpace: "nowrap" }}>{label} <b>{value}</b></span>;
-                    const sku = item.modelSku || "미확인";
+                    const sku = isRocketPendingItem(item) ? "" : item.modelSku || "미확인";
                     return <div key={`${item.skuId}|${item.modelSku}|${item.optionLabel}|${itemIndex}`} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px 12px", color: wmsColors.muted }}>
                       {itemLink ? <a href={itemLink} target="_blank" rel="noreferrer" title="제품링크 열기" style={{ color: wmsColors.ink, fontWeight: 800, whiteSpace: "nowrap", textDecoration: "underline", textUnderlineOffset: 2 }}>{sku}</a> : <b style={{ color: wmsColors.ink, whiteSpace: "nowrap" }}>{sku}</b>}
-                      {field("SKU ID", item.skuId || "미확인")}{field("바코드", item.barcode || "미확인")}{field("옵션", item.optionLabel || "미확인")}{field("누적입고", item.cumulativeInbound ? `${(Number(item.cumulativeInbound) || 0).toLocaleString()}개` : "미확인")}{field("발주가능상태", item.orderableStatus || "미확인")}{field("DB 상태", item.currentStatus || "미입력")}{item.skuId && <Link href={`/wms/products/${encodeURIComponent(item.skuId)}`} style={{ color: wmsColors.slate, fontWeight: 700, whiteSpace: "nowrap", textDecoration: "underline", textUnderlineOffset: 2 }}>상세 보기</Link>}
+                      {isRocketPendingItem(item) ? <>{field("Wing 옵션ID", item.skuId.replace(/^wing:/, ""))}{field("옵션", item.optionLabel || "미확인")}{field("Wing 판매상태", item.orderableStatus || "미확인")}</> : <>{field("SKU ID", item.skuId || "미확인")}{field("바코드", item.barcode || "미확인")}{field("옵션", item.optionLabel || "미확인")}{field("누적입고", item.cumulativeInbound ? `${(Number(item.cumulativeInbound) || 0).toLocaleString()}개` : "미확인")}{field("발주가능상태", item.orderableStatus || "미확인")}{field("DB 상태", item.currentStatus || "미입력")}</>}{item.skuId && !isRocketPendingItem(item) && <Link href={`/wms/products/${encodeURIComponent(item.skuId)}`} style={{ color: wmsColors.slate, fontWeight: 700, whiteSpace: "nowrap", textDecoration: "underline", textUnderlineOffset: 2 }}>상세 보기</Link>}
                     </div>;
                   })}</div>
                   {photos?.error && <div style={{ color: wmsColors.warnText, fontSize: 11, marginTop: 7 }}>{photos.error}</div>}
@@ -939,7 +939,7 @@ export default function ProductCatalogPage() {
           {query && <button type="button" onClick={() => { setQuery(""); try { window.sessionStorage.setItem(VIEW_KEY, JSON.stringify({ status, query: "" })); } catch {} }} title="검색어를 지웁니다." style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>검색 초기화</button>}
           <button type="button" onClick={() => void loadCatalog()} disabled={loading} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "새로 읽는 중…" : "제품DB 새로고침"}</button>
           <select value={status} onChange={event => setStatus(event.target.value)} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 10px", background: "#fff" }}>
-            <option value="all">전체 상태</option><option value="reregister">재등록 필요(모델 전체)</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="rocket-new">로켓 미등록 (제품DB에 없음)</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
+            <option value="all">전체 상태</option><option value="reregister">재등록 필요(모델 전체)</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="rocket-new">로켓 미등록 (Wing에만 있음)</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
           </select>
         </div>
       </div>
@@ -948,21 +948,28 @@ export default function ProductCatalogPage() {
       {error && <div style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{error}</div>}
       {exclusionError && <div role="alert" style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{exclusionError}</div>}
 
-      {(rejectedGroups.length > 0 || unmatchedRejectedRows.length > 0) && <section style={{ border: `2px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 16 }}>
-        <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 18 }}>반려 · 보완 후 재등록 · {rejectedGroups.length + unmatchedRejectedRows.length}건</div>
+      {rejectedGroups.length > 0 && <section style={{ border: `2px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 16 }}>
+        <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 18 }}>반려 · 보완 후 재등록 · {rejectedGroups.length}건</div>
         <p style={{ margin: "6px 0 4px", color: wmsColors.ink, fontSize: 12 }}>여기 있는 모델은 아래 재등록 목록에서 빠집니다. 이 카드에서 바로 등록 준비·사진검색·재등록 제외를 하세요.</p>
         <p style={{ margin: "0 0 12px", color: wmsColors.muted, fontSize: 12 }}>등록일은 반려일이 아닙니다. 상세 반려 사유와 반려일은 쿠팡 반려 안내에서 확인해 주세요.</p>
         <div style={{ display: "grid", gap: 8 }}>
           {rejectedGroups.map(stage => renderGroupCard(stage.group, <StageInfo stage={stage} />, wmsColors.warn))}
+        </div>
+      </section>}
+      {/* 모델SKU가 없어 제품DB 모델과 연결되지 않은 WIMS 반려 기록 — 대부분 사이트 사용 전 반려 후 이미 다시 올린 상품이라
+          조치 대상이 아니다(2026-10-07 사용자 확인). 지우지 않고 접어서만 보관한다. */}
+      {unmatchedRejectedRows.length > 0 && <details style={{ marginBottom: 16, border: `1px solid ${wmsColors.border}`, borderRadius: 12, background: "#fff", padding: "10px 14px" }}>
+        <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 800, color: wmsColors.muted }}>지난 WIMS 반려 기록 {unmatchedRejectedRows.length}건 보기 (모델 미연결 · 이미 다시 올린 상품)</summary>
+        <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
           {unmatchedRejectedRows.map((row, index) => <article key={`${row.modelSku}|${row.estimateId}|${index}`} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 10 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "start" }}>
               <div style={{ color: wmsColors.ink, fontWeight: 800 }}>{row.productName || "상품명 미확인"}</div>
-              <span style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 13 }}>반려 · 제품DB 모델 미연결</span>
+              <span style={{ color: wmsColors.muted, fontWeight: 800, fontSize: 12 }}>지난 반려 · 모델 미연결</span>
             </div>
             <WimsRowLine row={row} />
           </article>)}
         </div>
-      </section>}
+      </details>}
 
       {progressGroups.length > 0 && <section style={{ border: `2px solid ${wmsColors.slate}`, background: wmsColors.surface, borderRadius: 14, padding: 16, marginBottom: 16 }}>
         <div style={{ color: wmsColors.ink, fontWeight: 900, fontSize: 18 }}>등록 진행 중 · {progressGroups.length}개 모델</div>
@@ -976,8 +983,8 @@ export default function ProductCatalogPage() {
       {loading && !items.length ? <p style={{ color: wmsColors.muted }}>상품 연결 대장을 읽는 중입니다.</p> : (
         <div style={{ display: "grid", gap: 10 }}>
           {(status === "reregister" || reregistrationGroups.length > 0) && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 2 }}>
-            <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>{status === "reregister" ? "재등록 작업 묶음" : status === "rocket-new" ? "로켓 미등록 · 제품DB에 없는 상품" : "모델별 목록"} · {reregistrationGroups.length}개 모델</div>
-            {status === "rocket-new" && <p style={{ margin: "6px 0 10px", fontSize: 12, color: wmsColors.ink }}>모델명은 Wing 상품정보의 모델번호로 이었습니다. 사진검색은 MYBOX 사진 폴더 전체에서 모델명으로 찾아서 처음 한 번은 오래 걸릴 수 있어요. &quot;확인 필요&quot; 표시는 비슷한 상품명으로 붙인 모델이라 사진이 맞는지 보고 진행하세요.</p>}
+            <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>{status === "reregister" ? "재등록 작업 묶음" : status === "rocket-new" ? "로켓 미등록 · Wing에만 있는 상품" : "모델별 목록"} · {reregistrationGroups.length}개 모델</div>
+            {status === "rocket-new" && <p style={{ margin: "6px 0 10px", fontSize: 12, color: wmsColors.ink }}>쿠팡 Wing에만 있고 로켓(Supplier Hub)에는 없는 상품입니다. 로켓에 같은 상품이나 같은 모델이 있는 것은 중복 반려를 막으려고 뺐어요. 사진검색은 MYBOX 사진 폴더 전체에서 모델명으로 찾아서 처음 한 번은 오래 걸릴 수 있어요.</p>}
             {!manualExclusions && <p style={{ fontSize: 12 }}>재등록 제외 목록을 확인하는 중입니다. 확인 전에는 등록 준비를 할 수 없습니다.</p>}
             {manualExclusions && Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).length > 0 && <div style={{ margin: "8px 0 12px", padding: 12, border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff" }}>
               <strong style={{ fontSize: 12 }}>재등록 제외 모델</strong>
