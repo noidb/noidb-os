@@ -310,6 +310,8 @@ export default function Home() {
   // 상단 로고를 붙인 결과 그대로면 같은 로고가 두 번 붙지 않게 버튼을 막는다.
   const [logoAppliedPreview, setLogoAppliedPreview] = useState("");
   const [squareImagesBusy, setSquareImagesBusy] = useState(false);
+  /** 개별 다운로드 메시지를 버튼이 있는 칸에만 보여준다(5번 이미지 · 6번 상세 · 8번 기타). */
+  const [exportArea, setExportArea] = useState<"images" | "detail" | "etc">("etc");
   const [squareImagesMessage, setSquareImagesMessage] = useState("");
   const [detailMessage, setDetailMessage] = useState("");
   const [detailShareUrl, setDetailShareUrl] = useState("");
@@ -2434,7 +2436,7 @@ export default function Home() {
       </section>
 
       {/* 4. 검색 */}
-      <section className="card full">
+      <section className="card full sourcingCard">
         <h2>4. 쿠팡 · Google · 1688 검색</h2>
         <p className="note">쿠팡에서 판매 여부·가격을 확인하고, Google과 1688에서 동일제품 이미지를 찾습니다.</p>
         <div className="searchTwoButtons">
@@ -2481,7 +2483,7 @@ export default function Home() {
               <input value={sourcingUrlInputs[index]}
                 onChange={e => setSourcingUrlInputs(prev => prev.map((value, i) => i === index ? e.target.value : value))}
                 placeholder="링크를 붙여넣으세요" />
-              <button className="dark" type="button" onClick={() => saveSourcingUrl(index)}>링크 저장</button>
+              <button className="softBeigeButton" type="button" onClick={() => saveSourcingUrl(index)}>링크 저장</button>
             </div>
             {sourcingUrls[index] && (
               <div className="savedLinkBox">
@@ -2528,11 +2530,11 @@ export default function Home() {
             ))}
           </div>
         )}
-        <div className="exportActions" style={{ marginTop: 12 }}>
-          {dbSupported && !dbHandle && <button className="dark" type="button" onClick={pickFolder}>상품DB 폴더 선택</button>}
-          <button className="secondaryButton" type="button" onClick={() => void createSourcingFolder()}>모델명 폴더 생성</button>
-          <button className="green" type="button" onClick={() => void saveSourcingImages()}>이미지 저장</button>
-          {dbSupported && <button className="secondaryButton" type="button" onClick={() => void openModelFolder()}>폴더 바로가기</button>}
+        <div className="sourcingFolderActions">
+          {dbSupported && !dbHandle && <button className="softSlateButton" type="button" onClick={pickFolder}>상품DB 폴더 선택</button>}
+          <button className="softBeigeButton" type="button" onClick={() => void createSourcingFolder()}>모델명 폴더 생성</button>
+          <button className="softSageButton" type="button" onClick={() => void saveSourcingImages()}>위 이미지 저장</button>
+          {dbSupported && <button className="softBeigeButton" type="button" onClick={() => void openModelFolder()}>폴더 바로가기</button>}
         </div>
         <p className="note">위에 추가한 참고 사진을 상품DB의 카테고리/모델명/원본 폴더에 수집이미지로 저장합니다.</p>
         {sourcingSaveStatus && <p className="detailMessage">{sourcingSaveStatus}</p>}
@@ -2540,8 +2542,17 @@ export default function Home() {
 
       {/* 5. 쿠팡 등록 이미지 */}
       <section className="card full">
-        <h2>5. 쿠팡 등록 이미지</h2>
-        <button className="resetImagesButton" type="button" onClick={resetCoupangImages}>쿠팡 이미지 전체 초기화</button>
+        <div className="sectionTitleRow">
+          <h2>5. 쿠팡 등록 이미지</h2>
+          <div className="sectionTitleActions">
+            <button className="pillButtonBeige" type="button" disabled={Boolean(exportLoading)}
+              onClick={() => { setExportArea("images"); void downloadProductImagesOnly(); }}>
+              {exportLoading === "images" ? "이미지 묶는 중..." : "썸네일 + 추가이미지만 다운로드"}
+            </button>
+            <button className="resetImagesButton" type="button" onClick={resetCoupangImages} title="5번의 사진 목록과 모든 칸의 사진을 비웁니다.">이미지 초기화</button>
+          </div>
+        </div>
+        {exportArea === "images" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
         <div className="multiUpload imagePoolUpload" onClick={() => void openUploadPoolPicker()}
           onDragOver={e => e.preventDefault()}
           onDrop={e => {
@@ -2558,7 +2569,7 @@ export default function Home() {
           <span>클릭하거나 이미지를 이곳으로 드래그한 뒤 각 등록 칸에 배치하세요.</span>
         </div>
         {!!uploadPool.length && (
-          <div className="uploadPool">
+          <div className="uploadPool uploadPoolSticky" title="5번 안에서 아래로 내려도 이 사진 목록은 화면 위에 붙어 있습니다.">
             {uploadPool.map((item, index) => (
               <div className="uploadPoolItem" key={`${item.fileName}-${index}`} draggable
                 onDragStart={e => e.dataTransfer.setData("application/x-laura-pool-index", String(index))}>
@@ -2576,7 +2587,6 @@ export default function Home() {
           <button type="button" onClick={() => addCustomSlot("wear")}>+ 착용컷</button>
         </div>
 
-        <p className="note">색상·사이즈 조합별 사진 {variants.length}칸입니다. 각 옵션에 사용할 사진을 해당 칸에 올려주세요.</p>
         {variantOptions.error && <p className="error">{variantOptions.error} 색상에는 블랙,화이트처럼 색상만, 사이즈에는 S,M처럼 사이즈만 입력해주세요.</p>}
         {!!legacyColorThumbs.length && <div>
           <p className="note">이전에 저장한 색상 사진입니다. 사용할 옵션 칸으로 직접 끌어놓으세요.</p>
@@ -2806,19 +2816,20 @@ export default function Home() {
           <button type="button" className="purpleButton" onClick={() => void buildDetailPage()}>
             780px 상세페이지 만들기
           </button>
+          <button type="button" className="pillButtonBeige" disabled={!detailPreview || detailShareLoading}
+            title={detailPreview ? "휴대폰에서 상세페이지를 볼 수 있는 링크를 만듭니다." : "상세페이지를 먼저 만들어주세요."}
+            onClick={() => void shareDetailPreview()}>
+            {detailShareLoading ? "링크 만드는 중..." : "모바일 링크 만들기"}
+          </button>
+          <button type="button" className="pillButtonBeige" disabled={Boolean(exportLoading)}
+            onClick={() => { setExportArea("detail"); void downloadDetailPageOnly(); }}>
+            {exportLoading === "detail" ? "상세이미지 생성 중..." : "상세이미지만 다운로드"}
+          </button>
         </div>
         {detailMessage && <p className="detailMessage">{detailMessage}</p>}
+        {exportArea === "detail" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
         {detailPreview && (
           <div className="detailResult">
-            <div className="detailResultActions">
-              <button type="button" className="existingDetailUseButton" disabled={squareImagesBusy} onClick={() => void prepareApprovedSquareImages()}>
-                {squareImagesBusy ? "만드는 중..." : "상세페이지 사진사용"}
-              </button>
-              <button type="button" className="pillButtonBeige" disabled={detailShareLoading} onClick={() => void shareDetailPreview()}>
-                {detailShareLoading ? "링크 만드는 중..." : "모바일 링크 만들기"}
-              </button>
-            </div>
-            {squareImagesMessage && <p className="detailMessage">{squareImagesMessage}</p>}
             {detailShareUrl && <p className="detailMessage"><a href={detailShareUrl} target="_blank" rel="noopener noreferrer">{detailShareUrl}</a></p>}
             {detailShareError && <p className="error">{detailShareError}</p>}
             <div className="detailPreviewFrame">
@@ -2833,6 +2844,9 @@ export default function Home() {
         <h2>7. 상품DB · 등록파일 일괄 생성</h2>
         <div className="exportActions">
           {dbSupported && <button className="dark" type="button" onClick={pickFolder}>상품DB 폴더 선택</button>}
+          <button className="finalSaveDraft" type="button" disabled={draftSaving} onClick={() => void saveDraft()}>
+            {draftSaving ? "임시저장 중..." : "임시저장"}
+          </button>
         </div>
         {dbFolderName &&<p className="detailMessage">연결: {dbFolderName}</p>}
         {dbStatus && <p className="note">{dbStatus}</p>}
@@ -2846,9 +2860,6 @@ export default function Home() {
         </div>
         {batchMode === "actual" && modelDuplicate && !modelReregisterable && <p className="dangerAlert">기존 모델입니다. 판매중지 상태가 아닌 모델의 일괄 등록은 차단됩니다.</p>}
         <div className="finalSaveActions">
-          <button className="finalSaveDraft" type="button" disabled={draftSaving} onClick={() => void saveDraft()}>
-            {draftSaving ? "임시저장 중..." : "임시저장"}
-          </button>
           <button className="finalSaveAll" type="button" disabled={batchBusy} onClick={batchSave}>
             {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP 생성" : "전체 파일 저장"}
           </button>
@@ -2890,20 +2901,14 @@ export default function Home() {
           <span>{dbHandle ? "라벨만 실행하면 연결된 상품이미지DB/라벨 폴더에 JPG로 저장됩니다." : "저장 폴더가 연결되지 않은 환경에서는 JPG로 다운로드됩니다."}</span>
         </div>
         <div className="individualDownloadGrid">
-          <button className="secondaryButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadQuote()}>
+          <button className="secondaryButton" type="button" disabled={Boolean(exportLoading)} onClick={() => { setExportArea("etc"); void downloadQuote(); }}>
             {exportLoading === "quote" ? "견적서 생성 중..." : "견적서만 다운로드"}
           </button>
-          <button className="secondaryButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadDetailPageOnly()}>
-            {exportLoading === "detail" ? "상세이미지 생성 중..." : "상세이미지만 다운로드"}
-          </button>
-          <button className="secondaryButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadProductImagesOnly()}>
-            {exportLoading === "images" ? "이미지 묶는 중..." : "썸네일 + 추가이미지만 다운로드"}
-          </button>
-          <button className="secondaryButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadLabel()}>
+          <button className="secondaryButton" type="button" disabled={Boolean(exportLoading)} onClick={() => { setExportArea("etc"); void downloadLabel(); }}>
             {exportLoading === "label" ? "라벨 생성 중..." : dbHandle ? "라벨만 저장" : "라벨만 다운로드"}
           </button>
         </div>
-        {exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
+        {exportArea === "etc" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
         <div className="quoteQueuePanel">
           <div className="quoteQueueHeader">
             <div><h3>카테고리별 묶음 견적서</h3><p>등록할 때 자동 누적되며 같은 성별·카테고리끼리 최대 1,000 SKU행으로 나뉩니다.</p></div>
@@ -3008,6 +3013,10 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [view, setView] = useState<SquareCrop>(value.crop || { zoom: 1, x: 0, y: 0 });
   const [tuneOpen, setTuneOpen] = useState(false);
+  // 마우스가 지나가기만 해도 휠로 확대·축소되면 화면을 내리다 사진이 바뀐다 → 칸을 한 번 클릭한 뒤에만 휠 확대·축소.
+  const [active, setActive] = useState(false);
+  const activeRef = useRef(false);
+  activeRef.current = active;
   const viewRef = useRef(view);
   const frameRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ px: number; py: number } | null>(null);
@@ -3029,6 +3038,15 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
   }, [source]);
 
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+
+  // 칸에 처음 들어온 사진이 1000×1000이 아니면, 화면에 보이는 그대로(가장자리 자연스럽게 채움) 1000×1000으로 바로 만든다.
+  // 예전에는 손대지 않으면 원본 비율 그대로 남아, 저장할 때 흰 여백이 붙고 상세페이지에서는 모양이 달라졌다.
+  useEffect(() => {
+    if (!loadedImg || lockedRef.current || valueRef.current.crop) return;
+    if (loadedImg.naturalWidth === 1000 && loadedImg.naturalHeight === 1000) return;
+    commit(viewRef.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedImg]);
 
   const commit = (next: SquareCrop) => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -3057,7 +3075,7 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
     const el = frameRef.current;
     if (!el) return;
     const onWheel = (event: WheelEvent) => {
-      if (lockedRef.current) return;
+      if (lockedRef.current || !activeRef.current) return;
       event.preventDefault();
       const v = viewRef.current;
       update({ ...v, zoom: v.zoom * (event.deltaY < 0 ? 1.06 : 1 / 1.06) });
@@ -3066,6 +3084,16 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
     return () => el.removeEventListener("wheel", onWheel);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 칸 바깥을 누르면 휠 확대·축소를 끈다.
+  useEffect(() => {
+    if (!active) return;
+    const onOutside = (event: PointerEvent) => {
+      if (frameRef.current && !frameRef.current.contains(event.target as Node)) setActive(false);
+    };
+    document.addEventListener("pointerdown", onOutside);
+    return () => document.removeEventListener("pointerdown", onOutside);
+  }, [active]);
 
   const sharp = sharpenAmount(view.sharpness || 0);
 
@@ -3076,9 +3104,10 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
   return (
     <div
       ref={frameRef}
-      className="slotCropFrame"
+      className={"slotCropFrame" + (active && !locked ? " slotCropActive" : "")}
       onPointerDown={event => {
         if (lockedRef.current) return;
+        setActive(true);
         event.currentTarget.setPointerCapture(event.pointerId);
         dragRef.current = { px: event.clientX, py: event.clientY };
       }}
@@ -3094,7 +3123,7 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
       onPointerUp={() => { dragRef.current = null; }}
       onPointerCancel={() => { dragRef.current = null; }}
       onDoubleClick={() => { if (!lockedRef.current) update({ zoom: 1, x: 0, y: 0 }); }}
-      title={locked ? "저장됨 · 수정 버튼을 누르면 다시 조절할 수 있습니다." : "끌어서 위치 이동 · 마우스 휠로 확대/축소 · 더블클릭으로 처음 상태"}
+      title={locked ? "저장됨 · 수정 버튼을 누르면 다시 조절할 수 있습니다." : active ? "끌어서 위치 이동 · 마우스 휠로 확대/축소 · 더블클릭으로 처음 상태 · 칸 바깥을 누르면 휠 확대 끔" : "사진을 한 번 클릭하면 마우스 휠로 확대/축소할 수 있습니다."}
     >
       <canvas ref={canvasRef} className="slotCropCanvas" aria-label={title} />
       {!locked && <div className="slotCropTools" onPointerDown={event => event.stopPropagation()}>

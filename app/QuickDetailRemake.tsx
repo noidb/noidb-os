@@ -98,7 +98,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [scanSummary, setScanSummary] = useState<{ found: number; kept: number; excluded: number } | null>(null);
-  const [message, setMessage] = useState("상세페이지를 올려주세요.");
+  const [message, setMessage] = useState("상세페이지를 올리거나, 등록이미지에서 사진을 골라주세요.");
   const expectedEdits = originalSections.filter(section => (sectionActions[section.id] || "edit") === "edit").length;
   const completedEdits = editedSections.filter(section => originalSections.some(original => original.id === section.id) && (sectionActions[section.id] || "edit") === "edit").length;
   const editedById = useMemo(() => new Map(editedSections.map(section => [section.id, section])), [editedSections]);
@@ -463,16 +463,16 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
           <span>클릭해서 선택하거나 여기에 끌어다 놓으세요</span>
           <input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} />
         </label>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-          <button type="button" className="secondaryButton compactFieldButton" disabled={busy || !poolImages.length}
+        <div className={styles.photoSourceButtons}>
+          <button type="button" disabled={busy || !poolImages.length}
             title={poolImages.length ? "5번 쿠팡 등록이미지에서 AI로 편집할 사진을 고릅니다." : "5번 쿠팡 등록이미지에 사진이 없습니다."}
             onClick={() => { setPickingPool(value => !value); setPickedPool([]); }}>등록이미지에서 고르기</button>
-          <label className="secondaryButton compactFieldButton" style={{ cursor: busy ? "wait" : "pointer" }} title="상세페이지 없이 사진 여러 장을 바로 올립니다.">
+          <label style={{ cursor: busy ? "wait" : "pointer" }} title="상세페이지 없이 사진 여러 장을 바로 올립니다.">
             사진 여러 장 올리기
             <input type="file" accept="image/jpeg,image/png,image/webp" multiple style={{ display: "none" }} disabled={busy} onChange={event => void choosePhotoFiles(event)} />
           </label>
         </div>
-        <small>상세페이지가 없어도 사진만 골라 바로 AI 편집할 수 있습니다.</small>
+        <small className={styles.wrapNote}>상세페이지가 없어도 사진만 골라 바로 AI 편집할 수 있습니다.</small>
         {sourceName && <small>{sourceName}</small>}
       </article>
       <article>
@@ -480,13 +480,15 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         <div className={styles.styleChoices}>{STYLE_OPTIONS.map(option => <label key={option.value} className={style === option.value ? styles.selectedStyle : ""}><input type="radio" name="quick-style" value={option.value} checked={style === option.value} onChange={() => { setStyle(option.value); setEditedSections([]); invalidateResult(); setProgress(0); }} /><strong>{option.title}</strong><small>{option.description}</small></label>)}</div>
       </article>
       <article>
-        <span>3</span><h3>한 번에 AI 편집</h3>
+        <span>3</span><h3>AI 사진편집</h3>
         <button type="button" className={styles.quickCreate} disabled={!originalSections.length || busy} onClick={() => void create()}>{busy ? `작업 중… (${Math.min(progress + 1, Math.max(expectedEdits, 1))}/${Math.max(expectedEdits, 1)})` : completedEdits ? "이어서 AI 편집" : "AI 편집 시작"}</button>
-        <small>완성된 사진은 5번 쿠팡 등록이미지 목록에 들어갑니다. 아래 상세페이지 칸은 바꾸지 않습니다.</small>
+        <button type="button" className={styles.splitButton} disabled={!cut || busy}
+          title={cut ? "올린 상세페이지를 사진별로 나눕니다. 사진 바깥 흰 여백의 글자 줄은 잘라내고, 사진 위 글자는 그대로 둡니다." : "1단계에서 상세페이지를 먼저 올려주세요."}
+          onClick={() => void confirmCutForSplit()}>{busy && cut ? "나누는 중…" : "상세페이지 분할"}</button>
+        <small className={styles.wrapNote}>완성된 사진은 5번 쿠팡 등록이미지 목록에 들어갑니다. 아래 상세페이지 칸은 바꾸지 않습니다.</small>
         <p>{message}</p>
         {scanSummary && <div className={styles.scanSummary}><span>가져온 사진 <strong>{originalSections.length}</strong></span><span>AI 편집 예정 <strong>{expectedEdits}</strong></span><span>원본 사용 <strong>{originalSections.length - expectedEdits}</strong></span></div>}
         {originalSections.length > 0 && <small>예상 AI 편집: {expectedEdits}회 · 완료: {completedEdits}장</small>}
-        {result && <a className={styles.quickDownload} href={result.dataUrl} download={`${modelName.trim() || "NOID-B-새상세페이지"}.jpg`}>완성 이미지만 저장하기</a>}
       </article>
     </div>
 
@@ -573,19 +575,6 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       </div>
     )}
 
-    {result && (
-      <div className={styles.quickResult} style={{ marginTop: 16 }}>
-        <div>
-          <strong>완성 미리보기</strong>
-          <span>{result.width}×{result.height}px · 최종 사용 {result.sectionCount}장</span>
-          <button type="button" className={styles.zipDownload} disabled={busy} onClick={() => void saveZip()}>상세페이지 + 개별사진 ZIP 저장</button>
-        </div>
-        <a href={result.dataUrl} target="_blank" rel="noreferrer">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={result.dataUrl} alt="새로 만든 상세페이지" />
-        </a>
-      </div>
-    )}
 
     {drafts.length > 0 && (
       <div style={{ marginTop: 16, display: "grid", gap: 8 }}>

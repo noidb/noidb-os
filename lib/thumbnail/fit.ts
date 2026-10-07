@@ -143,6 +143,33 @@ function drawWithEdgeFill(ctx: CanvasRenderingContext2D, img: DrawableImage, dx:
         ctx.restore();
       }
     }
+    // 축소했을 때 사진 가장자리와 채운 배경 사이에 선이 보이지 않게, 사진 테두리를 배경 쪽으로 부드럽게 녹여 그린다.
+    const feather = Math.max(2, Math.round(size * 0.035));
+    if (xr - xl > feather * 3 && yb - yt > feather * 3) {
+      const photo = document.createElement("canvas");
+      photo.width = size;
+      photo.height = size;
+      const pc = photo.getContext("2d");
+      if (pc) {
+        pc.imageSmoothingEnabled = true;
+        pc.imageSmoothingQuality = "high";
+        pc.drawImage(img, dx, dy, dw, dh);
+        pc.globalCompositeOperation = "destination-in";
+        const fade = (x0: number, y0: number, x1: number, y1: number) => {
+          const g = pc.createLinearGradient(x0, y0, x1, y1);
+          g.addColorStop(0, "rgba(0,0,0,0)");
+          g.addColorStop(1, "rgba(0,0,0,1)");
+          pc.fillStyle = g;
+          pc.fillRect(0, 0, size, size);
+        };
+        if (xl > 0) fade(xl, 0, xl + feather, 0);
+        if (xr < size) fade(xr, 0, xr - feather, 0);
+        if (yt > 0) fade(0, yt, 0, yt + feather);
+        if (yb < size) fade(0, yb, 0, yb - feather);
+        ctx.drawImage(photo, 0, 0);
+        return;
+      }
+    }
   }
   ctx.drawImage(img, dx, dy, dw, dh);
 }

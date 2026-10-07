@@ -22,7 +22,7 @@ function promptFor(body: Record<string, unknown>) {
       : style === "modern"
         ? "modern pale-gray luxury studio, crisp restrained lighting and contemporary styling"
         : "bright clean white luxury jewelry studio, natural soft lighting";
-    const shared = `The single input image is the exact photograph to edit. Remove every visible Chinese, Korean or English character, caption, logo, brand mark, price, measurement graphic and watermark, reconstructing the surface naturally. The output must contain the same exact jewelry—not a similar or redesigned item.`;
+    const shared = `The single input image is the exact photograph to edit. Leave any letters, words, logos or graphics that appear on the photograph exactly as they are: do not erase, blur, cover or paint over them, and never create white patches, blank areas, borders or empty margins where they were. The output must contain the same exact jewelry—not a similar or redesigned item.`;
     if (sectionKind === "wear") return `${shared}
 
 This is a WEAR SHOT. Keep the photograph's composition exactly as it is: the same framing, crop, camera angle and distance, the same pose, the same head and body position and orientation, the same position and scale of the face, ear, neck, hand and shoulders. Nothing may move, rotate, zoom or reframe. Only the following appearance attributes must change, and each change must be clearly visible when the output is compared side by side with the input:

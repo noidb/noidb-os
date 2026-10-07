@@ -661,3 +661,65 @@ button.detailBrandUpload:disabled{opacity:.5;cursor:default}
 .finalSaveAll{background:var(--brand-sage);border:1px solid var(--brand-sage);color:#fff}
 .finalSaveAll:hover:not(:disabled){background:var(--brand-sage-dark);border-color:var(--brand-sage-dark)}
 .finalSaveActions button:disabled{opacity:.6;cursor:wait}
+
+/* 2026-10-07: 5번 쿠팡 등록이미지 — 칸이 늘어도 사진 목록에서 끌어오기 쉽게 칸 윗부분(제목) 여백을 줄인다. */
+.sectionTitleRow .resetImagesButton{margin:0}
+.imageSlotGrid .imageSlot{padding:8px 10px 10px}
+.imageSlotGrid .imageSlotHeader{height:42px;gap:1px;padding:0}
+.imageSlotGrid .imageSlot h3{margin:0;line-height:1.25}
+.imageSlotGrid .slotAlias{margin:0;line-height:1.2}
+@media(max-width:700px){.imageSlotGrid .imageSlotHeader{height:36px}.imageSlotGrid .imageSlot{padding:6px}}
+
+/* 2026-10-07: 5번 사진 목록을 화면 위에 고정 — 아래쪽 칸까지 내려가도 바로 끌어 넣을 수 있게.
+   body의 overflow-x:hidden은 sticky를 막으므로 같은 효과의 clip으로 바꾼다. */
+html,body{overflow-x:clip}
+.uploadPoolSticky{position:sticky;top:0;z-index:20;background:#fff;margin:0 -8px 8px;padding:8px 8px 10px;border-bottom:1px solid #e7e2db;box-shadow:0 6px 12px -8px rgba(30,28,25,.25)}
+.uploadPoolSticky .uploadPoolItem{flex:0 0 112px;width:112px;min-width:112px;max-width:112px;padding:6px}
+.uploadPoolSticky .uploadPoolItem span{font-size:10px;margin:3px 0}
+.uploadPoolSticky .uploadPoolItem button{padding:4px;font-size:11px}
+
+/* 2026-10-07: 7번 — 가장 많이 쓰는 "전체 파일 저장"은 연핑크로 한 줄 전체, 임시저장은 상품DB 폴더 선택 옆(같은 크기) */
+.dbSetupCard .exportActions{flex-direction:row;align-items:stretch}
+.dbSetupCard .exportActions button{width:auto;font-size:15px}
+.dbSetupCard .exportActions .finalSaveDraft{border:1px solid #b9cbbc}
+.dbSetupCard .finalSaveActions{grid-template-columns:1fr}
+.dbSetupCard .finalSaveAll{min-height:54px;background:#f8d9de;border:1px solid #ebb9c2;color:#7a2f3b;font-size:16px}
+.dbSetupCard .finalSaveAll:hover:not(:disabled){background:#f3c6ce;border-color:#e2a6b1}
+/* 2026-10-07: 5번 제목 옆 버튼 묶음(썸네일+추가이미지 다운로드 · 이미지 초기화), 6번 상세페이지 버튼 줄 */
+.sectionTitleActions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-left:auto}
+.sectionTitleActions button{min-height:38px;padding:8px 14px!important;font-size:13px;font-weight:800;border-radius:8px;margin:0}
+.detailActions .pillButtonBeige{border:1px solid #e3d7c8}
+.detailActions .pillButtonBeige:disabled{opacity:.55;cursor:not-allowed}
+
+/* ===== 2026-10-07 NOID-B 연한 버튼 팔레트 — 새 UI는 이 클래스를 쓴다 =====
+   연세이지(주요 동작) / 연베이지(보조) / 연핑크(가장 자주 쓰는 저장) / 연청회색 / 연살구. 모서리 8px, 굵은 글씨. */
+.softSageButton,.softBeigeButton,.softPinkButton,.softSlateButton,.softApricotButton,.softInkButton{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 16px;border-radius:8px!important;font-size:14px;font-weight:800;text-align:center;cursor:pointer;transition:background .15s,border-color .15s;box-shadow:none!important}
+.softSageButton{background:#e3ede6!important;border:1px solid #b9cbbc!important;color:#3f574b!important}
+.softSageButton:hover:not(:disabled){background:#d3e3d9!important}
+.softBeigeButton{background:#f4ede3!important;border:1px solid #e3d7c8!important;color:#554b3f!important}
+.softBeigeButton:hover:not(:disabled){background:#eadfd0!important}
+.softPinkButton{background:#f8d9de!important;border:1px solid #ebb9c2!important;color:#7a2f3b!important}
+.softPinkButton:hover:not(:disabled){background:#f3c6ce!important}
+.softSlateButton{background:#e6ecef!important;border:1px solid #c5d1d8!important;color:#3d5561!important}
+.softSlateButton:hover:not(:disabled){background:#d8e2e7!important}
+.softApricotButton{background:#f7e9da!important;border:1px solid #e8cdb0!important;color:#7a4f26!important}
+.softApricotButton:hover:not(:disabled){background:#f1dcc5!important}
+.softInkButton{background:#4a4743!important;border:1px solid #4a4743!important;color:#fff!important}
+.softSageButton:disabled,.softBeigeButton:disabled,.softPinkButton:disabled,.softSlateButton:disabled,.softApricotButton:disabled,.softInkButton:disabled{opacity:.55;cursor:not-allowed}
+
+/* 4번 검색: 큰 검색 버튼도 연한 색으로 */
+.sourcingCard .coupangSearchButton{background:#f8d9de!important;border:1px solid #ebb9c2!important;color:#7a2f3b!important}
+.sourcingCard .googleSearchButton{background:#e6ecef!important;border:1px solid #c5d1d8!important;color:#3d5561!important}
+.sourcingCard .search1688Button{background:#f7e9da!important;border:1px solid #e8cdb0!important;color:#7a4f26!important}
+.sourcingCard .sourceAnalyzeButton{background:#e3ede6!important;border:1px solid #b9cbbc!important;color:#3f574b!important}
+.sourcingCard .coupangSearchButton:hover{background:#f3c6ce!important}
+.sourcingCard .googleSearchButton:hover{background:#d8e2e7!important}
+.sourcingCard .search1688Button:hover{background:#f1dcc5!important}
+.sourcingCard .sourceAnalyzeButton:hover:not(:disabled){background:#d3e3d9!important}
+.sourcingCard .searchTwoButtons button,.sourcingCard .sourceAnalyzeButton{border-radius:8px!important;box-shadow:none!important}
+.sourcingCard .sourcingUrlRow .softBeigeButton{min-height:auto;align-self:stretch;white-space:nowrap}
+.sourcingFolderActions{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px}
+.sourcingFolderActions button{width:100%}
+
+/* 칸 사진을 클릭해 휠 확대·축소가 켜진 상태 표시 */
+.slotCropFrame.slotCropActive{outline:2px solid #60766a;outline-offset:-2px}
