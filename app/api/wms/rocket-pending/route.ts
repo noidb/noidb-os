@@ -71,7 +71,8 @@ export async function POST(request: NextRequest) {
     const text = (value: unknown) => typeof value === "string" ? value.trim().slice(0, 20) : undefined;
     await changeRocketPendingOverrides(skuIds, { modelName, category: text(body.category), gender: text(body.gender) });
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (error) {
+    console.error("Wing 등록검토 정리 상태 저장 실패", error instanceof Error ? { name: error.name, message: error.message } : error);
     return NextResponse.json({ error: "Wing 등록검토 정리 상태를 저장하지 못했습니다." }, { status: 500 });
   }
 }
