@@ -12,7 +12,8 @@
     },
   };
   const POLL_INTERVAL_MS = 500;
-  const MAX_POLL_MS = 6 * 60 * 1000;
+  // 상품공급상태는 10건씩 651페이지를 넘겨 20분 안팎 걸린다(2026-10). 6분이면 다 받기 전에 기다림을 멈췄다.
+  const MAX_POLL_MS = 60 * 60 * 1000;
   const MAX_DELIVERY_MS = 60 * 1000;
 
   async function deliver() {

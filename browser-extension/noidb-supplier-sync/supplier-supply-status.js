@@ -205,7 +205,7 @@
     };
   }
 
-  function toast(message, error = false) {
+  function toast(message, error = false, sticky = false) {
     let element = document.getElementById(`${BUTTON_ID}-message`);
     if (!element) {
       element = document.createElement("div");
@@ -215,7 +215,10 @@
     }
     element.style.background = error ? "#b42318" : "#28705d";
     element.textContent = message;
-    window.setTimeout(() => element.remove(), 5500);
+    window.clearTimeout(element._noidbTimer);
+    // 오류는 닫을 때까지 남긴다. 진행 상황은 다음 메시지로 바뀐다.
+    if (!sticky) element._noidbTimer = window.setTimeout(() => element.remove(), 5500);
+    else { element.style.cursor = "pointer"; element.title = "누르면 닫힙니다"; element.onclick = () => element.remove(); }
   }
 
   const button = document.createElement("button");
@@ -225,7 +228,8 @@
   button.title = "현재 검색 결과의 모든 페이지를 검증한 뒤 NOID-B AI 상품등록으로 전송합니다.";
   Object.assign(button.style, { position: "fixed", right: "20px", bottom: "24px", zIndex: "2147483647", border: "0", borderRadius: "12px", padding: "14px 18px", background: "#1f4f45", color: "white", fontSize: "14px", fontWeight: "800", cursor: "pointer", boxShadow: "0 8px 28px rgba(0,0,0,.25)" });
   button.addEventListener("click", async () => {
-    const original = button.textContent;
+    const original = "상품공급상태 전체를 NOID-B로 전송";
+    let failedMessage = "";
     const id = transferId();
     button.disabled = true;
     try {
@@ -239,11 +243,14 @@
       toast(`상품공급상태 전체 ${payload.totalRowCount.toLocaleString()}건을 전송했습니다.`);
     } catch (error) {
       await chrome.storage.local.remove(STORAGE_KEY).catch(() => undefined);
+      failedMessage = error instanceof Error ? error.message : "상품공급상태 전송에 실패했습니다.";
       button.textContent = "수집 실패 · 다시 시도";
-      toast(error instanceof Error ? error.message : "상품공급상태 전송에 실패했습니다.", true);
+      button.title = failedMessage;
+      toast(failedMessage, true, true);
     } finally {
       button.disabled = false;
-      window.setTimeout(() => { button.textContent = original; }, 5500);
+      // 실패했으면 버튼에 "수집 실패"를 남겨 둔다(자리를 비운 사이 끝나도 결과를 알 수 있게).
+      if (!failedMessage) window.setTimeout(() => { button.textContent = original; }, 5500);
     }
   });
   let mountScheduled = false;
