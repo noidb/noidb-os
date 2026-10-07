@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   buildLogisticsReceiptBoard,
+  collectDispatchReceiptTargets,
   logisticsReceiptLineKey,
   logisticsReceiptSourceFingerprint,
   mergeLogisticsReceiptTargets,
@@ -14,6 +15,32 @@ const targets: LogisticsReceiptTarget[] = [
   { shipmentNumber: "50129650", expectedDate: "2026-09-17", centerName: "동탄1", purchaseOrderNumbers: ["142638543"], source: "dispatch" },
   { shipmentNumber: "50129651", expectedDate: "2026-09-17", centerName: "동탄1", purchaseOrderNumbers: [], source: "aside" },
 ];
+type DispatchGroup = Parameters<typeof collectDispatchReceiptTargets>[0][number];
+const dispatchGroup = (purchaseOrderNumbers: string[], overrides: Partial<DispatchGroup> = {}): DispatchGroup => ({
+  id: purchaseOrderNumbers.join("-"), stage: "dispatched", shipmentNumbers: ["51031369"],
+  expectedDate: "2026-10-02", fulfillmentCenter: "인천36", purchaseOrderNumbers, ...overrides,
+} as DispatchGroup);
+const sharedShipmentGroups = [dispatchGroup(["142887641", "142884851"]), dispatchGroup(["143376735"]), dispatchGroup(["142884851"])];
+const sharedShipmentTargets = collectDispatchReceiptTargets(sharedShipmentGroups);
+assert.equal(sharedShipmentTargets.length, 1);
+assert.deepEqual(sharedShipmentTargets[0].purchaseOrderNumbers, ["142884851", "142887641", "143376735"]);
+assert.deepEqual(collectDispatchReceiptTargets([...sharedShipmentGroups].reverse()), sharedShipmentTargets);
+assert.deepEqual(sharedShipmentGroups[0].purchaseOrderNumbers, ["142887641", "142884851"]);
+assert.throws(() => collectDispatchReceiptTargets([sharedShipmentGroups[0], dispatchGroup(["143376735"], { expectedDate: "2026-10-03" })]), /입고예정일 또는 센터/);
+assert.throws(() => collectDispatchReceiptTargets([sharedShipmentGroups[0], dispatchGroup(["143376735"], { fulfillmentCenter: "동탄1" })]), /입고예정일 또는 센터/);
+assert.deepEqual(collectDispatchReceiptTargets([sharedShipmentGroups[0], dispatchGroup(["143376735"], { supersededByGroupId: "new-group" }), dispatchGroup(["144000000"], { stage: "shipment_closed" })])[0].purchaseOrderNumbers, ["142884851", "142887641"]);
+const sharedShipmentImport = {
+  source: "supplier-hub-shipments", schemaVersion: 3, collectedAt: "2026-09-19T01:00:00.000Z", requestedShipmentNumbers: ["51031369"],
+  shipments: [{ shipmentNumber: "51031369", status: "마감", totalDelivered: 3, totalReceived: 0,
+    lines: sharedShipmentTargets[0].purchaseOrderNumbers.map((purchaseOrderNumber, index) => ({ boxId: "BOX1", purchaseOrderNumber,
+      skuId: String(100 + index), productName: "shared shipment", barcode: "", deliveredQuantity: 1, receivedQuantity: 0 })) }],
+  skuStatuses: ["100", "101", "102"].map(skuId => ({ skuId, orderStatus: "정상" })),
+};
+assert.equal(parseLogisticsReceiptImport(sharedShipmentImport, sharedShipmentTargets).shipments[0].lines.length, 3);
+assert.throws(() => parseLogisticsReceiptImport({ ...sharedShipmentImport,
+  shipments: [{ ...sharedShipmentImport.shipments[0], totalDelivered: 2, lines: sharedShipmentImport.shipments[0].lines.slice(0, 2) }],
+  skuStatuses: sharedShipmentImport.skuStatuses.slice(0, 2),
+}, sharedShipmentTargets));
 const baseline: LogisticsAsideBaseline = {
   closedShipmentNumbers: [], pendingTargets: [], completedMarketingSkuIds: ["801"], excludedMarketingSkuIds: ["900"],
   handledLines: [{ shipmentNumber: "50129650", purchaseOrderNumber: "142638543", skuId: "100", quantity: 3, classification: "reorder", note: "already handled" }], source: {},

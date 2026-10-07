@@ -133,14 +133,18 @@ export function collectDispatchReceiptTargets(groups: InvoiceGroup[]): Logistics
         shipmentNumber,
         expectedDate: group.expectedDate,
         centerName: group.fulfillmentCenter,
-        purchaseOrderNumbers: [...group.purchaseOrderNumbers].sort(),
+        purchaseOrderNumbers: [...new Set(group.purchaseOrderNumbers)].sort(),
         source: "dispatch",
       };
       const existing = targets.get(shipmentNumber);
-      if (existing && JSON.stringify(existing) !== JSON.stringify(target)) {
-        throw new Error("같은 쉽먼트번호가 서로 다른 출고 묶음에 기록돼 있습니다.");
+      if (existing) {
+        if (existing.expectedDate !== target.expectedDate || existing.centerName !== target.centerName) {
+          throw new Error("같은 쉽먼트번호의 입고예정일 또는 센터가 서로 다릅니다.");
+        }
+        existing.purchaseOrderNumbers = [...new Set([...existing.purchaseOrderNumbers, ...target.purchaseOrderNumbers])].sort();
+      } else {
+        targets.set(shipmentNumber, target);
       }
-      targets.set(shipmentNumber, target);
     }
   }
   return [...targets.values()].sort((a, b) => a.shipmentNumber.localeCompare(b.shipmentNumber));
