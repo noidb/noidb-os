@@ -277,31 +277,65 @@ export async function loadPhotoSearch(model: string) {
   return read<SavedPhotoSearch>(`search-v2:${model}`);
 }
 
+/** 제품 폴더 안의 작업 단계 폴더(1000·보정·원본·상세페이지 등). 이름에 모델번호가 없다. */
+const WORK_STAGE_FOLDER = /^(1000(x1000|px)?|보정|보정원본|원본|상세|상세페이지|evoto.*)$/i;
+const SAME_MODEL_PARENT_LABEL = "같은 모델번호 상위 폴더";
+
 export async function searchPhotoFolder(searchTerms: string[], existing: LocalPhoto[] = []): Promise<LocalPhoto[]> {
   const root = await connectedRoot();
   if (!searchTerms.some(term => term.trim())) return [];
   // Model name remains the primary term; SKU IDs are additional historical/current aliases.
   const matchingTerms = termMatcher(searchTerms);
+  // 모델번호 숫자 부분(wd011917 → 011917). 접두어가 다른 모델이 같은 번호를 쓰는 경우가 많아(we011792/wr011792 등)
+  // 숫자만으로는 검색하지 않고, 이 모델 사진이 실제로 들어 있는 상위 폴더를 확인할 때만 쓴다.
+  const modelNumbers = new Set(searchTerms.map(term => term.trim().match(/^[a-z]{2,3}(\d{4,})$/i)?.[1]).filter(Boolean));
+  const sameModelNumber = (name: string) => (name.match(/[a-z]{2,3}\d{4,}/gi) || [])
+    .some(code => modelNumbers.has(code.match(/\d+$/)![0]));
   const found: LocalPhoto[] = [];
   const seen = new Set(existing.map(photo => duplicateKey(photo.file)));
-  const existingIds = new Set(existing.map(photo => photo.id));
-  async function walk(dir: FileSystemDirectoryHandle, prefix: string, inheritedMatches: string[]) {
+  const ids = new Set(existing.map(photo => photo.id));
+  const parentFolders = new Map<string, FileSystemDirectoryHandle>();
+  async function add(entry: any, id: string, name: string, matchedBy: string[]) {
+    const file = await entry.getFile() as File;
+    if (seen.has(duplicateKey(file))) return;
+    seen.add(duplicateKey(file));
+    ids.add(id);
+    found.push({ id, name, file, matchedBy });
+  }
+  type Ancestor = { name: string; id: string; handle: FileSystemDirectoryHandle };
+  async function walk(dir: FileSystemDirectoryHandle, prefix: string, inheritedMatches: string[], ancestors: Ancestor[]) {
     for await (const [name, entry] of (dir as any).entries()) {
       if (existing.length + found.length >= MAX_PHOTOS) return;
       if (name.startsWith(".")) continue;
       const id = `${prefix}/${name}`;
-      if (existingIds.has(id)) continue;
-      const matchedBy = [...new Set([...inheritedMatches, ...matchingTerms(name)])];
-      if (entry.kind === "directory") await walk(entry, id, matchedBy);
+      if (ids.has(id)) continue;
+      const ownMatches = matchingTerms(name);
+      // 여러 모델을 담은 묶음 폴더(예: "wn011229 ws011231 ws011232돼지코…") 안의 다른 모델 폴더
+      // (wr011231 반지, wa011143 체인 등)는 묶음 폴더 이름의 일치를 물려받지 않는다.
+      const otherModelFolder = entry.kind === "directory" && OTHER_MODEL_FOLDER.test(name) && !ownMatches.length;
+      const matchedBy = [...new Set([...(otherModelFolder ? [] : inheritedMatches), ...ownMatches])];
+      if (entry.kind === "directory") await walk(entry, id, matchedBy, [...ancestors, { name, id, handle: entry }]);
       else if (matchedBy.length > 0 && IMAGE_FILE.test(name)) {
-        const file = await entry.getFile() as File;
-        if (seen.has(duplicateKey(file))) continue;
-        seen.add(duplicateKey(file));
-        found.push({ id, name, file, matchedBy });
+        await add(entry, id, name, matchedBy);
+        // 예: ws011917 실버별똑딱핀/1000/wd011917.0.jpg — 작업 단계 폴더를 거슬러 올라간 제품 폴더가
+        // 같은 모델번호를 달고 있으면, 그 폴더의 보정·원본·상세페이지 사진도 함께 연다.
+        let at = ancestors.length - 1;
+        while (at > 0 && WORK_STAGE_FOLDER.test(ancestors[at].name)) at -= 1;
+        if (at > 0 && at < ancestors.length - 1 && sameModelNumber(ancestors[at].name)) parentFolders.set(ancestors[at].id, ancestors[at].handle);
       }
     }
   }
-  await walk(root, root.name, matchingTerms(root.name));
+  async function collect(dir: FileSystemDirectoryHandle, prefix: string) {
+    for await (const [name, entry] of (dir as any).entries()) {
+      if (existing.length + found.length >= MAX_PHOTOS) return;
+      if (name.startsWith(".")) continue;
+      const id = `${prefix}/${name}`;
+      if (entry.kind === "directory") await collect(entry, id);
+      else if (!ids.has(id) && IMAGE_FILE.test(name)) await add(entry, id, name, [SAME_MODEL_PARENT_LABEL]);
+    }
+  }
+  await walk(root, root.name, matchingTerms(root.name), [{ name: root.name, id: root.name, handle: root }]);
+  for (const [id, handle] of parentFolders) await collect(handle, id);
   return found.sort((a, b) => a.id.localeCompare(b.id, "ko"));
 }
 

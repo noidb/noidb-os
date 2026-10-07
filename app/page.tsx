@@ -2792,10 +2792,11 @@ export default function Home() {
           poolImages={quickRemakePool}
           incomingFile={incomingDetailFile}
           incomingToken={incomingDetailToken}
-          onComplete={({ dataUrl }) => {
+          onComplete={({ dataUrl, logoApplied }) => {
             setDetailPreview(dataUrl);
+            setLogoAppliedPreview(logoApplied ? dataUrl : "");
             setSquareImagesMessage("");
-            setDetailMessage("새 상세페이지를 아래 상세페이지 칸에 넣었습니다.");
+            setDetailMessage(logoApplied ? "자른 상세페이지에 상단 로고를 붙여 아래 상세페이지 칸에 넣었습니다." : "새 상세페이지를 아래 상세페이지 칸에 넣었습니다.");
           }}
           onAddToList={items => {
             setUploadPool(prev => [...prev, ...items]);
@@ -2872,7 +2873,7 @@ export default function Home() {
       <section className="card full dbSetupCard">
         <h2>7. 상품DB · 등록파일 일괄 생성</h2>
         <div className="exportActions">
-          {dbSupported && <button className="dark" type="button" onClick={pickFolder}>상품DB 폴더 선택</button>}
+          {dbSupported && <button className="folderPickButton" type="button" onClick={pickFolder}>폴더 선택</button>}
           <button className="finalSaveDraft" type="button" disabled={draftSaving} onClick={() => void saveDraft()}>
             {draftSaving ? "임시저장 중..." : "임시저장"}
           </button>

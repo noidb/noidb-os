@@ -682,6 +682,9 @@ html,body{overflow-x:clip}
 .dbSetupCard .exportActions{flex-direction:row;align-items:stretch}
 .dbSetupCard .exportActions button{width:auto;font-size:15px}
 .dbSetupCard .exportActions .finalSaveDraft{border:1px solid #b9cbbc}
+.dbSetupCard .exportActions .folderPickButton,.dbSetupCard .exportActions .finalSaveDraft{min-width:112px;padding:13px 17px;font-size:15px}
+.dbSetupCard .exportActions .folderPickButton{background:#f4ede3;border:1px solid #e3d7c8;color:#554b3f}
+.dbSetupCard .exportActions .folderPickButton:hover{background:#eadfd0}
 .dbSetupCard .finalSaveActions{grid-template-columns:1fr}
 .dbSetupCard .finalSaveAll{min-height:54px;background:#f2dfd8;border:1px solid #dfbdb2;color:#7f4032;font-size:16px}
 .dbSetupCard .finalSaveAll:hover:not(:disabled){background:#ecd2c9;border-color:#d4ab9e}
