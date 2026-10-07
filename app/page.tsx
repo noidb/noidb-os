@@ -369,6 +369,8 @@ export default function Home() {
   const [titleBackup, setTitleBackup] = useState("");
   const [tagsBackup, setTagsBackup] = useState("");
   const [reregisterModelName, setReregisterModelName] = useState("");
+  /** 제품DB에 없는 로켓 미등록 모델을 신규 등록 중 — 모델명은 고정하되, 채울 값이 없으므로 AI 분석 결과로 기본정보를 채운다. */
+  const [rocketNewModel, setRocketNewModel] = useState(false);
 
   const [dbSupported, setDbSupported] = useState(false);
   const [dbHandle, setDbHandle] = useState<FileSystemDirectoryHandle | null>(null);
@@ -398,7 +400,7 @@ export default function Home() {
     })();
 
     try {
-      if (new URLSearchParams(window.location.search).has("reregisterModel")) return;
+      if (new URLSearchParams(window.location.search).has("reregisterModel") || new URLSearchParams(window.location.search).has("rocketModel")) return;
       // 제품사진선택에서 등록 준비 없이(뒤로 가기 등) 돌아온 경우에도 나가기 전 작업을 다시 연다.
       if (sessionStorage.getItem(PHOTO_SELECT_RETURN_KEY)) {
         void restoreWorkAfterPhotoSelect();
@@ -455,7 +457,10 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const requestedModel = new URLSearchParams(window.location.search).get("reregisterModel")?.trim() || "";
+    const params = new URLSearchParams(window.location.search);
+    // rocketModel = 제품DB에 없는 로켓 미등록 모델(사진선택 "로켓 미등록" 보기에서 등록 준비). 신규 등록으로 연다.
+    const rocketModel = params.get("rocketModel")?.trim() || "";
+    const requestedModel = params.get("reregisterModel")?.trim() || rocketModel;
     if (!requestedModel) return;
     let active = true;
     void (async () => {
@@ -464,11 +469,12 @@ export default function Home() {
         if (!exclusionsResponse.ok) throw new Error("재등록 제외 목록을 확인하지 못했습니다.");
         const exclusions = await exclusionsResponse.json();
         if (exclusions.entries?.[requestedModel.toLowerCase()]) throw new Error(`${requestedModel}은 재등록 제외 모델입니다: ${exclusions.entries[requestedModel.toLowerCase()].reason}`);
-        const response = await fetch("/api/wms/product-registration-catalog", { cache: "no-store" });
+        const response = await fetch(rocketModel ? `/api/wms/rocket-pending?model=${encodeURIComponent(rocketModel)}` : "/api/wms/product-registration-catalog", { cache: "no-store" });
         const data = await response.json();
         if (!response.ok || !Array.isArray(data.items)) throw new Error(data?.error || "재등록 대상 조회 실패");
         const group = data.items.filter((item: any) => String(item.modelName || "").trim().toLowerCase() === requestedModel.toLowerCase());
-        if (!group.length) throw new Error(`${requestedModel} 모델을 제품DB에서 찾지 못했습니다.`);
+        if (!group.length) throw new Error(`${requestedModel} 모델을 ${rocketModel ? "로켓 미등록 목록" : "제품DB"}에서 찾지 못했습니다.`);
+        if (active) setRocketNewModel(Boolean(rocketModel));
         if (group.some((item: any) => String(item.reregistrationTier || "").startsWith("영구제외"))) throw new Error(`${requestedModel}은 제품DB에서 영구제외된 모델입니다.`);
         if (active) setReregisterModelName(requestedModel);
         const first = group[0];
@@ -923,7 +929,7 @@ export default function Home() {
       setProduct(prev => {
         // 재등록은 제품DB의 실제 값(치수·사이즈·성별·카테고리)을 이미 채워뒀으니, AI의 일반적인
         // 추정값으로 덮어쓰지 않는다. 검색어(keyword)만 참고용으로 갱신한다.
-        if (reregisterModelName) {
+        if (reregisterModelName && !rocketNewModel) {
           return {
             ...prev,
             keyword: normalizeKeyword(data.keyword || prev.keyword, prev),
@@ -1655,7 +1661,7 @@ export default function Home() {
       product, analysis, photos, mainWear, allOptions, optionThumbs, variantThumbs, detailCut, wear01, wear02, customSlots,
       detailImages, detailHeader, detailFooter, detailPreview, sourcingUrls, sourcingUrlInputs, sourcingImages,
       uploadPool, title, tags, sourcingAnalysis,
-      labelManufactureYearMonth, labelManufacturerName, labelImporterName, reregisterModelName, logoAppliedPreview,
+      labelManufactureYearMonth, labelManufacturerName, labelImporterName, reregisterModelName, rocketNewModel, logoAppliedPreview,
     },
   });
 
@@ -1696,7 +1702,7 @@ export default function Home() {
           model: record.model,
           savedAt: record.savedAt,
           data: { product, analysis, sourcingUrls, sourcingUrlInputs, title, tags, sourcingAnalysis,
-            labelManufactureYearMonth, labelManufacturerName, labelImporterName, reregisterModelName, cloudOnly: true },
+            labelManufactureYearMonth, labelManufacturerName, labelImporterName, reregisterModelName, rocketNewModel, cloudOnly: true },
         },
       }, AbortSignal.timeout(15000));
       const cloudResult = await readDraftResponse(cloudResponse);
@@ -1743,6 +1749,7 @@ export default function Home() {
     // 재등록 화면에서 저장한 임시저장은 불러와도 재등록 화면(모델명 고정)을 유지한다.
     // 예전 임시저장에는 이 값이 없으므로, 재등록 목록에서 연 같은 모델이면 현재 재등록 표시를 그대로 둔다.
     const draftModel = String(data.product?.modelName || record.model || "").trim().toLowerCase();
+    setRocketNewModel(Boolean(data.rocketNewModel));
     setReregisterModelName(prev => data.reregisterModelName
       ? String(data.reregisterModelName)
       : prev && prev.trim().toLowerCase() === draftModel ? prev : "");
@@ -2221,7 +2228,7 @@ export default function Home() {
           <h1>AI 상품등록 도우미</h1>
           <div className="heroUtilityActions">
             {(() => {
-              const photoSelectHref = `/wms/product-catalog?status=reregister${reregisterModelName ? `&model=${encodeURIComponent(reregisterModelName)}` : ""}`;
+              const photoSelectHref = `/wms/product-catalog?status=${rocketNewModel ? "rocket-new" : "reregister"}${reregisterModelName ? `&model=${encodeURIComponent(reregisterModelName)}` : ""}`;
               return <Link className="imageGeneratorLink" href={photoSelectHref} onClick={event => void openPhotoSelect(event, photoSelectHref)}>제품사진선택</Link>;
             })()}
             <button className="draftLoadButton" type="button" onClick={() => {
