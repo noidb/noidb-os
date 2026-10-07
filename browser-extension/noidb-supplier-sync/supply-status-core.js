@@ -38,6 +38,8 @@
       /(?:총|전체)\s*([\d,]+)\s*(?:건|개)/i,
       /([\d,]+)\s*(?:건|개)\s*(?:검색|조회|결과)/i,
       /([\d,]+)\s*개\s*검색됨/i,
+      // 2026-10-07 Supplier Hub 상품 공급상태 관리 화면: "1 - 10 of 6509 items"
+      /\bof\s*([\d,]+)\s*(?:items?|건|개)\b/i,
     ];
     for (const pattern of patterns) {
       const match = text.match(pattern);

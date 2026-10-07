@@ -683,38 +683,36 @@ html,body{overflow-x:clip}
 .dbSetupCard .exportActions button{width:auto;font-size:15px}
 .dbSetupCard .exportActions .finalSaveDraft{border:1px solid #b9cbbc}
 .dbSetupCard .finalSaveActions{grid-template-columns:1fr}
-.dbSetupCard .finalSaveAll{min-height:54px;background:#f8d9de;border:1px solid #ebb9c2;color:#7a2f3b;font-size:16px}
-.dbSetupCard .finalSaveAll:hover:not(:disabled){background:#f3c6ce;border-color:#e2a6b1}
+.dbSetupCard .finalSaveAll{min-height:54px;background:#f2dfd8;border:1px solid #dfbdb2;color:#7f4032;font-size:16px}
+.dbSetupCard .finalSaveAll:hover:not(:disabled){background:#ecd2c9;border-color:#d4ab9e}
 /* 2026-10-07: 5번 제목 옆 버튼 묶음(썸네일+추가이미지 다운로드 · 이미지 초기화), 6번 상세페이지 버튼 줄 */
 .sectionTitleActions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-left:auto}
 .sectionTitleActions button{min-height:38px;padding:8px 14px!important;font-size:13px;font-weight:800;border-radius:8px;margin:0}
 .detailActions .pillButtonBeige{border:1px solid #e3d7c8}
 .detailActions .pillButtonBeige:disabled{opacity:.55;cursor:not-allowed}
 
-/* ===== 2026-10-07 NOID-B 연한 버튼 팔레트 — 새 UI는 이 클래스를 쓴다 =====
-   연세이지(주요 동작) / 연베이지(보조) / 연핑크(가장 자주 쓰는 저장) / 연청회색 / 연살구. 모서리 8px, 굵은 글씨. */
+/* ===== 2026-10-07 NOID-B 버튼 팔레트 — 사이트에서 원래 쓰던 색만 쓴다 (새 색 추가 금지) =====
+   샌드(이미지 변경하기 버튼) · 연한 웜그레이(보조) · 연세이지(주요) · 클레이핑크(이미지 초기화·전체 파일 저장) · 잉크(검정). 모서리 8px. */
 .softSageButton,.softBeigeButton,.softPinkButton,.softSlateButton,.softApricotButton,.softInkButton{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 16px;border-radius:8px!important;font-size:14px;font-weight:800;text-align:center;cursor:pointer;transition:background .15s,border-color .15s;box-shadow:none!important}
 .softSageButton{background:#e3ede6!important;border:1px solid #b9cbbc!important;color:#3f574b!important}
 .softSageButton:hover:not(:disabled){background:#d3e3d9!important}
-.softBeigeButton{background:#f4ede3!important;border:1px solid #e3d7c8!important;color:#554b3f!important}
-.softBeigeButton:hover:not(:disabled){background:#eadfd0!important}
-.softPinkButton{background:#f8d9de!important;border:1px solid #ebb9c2!important;color:#7a2f3b!important}
-.softPinkButton:hover:not(:disabled){background:#f3c6ce!important}
-.softSlateButton{background:#e6ecef!important;border:1px solid #c5d1d8!important;color:#3d5561!important}
-.softSlateButton:hover:not(:disabled){background:#d8e2e7!important}
-.softApricotButton{background:#f7e9da!important;border:1px solid #e8cdb0!important;color:#7a4f26!important}
-.softApricotButton:hover:not(:disabled){background:#f1dcc5!important}
-.softInkButton{background:#4a4743!important;border:1px solid #4a4743!important;color:#fff!important}
+.softBeigeButton,.softSlateButton{background:#e9ddcf!important;border:1px solid #c7b9a8!important;color:#4b4744!important}
+.softBeigeButton:hover:not(:disabled),.softSlateButton:hover:not(:disabled){background:#e0d2c1!important}
+.softApricotButton{background:#f4f1ec!important;border:1px solid #d8d3cc!important;color:#4b4744!important}
+.softApricotButton:hover:not(:disabled){background:#ebe7e2!important}
+.softPinkButton{background:#f2dfd8!important;border:1px solid #dfbdb2!important;color:#7f4032!important}
+.softPinkButton:hover:not(:disabled){background:#ecd2c9!important}
+.softInkButton{background:#252525!important;border:1px solid #252525!important;color:#fff!important}
 .softSageButton:disabled,.softBeigeButton:disabled,.softPinkButton:disabled,.softSlateButton:disabled,.softApricotButton:disabled,.softInkButton:disabled{opacity:.55;cursor:not-allowed}
 
 /* 4번 검색: 큰 검색 버튼도 연한 색으로 */
-.sourcingCard .coupangSearchButton{background:#f8d9de!important;border:1px solid #ebb9c2!important;color:#7a2f3b!important}
-.sourcingCard .googleSearchButton{background:#e6ecef!important;border:1px solid #c5d1d8!important;color:#3d5561!important}
-.sourcingCard .search1688Button{background:#f7e9da!important;border:1px solid #e8cdb0!important;color:#7a4f26!important}
+.sourcingCard .coupangSearchButton{background:#f2dfd8!important;border:1px solid #dfbdb2!important;color:#7f4032!important}
+.sourcingCard .googleSearchButton{background:#e9ddcf!important;border:1px solid #c7b9a8!important;color:#4b4744!important}
+.sourcingCard .search1688Button{background:#f4f1ec!important;border:1px solid #d8d3cc!important;color:#4b4744!important}
 .sourcingCard .sourceAnalyzeButton{background:#e3ede6!important;border:1px solid #b9cbbc!important;color:#3f574b!important}
-.sourcingCard .coupangSearchButton:hover{background:#f3c6ce!important}
-.sourcingCard .googleSearchButton:hover{background:#d8e2e7!important}
-.sourcingCard .search1688Button:hover{background:#f1dcc5!important}
+.sourcingCard .coupangSearchButton:hover{background:#ecd2c9!important}
+.sourcingCard .googleSearchButton:hover{background:#e0d2c1!important}
+.sourcingCard .search1688Button:hover{background:#ebe7e2!important}
 .sourcingCard .sourceAnalyzeButton:hover:not(:disabled){background:#d3e3d9!important}
 .sourcingCard .searchTwoButtons button,.sourcingCard .sourceAnalyzeButton{border-radius:8px!important;box-shadow:none!important}
 .sourcingCard .sourcingUrlRow .softBeigeButton{min-height:auto;align-self:stretch;white-space:nowrap}

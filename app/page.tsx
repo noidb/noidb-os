@@ -352,6 +352,8 @@ export default function Home() {
   const draftSavingRef = useRef(false);
   const draftRefreshRef = useRef(0);
   const restoringDraftRef = useRef(false);
+  /** 상세페이지 사진 목록을 직접 끌어 순서를 바꿨는지. 바꾸기 전에는 5번 칸 순서를 그대로 따른다. */
+  const detailOrderEditedRef = useRef(false);
   const leavingForPhotosRef = useRef(false);
   const router = useRouter();
   const detailImagesRef = useRef<DetailImage[]>([]);
@@ -709,8 +711,24 @@ export default function Home() {
       const added = automatic.filter(item =>
         !existing.has(item.id) && dismissedDetailSlotsRef.current.get(item.id) !== item.dataUrl);
       if (added.length) changed = true;
+      // 목록을 직접 끌어 순서를 바꾸기 전에는 항상 5번 칸 순서(메인착용컷 → 전체옵션 → 옵션 썸네일 → 디테일컷 → 착용컷 → 추가 칸)를 따른다.
+      // 직접 바꾼 뒤에는 그 순서를 지키고, 새 사진은 칸 순서상 바로 앞 사진 뒤에 끼워 넣는다.
+      const slotOrder = new Map(automatic.map((item, index) => [item.id, index]));
+      let next: DetailImage[];
+      if (!detailOrderEditedRef.current) {
+        const slotItems = [...kept.filter(item => item.id.startsWith("slot:")), ...added].sort((a, b) => (slotOrder.get(a.id) ?? 0) - (slotOrder.get(b.id) ?? 0));
+        next = [...slotItems, ...kept.filter(item => !item.id.startsWith("slot:"))];
+      } else {
+        next = [...kept];
+        for (const item of added) {
+          const order = slotOrder.get(item.id) ?? 0;
+          let at = 0;
+          next.forEach((existingItem, index) => { if ((slotOrder.get(existingItem.id) ?? -1) < order && existingItem.id.startsWith("slot:")) at = index + 1; });
+          next.splice(at, 0, item);
+        }
+      }
+      if (!changed && next.some((item, index) => item.id !== prev[index]?.id)) changed = true;
       if (changed) {
-        const next = [...kept, ...added];
         detailImagesRef.current = next;
         setDetailImages(next);
       }
@@ -1180,6 +1198,7 @@ export default function Home() {
     setAnalysis({});
     resetCoupangImages();
     setDetailImages([]);
+    detailOrderEditedRef.current = false;
     dismissedDetailSlotsRef.current.clear();
     setDetailMessage("");
     setSourcingUrls(["", "", ""]);
@@ -1741,6 +1760,8 @@ export default function Home() {
     setWear02(data.wear02 || null);
     setCustomSlots(Array.isArray(data.customSlots) ? data.customSlots : []);
     setDetailImages(Array.isArray(data.detailImages) ? data.detailImages : []);
+    // 임시저장에 들어 있던 순서는 사용자가 정한 순서일 수 있으니 그대로 지킨다.
+    detailOrderEditedRef.current = Array.isArray(data.detailImages) && data.detailImages.length > 0;
     dismissedDetailSlotsRef.current.clear();
     setDetailHeader(data.detailHeader || null);
     setDetailFooter(data.detailFooter || null);
@@ -2792,6 +2813,7 @@ export default function Home() {
               onDragOver={e => e.preventDefault()}
               onDrop={() => {
                 if (dragDetailIndex === null || dragDetailIndex === index) return;
+                detailOrderEditedRef.current = true;
                 setDetailImages(prev => {
                   const next = [...prev];
                   const [m] = next.splice(dragDetailIndex, 1);

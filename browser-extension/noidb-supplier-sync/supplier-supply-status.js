@@ -60,7 +60,7 @@
   }
 
   function activePageNumber() {
-    const active = document.querySelector("[aria-current='page'],.pagination .active,[class*='pagination'] .active");
+    const active = document.querySelector("[aria-current='page'],.pagination .active,[class*='pagination'] .active,.rc-pagination-item-active");
     const value = Number(core.normalizeCell(active?.textContent));
     return Number.isSafeInteger(value) && value > 0 ? value : null;
   }
@@ -117,8 +117,9 @@
   async function setLargestPageSize(totalCount) {
     const candidate = pageSizeSelect();
     if (!candidate) {
+      // 표시 개수 선택창이 없는 화면(2026-10 상품 공급상태 관리: 10건 고정)은 지금 표시 개수로 모든 페이지를 넘긴다.
       const current = findSupplyTable().rows.length;
-      if (current === totalCount) return current;
+      if (current > 0) return current;
       throw new Error("페이지 표시 개수 선택창을 찾지 못했습니다.");
     }
     const target = Math.max(...candidate.values);
