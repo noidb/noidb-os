@@ -7,8 +7,12 @@
   const BUTTON_ID = "noidb-supply-status-sync-button";
   const STORAGE_KEY = "noidbPendingSupplyStatusTransfer";
   const NOIDB_URL = "https://noidb-os.vercel.app/";
-  const PAGE_WAIT_MS = 15000;
+  const PAGE_WAIT_MS = 30000;
   const STABLE_READS = 3;
+  // 한 페이지가 늦게 뜨면 같은 페이지 번호를 다시 눌러 이만큼 더 기다린다(651페이지 중 한 번 느려도 전체가 멈추지 않게).
+  const PAGE_RETRIES = 3;
+  // 실패한 지점부터 이어 받기 위해, 이 탭에서 이미 검증한 페이지를 보관한다(같은 검색 조건일 때만 사용).
+  let partialCapture = null;
 
   const delay = milliseconds => new Promise(resolve => window.setTimeout(resolve, milliseconds));
   const visible = element => Boolean(element && element.getClientRects().length > 0);
@@ -94,13 +98,16 @@
     throw new Error("페이지 번호 목록이 바뀌지 않아 수집을 중단했습니다.");
   }
 
-  async function waitForStablePage(expectedRows, previousFingerprint = "", requireChange = false) {
+  async function waitForStablePage(expectedRows, previousFingerprint = "", requireChange = false, pageLabel = "") {
     const started = Date.now();
     let lastFingerprint = "";
     let stable = 0;
+    let seenRows = null;
+    let unchanged = false;
     while (Date.now() - started < PAGE_WAIT_MS) {
       let state = null;
       try { state = findSupplyTable(); } catch {}
+      if (state) { seenRows = state.rows.length; unchanged = requireChange && state.fingerprint === previousFingerprint; }
       if (state && state.rows.length === expectedRows && (!requireChange || state.fingerprint !== previousFingerprint)) {
         if (state.fingerprint === lastFingerprint) stable += 1;
         else { lastFingerprint = state.fingerprint; stable = 1; }
@@ -111,7 +118,8 @@
       }
       await delay(180);
     }
-    throw new Error(`표가 예상 ${expectedRows}행으로 완전히 표시되지 않아 수집을 중단했습니다.`);
+    const seen = seenRows == null ? "표를 찾지 못함" : unchanged ? "앞 페이지 내용 그대로" : `${seenRows}행만 보임`;
+    throw new Error(`${pageLabel}표가 예상 ${expectedRows}행으로 완전히 표시되지 않아 수집을 중단했습니다(${seen}).`);
   }
 
   async function setLargestPageSize(totalCount) {
@@ -119,6 +127,8 @@
     if (!candidate) {
       // 표시 개수 선택창이 없는 화면(2026-10 상품 공급상태 관리: 10건 고정)은 지금 표시 개수로 모든 페이지를 넘긴다.
       const current = findSupplyTable().rows.length;
+      // 이어 받기 중이면 처음 정한 표시 개수를 쓴다(실패한 페이지가 덜 떠 있어도 표시 개수가 바뀌지 않게).
+      if (partialCapture && partialCapture.totalCount === totalCount) return partialCapture.pageSize;
       if (current > 0) return current;
       throw new Error("페이지 표시 개수 선택창을 찾지 못했습니다.");
     }
@@ -138,8 +148,10 @@
   }
 
   async function openPage(pageNumber, expectedRows, previousFingerprint) {
-    if (activePageNumber() === pageNumber) return waitForStablePage(expectedRows);
-    for (let guard = 0; guard < 100; guard += 1) {
+    const label = `${pageNumber}페이지: `;
+    if (activePageNumber() === pageNumber) return waitForStablePage(expectedRows, "", false, label);
+    let retries = 0;
+    for (let guard = 0; guard < 200; guard += 1) {
       const candidate = paginationCandidate(pageNumber);
       if (!candidate) throw new Error(`${pageNumber}페이지 이동 버튼을 찾지 못했습니다.`);
       const beforePagination = paginationSignature();
@@ -148,8 +160,17 @@
         await waitForPaginationChange(beforePagination);
         continue;
       }
-      const state = await waitForStablePage(expectedRows, previousFingerprint, true);
-      if (candidate.kind === "numeric" || activePageNumber() === pageNumber) return state;
+      try {
+        const state = await waitForStablePage(expectedRows, previousFingerprint, true, label);
+        if (candidate.kind === "numeric" || activePageNumber() === pageNumber) return state;
+      } catch (error) {
+        // 이미 그 페이지로 넘어갔는데 늦게 뜬 경우: 내용이 바뀌었는지는 따지지 않고 다시 기다린다.
+        if (retries >= PAGE_RETRIES) throw error;
+        retries += 1;
+        if (activePageNumber() === pageNumber) {
+          try { return await waitForStablePage(expectedRows, "", false, label); } catch {}
+        }
+      }
     }
     throw new Error(`${pageNumber}페이지 탐색 안전 한도를 초과했습니다.`);
   }
@@ -175,10 +196,16 @@
     progress(`페이지 표시 개수 준비 중 · 총 ${totalCount.toLocaleString()}건`);
     const pageSize = await setLargestPageSize(totalCount);
     const pageCount = core.expectedPageCount(totalCount, pageSize);
-    const pages = [];
-    let headers = null;
-    let previousFingerprint = "";
-    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+    // 같은 탭·같은 검색(총 건수·표시 개수)에서 실패했던 수집이 있으면 그 다음 페이지부터 이어 받는다.
+    const searchKey = location.origin + location.pathname + location.search;
+    const resume = partialCapture && partialCapture.totalCount === totalCount && partialCapture.pageSize === pageSize && partialCapture.searchKey === searchKey ? partialCapture : null;
+    const pages = resume ? [...resume.pages] : [];
+    let headers = resume ? resume.headers : null;
+    let previousFingerprint = resume ? resume.lastFingerprint : "";
+    const firstStartedAt = resume ? resume.startedAt : startedAt;
+    partialCapture = { totalCount, pageSize, searchKey, startedAt: firstStartedAt, pages, headers, lastFingerprint: previousFingerprint };
+    if (resume) progress(`${pages.length + 1}페이지부터 이어서 수집합니다 · 이미 받은 ${pages.length}페이지 유지`);
+    for (let pageNumber = pages.length + 1; pageNumber <= pageCount; pageNumber += 1) {
       const expectedRows = core.expectedRowsForPage(totalCount, pageSize, pageNumber);
       progress(`상품공급상태 ${pageNumber}/${pageCount} · ${pages.reduce((sum, page) => sum + page.rows.length, 0).toLocaleString()}/${totalCount.toLocaleString()}건`);
       const state = await openPage(pageNumber, expectedRows, previousFingerprint);
@@ -186,17 +213,20 @@
       else if (headers.length !== state.headers.length || headers.some((header, index) => core.normalizeHeader(header) !== core.normalizeHeader(state.headers[index]))) throw new Error(`${pageNumber}페이지의 열 구성이 앞 페이지와 다릅니다.`);
       pages.push({ pageNumber, rows: state.rows });
       previousFingerprint = state.fingerprint;
+      partialCapture.headers = headers;
+      partialCapture.lastFingerprint = previousFingerprint;
     }
     if (readTotalCount(findSupplyTable()) !== totalCount) throw new Error("수집 중 전체 건수가 변경되어 전송을 중단했습니다.");
     const validation = core.validateCapture({ totalCount, pageSize, headers, pages });
-    if (!validation.complete) throw new Error(`전체 수집 검증 실패: ${validation.errors.join(" ")}`);
+    if (!validation.complete) { partialCapture = null; throw new Error(`전체 수집 검증 실패: ${validation.errors.join(" ")}`); }
+    partialCapture = null;
     return {
       schemaVersion: 1,
       source: "supplier-hub-live",
       headers,
       rows: pages.flatMap(page => page.rows),
       capturedAt: new Date().toISOString(),
-      startedAt,
+      startedAt: firstStartedAt,
       sourceUrl: location.href,
       totalRowCount: totalCount,
       pageCount,
