@@ -61,6 +61,11 @@ function isRocketPendingItem(item: ProductCatalogItem): item is RocketPendingIte
   return Boolean((item as Partial<RocketPendingItem>).rocketPending);
 }
 
+function quickGroupKey(item: RocketPendingItem): string {
+  const model = clean(item.modelName);
+  return model ? `model:${model}` : `product:${item.productName}`;
+}
+
 function QuickProductImage({ url, name }: { url: string; name: string }) {
   const [failedUrl, setFailedUrl] = useState("");
   const imageUrl = getWmsDisplayImageUrl(externalUrl(url));
@@ -300,22 +305,22 @@ export default function ProductCatalogPage() {
   const [quickSelectedProducts, setQuickSelectedProducts] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   /** 여러 번 연속 삭제해도 서버 저장은 순서대로 처리하고, 성공한 상품만 목록에서 뺀다. */
-  const quickDelete = useCallback((name: string, productItems: RocketPendingItem[]) => {
+  const quickDelete = useCallback((key: string, name: string, productItems: RocketPendingItem[]) => {
     const skuIds = productItems.map(item => item.skuId);
-    setQuickDeleting(current => new Set(current).add(name));
+    setQuickDeleting(current => new Set(current).add(key));
     setRocketError("");
     const request = quickDeleteQueue.current.then(async () => {
       const response = await fetch("/api/wms/rocket-pending", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuIds, deleted: true }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.ok !== true) throw new Error(data.error || "삭제를 저장하지 못했습니다.");
       setRocketItems(current => current ? current.filter(item => !skuIds.includes(item.skuId)) : current);
-      setQuickSelectedProducts(current => { const next = new Set(current); next.delete(name); return next; });
+      setQuickSelectedProducts(current => { const next = new Set(current); next.delete(key); return next; });
       setLastDeleted({ name, skuIds });
       setDeletedRocketItems(current => current ? [...current.filter(item => !skuIds.includes(item.skuId)), ...productItems] : current);
     }).catch(error => {
       setRocketError(error instanceof Error && error.message.includes("저장하지 못했습니다") ? error.message : "삭제를 저장하지 못했습니다. 다시 눌러 주세요.");
     }).finally(() => {
-      setQuickDeleting(current => { const next = new Set(current); next.delete(name); return next; });
+      setQuickDeleting(current => { const next = new Set(current); next.delete(key); return next; });
     });
     quickDeleteQueue.current = request;
   }, []);
@@ -332,7 +337,7 @@ export default function ProductCatalogPage() {
       setRocketItems(current => current ? current.filter(item => !selectedSkuIds.has(item.skuId)) : current);
       setDeletedRocketItems(current => current ? [...current.filter(item => !selectedSkuIds.has(item.skuId)), ...selectedItems] : current);
       setQuickSelectedProducts(new Set());
-      setLastDeleted({ name: `${productCount.toLocaleString()}개 상품`, skuIds });
+      setLastDeleted({ name: `${productCount.toLocaleString()}개 묶음`, skuIds });
     }).catch(error => {
       setRocketError(error instanceof Error && error.message.includes("저장하지 못했습니다") ? error.message : "선택 상품 삭제를 저장하지 못했습니다. 다시 눌러 주세요.");
     }).finally(() => setBulkDeleting(false));
@@ -1130,17 +1135,21 @@ export default function ProductCatalogPage() {
           </section>}
           {status === "rocket-new" && rocketItems && (() => {
             const byProduct = new Map<string, RocketPendingItem[]>();
-            for (const item of filteredItems) if (isRocketPendingItem(item)) byProduct.set(item.productName, [...(byProduct.get(item.productName) || []), item]);
+            const matchedGroupKeys = new Set(filteredItems.filter(isRocketPendingItem).map(quickGroupKey));
+            for (const item of rocketItems) {
+              const key = quickGroupKey(item);
+              if (matchedGroupKeys.has(key)) byProduct.set(key, [...(byProduct.get(key) || []), item]);
+            }
             const quickNeedle = clean(quickQuery);
             const products = [...byProduct.entries()].filter(([, productItems]) => !quickNeedle || productItems.some(item =>
               [item.productName, item.modelName, item.skuId, item.barcode, item.optionLabel].map(clean).join(" ").includes(quickNeedle)));
             const shownProducts = quickNeedle ? products : products.slice(0, quickLimit);
-            const matchedNames = new Set(products.map(([name]) => name));
-            const selectedItems = rocketItems.filter(item => matchedNames.has(item.productName) && quickSelectedProducts.has(item.productName));
-            const selectedProductCount = new Set(selectedItems.map(item => item.productName)).size;
+            const selectedGroups = products.filter(([key]) => quickSelectedProducts.has(key));
+            const selectedItems = selectedGroups.flatMap(([, productItems]) => productItems);
+            const selectedProductCount = selectedGroups.length;
             const allShownSelected = shownProducts.length > 0 && shownProducts.every(([name]) => quickSelectedProducts.has(name));
             return <details open style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: "12px 16px" }}>
-              <summary style={{ cursor: "pointer", color: wmsColors.ink, fontWeight: 900, fontSize: 15 }}>빠른 정리 · {products.length.toLocaleString()}개 상품</summary>
+              <summary style={{ cursor: "pointer", color: wmsColors.ink, fontWeight: 900, fontSize: 15 }}>빠른 정리 · {products.length.toLocaleString()}개 묶음</summary>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
                 <input type="search" aria-label="빠른 정리 상품 검색" placeholder="삭제할 상품 검색 · 상품명, 모델명, SKU, 옵션" value={quickQuery} disabled={bulkDeleting || quickDeleting.size > 0 || undoingQuickDelete} onChange={event => {
                   setQuickQuery(event.target.value);
@@ -1149,8 +1158,8 @@ export default function ProductCatalogPage() {
                 }} style={{ flex: "1 1 280px", minWidth: 0, minHeight: 44, padding: "0 12px", border: `1px solid ${wmsColors.border}`, borderRadius: 8, fontSize: 14 }} />
                 {quickQuery && <button type="button" disabled={bulkDeleting || quickDeleting.size > 0 || undoingQuickDelete} onClick={() => { setQuickQuery(""); setQuickSelectedProducts(new Set()); setQuickLimit(100); }} style={{ ...neutralPillStyle, minHeight: 44 }}>검색 초기화</button>}
               </div>
-              {quickNeedle && <p role="status" style={{ margin: "6px 0", fontSize: 12, color: wmsColors.muted }}>검색 결과 {products.length.toLocaleString()}개를 모두 표시합니다. 검색어를 바꾸면 선택이 초기화됩니다.</p>}
-              <p style={{ margin: "6px 0 10px", fontSize: 12, color: wmsColors.muted }}>현재 표시된 상품만 전체 선택됩니다. 등록할 상품은 체크를 해제하세요. 선택 상품 삭제는 Wing 등록검토 목록에서만 제외하며, 저장에 성공하면 개수가 줄어듭니다.</p>
+              {quickNeedle && <p role="status" style={{ margin: "6px 0", fontSize: 12, color: wmsColors.muted }}>검색 결과 {products.length.toLocaleString()}개 묶음을 모두 표시합니다. 검색어를 바꾸면 선택이 초기화됩니다.</p>}
+              <p style={{ margin: "6px 0 10px", fontSize: 12, color: wmsColors.muted }}>모델명 기준으로 옵션을 묶고, 모델명이 없으면 상품명으로 묶습니다. 삭제하면 묶음의 모든 옵션이 Wing 등록검토 관련 목록에서 제외됩니다. 현재 표시된 묶음만 전체 선택됩니다.</p>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10, fontSize: 12 }}>
                 <label style={{ display: "inline-flex", gap: 8, alignItems: "center", minHeight: 44, padding: "0 10px", border: `1px solid ${wmsColors.border}`, borderRadius: 8, fontWeight: 800, cursor: "pointer" }}>
                   <input type="checkbox" style={{ width: 24, height: 24, margin: 0, accentColor: wmsColors.slate, cursor: "pointer" }} checked={allShownSelected} disabled={bulkDeleting || quickDeleting.size > 0 || undoingQuickDelete} onChange={event => {
@@ -1160,9 +1169,9 @@ export default function ProductCatalogPage() {
                       for (const [name] of shownProducts) if (checked) next.add(name); else next.delete(name);
                       return next;
                     });
-                  }} /> {quickNeedle ? "검색 결과" : "현재 표시된"} {shownProducts.length.toLocaleString()}개 전체 선택
+                  }} /> {quickNeedle ? "검색 결과" : "현재 표시된"} {shownProducts.length.toLocaleString()}개 묶음 전체 선택
                 </label>
-                <span>삭제 선택 {selectedProductCount.toLocaleString()}개</span>
+                <span>삭제 선택 {selectedProductCount.toLocaleString()}개 묶음 · 옵션 {selectedItems.length.toLocaleString()}개</span>
                 <button type="button" disabled={!selectedProductCount || bulkDeleting || quickDeleting.size > 0 || undoingQuickDelete} onClick={() => setQuickSelectedProducts(new Set())} style={{ ...neutralPillStyle, minHeight: 44 }}>선택 초기화</button>
                 <button type="button" disabled={!selectedProductCount || bulkDeleting || quickDeleting.size > 0 || undoingQuickDelete} onClick={() => bulkDelete(selectedItems, selectedProductCount)} style={{ minHeight: 34, padding: "0 14px", borderRadius: 8, border: "1px solid #dfbdb2", background: "#f2dfd8", color: "#7f4032", fontWeight: 800, fontSize: 12, cursor: bulkDeleting ? "wait" : "pointer" }}>{bulkDeleting ? "선택 상품 저장 중…" : `선택 ${selectedProductCount.toLocaleString()}개 삭제`}</button>
               </div>
@@ -1172,15 +1181,17 @@ export default function ProductCatalogPage() {
                 <button type="button" onClick={() => void undoQuickDelete()} disabled={undoingQuickDelete || bulkDeleting} style={{ minHeight: 30, padding: "0 12px", borderRadius: 8, border: "1px solid #c7b9a8", background: "#e9ddcf", color: "#4b4744", fontWeight: 800, fontSize: 12, cursor: undoingQuickDelete ? "wait" : "pointer" }}>{undoingQuickDelete ? "되돌리는 중…" : "되돌리기"}</button>
               </div>}
               <div style={{ display: "grid", gap: 4 }}>
-                {shownProducts.map(([name, productItems]) => {
+                {shownProducts.map(([key, productItems]) => {
                   const first = productItems[0];
+                  const name = first.productName || "상품명 없음";
+                  const groupName = first.modelName ? `${first.modelName} · ${name}` : name;
                   const link = first.exposedProductId ? `https://www.coupang.com/vp/products/${encodeURIComponent(first.exposedProductId)}` : "";
-                  const imageUrl = productItems.find(item => item.imageUrl)?.imageUrl || quickImagesByProductId.get(first.exposedProductId || "") || "";
-                    return <div key={name} style={{ display: "grid", gridTemplateColumns: "auto minmax(0,1fr) auto", gap: 10, alignItems: "center", padding: "6px 8px", borderBottom: `1px solid ${wmsColors.border}` }}>
+                  const imageUrl = productItems.map(item => item.imageUrl || quickImagesByProductId.get(item.exposedProductId || "")).find(Boolean) || "";
+                    return <div key={key} style={{ display: "grid", gridTemplateColumns: "auto minmax(0,1fr) auto", gap: 10, alignItems: "center", padding: "6px 8px", borderBottom: `1px solid ${wmsColors.border}` }}>
                       <label style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 44, height: 44, cursor: "pointer" }}>
-                        <input type="checkbox" aria-label={`${name || "상품명 없음"} 삭제 선택`} style={{ width: 24, height: 24, margin: 0, accentColor: wmsColors.slate, cursor: "pointer" }} checked={quickSelectedProducts.has(name)} disabled={bulkDeleting || quickDeleting.size > 0 || undoingQuickDelete} onChange={event => {
+                        <input type="checkbox" aria-label={`${groupName} 삭제 선택`} style={{ width: 24, height: 24, margin: 0, accentColor: wmsColors.slate, cursor: "pointer" }} checked={quickSelectedProducts.has(key)} disabled={bulkDeleting || quickDeleting.size > 0 || undoingQuickDelete} onChange={event => {
                           const checked = event.target.checked;
-                          setQuickSelectedProducts(current => { const next = new Set(current); if (checked) next.add(name); else next.delete(name); return next; });
+                          setQuickSelectedProducts(current => { const next = new Set(current); if (checked) next.add(key); else next.delete(key); return next; });
                         }} />
                       </label>
                     <div style={{ minWidth: 0, display: "flex", gap: 10, alignItems: "center" }}>
@@ -1196,11 +1207,11 @@ export default function ProductCatalogPage() {
                       </div>
                       </div>
                     </div>
-                    <button type="button" onClick={() => void quickDelete(name, productItems)} disabled={quickDeleting.has(name) || bulkDeleting} style={{ minHeight: 34, padding: "0 14px", borderRadius: 8, border: "1px solid #dfbdb2", background: "#f2dfd8", color: "#7f4032", fontWeight: 800, fontSize: 12, cursor: quickDeleting.has(name) ? "wait" : "pointer" }}>{quickDeleting.has(name) ? "저장 중…" : "삭제"}</button>
+                    <button type="button" onClick={() => void quickDelete(key, `${groupName} (옵션 ${productItems.length}개)`, productItems)} disabled={quickDeleting.has(key) || bulkDeleting} style={{ minHeight: 34, padding: "0 14px", borderRadius: 8, border: "1px solid #dfbdb2", background: "#f2dfd8", color: "#7f4032", fontWeight: 800, fontSize: 12, cursor: quickDeleting.has(key) ? "wait" : "pointer" }}>{quickDeleting.has(key) ? "저장 중…" : "삭제"}</button>
                   </div>;
                 })}
               </div>
-              {!quickNeedle && products.length > quickLimit && <button type="button" onClick={() => setQuickLimit(current => current + 100)} style={{ ...neutralPillStyle, marginTop: 10 }}>상품 100개 더 보기 ({(products.length - quickLimit).toLocaleString()}개 남음)</button>}
+              {!quickNeedle && products.length > quickLimit && <button type="button" onClick={() => setQuickLimit(current => current + 100)} style={{ ...neutralPillStyle, marginTop: 10 }}>묶음 100개 더 보기 ({(products.length - quickLimit).toLocaleString()}개 남음)</button>}
             </details>;
           })()}
           {status === "rocket-new" && !rocketItems && <p style={{ color: rocketError ? wmsColors.warnText : wmsColors.muted }}>{rocketError || "로켓 미등록 목록을 읽는 중입니다."}</p>}
