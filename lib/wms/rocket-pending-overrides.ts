@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { BlobPreconditionFailedError, get, put } from "@vercel/blob";
+import { BlobNotFoundError, BlobPreconditionFailedError, get, head, put } from "@vercel/blob";
 
 /**
  * 로켓 미등록 상품(data/rocket-pending.json)에 사용자가 직접 넣거나 고친 모델명·카테고리·성별.
@@ -18,14 +18,22 @@ function useBlob(): boolean {
   return Boolean(process.env.VERCEL || process.env.BLOB_READ_WRITE_TOKEN);
 }
 
-async function readStore(): Promise<{ store: Store; etag?: string }> {
+async function readStore(forWrite = false): Promise<{ store: Store; etag?: string }> {
   if (!useBlob()) {
     try { return { store: JSON.parse(await fs.readFile(LOCAL_PATH, "utf8")) as Store }; }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { store: { entries: {} } }; throw error; }
   }
+  let writeEtag: string | undefined;
+  if (forWrite) {
+    try { writeEtag = (await head(BLOB_PATH)).etag; }
+    catch (error) {
+      const missing = error instanceof BlobNotFoundError || (error instanceof Error && error.message.includes("The requested blob does not exist"));
+      if (!missing) throw error;
+    }
+  }
   const result = await get(BLOB_PATH, { access: "private", useCache: false });
   if (!result || result.statusCode !== 200) return { store: { entries: {} } };
-  return { store: JSON.parse(await new Response(result.stream).text()) as Store, etag: result.blob.etag };
+  return { store: JSON.parse(await new Response(result.stream).text()) as Store, etag: writeEtag ?? result.blob.etag };
 }
 
 export async function readRocketPendingOverrides(): Promise<Record<string, RocketPendingOverride>> {
@@ -39,7 +47,7 @@ export async function readRocketPendingOverrides(): Promise<Record<string, Rocke
 export async function changeRocketPendingOverrides(skuIds: string[], value: Omit<RocketPendingOverride, "updatedAt"> | null) {
   const work = localQueue.then(async () => {
     for (let attempt = 0; attempt < 4; attempt += 1) {
-      const { store, etag } = await readStore();
+      const { store, etag } = await readStore(true);
       const entries = { ...store.entries };
       for (const skuId of skuIds) {
         const previous = entries[skuId];
