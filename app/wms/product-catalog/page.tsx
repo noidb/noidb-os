@@ -56,7 +56,7 @@ function clean(value: string): string {
   return String(value || "").trim().toLowerCase();
 }
 
-type RocketPendingItem = ProductCatalogItem & { rocketPending: true; modelSource: string };
+type RocketPendingItem = ProductCatalogItem & { rocketPending: true; modelSource: string; exposedProductId?: string };
 function isRocketPendingItem(item: ProductCatalogItem): item is RocketPendingItem {
   return Boolean((item as Partial<RocketPendingItem>).rocketPending);
 }
@@ -256,6 +256,28 @@ export default function ProductCatalogPage() {
   }, []);
   // 저장 뒤에는 화면을 비우지 않고 목록만 새로 받아 바꾼다(스크롤 위치 유지).
   const deletedOpenedRef = useRef(false);
+  const [quickLimit, setQuickLimit] = useState(100);
+  const [lastDeleted, setLastDeleted] = useState<{ name: string; skuIds: string[] } | null>(null);
+  /** 빠른 정리: 확인창 없이 바로 목록에서 빼고(화면도 즉시 갱신), 바로 아래 "되돌리기"로 취소한다. */
+  const quickDelete = useCallback(async (name: string, productItems: RocketPendingItem[]) => {
+    const skuIds = productItems.map(item => item.skuId);
+    setRocketItems(current => current ? current.filter(item => !skuIds.includes(item.skuId)) : current);
+    setLastDeleted({ name, skuIds });
+    try {
+      const response = await fetch("/api/wms/rocket-pending", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuIds, deleted: true }) });
+      if (!response.ok) throw new Error();
+    } catch {
+      setRocketError("삭제를 저장하지 못했습니다. 목록을 다시 불러옵니다.");
+      void loadRocketItems();
+    }
+  }, [loadRocketItems]);
+  const undoQuickDelete = useCallback(async () => {
+    if (!lastDeleted) return;
+    const target = lastDeleted;
+    setLastDeleted(null);
+    await fetch("/api/wms/rocket-pending", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuIds: target.skuIds, deleted: false }) }).catch(() => undefined);
+    void loadRocketItems();
+  }, [lastDeleted, loadRocketItems]);
   const reloadRocketItems = useCallback(() => {
     void loadRocketItems();
     if (deletedOpenedRef.current) void loadDeletedRocketItems();
@@ -1029,6 +1051,38 @@ export default function ProductCatalogPage() {
             </div>
             {reregistrationGroups.length > groupLimit && <button type="button" onClick={() => setGroupLimit(current => current + 100)} style={{ ...neutralPillStyle, marginTop: 10 }}>모델 100개 더 보기 ({reregistrationGroups.length - groupLimit}개 남음)</button>}
           </section>}
+          {status === "rocket-new" && rocketItems && (() => {
+            const byProduct = new Map<string, RocketPendingItem[]>();
+            for (const item of filteredItems) if (isRocketPendingItem(item)) byProduct.set(item.productName, [...(byProduct.get(item.productName) || []), item]);
+            const products = [...byProduct.entries()];
+            return <details open style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: "12px 16px" }}>
+              <summary style={{ cursor: "pointer", color: wmsColors.ink, fontWeight: 900, fontSize: 15 }}>빠른 정리 · {products.length.toLocaleString()}개 상품</summary>
+              <p style={{ margin: "6px 0 10px", fontSize: 12, color: wmsColors.muted }}>재고가 없거나 등록하지 않을 상품은 &quot;삭제&quot;를 누르면 바로 사라져요(확인창 없음). 잘못 눌렀으면 위에 뜨는 &quot;되돌리기&quot;를 누르세요. 남은 상품은 아래 카드에서 사진검색·등록 준비를 하면 됩니다.</p>
+              {lastDeleted && <div role="status" style={{ position: "sticky", top: 0, zIndex: 5, display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", padding: "8px 12px", marginBottom: 8, borderRadius: 8, background: "#f2dfd8", color: "#7f4032", fontSize: 12, fontWeight: 700 }}>
+                <span>삭제했어요 · {lastDeleted.name}</span>
+                <button type="button" onClick={() => void undoQuickDelete()} style={{ minHeight: 30, padding: "0 12px", borderRadius: 8, border: "1px solid #c7b9a8", background: "#e9ddcf", color: "#4b4744", fontWeight: 800, fontSize: 12, cursor: "pointer" }}>되돌리기</button>
+              </div>}
+              <div style={{ display: "grid", gap: 4 }}>
+                {products.slice(0, quickLimit).map(([name, productItems]) => {
+                  const first = productItems[0];
+                  const link = first.exposedProductId ? `https://www.coupang.com/vp/products/${encodeURIComponent(first.exposedProductId)}` : "";
+                  return <div key={name} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 10, alignItems: "center", padding: "6px 8px", borderBottom: `1px solid ${wmsColors.border}` }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: wmsColors.ink, overflowWrap: "anywhere" }}>{name || "상품명 없음"}</div>
+                      <div style={{ fontSize: 11, color: wmsColors.muted, display: "flex", gap: "2px 10px", flexWrap: "wrap" }}>
+                        <span>{first.modelName || "모델명 없음"}</span>
+                        <span>옵션 {productItems.length}개{productItems.some(item => item.optionLabel) ? ` · ${productItems.map(item => item.optionLabel).filter(Boolean).slice(0, 4).join(", ")}${productItems.length > 4 ? " …" : ""}` : ""}</span>
+                        <span>Wing {first.orderableStatus || "상태 미확인"}</span>
+                        {link && <a href={link} target="_blank" rel="noreferrer" style={{ color: wmsColors.slate, fontWeight: 700 }}>쿠팡에서 보기 ↗</a>}
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => void quickDelete(name, productItems)} style={{ minHeight: 34, padding: "0 14px", borderRadius: 8, border: "1px solid #dfbdb2", background: "#f2dfd8", color: "#7f4032", fontWeight: 800, fontSize: 12, cursor: "pointer" }}>삭제</button>
+                  </div>;
+                })}
+              </div>
+              {products.length > quickLimit && <button type="button" onClick={() => setQuickLimit(current => current + 100)} style={{ ...neutralPillStyle, marginTop: 10 }}>상품 100개 더 보기 ({(products.length - quickLimit).toLocaleString()}개 남음)</button>}
+            </details>;
+          })()}
           {status === "rocket-new" && !rocketItems && <p style={{ color: rocketError ? wmsColors.warnText : wmsColors.muted }}>{rocketError || "로켓 미등록 목록을 읽는 중입니다."}</p>}
           {status === "rocket-new" && rocketItems && unnamedItems.length > 0 && (() => {
             const byProduct = new Map<string, RocketPendingItem[]>();
