@@ -8,7 +8,7 @@ import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { MAX_SELECTED_PHOTOS, clearPhotoSearch, connectPhotoFolder, FOLDER_TIER_LABELS, loadPhotoSearch, loadSavedThumbnail, saveThumbnail, openPhotoFolders, openSavedPhotos, photoFolderName, photoFolderReady, savePhotoSearch, searchPhotoFolder, savePreparedPhotos, type FolderTier, type LocalPhoto } from "@/lib/image-search/browser-folder";
-import { savePreparedDetail } from "@/lib/image-search/browser-folder";
+import { loadPreparedDetail, savePreparedDetail } from "@/lib/image-search/browser-folder";
 import { identifyPhoto, photoPriority, photoTier, type PhotoIdentity, type PhotoTier } from "@/lib/image-search/photo-kind";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 import type { ReregistrationExclusion } from "@/lib/wms/reregistration-exclusions";
@@ -431,7 +431,10 @@ export default function ProductCatalogPage() {
     // 빠르게 되살리려고 1차 사진과 고른 사진만 다시 연다. 2·3·4차는 필요하면 버튼으로 다시 연다.
     const firstTier = FOLDER_TIER_LABELS[1];
     const picked = new Set(saved.selectedIds);
-    const quick = saved.hasFolders === false ? saved.hits : saved.hits.filter(hit => hit.matchedBy.includes(firstTier) || picked.has(hit.id));
+    // 기존 상세페이지 후보도 함께 연다 — 빼면 등록 준비 때 "기존상세페이지 사용"이 사라진다.
+    // 상세페이지는 대부분 "모델명.jpg"·"SKU.jpg"라 이름으로는 알 수 없어서, 검색 때 긴 이미지로 판별한 사진을 저장해 두고 그대로 다시 연다.
+    const details = new Set(saved.detailIds || []);
+    const quick = saved.hasFolders === false ? saved.hits : saved.hits.filter(hit => hit.matchedBy.includes(firstTier) || picked.has(hit.id) || details.has(hit.id) || /상세|detail/i.test(hit.id));
     const found = await openSavedPhotos(quick.length ? quick : saved.hits.slice(0, 60));
     if (!found.length) return null;
     const selectedIds = new Set(saved.selectedIds.slice(0, MAX_SELECTED_PHOTOS));
@@ -454,7 +457,7 @@ export default function ProductCatalogPage() {
   useEffect(() => {
     for (const [model, state] of Object.entries(photoStates)) {
       if (state.loading || !state.hits.length) continue;
-      const saved = { hits: state.hits.map(hit => ({ id: hit.id, matchedBy: hit.matchedBy })), selectedIds: state.hits.filter(hit => hit.selected).map(hit => hit.id), analysisId: state.analysisId, level: state.level, grouped: state.grouped, hasFolders: state.hasFolders, hiddenIds: state.hiddenIds || [], visualGroups: state.visualGroups || {}, photoDecisions: state.photoDecisions || {} };
+      const saved = { hits: state.hits.map(hit => ({ id: hit.id, matchedBy: hit.matchedBy })), selectedIds: state.hits.filter(hit => hit.selected).map(hit => hit.id), analysisId: state.analysisId, level: state.level, grouped: state.grouped, hasFolders: state.hasFolders, hiddenIds: state.hiddenIds || [], detailIds: state.hits.filter(hit => hit.identity.kind === "detail").map(hit => hit.id), visualGroups: state.visualGroups || {}, photoDecisions: state.photoDecisions || {} };
       const json = JSON.stringify(saved);
       if (savedSearchJson.current[model] === json) continue;
       savedSearchJson.current[model] = json;
@@ -723,7 +726,10 @@ export default function ProductCatalogPage() {
     setFolderMessage("");
     try {
       await savePreparedPhotos(modelName, selectedPhotos, analysisId);
-      await savePreparedDetail(modelName, chosenDetail);
+      // 다시 열 때 기존 상세페이지 후보를 못 찾았으면, 전에 골라 둔 상세페이지를 지우지 않고 그대로 둔다.
+      // ("사용하지 않음"을 고른 경우에만 비운다.)
+      const keepPrevious = !chosenDetail && detailChoices[modelName] !== "none" && Boolean(await loadPreparedDetail(modelName).catch(() => null));
+      if (!keepPrevious) await savePreparedDetail(modelName, chosenDetail);
       window.localStorage.setItem(REREGISTRATION_PREP_KEY, JSON.stringify({ modelName, items: groupItems }));
       router.push(`/?reregisterModel=${encodeURIComponent(modelName)}`);
     } catch {

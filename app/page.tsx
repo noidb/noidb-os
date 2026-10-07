@@ -504,7 +504,8 @@ export default function Home() {
           colors: colors.join(","),
           // 제품DB에 사이즈가 비어 있으면 카테고리 기본값(목걸이 = FREE)을 넣는다.
           sizes: String(first.jewelrySize || "").trim() || defaultSizes(String(first.gender || ""), String(first.category || "")),
-          coupangTitle: String(first.productName || ""),
+          // 제품DB 상품명 끝에 붙은 옵션(", 유광골드" 등)은 빼고 첫 번째 쉼표 앞의 상품명만 가져온다.
+          coupangTitle: String(first.productName || "").split(",")[0].trim(),
           dimension: String(first.dimension || ""),
           cost: String(first.costVatIncluded || ""),
           price: String(first.salePrice || ""),
@@ -1778,6 +1779,16 @@ export default function Home() {
   };
 
   // 제품사진선택으로 나가기 전에 지금 작업을 이 기기에 임시저장한다(사진까지). 돌아오면 자동으로 다시 연다.
+  // AI 상세페이지 새로 만들기에서 고를 수 있는 사진: 5번 쿠팡 등록이미지 목록 + 이미 칸에 넣은 사진(중복 제외).
+  const quickRemakePool = useMemo(() => {
+    const seen = new Set<string>();
+    const all: Array<SlotImage | null | undefined> = [
+      ...uploadPool, mainWear, allOptions, detailCut, wear01, wear02, ...customSlots.map(item => item.slot),
+    ];
+    return all.filter((image): image is SlotImage => Boolean(image?.dataUrl) && !seen.has(image!.dataUrl) && Boolean(seen.add(image!.dataUrl)))
+      .map(image => ({ dataUrl: image.source || image.dataUrl, fileName: image.fileName }));
+  }, [uploadPool, mainWear, allOptions, detailCut, wear01, wear02, customSlots]);
+
   const openPhotoSelect = async (event: React.MouseEvent<HTMLAnchorElement>, href: string) => {
     const hasWork = Boolean(product.modelNo?.trim() || product.modelName?.trim() || photos.length || uploadPool.length);
     if (!model || !hasWork) return;
@@ -2740,6 +2751,7 @@ export default function Home() {
           headerUrl={detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER}
           footerUrl={detailFooter?.dataUrl || ""}
           modelName={model}
+          poolImages={quickRemakePool}
           incomingFile={incomingDetailFile}
           incomingToken={incomingDetailToken}
           onComplete={({ dataUrl }) => {

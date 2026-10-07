@@ -24,6 +24,8 @@ type Props = {
   incomingToken: number;
   onComplete: (result: { dataUrl: string; sections: QuickDetailSection[] }) => void;
   onAddToList: (items: Array<{ fileName: string; dataUrl: string; source: string }>) => void;
+  /** 5번 쿠팡 등록이미지(목록·칸)의 사진. 상세페이지 없이 여기서 골라 바로 AI 편집을 시작할 수 있다. */
+  poolImages?: Array<{ dataUrl: string; fileName: string }>;
 };
 
 async function cropDataUrl(dataUrl: string, top: number, bottom: number): Promise<string> {
@@ -74,7 +76,9 @@ function newDraftId() {
   return `quick-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, incomingFile, incomingToken, onComplete, onAddToList }: Props) {
+export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, incomingFile, incomingToken, onComplete, onAddToList, poolImages = [] }: Props) {
+  const [pickingPool, setPickingPool] = useState(false);
+  const [pickedPool, setPickedPool] = useState<string[]>([]);
   const [draftId, setDraftId] = useState("");
   const [drafts, setDrafts] = useState<QuickDetailDraft[]>([]);
   const [draftsReady, setDraftsReady] = useState(false);
@@ -189,6 +193,47 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       setMessage(error instanceof Error ? error.message : "상세페이지를 나누지 못했습니다.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * 상세페이지 없이 사진 몇 장으로 바로 시작한다(모델컷·제품컷만 골라 AI 편집).
+   * 고른 사진이 그대로 "사진별 확인" 목록이 되고, 2·3단계는 상세페이지를 나눴을 때와 똑같다.
+   */
+  async function startFromPhotos(images: Array<{ dataUrl: string; name: string }>, label: string) {
+    if (!images.length || busy) return;
+    setBusy(true);
+    try {
+      const stamp = Date.now().toString(36);
+      const found = images.map((image, index) => ({ id: `${stamp}-p${index + 1}`, dataUrl: image.dataUrl }));
+      const sections = await classifyKinds(found);
+      setDraftId(newDraftId());
+      setSource("");
+      setSourceName(label);
+      resetWork();
+      setOriginalSections(sections);
+      setSectionActions(Object.fromEntries(sections.map(section => [section.id, "edit"])));
+      setScanSummary({ found: sections.length, kept: sections.length, excluded: 0 });
+      setCut(null);
+      setPickingPool(false);
+      setPickedPool([]);
+      setMessage(`사진 ${sections.length}장을 가져왔습니다. 제품컷·착용컷 구분을 확인하고, AI로 바꾸지 않을 사진은 "편집 제외"를 누른 뒤 새로 만들기를 누르세요.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "사진을 가져오지 못했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function choosePhotoFiles(event: ChangeEvent<HTMLInputElement>) {
+    const files = [...(event.target.files || [])].filter(file => file.type.startsWith("image/"));
+    event.target.value = "";
+    if (!files.length) return;
+    try {
+      const images = await Promise.all(files.map(async file => ({ dataUrl: await readImageFile(file), name: file.name })));
+      await startFromPhotos(images, `사진 ${images.length}장`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "사진을 불러오지 못했습니다.");
     }
   }
 
@@ -404,6 +449,16 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
           <span>클릭해서 선택하거나 여기에 끌어다 놓으세요</span>
           <input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseFile} />
         </label>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+          <button type="button" className="secondaryButton compactFieldButton" disabled={busy || !poolImages.length}
+            title={poolImages.length ? "5번 쿠팡 등록이미지에서 AI로 편집할 사진을 고릅니다." : "5번 쿠팡 등록이미지에 사진이 없습니다."}
+            onClick={() => { setPickingPool(value => !value); setPickedPool([]); }}>등록이미지에서 고르기</button>
+          <label className="secondaryButton compactFieldButton" style={{ cursor: busy ? "wait" : "pointer" }} title="상세페이지 없이 사진 여러 장을 바로 올립니다.">
+            사진 여러 장 올리기
+            <input type="file" accept="image/jpeg,image/png,image/webp" multiple style={{ display: "none" }} disabled={busy} onChange={event => void choosePhotoFiles(event)} />
+          </label>
+        </div>
+        <small>상세페이지가 없어도 사진만 골라 바로 AI 편집할 수 있습니다.</small>
         {sourceName && <small>{sourceName}</small>}
       </article>
       <article>
@@ -419,6 +474,29 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         {result && <a className={styles.quickDownload} href={result.dataUrl} download={`${modelName.trim() || "NOID-B-새상세페이지"}.jpg`}>완성 이미지만 저장하기</a>}
       </article>
     </div>
+
+    {pickingPool && (
+      <div style={{ marginTop: 16, padding: 12, border: "1px solid #d8d3cc", borderRadius: 10, background: "#faf9f7" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          <strong style={{ fontSize: 14 }}>AI로 편집할 사진 고르기 · {pickedPool.length}장 선택</strong>
+          <button type="button" className="green compactFieldButton" disabled={busy || !pickedPool.length}
+            onClick={() => void startFromPhotos(poolImages.filter(image => pickedPool.includes(image.dataUrl)).map(image => ({ dataUrl: image.dataUrl, name: image.fileName })), `등록이미지 ${pickedPool.length}장`)}>
+            {busy ? "가져오는 중…" : "선택한 사진으로 시작"}
+          </button>
+          <button type="button" className="secondaryButton compactFieldButton" onClick={() => { setPickingPool(false); setPickedPool([]); }}>닫기</button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8 }}>
+          {poolImages.map((image, index) => {
+            const picked = pickedPool.includes(image.dataUrl);
+            return <button key={`${image.fileName}-${index}`} type="button" onClick={() => setPickedPool(current => picked ? current.filter(url => url !== image.dataUrl) : [...current, image.dataUrl])}
+              style={{ position: "relative", padding: 0, border: picked ? "3px solid #60766a" : "1px solid #d8d3cc", borderRadius: 8, background: "#fff", cursor: "pointer", overflow: "hidden" }}>
+              <img src={image.dataUrl} alt={image.fileName} style={{ display: "block", width: "100%", aspectRatio: "1 / 1", objectFit: "contain" }} />
+              {picked && <span style={{ position: "absolute", top: 4, left: 4, background: "#60766a", color: "#fff", borderRadius: 999, minWidth: 22, height: 22, fontSize: 12, fontWeight: 800, display: "grid", placeItems: "center" }}>{pickedPool.indexOf(image.dataUrl) + 1}</span>}
+            </button>;
+          })}
+        </div>
+      </div>
+    )}
 
     {cut && (
       <div className="pageCutPanel" style={{ marginTop: 16 }}>
