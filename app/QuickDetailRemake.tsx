@@ -78,6 +78,8 @@ function newDraftId() {
 
 export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, incomingFile, incomingToken, onComplete, onAddToList, poolImages = [] }: Props) {
   const [pickingPool, setPickingPool] = useState(false);
+  /** 이미 5번 목록에 넣은 AI 사진 — "이어서 만들기"를 다시 눌러도 같은 사진이 두 번 들어가지 않게 한다. */
+  const alreadyAdded = useRef(new Set<string>());
   const [pickedPool, setPickedPool] = useState<string[]>([]);
   const [draftId, setDraftId] = useState("");
   const [drafts, setDrafts] = useState<QuickDetailDraft[]>([]);
@@ -368,11 +370,23 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         completed.push(edited);
       }
       setProgress(expectedEdits);
-      const composed = await composeQuickDetailPage(headerUrl, completed, footerUrl || undefined);
+      // 상세페이지는 만들지 않는다(아래 상세페이지 칸을 덮어쓰지 않음). AI로 새로 만든 사진만 1000×1000으로
+      // 5번 쿠팡 등록이미지 목록에 넣고, 썸네일·추가이미지 칸에 쓴 뒤 그 사진들로 상세페이지를 만든다.
+      const newlyEdited = completed.filter(section => (sectionActions[section.id] || "edit") === "edit" && !alreadyAdded.current.has(section.dataUrl));
+      if (newlyEdited.length) {
+        const stamp = Date.now().toString(36).slice(-4);
+        const base = modelName.trim() || "NOID-B";
+        const items: Array<{ fileName: string; dataUrl: string; source: string }> = [];
+        for (let index = 0; index < newlyEdited.length; index += 1) {
+          items.push({ fileName: `${base}-ai-${stamp}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(newlyEdited[index].dataUrl, 1000), source: newlyEdited[index].dataUrl });
+          alreadyAdded.current.add(newlyEdited[index].dataUrl);
+        }
+        onAddToList(items);
+      }
       setFinalSections(completed);
-      setResult(composed);
-      onComplete({ dataUrl: composed.dataUrl, sections: completed });
-      setMessage("새 상세페이지를 완성해 아래 상세페이지 칸에 넣었습니다. 제품 모양을 꼭 확인해주세요.");
+      setMessage(newlyEdited.length
+        ? `AI 편집 사진 ${newlyEdited.length}장을 5번 쿠팡 등록이미지 목록에 넣었습니다. 제품 모양을 꼭 확인한 뒤 썸네일·추가이미지 칸으로 끌어 넣으세요.`
+        : "새로 넣을 AI 편집 사진이 없습니다. 이미 5번 목록에 넣었습니다.");
     } catch (error) {
       setMessage(`${error instanceof Error ? error.message : "작업 중 문제가 생겼습니다."} 다시 누르면 완료된 AI 사진 다음부터 이어서 만듭니다.`);
     } finally {
@@ -466,8 +480,9 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         <div className={styles.styleChoices}>{STYLE_OPTIONS.map(option => <label key={option.value} className={style === option.value ? styles.selectedStyle : ""}><input type="radio" name="quick-style" value={option.value} checked={style === option.value} onChange={() => { setStyle(option.value); setEditedSections([]); invalidateResult(); setProgress(0); }} /><strong>{option.title}</strong><small>{option.description}</small></label>)}</div>
       </article>
       <article>
-        <span>3</span><h3>한 번에 새로 만들기</h3>
-        <button type="button" className={styles.quickCreate} disabled={!originalSections.length || busy} onClick={() => void create()}>{busy ? `작업 중… (${Math.min(progress + 1, Math.max(expectedEdits, 1))}/${Math.max(expectedEdits, 1)})` : completedEdits ? "이어서 만들기" : "새 상세페이지 만들기"}</button>
+        <span>3</span><h3>한 번에 AI 편집</h3>
+        <button type="button" className={styles.quickCreate} disabled={!originalSections.length || busy} onClick={() => void create()}>{busy ? `작업 중… (${Math.min(progress + 1, Math.max(expectedEdits, 1))}/${Math.max(expectedEdits, 1)})` : completedEdits ? "이어서 AI 편집" : "AI 편집 시작"}</button>
+        <small>완성된 사진은 5번 쿠팡 등록이미지 목록에 들어갑니다. 아래 상세페이지 칸은 바꾸지 않습니다.</small>
         <p>{message}</p>
         {scanSummary && <div className={styles.scanSummary}><span>가져온 사진 <strong>{originalSections.length}</strong></span><span>AI 편집 예정 <strong>{expectedEdits}</strong></span><span>원본 사용 <strong>{originalSections.length - expectedEdits}</strong></span></div>}
         {originalSections.length > 0 && <small>예상 AI 편집: {expectedEdits}회 · 완료: {completedEdits}장</small>}
