@@ -65,7 +65,8 @@ export async function changeRocketPendingOverrides(skuIds: string[], value: Omit
         await put(BLOB_PATH, JSON.stringify({ entries }), { access: "private", addRandomSuffix: false, contentType: "application/json", ...(etag ? { allowOverwrite: true, ifMatch: etag } : { allowOverwrite: false }) });
         return entries;
       } catch (error) {
-        if (!(error instanceof BlobPreconditionFailedError) || attempt === 3) throw error;
+        const etagMismatch = error instanceof BlobPreconditionFailedError || (error instanceof Error && error.message.includes("Precondition failed: ETag mismatch."));
+        if (!etagMismatch || attempt === 3) throw error;
       }
     }
     throw new Error("로켓 미등록 모델명을 저장하지 못했습니다.");
