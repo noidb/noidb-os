@@ -257,6 +257,7 @@ export default function ProductCatalogPage() {
   // 저장 뒤에는 화면을 비우지 않고 목록만 새로 받아 바꾼다(스크롤 위치 유지).
   const deletedOpenedRef = useRef(false);
   const [quickLimit, setQuickLimit] = useState(100);
+  const [quickQuery, setQuickQuery] = useState("");
   const [lastDeleted, setLastDeleted] = useState<{ name: string; skuIds: string[] } | null>(null);
   const quickDeleteQueue = useRef<Promise<void>>(Promise.resolve());
   const [quickDeleting, setQuickDeleting] = useState<Set<string>>(new Set());
@@ -1095,13 +1096,25 @@ export default function ProductCatalogPage() {
           {status === "rocket-new" && rocketItems && (() => {
             const byProduct = new Map<string, RocketPendingItem[]>();
             for (const item of filteredItems) if (isRocketPendingItem(item)) byProduct.set(item.productName, [...(byProduct.get(item.productName) || []), item]);
-            const products = [...byProduct.entries()];
-            const shownProducts = products.slice(0, quickLimit);
-            const selectedItems = rocketItems.filter(item => quickSelectedProducts.has(item.productName));
+            const quickNeedle = clean(quickQuery);
+            const products = [...byProduct.entries()].filter(([, productItems]) => !quickNeedle || productItems.some(item =>
+              [item.productName, item.modelName, item.skuId, item.barcode, item.optionLabel].map(clean).join(" ").includes(quickNeedle)));
+            const shownProducts = quickNeedle ? products : products.slice(0, quickLimit);
+            const matchedNames = new Set(products.map(([name]) => name));
+            const selectedItems = rocketItems.filter(item => matchedNames.has(item.productName) && quickSelectedProducts.has(item.productName));
             const selectedProductCount = new Set(selectedItems.map(item => item.productName)).size;
             const allShownSelected = shownProducts.length > 0 && shownProducts.every(([name]) => quickSelectedProducts.has(name));
             return <details open style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: "12px 16px" }}>
               <summary style={{ cursor: "pointer", color: wmsColors.ink, fontWeight: 900, fontSize: 15 }}>빠른 정리 · {products.length.toLocaleString()}개 상품</summary>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
+                <input type="search" aria-label="빠른 정리 상품 검색" placeholder="삭제할 상품 검색 · 상품명, 모델명, SKU, 옵션" value={quickQuery} disabled={bulkDeleting || quickDeleting.size > 0 || undoingQuickDelete} onChange={event => {
+                  setQuickQuery(event.target.value);
+                  setQuickSelectedProducts(new Set());
+                  setQuickLimit(100);
+                }} style={{ flex: "1 1 280px", minWidth: 0, minHeight: 44, padding: "0 12px", border: `1px solid ${wmsColors.border}`, borderRadius: 8, fontSize: 14 }} />
+                {quickQuery && <button type="button" disabled={bulkDeleting || quickDeleting.size > 0 || undoingQuickDelete} onClick={() => { setQuickQuery(""); setQuickSelectedProducts(new Set()); setQuickLimit(100); }} style={{ ...neutralPillStyle, minHeight: 44 }}>검색 초기화</button>}
+              </div>
+              {quickNeedle && <p role="status" style={{ margin: "6px 0", fontSize: 12, color: wmsColors.muted }}>검색 결과 {products.length.toLocaleString()}개를 모두 표시합니다. 검색어를 바꾸면 선택이 초기화됩니다.</p>}
               <p style={{ margin: "6px 0 10px", fontSize: 12, color: wmsColors.muted }}>현재 표시된 상품만 전체 선택됩니다. 등록할 상품은 체크를 해제하세요. 선택 상품 삭제는 Wing 등록검토 목록에서만 제외하며, 저장에 성공하면 개수가 줄어듭니다.</p>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10, fontSize: 12 }}>
                 <label style={{ display: "inline-flex", gap: 8, alignItems: "center", minHeight: 44, padding: "0 10px", border: `1px solid ${wmsColors.border}`, borderRadius: 8, fontWeight: 800, cursor: "pointer" }}>
@@ -1112,7 +1125,7 @@ export default function ProductCatalogPage() {
                       for (const [name] of shownProducts) if (checked) next.add(name); else next.delete(name);
                       return next;
                     });
-                  }} /> 현재 표시된 {shownProducts.length.toLocaleString()}개 전체 선택
+                  }} /> {quickNeedle ? "검색 결과" : "현재 표시된"} {shownProducts.length.toLocaleString()}개 전체 선택
                 </label>
                 <span>삭제 선택 {selectedProductCount.toLocaleString()}개</span>
                 <button type="button" disabled={!selectedProductCount || bulkDeleting || quickDeleting.size > 0 || undoingQuickDelete} onClick={() => setQuickSelectedProducts(new Set())} style={{ ...neutralPillStyle, minHeight: 44 }}>선택 초기화</button>
@@ -1147,7 +1160,7 @@ export default function ProductCatalogPage() {
                   </div>;
                 })}
               </div>
-              {products.length > quickLimit && <button type="button" onClick={() => setQuickLimit(current => current + 100)} style={{ ...neutralPillStyle, marginTop: 10 }}>상품 100개 더 보기 ({(products.length - quickLimit).toLocaleString()}개 남음)</button>}
+              {!quickNeedle && products.length > quickLimit && <button type="button" onClick={() => setQuickLimit(current => current + 100)} style={{ ...neutralPillStyle, marginTop: 10 }}>상품 100개 더 보기 ({(products.length - quickLimit).toLocaleString()}개 남음)</button>}
             </details>;
           })()}
           {status === "rocket-new" && !rocketItems && <p style={{ color: rocketError ? wmsColors.warnText : wmsColors.muted }}>{rocketError || "로켓 미등록 목록을 읽는 중입니다."}</p>}
