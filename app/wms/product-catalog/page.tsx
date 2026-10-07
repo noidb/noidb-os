@@ -61,6 +61,32 @@ function isRocketPendingItem(item: ProductCatalogItem): item is RocketPendingIte
   return Boolean((item as Partial<RocketPendingItem>).rocketPending);
 }
 
+function QuickProductImage({ url, name }: { url: string; name: string }) {
+  const [failedUrl, setFailedUrl] = useState("");
+  const imageUrl = getWmsDisplayImageUrl(externalUrl(url));
+  const style = { width: 68, height: 68, minWidth: 68, borderRadius: 8, border: `1px solid ${wmsColors.border}`, background: wmsColors.surface };
+  if (!imageUrl || failedUrl === imageUrl) return <span style={{ ...style, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: wmsColors.muted }}>이미지 없음</span>;
+  return <a href={imageUrl} target="_blank" rel="noreferrer" aria-label={`${name} 이미지 크게 보기`} style={{ display: "inline-flex", flexShrink: 0 }}><img src={imageUrl} alt={`${name} 상품 이미지`} width={68} height={68} loading="lazy" onError={() => setFailedUrl(imageUrl)} style={{ ...style, objectFit: "contain" }} /></a>;
+}
+
+function ProductLinkCopy({ url, name }: { url: string; name: string }) {
+  const [copied, setCopied] = useState(false);
+  const [manualCopy, setManualCopy] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setManualCopy(false);
+    } catch {
+      setManualCopy(true);
+    }
+  };
+  return <>
+    <button type="button" aria-label={`${name} 쿠팡 주소 복사`} onClick={() => void copy()} style={{ minHeight: 32, padding: "0 10px", border: `1px solid ${wmsColors.border}`, borderRadius: 6, background: "#fff", color: wmsColors.slate, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{copied ? "주소 복사됨" : "주소 복사"}</button>
+    {manualCopy && <label style={{ flexBasis: "100%", fontSize: 11 }}>주소를 선택해 Ctrl+C로 복사하세요.<input aria-label={`${name} 쿠팡 주소`} type="text" readOnly value={url} autoFocus onFocus={event => event.currentTarget.select()} onClick={event => event.currentTarget.select()} style={{ display: "block", width: "100%", minHeight: 32, marginTop: 4, border: `1px solid ${wmsColors.border}`, borderRadius: 6, padding: "0 8px" }} /></label>}
+  </>;
+}
+
 function namedModelGroupKey(item: ProductCatalogItem): string | null {
   const modelName = clean(item.modelName);
   return modelName || null;
@@ -231,6 +257,15 @@ export default function ProductCatalogPage() {
     return () => { photoUrls.current.forEach(url => URL.revokeObjectURL(url)); };
   }, []);
   const [items, setItems] = useState<ProductCatalogItem[]>([]);
+  const quickImagesByProductId = useMemo(() => {
+    const images = new Map<string, string>();
+    for (const item of items) {
+      const productId = externalUrl(item.productLink).match(/^https?:\/\/(?:www\.)?coupang\.com\/vp\/products\/(\d+)/i)?.[1];
+      const imageUrl = externalUrl(item.imageUrl);
+      if (productId && imageUrl && !images.has(productId)) images.set(productId, imageUrl);
+    }
+    return images;
+  }, [items]);
   /** 로켓 미등록(제품DB에 없는) 상품 — 상품공급상태·Wing 다운로드로 만든 목록. "로켓 미등록" 보기를 처음 열 때 읽는다. */
   const [rocketItems, setRocketItems] = useState<RocketPendingItem[] | null>(null);
   const [rocketError, setRocketError] = useState("");
@@ -1140,6 +1175,7 @@ export default function ProductCatalogPage() {
                 {shownProducts.map(([name, productItems]) => {
                   const first = productItems[0];
                   const link = first.exposedProductId ? `https://www.coupang.com/vp/products/${encodeURIComponent(first.exposedProductId)}` : "";
+                  const imageUrl = productItems.find(item => item.imageUrl)?.imageUrl || quickImagesByProductId.get(first.exposedProductId || "") || "";
                     return <div key={name} style={{ display: "grid", gridTemplateColumns: "auto minmax(0,1fr) auto", gap: 10, alignItems: "center", padding: "6px 8px", borderBottom: `1px solid ${wmsColors.border}` }}>
                       <label style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 44, height: 44, cursor: "pointer" }}>
                         <input type="checkbox" aria-label={`${name || "상품명 없음"} 삭제 선택`} style={{ width: 24, height: 24, margin: 0, accentColor: wmsColors.slate, cursor: "pointer" }} checked={quickSelectedProducts.has(name)} disabled={bulkDeleting || quickDeleting.size > 0 || undoingQuickDelete} onChange={event => {
@@ -1147,13 +1183,17 @@ export default function ProductCatalogPage() {
                           setQuickSelectedProducts(current => { const next = new Set(current); if (checked) next.add(name); else next.delete(name); return next; });
                         }} />
                       </label>
-                    <div style={{ minWidth: 0 }}>
+                    <div style={{ minWidth: 0, display: "flex", gap: 10, alignItems: "center" }}>
+                      <QuickProductImage url={imageUrl} name={name || "상품명 없음"} />
+                      <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontSize: 13, fontWeight: 800, color: wmsColors.ink, overflowWrap: "anywhere" }}>{name || "상품명 없음"}</div>
                       <div style={{ fontSize: 11, color: wmsColors.muted, display: "flex", gap: "2px 10px", flexWrap: "wrap" }}>
                         <span>{first.modelName || "모델명 없음"}</span>
                         <span>옵션 {productItems.length}개{productItems.some(item => item.optionLabel) ? ` · ${productItems.map(item => item.optionLabel).filter(Boolean).slice(0, 4).join(", ")}${productItems.length > 4 ? " …" : ""}` : ""}</span>
                         <span>Wing {first.orderableStatus || "상태 미확인"}</span>
                         {link && <a href={link} target="_blank" rel="noreferrer" style={{ color: wmsColors.slate, fontWeight: 700 }}>쿠팡에서 보기 ↗</a>}
+                        {link && <ProductLinkCopy url={link} name={name || "상품명 없음"} />}
+                      </div>
                       </div>
                     </div>
                     <button type="button" onClick={() => void quickDelete(name, productItems)} disabled={quickDeleting.has(name) || bulkDeleting} style={{ minHeight: 34, padding: "0 14px", borderRadius: 8, border: "1px solid #dfbdb2", background: "#f2dfd8", color: "#7f4032", fontWeight: 800, fontSize: 12, cursor: quickDeleting.has(name) ? "wait" : "pointer" }}>{quickDeleting.has(name) ? "저장 중…" : "삭제"}</button>
