@@ -3022,7 +3022,7 @@ async function checkModelInGoogleDb(model: string): Promise<{ duplicate: boolean
       return {
         duplicate: Boolean(data.duplicate),
         reregisterable: Boolean(data.reregisterable),
-        message: data.reregisterable ? "기존 행 재등록 가능" : data.duplicate ? (data.reason || "중복번호") : data.configured === false ? "Google DB 연결 후 중복확인" : "사용 가능한 모델명",
+        message: data.reregisterable ? (data.reason || "기존 행 재등록 가능") : data.duplicate ? (data.reason || "중복번호") : data.configured === false ? "Google DB 연결 후 중복확인" : "사용 가능한 모델명",
       };
     } catch (error) {
       if (attempt < 1) {

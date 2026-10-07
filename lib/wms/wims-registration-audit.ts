@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { fetchSheetRows } from "./google-sheets";
-import { backupSheetWithinSpreadsheet, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
+import { backupSheetWithinSpreadsheet, fetchExistingSheetRows, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
 import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
 import { collectRetiredSkuIds, fetchSkuReplacementHistory as readReregistrationHistory } from "./sku-retirement";
 import type { WimsRegistrationRow } from "./wims-registration";
@@ -387,8 +387,51 @@ export async function applyWimsRejectionDecision(
   return { applied: true, decision, sheetRowNumber, backupSheetName: backup.sheetName };
 }
 
+const REREGISTRATION_SKU_SHEET_NAME = "재등록SKU";
+
+export interface ReregistrationSkuRestore {
+  tabRow: number;
+  originalStatus: string;
+}
+
+/** 재등록SKU 탭에서 재등록중인 옵션의 원래 현재상태를 모델SKU 기준으로 읽는다. */
+export function buildReregistrationSkuRestores(tabRows: string[][]): Map<string, ReregistrationSkuRestore> {
+  const restores = new Map<string, ReregistrationSkuRestore>();
+  if (tabRows.length === 0) return restores;
+  const headers = tabRows[0].map(value => String(value ?? "").trim());
+  const idx = { modelSku: headers.indexOf("모델SKU"), originalStatus: headers.indexOf("기존 현재상태"), state: headers.indexOf("진행상태") };
+  if (Object.values(idx).some(index => index < 0)) throw new Error("재등록SKU 탭의 모델SKU·기존 현재상태·진행상태 열을 찾지 못했습니다.");
+  tabRows.slice(1).forEach((row, index) => {
+    if (String(row[idx.state] ?? "").trim() !== "재등록중") return;
+    const key = identityKey(row[idx.modelSku]);
+    if (!key) return;
+    if (restores.has(key)) throw new Error(`재등록SKU 탭에 재등록중인 ${row[idx.modelSku]} 행이 여러 개라 승인 반영을 중단했습니다.`);
+    restores.set(key, { tabRow: index + 2, originalStatus: String(row[idx.originalStatus] ?? "").trim() });
+  });
+  return restores;
+}
+
+/** 승인 반영된 재등록SKU 옵션의 탭 행을 완료로 표시하고 새 SKU ID를 남긴다. */
+export function buildReregistrationSkuTabUpdates(
+  tabRows: string[][], restores: Map<string, ReregistrationSkuRestore>, audit: WimsRegistrationAudit, completedOn: string
+): SheetCellUpdate[] {
+  if (restores.size === 0) return [];
+  const headers = tabRows[0].map(value => String(value ?? "").trim());
+  const idx = { state: headers.indexOf("진행상태"), newSkuId: headers.indexOf("새 SKU ID"), completedOn: headers.indexOf("완료일") };
+  if (Object.values(idx).some(index => index < 0)) throw new Error("재등록SKU 탭의 진행상태·새 SKU ID·완료일 열을 찾지 못했습니다.");
+  return audit.rows.flatMap(row => {
+    const restore = row.type === "approved_candidate" && row.sheetRowNumber ? restores.get(identityKey(row.productDbModelSku)) : undefined;
+    return restore ? [
+      { row: restore.tabRow, col: idx.state + 1, value: "완료" },
+      { row: restore.tabRow, col: idx.newSkuId + 1, value: String(row.wims.skuId ?? "") },
+      { row: restore.tabRow, col: idx.completedOn + 1, value: completedOn },
+    ] : [];
+  });
+}
+
 export function buildWimsRegistrationCellUpdates(
-  sheetRows: string[][], audit: WimsRegistrationAudit, includeReviewing = false
+  sheetRows: string[][], audit: WimsRegistrationAudit, includeReviewing = false,
+  restores: Map<string, ReregistrationSkuRestore> = new Map()
 ): SheetCellUpdate[] {
   const headers = (sheetRows[0] || []).map(value => String(value ?? "").trim());
   const idx = {
@@ -422,7 +465,8 @@ export function buildWimsRegistrationCellUpdates(
       continue;
     }
     cellUpdates.push(
-      { row, col: idx.status + 1, value: "완료" },
+      // 재등록SKU 옵션은 완료 대신 재등록 전 현재상태(과재고 등)로 되돌린다.
+      { row, col: idx.status + 1, value: restores.get(identityKey(candidate.productDbModelSku))?.originalStatus ?? "완료" },
       { row, col: idx.skuId + 1, value: candidate.wims.skuId },
       { row, col: idx.barcode + 1, value: candidate.wims.barcode },
       { row, col: idx.productName + 1, value: candidate.wims.productName }
@@ -465,10 +509,22 @@ export async function applyWimsRegistrationAudit(
   const historyRows = await readReregistrationHistory(sheetRows);
   const rechecked = buildWimsRegistrationAuditFromRows(wimsRows, sheetRows, historyRows);
   if (rechecked.dryRunToken !== audit.dryRunToken) throw new Error("제품DB가 백업 중 변경되었습니다. 다시 대조해주세요.");
-  const cellUpdates = buildWimsRegistrationCellUpdates(sheetRows, rechecked, includeReviewing);
+  const skuTabRows = await fetchExistingSheetRows(REREGISTRATION_SKU_SHEET_NAME);
+  const restores = buildReregistrationSkuRestores(skuTabRows);
+  const cellUpdates = buildWimsRegistrationCellUpdates(sheetRows, rechecked, includeReviewing, restores);
   if (cellUpdates.length === 0) return { applied: false, audit: rechecked, backupSheetName: backup.sheetName, writtenRowCount: 0, writtenCellCount: 0 };
   await updateSheetCells(PRODUCT_DB_SHEET_NAME, cellUpdates);
   const after = await fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" });
   verifyWrittenRows(sheetRows, after, cellUpdates);
+  const skuTabUpdates = buildReregistrationSkuTabUpdates(skuTabRows, restores, rechecked,
+    new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Seoul" }).format(new Date()));
+  if (skuTabUpdates.length) {
+    try {
+      await updateSheetCells(REREGISTRATION_SKU_SHEET_NAME, skuTabUpdates);
+      verifyWrittenRows(skuTabRows, await fetchSheetRows(REREGISTRATION_SKU_SHEET_NAME), skuTabUpdates);
+    } catch (error) {
+      throw new Error("제품DB 승인 반영은 완료됐지만 재등록SKU 탭 완료 표시에 실패했습니다: " + (error instanceof Error ? error.message : String(error)));
+    }
+  }
   return { applied: true, audit: rechecked, backupSheetName: backup.sheetName, writtenRowCount: new Set(cellUpdates.map(cell => cell.row)).size, writtenCellCount: cellUpdates.length };
 }
