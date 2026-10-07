@@ -7,6 +7,8 @@
 
   const MAX_TRANSFER_ROWS = 10000;
   const REQUIRED_HEADERS = ["SKU ID", "상품명", "바코드", "발주가능상태"];
+  // 2026-10-07: Supplier Hub 화면이 SKU ID 열을 "상품번호"로 표시하도록 바뀌었다. 둘 다 SKU ID로 인식한다.
+  const HEADER_ALIASES = { "SKU ID": ["SKU ID", "상품번호"] };
 
   function normalizeCell(value) {
     return String(value == null ? "" : value).replace(/[\t\r\n]+/g, " ").replace(/\s+/g, " ").trim();
@@ -17,8 +19,13 @@
   }
 
   function headerIndex(headers, candidate) {
-    const expected = normalizeHeader(candidate);
-    return headers.findIndex(header => normalizeHeader(header) === expected);
+    const names = HEADER_ALIASES[candidate] || [candidate];
+    for (const name of names) {
+      const expected = normalizeHeader(name);
+      const index = headers.findIndex(header => normalizeHeader(header) === expected);
+      if (index >= 0) return index;
+    }
+    return -1;
   }
 
   function missingRequiredHeaders(headers) {
