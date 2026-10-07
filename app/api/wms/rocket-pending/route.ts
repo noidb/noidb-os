@@ -21,11 +21,13 @@ const MODEL_PATTERN = /^[a-z]{1,4}\d{3,7}[a-z]{0,3}$/;
  */
 export async function GET(request: NextRequest) {
   const model = (request.nextUrl.searchParams.get("model") || "").trim().toLowerCase();
+  // 삭제한 상품은 기본 목록에서 빼고, ?deleted=1이면 삭제한 상품만 돌려준다(되살리기용).
+  const showDeleted = request.nextUrl.searchParams.get("deleted") === "1";
   const overrides = await readRocketPendingOverrides().catch(() => ({} as Awaited<ReturnType<typeof readRocketPendingOverrides>>));
   const items = rows
     .map(row => {
       const edit = overrides[row.skuId];
-      return edit ? {
+      return edit && edit.modelName !== undefined ? {
         ...row,
         modelName: edit.modelName,
         category: edit.category ?? row.category,
@@ -34,6 +36,7 @@ export async function GET(request: NextRequest) {
         originalModelName: row.modelName,
       } : row;
     })
+    .filter(row => Boolean(overrides[row.skuId]?.deleted) === showDeleted)
     .filter(row => !model || row.modelName === model)
     .map(row => ({
       ...row,
@@ -48,9 +51,14 @@ export async function GET(request: NextRequest) {
 /** { skuIds, modelName, category?, gender? } 저장 · { skuIds, reset: true } 원래 값으로 되돌리기. 제품DB(구글시트)는 건드리지 않는다. */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json() as { skuIds?: unknown; modelName?: unknown; category?: unknown; gender?: unknown; reset?: unknown };
+    const body = await request.json() as { skuIds?: unknown; modelName?: unknown; category?: unknown; gender?: unknown; reset?: unknown; deleted?: unknown };
     const skuIds = Array.isArray(body.skuIds) ? body.skuIds.map(String).filter(sku => knownSkus.has(sku)) : [];
     if (!skuIds.length || skuIds.length > 500) return NextResponse.json({ error: "SKU를 찾지 못했습니다." }, { status: 400 });
+    // 삭제 = 이 목록에서만 뺀다(쿠팡·Wing 상품은 그대로). deleted:false로 되살린다.
+    if (typeof body.deleted === "boolean") {
+      await changeRocketPendingOverrides(skuIds, { deleted: body.deleted });
+      return NextResponse.json({ ok: true });
+    }
     if (body.reset === true) {
       await changeRocketPendingOverrides(skuIds, null);
       return NextResponse.json({ ok: true });

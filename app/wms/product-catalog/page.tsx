@@ -198,6 +198,28 @@ function RocketModelEditor({ items, onSaved, compact }: { items: RocketPendingIt
   </div>;
 }
 
+/** Wing 등록검토 상품을 이 목록에서 뺀다(쿠팡·Wing 상품은 그대로). 되살리기는 목록 맨 아래 "삭제한 상품"에서 한다. */
+function RocketDeleteButton({ items, onDone, restore }: { items: RocketPendingItem[]; onDone: () => void; restore?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const run = async () => {
+    if (!restore && !window.confirm(`${items[0]?.productName || "이 상품"} (옵션 ${items.length}개)을 Wing 등록검토 목록에서 삭제할까요?\n쿠팡·Wing 상품은 지워지지 않고, 아래 "삭제한 상품"에서 되살릴 수 있습니다.`)) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/wms/rocket-pending", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuIds: items.map(item => item.skuId), deleted: !restore }) });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({})))?.error || "처리하지 못했습니다.");
+      onDone();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "처리하지 못했습니다.");
+    } finally { setBusy(false); }
+  };
+  return <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+    <button type="button" disabled={busy} onClick={() => void run()} style={{ minHeight: 32, padding: "0 12px", borderRadius: 8, fontSize: 12, fontWeight: 800, cursor: busy ? "wait" : "pointer", border: `1px solid ${restore ? "#b9cbbc" : "#dfbdb2"}`, background: restore ? "#e3ede6" : "#f2dfd8", color: restore ? "#3f574b" : "#7f4032" }}>{busy ? "처리 중…" : restore ? "되살리기" : "삭제"}</button>
+    {error && <span style={{ fontSize: 11, color: "#7f4032" }}>{error}</span>}
+  </span>;
+}
+
 export default function ProductCatalogPage() {
   const router = useRouter();
   const [folderName, setFolderName] = useState("");
@@ -213,6 +235,14 @@ export default function ProductCatalogPage() {
   const [rocketItems, setRocketItems] = useState<RocketPendingItem[] | null>(null);
   const [rocketError, setRocketError] = useState("");
   const [unnamedLimit, setUnnamedLimit] = useState(50);
+  const [deletedRocketItems, setDeletedRocketItems] = useState<RocketPendingItem[] | null>(null);
+  const loadDeletedRocketItems = useCallback(async () => {
+    try {
+      const response = await fetch("/api/wms/rocket-pending?deleted=1", { cache: "no-store" });
+      const data = await response.json();
+      if (response.ok && Array.isArray(data.items)) setDeletedRocketItems(data.items);
+    } catch { /* 목록은 다음에 다시 연다 */ }
+  }, []);
   const loadRocketItems = useCallback(async () => {
     try {
       const response = await fetch("/api/wms/rocket-pending", { cache: "no-store" });
@@ -225,7 +255,11 @@ export default function ProductCatalogPage() {
     }
   }, []);
   // 저장 뒤에는 화면을 비우지 않고 목록만 새로 받아 바꾼다(스크롤 위치 유지).
-  const reloadRocketItems = useCallback(() => { void loadRocketItems(); }, [loadRocketItems]);
+  const deletedOpenedRef = useRef(false);
+  const reloadRocketItems = useCallback(() => {
+    void loadRocketItems();
+    if (deletedOpenedRef.current) void loadDeletedRocketItems();
+  }, [loadRocketItems, loadDeletedRocketItems]);
   const [manualExclusions, setManualExclusions] = useState<Record<string, ReregistrationExclusion> | null>(null);
   const [exclusionError, setExclusionError] = useState("");
   const [savingExclusion, setSavingExclusion] = useState("");
@@ -866,11 +900,11 @@ export default function ProductCatalogPage() {
                     <div>
                       <div style={{ color: wmsColors.ink, fontSize: 14, fontWeight: 800 }}>{resolveDisplayNameAndOption(group.productName || "", first.optionLabel).name || group.productName || group.modelName}</div>
                       {group.items.some(isRocketPendingItem) && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4, fontSize: 11 }}>
-                        <span style={{ padding: "2px 8px", borderRadius: 999, background: "#e9ddcf", color: "#4b4744", fontWeight: 800 }}>로켓 미등록 · {group.modelName} · 옵션 {group.items.length}개</span>
+                        <span style={{ padding: "2px 8px", borderRadius: 999, background: "#e9ddcf", color: "#4b4744", fontWeight: 800 }}>Wing 등록검토 · {group.modelName} · 옵션 {group.items.length}개</span>
                         {group.items.some(item => isRocketPendingItem(item) && item.modelSource.includes("확인 필요")) && <span style={{ padding: "2px 8px", borderRadius: 999, background: "#f2dfd8", color: "#7f4032", fontWeight: 800 }} title="Wing에서 상품명이 비슷한 상품의 모델번호로 이었습니다. 사진이 이 상품이 맞는지 확인하세요.">확인 필요</span>}
                         {group.items.some(item => isRocketPendingItem(item) && item.modelSource === "직접 입력") && <span style={{ padding: "2px 8px", borderRadius: 999, background: "#e3ede6", color: "#3f574b", fontWeight: 800 }}>직접 입력</span>}
                       </div>}
-                      {group.items.some(isRocketPendingItem) && <div style={{ marginTop: 6 }}><RocketModelEditor compact items={group.items.filter(isRocketPendingItem)} onSaved={reloadRocketItems} /></div>}
+                      {group.items.some(isRocketPendingItem) && <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}><RocketModelEditor compact items={group.items.filter(isRocketPendingItem)} onSaved={reloadRocketItems} /><RocketDeleteButton items={group.items.filter(isRocketPendingItem)} onDone={reloadRocketItems} /></div>}
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
                       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}><Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={primaryPillStyle}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName || photos?.loading} style={{ ...pillStyle, cursor: photos?.loading ? "wait" : "pointer" }}>{photos?.loading ? "사진 검색 중…" : "사진검색"}</button>{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={neutralPillStyle}>사진 검색 초기화</button>}</div>
@@ -939,7 +973,7 @@ export default function ProductCatalogPage() {
           {query && <button type="button" onClick={() => { setQuery(""); try { window.sessionStorage.setItem(VIEW_KEY, JSON.stringify({ status, query: "" })); } catch {} }} title="검색어를 지웁니다." style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>검색 초기화</button>}
           <button type="button" onClick={() => void loadCatalog()} disabled={loading} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "새로 읽는 중…" : "제품DB 새로고침"}</button>
           <select value={status} onChange={event => setStatus(event.target.value)} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 10px", background: "#fff" }}>
-            <option value="all">전체 상태</option><option value="reregister">재등록 필요(모델 전체)</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="rocket-new">로켓 미등록 (Wing에만 있음)</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
+            <option value="all">전체 상태</option><option value="reregister">재등록 필요(모델 전체)</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="rocket-new">Wing 등록검토 (Wing에만 있음)</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
           </select>
         </div>
       </div>
@@ -983,8 +1017,8 @@ export default function ProductCatalogPage() {
       {loading && !items.length ? <p style={{ color: wmsColors.muted }}>상품 연결 대장을 읽는 중입니다.</p> : (
         <div style={{ display: "grid", gap: 10 }}>
           {(status === "reregister" || reregistrationGroups.length > 0) && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 2 }}>
-            <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>{status === "reregister" ? "재등록 작업 묶음" : status === "rocket-new" ? "로켓 미등록 · Wing에만 있는 상품" : "모델별 목록"} · {reregistrationGroups.length}개 모델</div>
-            {status === "rocket-new" && <p style={{ margin: "6px 0 10px", fontSize: 12, color: wmsColors.ink }}>쿠팡 Wing에만 있고 로켓(Supplier Hub)에는 없는 상품입니다. 로켓에 같은 상품이나 같은 모델이 있는 것은 중복 반려를 막으려고 뺐어요. 사진검색은 MYBOX 사진 폴더 전체에서 모델명으로 찾아서 처음 한 번은 오래 걸릴 수 있어요.</p>}
+            <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>{status === "reregister" ? "재등록 작업 묶음" : status === "rocket-new" ? "Wing 등록검토 · Wing에만 있는 상품" : "모델별 목록"} · {reregistrationGroups.length}개 모델</div>
+            {status === "rocket-new" && <p style={{ margin: "6px 0 10px", fontSize: 12, color: wmsColors.ink }}>쿠팡 Wing에만 있고 로켓(Supplier Hub)에는 없는 상품입니다. 로켓에 같은 상품이나 같은 모델이 있는 것은 중복 반려를 막으려고 뺐어요. 오래돼 등록하지 않을 상품은 "삭제"로 목록에서 빼세요(쿠팡·Wing 상품은 그대로). 사진검색은 MYBOX 사진 폴더 전체에서 모델명으로 찾아서 처음 한 번은 오래 걸릴 수 있어요.</p>}
             {!manualExclusions && <p style={{ fontSize: 12 }}>재등록 제외 목록을 확인하는 중입니다. 확인 전에는 등록 준비를 할 수 없습니다.</p>}
             {manualExclusions && Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).length > 0 && <div style={{ margin: "8px 0 12px", padding: 12, border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff" }}>
               <strong style={{ fontSize: 12 }}>재등록 제외 모델</strong>
@@ -1009,12 +1043,21 @@ export default function ProductCatalogPage() {
                     <div style={{ fontWeight: 800, fontSize: 13, color: wmsColors.ink }}>{name || "상품명 없음"}</div>
                     <div style={{ fontSize: 11, color: wmsColors.muted, marginTop: 3 }}>SKU {productItems.length}개 · 옵션 {productItems.map(item => item.optionLabel).filter(Boolean).slice(0, 6).join(", ") || "단일"}{productItems.length > 6 ? " …" : ""} · 발주가능 {productItems.some(item => item.orderableStatus === "정상") ? "정상" : productItems[0].orderableStatus || "미확인"}</div>
                   </div>
-                  <RocketModelEditor items={productItems} onSaved={reloadRocketItems} />
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}><RocketModelEditor items={productItems} onSaved={reloadRocketItems} /><RocketDeleteButton items={productItems} onDone={reloadRocketItems} /></div>
                 </div>)}
               </div>
               {products.length > unnamedLimit && <button type="button" onClick={() => setUnnamedLimit(current => current + 50)} style={{ ...neutralPillStyle, marginTop: 10 }}>상품 50개 더 보기 ({(products.length - unnamedLimit).toLocaleString()}개 남음)</button>}
             </section>;
           })()}
+          {status === "rocket-new" && rocketItems && <details onToggle={event => { if ((event.currentTarget as HTMLDetailsElement).open) { deletedOpenedRef.current = true; void loadDeletedRocketItems(); } }} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 12, background: "#fff", padding: "10px 14px" }}>
+            <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 800, color: wmsColors.muted }}>삭제한 상품 보기{deletedRocketItems ? ` · ${new Set(deletedRocketItems.map(item => item.productName)).size.toLocaleString()}개` : ""}</summary>
+            {!deletedRocketItems ? <p style={{ fontSize: 12, color: wmsColors.muted }}>읽는 중입니다.</p> : deletedRocketItems.length === 0 ? <p style={{ fontSize: 12, color: wmsColors.muted }}>삭제한 상품이 없습니다.</p> : <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
+              {[...deletedRocketItems.reduce((map, item) => map.set(item.productName, [...(map.get(item.productName) || []), item]), new Map<string, RocketPendingItem[]>())].map(([name, productItems]) => <div key={name} style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", border: `1px solid ${wmsColors.border}`, borderRadius: 8, padding: "6px 10px", fontSize: 12 }}>
+                <span>{name || "상품명 없음"} <span style={{ color: wmsColors.muted }}>· 옵션 {productItems.length}개{productItems[0].modelName ? ` · ${productItems[0].modelName}` : ""}</span></span>
+                <RocketDeleteButton restore items={productItems} onDone={reloadRocketItems} />
+              </div>)}
+            </div>}
+          </details>}
           {status !== "reregister" && status !== "rocket-new" && unnamedItems.slice(0, 200).map((item, index) => {
             const rowKey = `${item.skuId}|${item.modelSku}|${item.modelName}|${index}`;
             const wims = snapshot ? findWimsRow(item, snapshot.rows) : null;

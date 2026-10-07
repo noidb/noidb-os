@@ -11,6 +11,7 @@ import { orderVendorDrafts } from "@/lib/wms/vendor-order/order-list";
 import { mergeVendorImageResult } from "@/lib/wms/vendor-order/image-edit";
 import { getVendorLineDeletionBlockReason } from "@/lib/wms/vendor-order/delete-lines";
 import VendorNameSelect from "./VendorNameSelect";
+import CostPriceEditor from "./CostPriceEditor";
 import ProductVariantAddSheet from "./ProductVariantAddSheet";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { resolveVendorOrderCatalog } from "@/lib/wms/vendor-order/resolve-catalog";
@@ -1163,6 +1164,8 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                       deletionAvailable={!isPreview && !workspaceMoved}
                       knownVendorNames={knownVendorNames}
                       productLink={liveCatalogByProductCode.get(normalizeSkuId(line.skuId))?.productLink || ""}
+                      currentCost={liveCatalogByProductCode.get(normalizeSkuId(line.skuId))?.costVatIncluded || ""}
+                      onCostSaved={cost => setLiveCatalogByProductCode(previous => { const next = new Map(previous); for (const [key, value] of next) if (normalizeSkuId(value.skuId) === normalizeSkuId(line.skuId)) next.set(key, { ...value, costVatIncluded: cost }); return next; })}
                       delaySummary={status === "sent" ? sentDelay(line) : receivingDelays.summaries.get(normalizeSkuId(line.skuId))}
                       delayDisabled={((historical || historyView) && !processingSent) || (status === "sent" ? sentDelaySaving : receivingDelays.loading || receivingDelays.saving || Boolean(receivingDelays.error)) || saving}
                       onDelay={() => void saveReceivingDelay({ line, sent: status === "sent", previous: status === "sent" ? sentDelay(line) : receivingDelays.summaries.get(normalizeSkuId(line.skuId)) })}
@@ -1302,6 +1305,8 @@ function VendorOrderLineCard({
   onQueueDiscontinue,
   onQueueReorder,
   onCatalogStatusSaved,
+  currentCost = "",
+  onCostSaved = () => undefined,
 }: {
   line: VendorOrderDraftLine;
   orderDate: string;
@@ -1332,6 +1337,9 @@ function VendorOrderLineCard({
   onQueueDiscontinue: () => Promise<void>;
   onQueueReorder: () => Promise<void>;
   onCatalogStatusSaved: () => void;
+  /** 제품DB 원가(부가세 포함) 실시간 값 — 발주결과처리에서 원가 확인·수정에 쓴다. */
+  currentCost?: string;
+  onCostSaved?: (cost: string) => void;
 }) {
   const pasteUploading = useRef(false);
   const [imageEditOpen, setImageEditOpen] = useState(false);
@@ -1557,6 +1565,11 @@ function VendorOrderLineCard({
         ) : null}
       </div>
 
+      {/* 발주결과처리에서만 SKU 번호와 쿠팡 바코드를 보여준다 — 거래처에 보내는 발주서 화면은 그대로 둔다(2026-10-07). */}
+      {processingSent && <div data-vendor-sku-ids style={{ marginTop: "6px", width: "100%", maxWidth: "92%", marginInline: "auto", display: "flex", flexWrap: "wrap", gap: "4px 12px", fontSize: "12px", color: wmsColors.muted, fontVariantNumeric: "tabular-nums" }}>
+        <span>SKU <b style={{ color: wmsColors.ink, userSelect: "all" }}>{line.skuId || "미확인"}</b></span>
+        <span>바코드 <b style={{ color: wmsColors.ink, userSelect: "all" }}>{line.barcode || "미등록"}</b></span>
+      </div>}
       <div style={{ marginTop: "14px", display: editable ? "block" : "none" }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "6px" }}>
           <div style={{ fontSize: "11px", color: wmsColors.muted, textAlign: "center" }}>주문수량</div>
@@ -1601,6 +1614,8 @@ function VendorOrderLineCard({
         {deletionAvailable && <button type="button" onClick={onRemove} disabled={Boolean(deleteBlockReason) || optionsBusy} style={{...wmsWarnButton,width:"100%",height:"100%",minHeight:48,fontSize:13,opacity:deleteBlockReason ? .5 : 1}}>삭제</button>}
       </div>}
       {processingSent && <SentVendorMemoInput line={line} disabled={delayDisabled || Boolean(optionsBusy)} onSaved={onReceivingSaved} />}
+      {/* 영수증 단가가 다르면 여기서 받은 수량·입고단가를 고치고, 확인 후 제품DB 원가(부가세 포함)에 백업과 함께 반영한다. */}
+      {processingSent && <CostPriceEditor skuId={line.skuId} currentCost={currentCost} onSaved={onCostSaved} />}
       {processingSent && statusMessage && <p role="status" style={{fontSize:12,color:wmsColors.warn}}>{statusMessage}</p>}
       {processingSent && deletionAvailable && deleteBlockReason && <p style={{fontSize:12,color:wmsColors.muted}}>{deleteBlockReason}</p>}
 
