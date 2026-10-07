@@ -54,7 +54,8 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json() as { skuIds?: unknown; modelName?: unknown; category?: unknown; gender?: unknown; reset?: unknown; deleted?: unknown };
     const skuIds = Array.isArray(body.skuIds) ? body.skuIds.map(String).filter(sku => knownSkus.has(sku)) : [];
-    if (!skuIds.length || skuIds.length > 500) return NextResponse.json({ error: "SKU를 찾지 못했습니다." }, { status: 400 });
+    const maxSkus = typeof body.deleted === "boolean" ? knownSkus.size : 500;
+    if (!skuIds.length || skuIds.length > maxSkus) return NextResponse.json({ error: "SKU를 찾지 못했습니다." }, { status: 400 });
     // 삭제 = 이 목록에서만 뺀다(쿠팡·Wing 상품은 그대로). deleted:false로 되살린다.
     if (typeof body.deleted === "boolean") {
       await changeRocketPendingOverrides(skuIds, { deleted: body.deleted });
