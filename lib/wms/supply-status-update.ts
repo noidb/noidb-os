@@ -94,21 +94,6 @@ export interface LatestSupplyStatusFile {
   mtime: string;
 }
 
-export interface SupplyStatusTableCapture {
-  schemaVersion: 1;
-  source: "supplier-hub-live";
-  headers: string[];
-  rows: string[][];
-  capturedAt: string;
-  sourceUrl: string;
-  totalRowCount: number;
-  pageCount: number;
-  pageSize: number;
-  coverageComplete: true;
-}
-
-const MAX_SUPPLY_STATUS_CAPTURE_ROWS = 10_000;
-
 /** 대상 폴더에서 ~$ 임시파일·숨김파일을 제외하고 수정일이 가장 최근인 xlsx 1개를 고른다. */
 export async function findLatestSupplyStatusFile(): Promise<LatestSupplyStatusFile | null> {
   if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
@@ -266,85 +251,6 @@ export interface MatchedRow {
   eligible: boolean;
   matchRule: SupplyStatusMatchRule | null;
   reasons: string[];
-}
-
-export function parseSupplyStatusCapture(capture: SupplyStatusTableCapture): ParsedSupplyStatusFile {
-  if (capture?.schemaVersion !== 1 || capture.source !== "supplier-hub-live" || capture.coverageComplete !== true) {
-    throw new Error("Supplier Hub 전체 수집 정보가 올바르지 않습니다.");
-  }
-  if (!Array.isArray(capture.headers) || !Array.isArray(capture.rows) || capture.headers.length === 0) {
-    throw new Error("Supplier Hub 표의 헤더 또는 행이 없습니다.");
-  }
-  if (!Number.isSafeInteger(capture.totalRowCount) || capture.totalRowCount <= 0 || capture.totalRowCount > MAX_SUPPLY_STATUS_CAPTURE_ROWS) {
-    throw new Error(`상품공급상태 수집 건수는 1~${MAX_SUPPLY_STATUS_CAPTURE_ROWS.toLocaleString()}건이어야 합니다.`);
-  }
-  if (capture.rows.length !== capture.totalRowCount) {
-    throw new Error(`Supplier Hub 전체 ${capture.totalRowCount.toLocaleString()}건 중 ${capture.rows.length.toLocaleString()}건만 전달되었습니다.`);
-  }
-  if (!Number.isSafeInteger(capture.pageSize) || capture.pageSize <= 0 || capture.pageSize > 500) {
-    throw new Error("Supplier Hub 페이지 표시 건수가 올바르지 않습니다.");
-  }
-  if (!Number.isSafeInteger(capture.pageCount) || capture.pageCount !== Math.ceil(capture.totalRowCount / capture.pageSize)) {
-    throw new Error("Supplier Hub 전체 페이지 수가 수집 건수와 맞지 않습니다.");
-  }
-  if (!capture.capturedAt || Number.isNaN(Date.parse(capture.capturedAt))) throw new Error("Supplier Hub 수집 시간이 올바르지 않습니다.");
-  try {
-    const sourceUrl = new URL(capture.sourceUrl);
-    if (sourceUrl.origin !== "https://supplier.coupang.com") throw new Error();
-  } catch {
-    throw new Error("Supplier Hub 출처 주소가 올바르지 않습니다.");
-  }
-
-  const headers = ["", ...capture.headers.map(value => String(value ?? "").trim())];
-  const explicitModelSkuCol = findHeaderIndex(headers, EXPLICIT_MODEL_SKU_HEADERS);
-  const optionNameCol = findHeaderIndex(headers, OPTION_NAME_HEADERS);
-  const skuIdCol = findHeaderIndex(headers, SKU_ID_HEADERS);
-  const productNameCol = findHeaderIndex(headers, ["상품명"]);
-  const barcodeCol = findHeaderIndex(headers, ["바코드", "쿠팡 바코드", "쿠팡바코드"]);
-  let approvalCol: { index: number; header: string } | null = null;
-  let approvedValues: string[] = [];
-  for (const [headerName, values] of APPROVAL_HEADER_APPROVED_VALUES) {
-    const found = findHeaderIndex(headers, [headerName]);
-    if (found) {
-      approvalCol = found;
-      approvedValues = values;
-      break;
-    }
-  }
-  const requiredMissing = [
-    !skuIdCol && "SKU ID",
-    !productNameCol && "상품명",
-    !barcodeCol && "바코드",
-    !approvalCol && "발주가능상태",
-  ].filter(Boolean);
-  if (requiredMissing.length) throw new Error(`Supplier Hub 표에서 필요한 열을 찾지 못했습니다: ${requiredMissing.join(", ")}`);
-
-  const rows: DownloadRow[] = [];
-  const seenSkuIds = new Set<string>();
-  for (const rawRow of capture.rows) {
-    if (!Array.isArray(rawRow) || rawRow.length !== capture.headers.length) throw new Error("Supplier Hub 표의 열 개수가 페이지마다 다릅니다.");
-    const value = (column: { index: number } | null) => column ? String(rawRow[column.index - 1] ?? "").trim() : "";
-    const skuId = value(skuIdCol);
-    const skuKey = norm(skuId);
-    if (skuKey && seenSkuIds.has(skuKey)) throw new Error(`Supplier Hub 표에 SKU ID ${skuId}가 반복되어 있습니다.`);
-    if (skuKey) seenSkuIds.add(skuKey);
-    const explicitModelSku = value(explicitModelSkuCol);
-    const optionName = value(optionNameCol);
-    const matchKey = explicitModelSku || optionName;
-    const productName = value(productNameCol);
-    const barcode = cleanBarcode(value(barcodeCol));
-    const approvalRaw = value(approvalCol);
-    const approved = approvedValues.includes(approvalRaw);
-    if (!matchKey && !skuId) continue;
-    rows.push({ matchKey, explicitModelSku, optionName, skuId, productName, barcode, approvalRaw, approved });
-  }
-  if (rows.length !== capture.rows.length) throw new Error("Supplier Hub 표에 SKU ID와 매칭키가 모두 비어 있는 행이 있습니다.");
-  return {
-    matchKeyColumnHeader: explicitModelSkuCol?.header ?? optionNameCol?.header ?? null,
-    approvalColumnHeader: approvalCol?.header ?? null,
-    skuIdColumnHeader: skuIdCol?.header ?? null,
-    rows,
-  };
 }
 
 function normalizeExactProductText(value: unknown): string {
@@ -725,13 +631,11 @@ export function compareSupplyStatusWithProductDb(
   return { updates, issues, matchedCount, notInProductDbCount, duplicateCount };
 }
 
-async function computeSupplyStatusAudit(capture?: SupplyStatusTableCapture): Promise<InternalSupplyStatusAudit | null> {
-  const fileInfo = capture
-    ? { fileName: "Supplier Hub 실시간 상품공급상태", mtime: capture.capturedAt }
-    : await findLatestSupplyStatusFile();
+async function computeSupplyStatusAudit(): Promise<InternalSupplyStatusAudit | null> {
+  const fileInfo = await findLatestSupplyStatusFile();
   if (!fileInfo) return null;
 
-  const parsed = capture ? parseSupplyStatusCapture(capture) : await parseSupplyStatusFile(fileInfo);
+  const parsed = await parseSupplyStatusFile(fileInfo);
   const sheetRows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" });
   const retiredSkuIds = collectRetiredSkuIds(await fetchSkuReplacementHistory(sheetRows));
   const headers = sheetRows[0].map(value => String(value ?? "").trim());
@@ -765,8 +669,8 @@ async function computeSupplyStatusAudit(capture?: SupplyStatusTableCapture): Pro
   return { audit, headerIndex: idx, updates: result.updates };
 }
 
-export async function buildSupplyStatusAudit(capture?: SupplyStatusTableCapture): Promise<SupplyStatusAuditOrNotFound> {
-  const result = await computeSupplyStatusAudit(capture);
+export async function buildSupplyStatusAudit(): Promise<SupplyStatusAuditOrNotFound> {
+  const result = await computeSupplyStatusAudit();
   return result?.audit ?? { fileFound: false };
 }
 
@@ -811,8 +715,8 @@ export function buildSafeSupplyStatusCellUpdates(
 
 /** 진단 결과대로 SKU ID가 같은 기존 행의 상품명·발주가능상태·바코드만 쿠팡 최신값으로 바꾼다.
  *  SKU ID와 그 밖의 열은 수정하지 않고, 행을 추가하거나 지우지 않는다. 반영 전 시트 전체를 백업한다. */
-export async function applySupplyStatusAudit(expectedDryRunToken: string, capture?: SupplyStatusTableCapture): Promise<SupplyStatusAuditApplyResult | { fileFound: false }> {
-  const result = await computeSupplyStatusAudit(capture);
+export async function applySupplyStatusAudit(expectedDryRunToken: string): Promise<SupplyStatusAuditApplyResult | { fileFound: false }> {
+  const result = await computeSupplyStatusAudit();
   if (!result) return { fileFound: false };
   if (!expectedDryRunToken || expectedDryRunToken !== result.audit.dryRunToken) throw new SupplyStatusPreviewChangedError();
   if (result.updates.length === 0) {
@@ -820,7 +724,7 @@ export async function applySupplyStatusAudit(expectedDryRunToken: string, captur
   }
 
   const backup = await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME);
-  const rechecked = await computeSupplyStatusAudit(capture);
+  const rechecked = await computeSupplyStatusAudit();
   if (!rechecked || rechecked.audit.dryRunToken !== result.audit.dryRunToken) throw new SupplyStatusPreviewChangedError();
 
   const cellUpdates = buildSafeSupplyStatusCellUpdates(rechecked.headerIndex, rechecked.updates);

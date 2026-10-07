@@ -249,7 +249,7 @@ export default function WimsRegistrationImportPanel() {
     <section id="wims-registration" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", background: "#fff" }}>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "7px", marginBottom: "4px" }}>
         <a href="/downloads/noidb-supplier-sync.zip" download style={{ ...wmsGhostButton, minHeight: "34px", padding: "0 11px", display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
-          확장 기능 v1.3.5 받기
+          확장 기능 v1.3.6 받기
         </a>
         <span style={{ color: wmsColors.muted, fontSize: "10px" }}>Supplier Hub에서 확장 기능의 `WIMS 전체를 NOID-B로 전송`을 누르면 자동으로 가져옵니다.</span>
       </div>

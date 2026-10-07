@@ -5,14 +5,9 @@
       eventType: "NOIDB_WIMS_EXTENSION_TRANSFER",
       ackType: "NOIDB_WIMS_EXTENSION_ACK",
     },
-    "supply-status-extension": {
-      storageKey: "noidbPendingSupplyStatusTransfer",
-      eventType: "NOIDB_SUPPLY_STATUS_EXTENSION_TRANSFER",
-      ackType: "NOIDB_SUPPLY_STATUS_EXTENSION_ACK",
-    },
   };
   const POLL_INTERVAL_MS = 500;
-  // 상품공급상태는 10건씩 651페이지를 넘겨 20분 안팎 걸린다(2026-10). 6분이면 다 받기 전에 기다림을 멈췄다.
+  // 큰 WIMS 수집도 끝까지 기다리도록 넉넉히 둔다.
   const MAX_POLL_MS = 60 * 60 * 1000;
   const MAX_DELIVERY_MS = 60 * 1000;
 
