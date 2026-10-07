@@ -403,13 +403,20 @@ export default function ProductCatalogPage() {
   useEffect(() => { setGroupLimit(100); }, [status, query]);
 
   async function toHits(found: LocalPhoto[], selectedIds: Set<string>): Promise<PhotoHit[]> {
-    const hits: PhotoHit[] = [];
-    for (const hit of found) {
-      const preview = URL.createObjectURL(hit.file);
-      photoUrls.current.push(preview);
-      const identity = await identifyPhoto(hit.id, hit.file);
-      hits.push({ ...hit, fileName: hit.name, preview, selected: identity.kind !== "detail" && selectedIds.has(hit.id), identity });
-    }
+    // 사진 종류 확인(파일 앞부분 읽기)을 한 장씩 차례로 하면 MYBOX 폴더에서 수십 장이 줄줄이 기다린다 → 8장씩 동시에.
+    const hits: PhotoHit[] = new Array(found.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < found.length) {
+        const index = next++;
+        const hit = found[index];
+        const preview = URL.createObjectURL(hit.file);
+        photoUrls.current.push(preview);
+        const identity = await identifyPhoto(hit.id, hit.file);
+        hits[index] = { ...hit, fileName: hit.name, preview, selected: identity.kind !== "detail" && selectedIds.has(hit.id), identity };
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, found.length) }, worker));
     return sortPhotoHits(hits);
   }
 
@@ -457,28 +464,46 @@ export default function ProductCatalogPage() {
 
   // 재등록 묶음을 열면 저장된 결과를 자동으로 되살린다. 폴더 권한은 클릭 없이 요청할 수 없으므로,
   // 권한이 아직 없으면 안내만 표시하고 "이 모델 사진 검색"을 누를 때 검색 없이 불러온다.
+  // 위쪽 반려·진행 카드(등록파일 생성·검수중 등)에 있는 모델도 똑같이 되살린다 — 예전에는 아래 목록만 되살려
+  // 등록도우미에서 다시 사진선택으로 오면 고른 화면 대신 "사진검색" 버튼만 보였다.
+  const restoreTargets = useMemo(() => {
+    const seen = new Set<string>();
+    return [...stagedGroups.map(stage => stage.group), ...reregistrationGroups].filter(group => {
+      if (!group.modelName || seen.has(group.modelName)) return false;
+      seen.add(group.modelName);
+      return true;
+    });
+  }, [stagedGroups, reregistrationGroups]);
+  // 되살리는 중인 모델. 목록이 다시 계산돼도(제품DB 새로고침 등) 진행 중인 되살리기를 버리고 처음부터 다시 하지 않는다.
+  const restoringModels = useRef(new Set<string>());
   useEffect(() => {
-    if (status !== "reregister" || !reregistrationGroups.length) return;
+    if (status !== "reregister" || !restoreTargets.length) return;
     // 사진이 커서(1장 약 8MB) 여러 모델을 한꺼번에 되살리면 화면이 느려진다 — 3개 모델 이하일 때만 자동으로 연다.
-    const autoOpen = reregistrationGroups.length <= 3;
-    let active = true;
+    const autoOpen = restoreTargets.length <= 3;
     void (async () => {
       const ready = await photoFolderReady().catch(() => false);
-      for (const group of reregistrationGroups) {
-        if (!active) return;
+      for (const group of restoreTargets) {
         const model = group.modelName;
-        if (photoStatesRef.current[model]) continue;
+        if (photoStatesRef.current[model] || restoringModels.current.has(model)) continue;
         if (!ready || !autoOpen) {
           const saved = await loadPhotoSearch(model).catch(() => undefined);
-          if (active && saved?.hits.length) setSavedHints(current => ({ ...current, [model]: saved.selectedIds.length }));
+          if (saved?.hits.length) setSavedHints(current => ({ ...current, [model]: saved.selectedIds.length }));
           continue;
         }
+        restoringModels.current.add(model);
+        setPhotoStates(current => current[model] ? current : { ...current, [model]: { loading: true, hits: [], analysisId: "", level: 1, grouped: false, hasFolders: false } });
         const restored = await restoreSavedSearch(model).catch(() => null);
-        if (active && restored) setPhotoStates(current => current[model] ? current : { ...current, [model]: restored });
+        restoringModels.current.delete(model);
+        setPhotoStates(current => {
+          if (current[model] && !current[model].loading) return current;
+          if (restored) return { ...current, [model]: restored };
+          const next = { ...current };
+          delete next[model];
+          return next;
+        });
       }
     })();
-    return () => { active = false; };
-  }, [status, reregistrationGroups, restoreSavedSearch]);
+  }, [status, restoreTargets, restoreSavedSearch]);
 
   /**
    * 사진 폴더 정보는 이제 제품DB '사진폴더(확정)' 열(연결표 v8 병합, 2026-09-22)에서 바로 읽는다.

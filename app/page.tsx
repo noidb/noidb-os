@@ -3,6 +3,7 @@
 import { createPortal } from "react-dom";
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import AppNavigation from "./AppNavigation";
 import {
   ensureReadWritePermission,
@@ -94,6 +95,8 @@ const MAX_PHOTOS = 20;
 const ACCEPTED = ["image/jpeg", "image/jpg", "image/png"];
 const DEFAULT_DETAIL_HEADER = "/노이드비-상단이미지.jpg";
 const DRAFT_STORAGE_KEY = "noidb-product-draft";
+/** 제품사진선택으로 나갈 때 작업 중이던 내용을 임시저장한 모델명. 돌아오면 그 임시저장을 다시 연다(이 탭에서만). */
+const PHOTO_SELECT_RETURN_KEY = "noidb-photo-select-return";
 const PRODUCT_DB_PATH_KEY = "noidb-product-db-path";
 const LAURA_DRAFT_STORAGE_KEY = "laura-product-draft";
 const LEGACY_DRAFT_STORAGE_KEY = ["noi", "db-product-draft"].join("");
@@ -347,6 +350,8 @@ export default function Home() {
   const draftSavingRef = useRef(false);
   const draftRefreshRef = useRef(0);
   const restoringDraftRef = useRef(false);
+  const leavingForPhotosRef = useRef(false);
+  const router = useRouter();
   const detailImagesRef = useRef<DetailImage[]>([]);
   detailImagesRef.current = detailImages;
   const detailPreviewRef = useRef("");
@@ -392,6 +397,11 @@ export default function Home() {
 
     try {
       if (new URLSearchParams(window.location.search).has("reregisterModel")) return;
+      // 제품사진선택에서 등록 준비 없이(뒤로 가기 등) 돌아온 경우에도 나가기 전 작업을 다시 연다.
+      if (sessionStorage.getItem(PHOTO_SELECT_RETURN_KEY)) {
+        void restoreWorkAfterPhotoSelect();
+        return;
+      }
       const legacyKey = localStorage.getItem(LAURA_DRAFT_STORAGE_KEY) ? LAURA_DRAFT_STORAGE_KEY : LEGACY_DRAFT_STORAGE_KEY;
       const legacyRaw = localStorage.getItem(legacyKey);
       const raw = localStorage.getItem(DRAFT_STORAGE_KEY) || legacyRaw;
@@ -467,6 +477,23 @@ export default function Home() {
         const colors = [...new Set(optionText.map((value: string) => value.replace(/\s*\d+(?:\.\d+)?\s*호\s*$/u, "").trim()).filter(Boolean))];
         const digits = requestedModel.match(/\d+/)?.[0] || "";
         if (!active) return;
+        // 작업하다 제품사진선택으로 나갔다가 돌아온 경우: 입력·이미지를 처음 상태로 덮지 않고
+        // 나가기 전 임시저장을 다시 연 뒤, 새로 고른 사진만 업로드 풀 뒤에 붙인다.
+        const returned = await restoreWorkAfterPhotoSelect(requestedModel);
+        if (!active) return;
+        if (returned) {
+          const added = await loadPreparedPhotos(requestedModel).catch(() => []);
+          if (!active) return;
+          if (added.length) {
+            setUploadPool(current => {
+              const known = new Set(current.map(image => image.dataUrl));
+              const fresh = added.filter(photo => !known.has(photo.dataUrl)).map(photo => ({ dataUrl: photo.dataUrl, fileName: photo.name }));
+              setPhotoMessage(fresh.length ? `제품사진선택에서 고른 사진 ${fresh.length}장을 업로드 풀 뒤에 추가했습니다. 슬롯에 넣어 쓰세요.` : "제품사진선택에서 새로 추가된 사진은 없습니다.");
+              return [...current, ...fresh];
+            });
+          }
+          return;
+        }
         setProduct({
           ...DEFAULT_PRODUCT,
           supplier: String(first.vendorName || ""),
@@ -475,7 +502,8 @@ export default function Home() {
           modelName: requestedModel,
           modelNo: digits,
           colors: colors.join(","),
-          sizes: String(first.jewelrySize || ""),
+          // 제품DB에 사이즈가 비어 있으면 카테고리 기본값(목걸이 = FREE)을 넣는다.
+          sizes: String(first.jewelrySize || "").trim() || defaultSizes(String(first.gender || ""), String(first.category || "")),
           coupangTitle: String(first.productName || ""),
           dimension: String(first.dimension || ""),
           cost: String(first.costVatIncluded || ""),
@@ -1617,6 +1645,17 @@ export default function Home() {
     }
   };
 
+  const buildDraftRecord = (): ProductDraftRecord => ({
+    model,
+    savedAt: Date.now(),
+    data: {
+      product, analysis, photos, mainWear, allOptions, optionThumbs, variantThumbs, detailCut, wear01, wear02, customSlots,
+      detailImages, detailHeader, detailFooter, detailPreview, sourcingUrls, sourcingUrlInputs, sourcingImages,
+      uploadPool, title, tags, sourcingAnalysis,
+      labelManufactureYearMonth, labelManufacturerName, labelImporterName, reregisterModelName, logoAppliedPreview,
+    },
+  });
+
   const saveDraft = async (revealList = true) => {
     if (draftSavingRef.current) return;
     if (!model) {
@@ -1626,16 +1665,7 @@ export default function Home() {
     draftSavingRef.current = true;
     setDraftSaving(true);
     setDraftStatus("이 기기에 임시저장 중...");
-    const record: ProductDraftRecord = {
-        model,
-        savedAt: Date.now(),
-        data: {
-          product, analysis, photos, mainWear, allOptions, optionThumbs, variantThumbs, detailCut, wear01, wear02, customSlots,
-          detailImages, detailHeader, detailFooter, detailPreview, sourcingUrls, sourcingUrlInputs, sourcingImages,
-          uploadPool, title, tags, sourcingAnalysis,
-          labelManufactureYearMonth, labelManufacturerName, labelImporterName, reregisterModelName, logoAppliedPreview,
-        },
-      };
+    const record = buildDraftRecord();
     try {
       await saveProductDraft(record);
     } catch (error) {
@@ -1722,6 +1752,48 @@ export default function Home() {
     setDraftStatus(data.cloudOnly
       ? `${record.model} 기본정보를 불러왔습니다. 다른 기기의 이미지는 다시 올려주세요.`
       : `${record.model} 임시저장을 불러왔습니다.`);
+  };
+
+  /**
+   * 제품사진선택에서 돌아왔을 때 나가기 전 작업을 다시 연다. expectedModel(등록 준비한 모델)이 있으면
+   * 같은 모델일 때만 연다 — 다른 모델을 등록 준비했으면 그 모델로 새로 시작하고, 이전 작업은 임시저장 목록에 남는다.
+   */
+  const restoreWorkAfterPhotoSelect = async (expectedModel = "") => {
+    let draftModel = "";
+    try {
+      draftModel = sessionStorage.getItem(PHOTO_SELECT_RETURN_KEY) || "";
+      sessionStorage.removeItem(PHOTO_SELECT_RETURN_KEY);
+    } catch { /* 저장공간을 못 쓰면 되살릴 작업도 없다 */ }
+    if (!draftModel) return false;
+    const record = (await listProductDrafts().catch(() => [])).find(row => row.model === draftModel);
+    if (!record) return false;
+    const data = record.data as any;
+    const expected = expectedModel.trim().toLowerCase();
+    const sameModel = [record.model, data?.product?.modelName, data?.reregisterModelName]
+      .some(value => String(value || "").trim().toLowerCase() === expected);
+    if (expected && !sameModel) return false;
+    loadDraft(record);
+    setDraftStatus(`${record.model} 작업하던 내용을 그대로 다시 열었습니다.`);
+    return true;
+  };
+
+  // 제품사진선택으로 나가기 전에 지금 작업을 이 기기에 임시저장한다(사진까지). 돌아오면 자동으로 다시 연다.
+  const openPhotoSelect = async (event: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+    const hasWork = Boolean(product.modelNo?.trim() || product.modelName?.trim() || photos.length || uploadPool.length);
+    if (!model || !hasWork) return;
+    event.preventDefault();
+    if (leavingForPhotosRef.current) return;
+    leavingForPhotosRef.current = true;
+    try {
+      await saveProductDraft(buildDraftRecord());
+      sessionStorage.setItem(PHOTO_SELECT_RETURN_KEY, model);
+    } catch (error) {
+      if (!window.confirm(`작업 내용을 임시저장하지 못했습니다(${error instanceof Error ? error.message : "저장 공간 확인"}).\n그래도 제품사진선택으로 이동할까요? 이동하면 입력한 내용이 사라집니다.`)) {
+        leavingForPhotosRef.current = false;
+        return;
+      }
+    }
+    router.push(href);
   };
 
   const pickFolder = async () => {
@@ -2135,7 +2207,10 @@ export default function Home() {
         <div className="heroBrandArea">
           <h1>AI 상품등록 도우미</h1>
           <div className="heroUtilityActions">
-            <Link className="imageGeneratorLink" href={`/wms/product-catalog?status=reregister${reregisterModelName ? `&model=${encodeURIComponent(reregisterModelName)}` : ""}`}>제품사진선택</Link>
+            {(() => {
+              const photoSelectHref = `/wms/product-catalog?status=reregister${reregisterModelName ? `&model=${encodeURIComponent(reregisterModelName)}` : ""}`;
+              return <Link className="imageGeneratorLink" href={photoSelectHref} onClick={event => void openPhotoSelect(event, photoSelectHref)}>제품사진선택</Link>;
+            })()}
             <button className="draftLoadButton" type="button" onClick={() => {
               setShowDrafts(value => !value);
               if (!showDrafts) void refreshDrafts();
