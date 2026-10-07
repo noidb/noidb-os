@@ -258,26 +258,45 @@ export default function ProductCatalogPage() {
   const deletedOpenedRef = useRef(false);
   const [quickLimit, setQuickLimit] = useState(100);
   const [lastDeleted, setLastDeleted] = useState<{ name: string; skuIds: string[] } | null>(null);
-  /** 빠른 정리: 확인창 없이 바로 목록에서 빼고(화면도 즉시 갱신), 바로 아래 "되돌리기"로 취소한다. */
-  const quickDelete = useCallback(async (name: string, productItems: RocketPendingItem[]) => {
+  const quickDeleteQueue = useRef<Promise<void>>(Promise.resolve());
+  const [quickDeleting, setQuickDeleting] = useState<Set<string>>(new Set());
+  const [undoingQuickDelete, setUndoingQuickDelete] = useState(false);
+  /** 여러 번 연속 삭제해도 서버 저장은 순서대로 처리하고, 성공한 상품만 목록에서 뺀다. */
+  const quickDelete = useCallback((name: string, productItems: RocketPendingItem[]) => {
     const skuIds = productItems.map(item => item.skuId);
-    setRocketItems(current => current ? current.filter(item => !skuIds.includes(item.skuId)) : current);
-    setLastDeleted({ name, skuIds });
-    try {
+    setQuickDeleting(current => new Set(current).add(name));
+    setRocketError("");
+    const request = quickDeleteQueue.current.then(async () => {
       const response = await fetch("/api/wms/rocket-pending", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuIds, deleted: true }) });
-      if (!response.ok) throw new Error();
-    } catch {
-      setRocketError("삭제를 저장하지 못했습니다. 목록을 다시 불러옵니다.");
-      void loadRocketItems();
-    }
-  }, [loadRocketItems]);
-  const undoQuickDelete = useCallback(async () => {
-    if (!lastDeleted) return;
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok !== true) throw new Error(data.error || "삭제를 저장하지 못했습니다.");
+      setRocketItems(current => current ? current.filter(item => !skuIds.includes(item.skuId)) : current);
+      setLastDeleted({ name, skuIds });
+      setDeletedRocketItems(current => current ? [...current.filter(item => !skuIds.includes(item.skuId)), ...productItems] : current);
+    }).catch(error => {
+      setRocketError(error instanceof Error && error.message.includes("저장하지 못했습니다") ? error.message : "삭제를 저장하지 못했습니다. 다시 눌러 주세요.");
+    }).finally(() => {
+      setQuickDeleting(current => { const next = new Set(current); next.delete(name); return next; });
+    });
+    quickDeleteQueue.current = request;
+  }, []);
+  const undoQuickDelete = useCallback(() => {
+    if (!lastDeleted || undoingQuickDelete) return;
     const target = lastDeleted;
-    setLastDeleted(null);
-    await fetch("/api/wms/rocket-pending", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuIds: target.skuIds, deleted: false }) }).catch(() => undefined);
-    void loadRocketItems();
-  }, [lastDeleted, loadRocketItems]);
+    setUndoingQuickDelete(true);
+    setRocketError("");
+    const request = quickDeleteQueue.current.then(async () => {
+      const response = await fetch("/api/wms/rocket-pending", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuIds: target.skuIds, deleted: false }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok !== true) throw new Error(data.error || "되돌리기를 저장하지 못했습니다.");
+      setLastDeleted(current => current?.skuIds.join("|") === target.skuIds.join("|") ? null : current);
+      setDeletedRocketItems(current => current ? current.filter(item => !target.skuIds.includes(item.skuId)) : current);
+      void loadRocketItems();
+    }).catch(error => {
+      setRocketError(error instanceof Error && error.message.includes("저장하지 못했습니다") ? error.message : "되돌리기를 저장하지 못했습니다. 다시 눌러 주세요.");
+    }).finally(() => setUndoingQuickDelete(false));
+    quickDeleteQueue.current = request;
+  }, [lastDeleted, undoingQuickDelete, loadRocketItems]);
   const reloadRocketItems = useCallback(() => {
     void loadRocketItems();
     if (deletedOpenedRef.current) void loadDeletedRocketItems();
@@ -1057,10 +1076,11 @@ export default function ProductCatalogPage() {
             const products = [...byProduct.entries()];
             return <details open style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: "12px 16px" }}>
               <summary style={{ cursor: "pointer", color: wmsColors.ink, fontWeight: 900, fontSize: 15 }}>빠른 정리 · {products.length.toLocaleString()}개 상품</summary>
-              <p style={{ margin: "6px 0 10px", fontSize: 12, color: wmsColors.muted }}>재고가 없거나 등록하지 않을 상품은 &quot;삭제&quot;를 누르면 바로 사라져요(확인창 없음). 잘못 눌렀으면 위에 뜨는 &quot;되돌리기&quot;를 누르세요. 남은 상품은 아래 카드에서 사진검색·등록 준비를 하면 됩니다.</p>
+              <p style={{ margin: "6px 0 10px", fontSize: 12, color: wmsColors.muted }}>재고가 없거나 등록하지 않을 상품은 &quot;삭제&quot;로 목록에서 뺍니다. 저장에 성공하면 개수가 줄고, 실패하면 아래에 알립니다. 잘못 눌렀으면 &quot;되돌리기&quot;를 누르세요.</p>
+              {rocketError && <p role="alert" style={{ margin: "6px 0 10px", color: wmsColors.warnText, fontWeight: 700, fontSize: 12 }}>{rocketError}</p>}
               {lastDeleted && <div role="status" style={{ position: "sticky", top: 0, zIndex: 5, display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", padding: "8px 12px", marginBottom: 8, borderRadius: 8, background: "#f2dfd8", color: "#7f4032", fontSize: 12, fontWeight: 700 }}>
                 <span>삭제했어요 · {lastDeleted.name}</span>
-                <button type="button" onClick={() => void undoQuickDelete()} style={{ minHeight: 30, padding: "0 12px", borderRadius: 8, border: "1px solid #c7b9a8", background: "#e9ddcf", color: "#4b4744", fontWeight: 800, fontSize: 12, cursor: "pointer" }}>되돌리기</button>
+                <button type="button" onClick={() => void undoQuickDelete()} disabled={undoingQuickDelete} style={{ minHeight: 30, padding: "0 12px", borderRadius: 8, border: "1px solid #c7b9a8", background: "#e9ddcf", color: "#4b4744", fontWeight: 800, fontSize: 12, cursor: undoingQuickDelete ? "wait" : "pointer" }}>{undoingQuickDelete ? "되돌리는 중…" : "되돌리기"}</button>
               </div>}
               <div style={{ display: "grid", gap: 4 }}>
                 {products.slice(0, quickLimit).map(([name, productItems]) => {
@@ -1076,7 +1096,7 @@ export default function ProductCatalogPage() {
                         {link && <a href={link} target="_blank" rel="noreferrer" style={{ color: wmsColors.slate, fontWeight: 700 }}>쿠팡에서 보기 ↗</a>}
                       </div>
                     </div>
-                    <button type="button" onClick={() => void quickDelete(name, productItems)} style={{ minHeight: 34, padding: "0 14px", borderRadius: 8, border: "1px solid #dfbdb2", background: "#f2dfd8", color: "#7f4032", fontWeight: 800, fontSize: 12, cursor: "pointer" }}>삭제</button>
+                    <button type="button" onClick={() => void quickDelete(name, productItems)} disabled={quickDeleting.has(name)} style={{ minHeight: 34, padding: "0 14px", borderRadius: 8, border: "1px solid #dfbdb2", background: "#f2dfd8", color: "#7f4032", fontWeight: 800, fontSize: 12, cursor: quickDeleting.has(name) ? "wait" : "pointer" }}>{quickDeleting.has(name) ? "저장 중…" : "삭제"}</button>
                   </div>;
                 })}
               </div>

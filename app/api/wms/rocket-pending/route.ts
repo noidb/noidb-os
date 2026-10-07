@@ -23,7 +23,8 @@ export async function GET(request: NextRequest) {
   const model = (request.nextUrl.searchParams.get("model") || "").trim().toLowerCase();
   // 삭제한 상품은 기본 목록에서 빼고, ?deleted=1이면 삭제한 상품만 돌려준다(되살리기용).
   const showDeleted = request.nextUrl.searchParams.get("deleted") === "1";
-  const overrides = await readRocketPendingOverrides().catch(() => ({} as Awaited<ReturnType<typeof readRocketPendingOverrides>>));
+  const overrides = await readRocketPendingOverrides().catch(() => null);
+  if (!overrides) return NextResponse.json({ error: "Wing 등록검토 정리 상태를 읽지 못했습니다. 다시 시도해 주세요." }, { status: 503, headers: { "Cache-Control": "no-store" } });
   const items = rows
     .map(row => {
       const edit = overrides[row.skuId];
@@ -71,6 +72,6 @@ export async function POST(request: NextRequest) {
     await changeRocketPendingOverrides(skuIds, { modelName, category: text(body.category), gender: text(body.gender) });
     return NextResponse.json({ ok: true });
   } catch {
-    return NextResponse.json({ error: "모델명을 저장하지 못했습니다." }, { status: 500 });
+    return NextResponse.json({ error: "Wing 등록검토 정리 상태를 저장하지 못했습니다." }, { status: 500 });
   }
 }
