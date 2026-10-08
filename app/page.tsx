@@ -1065,20 +1065,21 @@ export default function Home() {
     }
   };
 
-  const openModelFolder = async () => {
-    if (!dbHandle) return setSourcingSaveStatus("먼저 상품DB 폴더를 선택해주세요.");
-    if (!model || !product.category) return setSourcingSaveStatus("카테고리와 모델명을 먼저 확인해주세요.");
+  // 4번(수집이미지)과 7번(등록파일 저장 확인)에서 함께 쓴다. 안내 문구는 누른 칸에 보여준다.
+  const openModelFolder = async (setStatus: (message: string) => void = setSourcingSaveStatus) => {
+    if (!dbHandle) return setStatus("먼저 상품DB 폴더를 선택해주세요.");
+    if (!model || !product.category) return setStatus("카테고리와 모델명을 먼저 확인해주세요.");
     try {
       const modelDir = await ensureProductFolderTree(dbHandle, product.category, model);
       const picker = (window as any).showOpenFilePicker;
       if (typeof picker !== "function") {
-        setSourcingSaveStatus("이 브라우저에서는 파일 목록 바로가기를 지원하지 않습니다.");
+        setStatus("이 브라우저에서는 파일 목록 바로가기를 지원하지 않습니다.");
         return;
       }
       await picker({ startIn: modelDir, multiple: false });
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
-      setSourcingSaveStatus(`오류: ${e instanceof Error ? e.message : "폴더 열기 실패"}`);
+      setStatus(`오류: ${e instanceof Error ? e.message : "폴더 열기 실패"}`);
     }
   };
 
@@ -2876,6 +2877,7 @@ export default function Home() {
         <h2>7. 상품DB · 등록파일 일괄 생성</h2>
         <div className="exportActions">
           {dbSupported && <button className="folderPickButton" type="button" onClick={pickFolder}>폴더 선택</button>}
+          {dbSupported && <button className="folderPickButton" type="button" onClick={() => void openModelFolder(setDbStatus)}>폴더 바로가기</button>}
           <button className="finalSaveDraft" type="button" disabled={draftSaving} onClick={() => void saveDraft()}>
             {draftSaving ? "임시저장 중..." : "임시저장"}
           </button>
