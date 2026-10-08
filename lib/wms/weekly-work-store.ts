@@ -28,7 +28,7 @@ async function read(): Promise<{value: WeeklyWorkspace; etag?: string}> {
 }
 export async function mutateWeeklyWorkspace<T>(change: (workspace: WeeklyWorkspace) => T): Promise<T> {
   const task = queue.then(async () => {
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let attempt = 0; attempt < 6; attempt++) {
       const { value, etag } = await read();
       const result = change(value); value.revision++;
       try {
@@ -42,7 +42,9 @@ export async function mutateWeeklyWorkspace<T>(change: (workspace: WeeklyWorkspa
         }
         return structuredClone(result);
       } catch (error) {
-        if (!useBlob() || attempt === 3 || !/precondition|conflict|etag|already exists/i.test(String(error))) throw error;
+        if (!useBlob() || attempt === 5 || !/precondition|conflict|etag|already exists|mismatch/i.test(String(error))) throw error;
+        // 동시에 저장된 경우: 잠깐 기다렸다가 최신본을 다시 읽어 그 위에 저장한다.
+        await new Promise(resolve => setTimeout(resolve, 150 * (attempt + 1) + Math.floor(Math.random() * 100)));
       }
     }
     throw new Error("동시에 저장된 내용이 있습니다. 새로고침 후 다시 확인해 주세요.");

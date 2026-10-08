@@ -401,11 +401,15 @@
 .table td.decisionCell {
   text-align: center;
 }
+/* 후속 처리 버튼: 2칸 격자, 버튼 폭 모두 같게. 버튼이 홀수면 마지막 버튼이 한 줄 전체 */
 .decisionRow {
-  display: inline-grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
+  display: grid;
+  grid-template-columns: repeat(2, 132px);
   gap: 6px;
+  justify-content: center;
+}
+.decisionRow > :last-child:nth-child(odd) {
+  grid-column: span 2;
 }
 .decisionRow .decisionButton {
   min-height: 34px;
@@ -561,4 +565,59 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+/* 표 열 폭 고정: 쉽먼트 정보 · 상품명(넓게) · 숫자 · 후속 처리 */
+.table.fixedTable {
+  table-layout: fixed;
+  min-width: 900px;
+}
+.colInfo { width: 150px; }
+.colNum { width: 58px; }
+.colDecision { width: 300px; }
+.colStatus { width: 96px; }
+.table td.shipInfo span {
+  display: block;
+  font-size: 12px;
+  color: #52646d;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.table td.shipInfo span:first-child {
+  font-size: 13px;
+  font-weight: 800;
+  color: #1c2931;
+}
+/* 화면 아래 알림 */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(92vw, 720px);
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: #252525;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+.toastError {
+  background: #8a2a1c;
+}
+.toast button {
+  flex: none;
+  border: 0;
+  border-radius: 8px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
 }

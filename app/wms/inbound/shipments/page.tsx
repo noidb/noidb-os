@@ -592,10 +592,39 @@ export default function ShipmentReceiptsPage() {
     const link = payload?.productDbLooks?.[skuId]?.productLink;
     return link ? <a className={styles.productLink} href={link} target="_blank" rel="noreferrer">{name}</a> : name;
   };
+  // 쉽먼트·발주번호·입고예정일을 한 칸에 위아래로
+  const shipInfo = (shipmentNumber: string, purchaseOrderNumber: string, expectedDate: string) => (
+    <>
+      <span>쉽먼트 {shipmentNumber}</span>
+      <span>발주 {purchaseOrderNumber || "-"}</span>
+      <span>입고예정 {expectedDate ? expectedDate.slice(5).replace("-", "/") : "-"}</span>
+    </>
+  );
+  const resultColumns = (
+    <colgroup>
+      <col className={styles.colInfo} />
+      <col />
+      <col className={styles.colNum} />
+      <col className={styles.colNum} />
+      <col className={styles.colNum} />
+      <col className={styles.colDecision} />
+    </colgroup>
+  );
+  const resultHead = (
+    <thead>
+      <tr>
+        <th>쉽먼트 정보</th>
+        <th>상품명</th>
+        <th>납품</th>
+        <th>입고</th>
+        <th>미납</th>
+        <th className={styles.decisionCell}>후속 처리</th>
+      </tr>
+    </thead>
+  );
   const renderResultRow = (line: LogisticsReceiptBoardLine) => (
     <tr key={line.lineKey}>
-      <td>{line.shipmentNumber}</td>
-      <td>{line.purchaseOrderNumber}</td>
+      <td className={styles.shipInfo}>{shipInfo(line.shipmentNumber, line.purchaseOrderNumber, line.target.expectedDate)}</td>
       <td className={styles.product}>
         <div className={styles.productRow}>
           {productThumb(line.skuId)}
@@ -606,7 +635,6 @@ export default function ShipmentReceiptsPage() {
           </div>
         </div>
       </td>
-      <td className={styles.expectedDate}>{line.target.expectedDate || "-"}</td>
       <td>{line.deliveredQuantity ?? "-"}</td>
       <td>{line.receivedQuantity ?? "-"}</td>
       <td className={styles.shortageQty}>
@@ -617,7 +645,7 @@ export default function ShipmentReceiptsPage() {
             : "-")}
       </td>
       <td className={styles.decisionCell}>
-        {line.reviewReason && (
+        {line.reviewReason && !isSupplyReview(line) && (
           <div className={styles.meta}>{line.reviewReason}</div>
         )}
         {line.kind === "shortage" &&
@@ -702,15 +730,12 @@ export default function ShipmentReceiptsPage() {
           </button>
         </div>
       </header>
-      {message && (
-        <p className={styles.notice} role="status">
-          {message}
-        </p>
-      )}
-      {error && (
-        <p className={`${styles.notice} ${styles.error}`} role="alert">
-          {error}
-        </p>
+      {/* 결과 알림은 화면 아래에 떠서 어디까지 내려가 있어도 보인다 */}
+      {(error || message) && (
+        <div className={`${styles.toast} ${error ? styles.toastError : ""}`} role={error ? "alert" : "status"}>
+          <span>{error || message}</span>
+          <button type="button" onClick={() => { setError(""); setMessage(""); }} aria-label="알림 닫기">닫기</button>
+        </div>
       )}
       {fixture && (
         <p className={styles.notice}>
@@ -735,13 +760,21 @@ export default function ShipmentReceiptsPage() {
             확인이 필요한 기록: 공급상태가 정상이 아닌 SKU {unavailableShown.length}건(불가·일시중단·조회안됨)은 미납·쿠폰광고 분류에서 뺐습니다. <b>목록 보기</b>
           </summary>
           <div className={styles.tableWrap}>
-            <table className={styles.table} aria-label="공급상태가 정상이 아닌 SKU">
+            <table className={`${styles.table} ${styles.fixedTable}`} aria-label="공급상태가 정상이 아닌 SKU">
+              <colgroup>
+                <col className={styles.colStatus} />
+                <col className={styles.colInfo} />
+                <col />
+                <col className={styles.colNum} />
+                <col className={styles.colNum} />
+                <col className={styles.colNum} />
+                <col className={styles.colDecision} />
+              </colgroup>
               <thead>
                 <tr>
                   <th>공급상태</th>
+                  <th>쉽먼트 정보</th>
                   <th>상품명</th>
-                  <th>쉽먼트</th>
-                  <th>입고예정일</th>
                   <th>납품</th>
                   <th>입고</th>
                   <th>미납</th>
@@ -755,17 +788,16 @@ export default function ShipmentReceiptsPage() {
                       {item.orderStatus}
                       {item.fromProductDb && <span className={styles.meta}> (제품DB)</span>}
                     </td>
+                    <td className={styles.shipInfo}>{shipInfo(item.shipmentNumber, item.purchaseOrderNumber, item.expectedDate)}</td>
                     <td className={styles.product}>
                       <div className={styles.productRow}>
                         {productThumb(item.skuId)}
                         <div>
                           <strong>{productDbBadge(item.skuId)}{productTitle(item.skuId, item.productName)}</strong>
-                          <span className={styles.meta}>SKU {item.skuId} · 발주 {item.purchaseOrderNumber}</span>
+                          <span className={styles.meta}>SKU {item.skuId}</span>
                         </div>
                       </div>
                     </td>
-                    <td>{item.shipmentNumber}</td>
-                    <td className={styles.expectedDate}>{item.expectedDate}</td>
                     <td>{item.deliveredQuantity}</td>
                     <td>{item.receivedQuantity}</td>
                     <td className={styles.shortageQty}>{Math.max(0, item.deliveredQuantity - item.receivedQuantity) || ""}</td>
@@ -845,19 +877,9 @@ export default function ShipmentReceiptsPage() {
               미납 SKU 리스트 <span>{resultLines.length}건</span>
             </h2>
             <div className={styles.tableWrap}>
-              <table className={styles.table} aria-label="미납 SKU 리스트">
-                <thead>
-                  <tr>
-                    <th>쉽먼트</th>
-                    <th>발주번호</th>
-                    <th>상품명</th>
-                    <th>입고예정일</th>
-                    <th>납품</th>
-                    <th>입고</th>
-                    <th>미납</th>
-                    <th className={styles.decisionCell}>후속 처리</th>
-                  </tr>
-                </thead>
+              <table className={`${styles.table} ${styles.fixedTable}`} aria-label="미납 SKU 리스트">
+                {resultColumns}
+                {resultHead}
                 <tbody>{resultLines.map(renderResultRow)}</tbody>
               </table>
             </div>
@@ -1006,19 +1028,9 @@ export default function ShipmentReceiptsPage() {
               <details className={styles.reviewDetails}>
                 <summary>확인 필요 {shortageReviewLines.length}건</summary>
                 <div className={styles.tableWrap}>
-                  <table className={styles.table} aria-label="수량 재확인">
-                    <thead>
-                      <tr>
-                        <th>쉽먼트</th>
-                        <th>발주번호</th>
-                        <th>상품명</th>
-                        <th>입고예정일</th>
-                        <th>납품</th>
-                        <th>입고</th>
-                        <th>미납</th>
-                        <th className={styles.decisionCell}>후속 처리</th>
-                      </tr>
-                    </thead>
+                  <table className={`${styles.table} ${styles.fixedTable}`} aria-label="수량 재확인">
+                    {resultColumns}
+                    {resultHead}
                     <tbody>{shortageReviewLines.map(renderResultRow)}</tbody>
                   </table>
                 </div>
