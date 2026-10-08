@@ -144,6 +144,8 @@ export default function ShipmentReceiptsPage() {
     Record<string, { fileName: string; href: string }>
   >({});
   const initialLoad = useRef(false);
+  const followUpStale = useRef(false);
+  const [routingKeys, setRoutingKeys] = useState<Record<string, boolean>>({});
   const fixturePayload = useRef<ApiPayload | null>(null);
 
   async function loadFollowUp(nextPayload: ApiPayload, fixtureMode: boolean) {
@@ -292,28 +294,23 @@ export default function ShipmentReceiptsPage() {
     void load();
   }, []);
 
+  // 누른 줄만 바로 처리한다: 화면 전체를 다시 불러오지 않고, 다른 줄 버튼도 잠그지 않는다.
   async function submitDecision(
     line: LogisticsReceiptBoardLine,
     decision: Decision,
   ) {
     if (!payload) return;
-    setBusy(true);
     setError("");
+    if (fixture) {
+      const next = routeLogisticsReceiptsFixtureItem(payload, line.lineKey, decision);
+      fixturePayload.current = next;
+      setPayload(next);
+      setFollowUp(createLogisticsFollowUpFixture(next));
+      setMessage("개발용 예시자료에만 후속 처리 상태를 표시했습니다. 실제 업무 변경은 없습니다.");
+      return;
+    }
+    setRoutingKeys((current) => ({ ...current, [line.lineKey]: true }));
     try {
-      if (fixture) {
-        const next = routeLogisticsReceiptsFixtureItem(
-          payload,
-          line.lineKey,
-          decision,
-        );
-        fixturePayload.current = next;
-        setPayload(next);
-        setFollowUp(createLogisticsFollowUpFixture(next));
-        setMessage(
-          "개발용 예시자료에만 후속 처리 상태를 표시했습니다. 실제 업무 변경은 없습니다.",
-        );
-        return;
-      }
       const response = await fetch("/api/wms/logistics/receipts/route-item", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -327,18 +324,35 @@ export default function ShipmentReceiptsPage() {
       const data = await response.json();
       if (!response.ok || !data.ok)
         throw new Error(data.error || "후속 처리 연결에 실패했습니다.");
-      await load(true);
-      setMessage(
-        "후속 처리 대기열에 연결하고 최신 입고결과를 다시 불러왔습니다.",
-      );
+      const route = (data.route || { decision, runId: "", at: new Date().toISOString(), completed: true, quantity: line.remainingQuantity ?? 0, sourceFingerprint: "" }) as LogisticsReceiptBoardLine["route"];
+      setPayload((current) => current && {
+        ...current,
+        board: {
+          ...current.board,
+          lines: current.board.lines.map((item) =>
+            item.lineKey === line.lineKey ? { ...item, state: "routed", route, reviewReason: "후속 처리 중" } : item,
+          ),
+        },
+      });
+      followUpStale.current = true;
+      setMessage(`SKU ${line.skuId} · ${decisionLabel[decision]}(으)로 보냈습니다.`);
     } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "후속 처리 연결에 실패했습니다.",
-      );
+      setError(cause instanceof Error ? cause.message : "후속 처리 연결에 실패했습니다.");
     } finally {
-      setBusy(false);
+      setRoutingKeys((current) => {
+        const next = { ...current };
+        delete next[line.lineKey];
+        return next;
+      });
+    }
+  }
+
+  // 분류 후 후속처리·처리이력 탭을 열 때만 최신 목록을 한 번 불러온다.
+  function openTab(value: Tab) {
+    setTab(value);
+    if ((value === "followup" || value === "history") && followUpStale.current) {
+      followUpStale.current = false;
+      void load(true);
     }
   }
 
@@ -438,21 +452,21 @@ export default function ShipmentReceiptsPage() {
           <div className={styles.decisionRow}>
             <button
               className={`softBeigeButton ${styles.decisionButton}`}
-              disabled={busy}
+              disabled={busy || routingKeys[line.lineKey]}
               onClick={() => void submitDecision(line, "discontinue")}
             >
               단종
             </button>
             <button
               className={`softSageButton ${styles.decisionButton}`}
-              disabled={busy}
+              disabled={busy || routingKeys[line.lineKey]}
               onClick={() => void submitDecision(line, "vendor")}
             >
               거래처발주
             </button>
             <button
               className={`softApricotButton ${styles.decisionButton}`}
-              disabled={busy}
+              disabled={busy || routingKeys[line.lineKey]}
               onClick={() => void submitDecision(line, "reorder")}
             >
               미납분 재발주요청
@@ -534,7 +548,7 @@ export default function ShipmentReceiptsPage() {
             key={value}
             type="button"
             className={`${styles.tab} ${tab === value ? styles.tabActive : ""}`}
-            onClick={() => setTab(value)}
+            onClick={() => openTab(value)}
           >
             {label}
           </button>
@@ -994,7 +1008,7 @@ export default function ShipmentReceiptsPage() {
                   line.route?.decision === "discontinue") && (
                   <button
                     className={styles.button}
-                    onClick={() => setTab("followup")}
+                    onClick={() => openTab("followup")}
                   >
                     이 페이지 후속처리 열기
                   </button>
