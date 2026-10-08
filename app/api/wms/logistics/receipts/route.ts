@@ -17,6 +17,16 @@ import { previewFollowUpDiscontinue } from "@/lib/wms/logistics-discontinue-adap
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const headers = { "Cache-Control": "private, no-store, max-age=0" };
+// 쿠팡 쉽먼트 화면의 확장프로그램이 직접 보내고 받도록 허용(크롬 백그라운드가 중간에 꺼지는 문제 방지).
+const supplierOrigin = "https://supplier.coupang.com";
+function withCors(request: Request, init: Record<string, string> = headers): Record<string, string> {
+  return request.headers.get("origin") === supplierOrigin
+    ? { ...init, "Access-Control-Allow-Origin": supplierOrigin, "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type", Vary: "Origin" }
+    : init;
+}
+export async function OPTIONS(request: Request) {
+  return new Response(null, { status: 204, headers: withCors(request, { "Access-Control-Max-Age": "600" }) });
+}
 
 function baseline(): LogisticsAsideBaseline {
   const raw = asideBaseline as typeof asideBaseline & { source?: unknown; sources?: unknown };
@@ -52,7 +62,13 @@ async function responseBoard() {
 }
 
 /** Read-only: listing current dispatched and preserved Aside targets does not create business records. */
-export async function GET() {
+export async function GET(request: Request) {
+  // 확장프로그램(설치된 0.9.8)은 이 주소를 그대로 부른다 → 시작 기준만 바로 알려 준다.
+  // 사이트 화면은 ?view=board 로 무거운 목록 계산을 요청한다.
+  if (new URL(request.url).searchParams.get("view") !== "board") {
+    return NextResponse.json({ ok: true, status: "ready", source: "supplier-hub-shipments", schemaVersion: 3,
+      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: [] }, { headers: withCors(request) });
+  }
   try {
     const { currentTargets, board, followUp } = await responseBoard();
     return NextResponse.json({ ok: true, status: "ready", source: "supplier-hub-shipments", schemaVersion: 3,
@@ -63,27 +79,19 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const responseHeaders = withCors(request);
   try {
     const body = await request.text();
-    if (body.length > 2_000_000) return NextResponse.json({ ok: false, error: "한 번에 수집할 쉽먼트 자료가 너무 큽니다." }, { status: 413, headers });
+    if (body.length > 4_000_000) return NextResponse.json({ ok: false, error: "한 번에 수집할 쉽먼트 자료가 너무 큽니다." }, { status: 413, headers: responseHeaders });
     const input = JSON.parse(body) as unknown;
     const snapshot = await mutateWeeklyWorkspace(workspace => {
       resetLogisticsReceiptHistory(workspace);
       workspace.logisticsReceipts = mergeHubClosedSnapshot(workspace.logisticsReceipts, input);
       return workspace.logisticsReceipts;
     });
-    const currentTargets = logisticsTargetsFromSnapshot(snapshot);
-    const workspace = await readWeeklyWorkspace();
-    const board = buildLogisticsReceiptBoard({
-      targets: currentTargets,
-      snapshot,
-      baseline: baseline(),
-      routes: workspace.logisticsReceiptRoutes,
-      excludedMarketingLineKeys: [...activeMarketingExclusionKeys(workspace)],
-    });
-    return NextResponse.json({ ok: true, status: "ready", source: "supplier-hub-shipments", schemaVersion: 3,
-      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, count: snapshot.shipments.length, targets: currentTargets, board }, { headers });
+    // 저장만 하고 바로 답한다. 화면은 새로고침 때 목록을 계산한다.
+    return NextResponse.json({ ok: true, count: snapshot.shipments.length, collectedAt: snapshot.collectedAt }, { headers: responseHeaders });
   } catch (error) {
-    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "쉽먼트 수집 자료를 저장하지 못했습니다." }, { status: 400, headers });
+    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "쉽먼트 수집 자료를 저장하지 못했습니다." }, { status: 400, headers: responseHeaders });
   }
 }

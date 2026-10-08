@@ -26,13 +26,19 @@ const deps = {
 };
 const compiled = ts.transpileModule(fs.readFileSync(routeFile, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
 const loaded = { exports: {} };
-vm.runInNewContext(compiled, { module: loaded, exports: loaded.exports, require: name => { if (!deps[name]) throw new Error(`unmocked ${name}`); return deps[name]; }, Response, JSON, Error, Set, structuredClone });
+vm.runInNewContext(compiled, { module: loaded, exports: loaded.exports, require: name => { if (!deps[name]) throw new Error(`unmocked ${name}`); return deps[name]; }, Response, JSON, Error, Set, URL, structuredClone });
 
 (async () => {
   const request = new Request("http://test/api/wms/logistics/receipts", { method: "POST", body: JSON.stringify({ source: "supplier-hub-shipments" }) });
   const response = await loaded.exports.POST(request);
   assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true, count: 0, collectedAt: snapshot.collectedAt }, "save answers immediately without board work");
+  const cors = await loaded.exports.POST(new Request("http://test/api/wms/logistics/receipts", { method: "POST", headers: { origin: "https://supplier.coupang.com" }, body: "{}" }));
+  assert.equal(cors.headers.get("access-control-allow-origin"), "https://supplier.coupang.com");
+  const light = await (await loaded.exports.GET(new Request("http://test/api/wms/logistics/receipts"))).json();
+  assert.equal(light.since, "2026-09-13"); assert.deepEqual(light.targets, []);
+  await loaded.exports.GET(new Request("http://test/api/wms/logistics/receipts?view=board"));
   assert.deepEqual([...boardInput.excludedMarketingLineKeys], ["marketing::excluded"]);
-  assert.equal(resetCalls, 1, "first hub collection save runs the one-time history reset check");
-  console.log("PASS receipt save response retains active marketing exclusions");
+  assert.equal(resetCalls, 2, "every save runs the one-time history reset check (it no-ops after the first)");
+  console.log("PASS receipt save answers fast with CORS for Supplier Hub; light collect GET; board keeps active marketing exclusions");
 })().catch(error => { console.error(error); process.exitCode = 1; });

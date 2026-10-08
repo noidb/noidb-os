@@ -175,7 +175,7 @@ export default function ShipmentReceiptsPage() {
         return;
       }
       setFixture(false);
-      const response = await fetch("/api/wms/logistics/receipts", {
+      const response = await fetch("/api/wms/logistics/receipts?view=board", {
         cache: "no-store",
       });
       const data = await response.json();
@@ -185,11 +185,7 @@ export default function ShipmentReceiptsPage() {
       setPayload(next);
       if (next.followUp) setFollowUp(next.followUp);
       else await loadFollowUp(next, false);
-      setMessage(
-        manual
-          ? "최신 입고결과와 후속 처리 목록을 다시 불러왔습니다."
-          : "저장된 입고결과를 불러왔습니다.",
-      );
+      setMessage(manual ? "최신 입고결과와 후속 처리 목록을 다시 불러왔습니다." : "");
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -294,39 +290,6 @@ export default function ShipmentReceiptsPage() {
     if (new URLSearchParams(window.location.search).get("tab") === "followup") setTab("followup");
     void load();
   }, []);
-
-  async function importBackup(file: File) {
-    setBusy(true);
-    setError("");
-    try {
-      const raw = JSON.parse(await file.text());
-      if (isFixtureMode())
-        throw new Error(
-          "개발용 예시자료에서는 백업 가져오기를 사용할 수 없습니다.",
-        );
-      const response = await fetch("/api/wms/logistics/receipts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(raw),
-      });
-      const data = await response.json();
-      if (!response.ok)
-        throw new Error(data.error || "JSON 백업을 저장하지 못했습니다.");
-      const next = asPayload(data);
-      setPayload(next);
-      if (next.followUp) setFollowUp(next.followUp);
-      else await loadFollowUp(next, false);
-      setMessage("쉽먼트 입고결과 백업을 저장했습니다.");
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "JSON 백업을 저장하지 못했습니다.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function submitDecision(
     line: LogisticsReceiptBoardLine,
@@ -501,22 +464,13 @@ export default function ShipmentReceiptsPage() {
   return (
     <main className={styles.page}>
       <header className={styles.header}>
-        <div>
-          <p className={styles.eyebrow}>입고 · 후속 처리</p>
-          <h1 className={styles.title}>쉽먼트 입고결과</h1>
-          <p className={styles.subtitle}>
-            날짜, 센터, 쉽먼트 순서로 확인합니다. 저장된 결과는 자동 재조회하지
-            않으며, 새로고침을 눌러야만 최신 자료를 요청합니다.
-          </p>
-        </div>
+        <h1 className={styles.title}>쉽먼트 입고결과</h1>
         <div className={styles.actions}>
-          {!modeReady ? (
-            <span className={styles.linkButton}>화면 준비 중…</span>
-          ) : fixture ? (
-            <span className={styles.linkButton}>입고결과 가져오기</span>
+          {fixture ? (
+            <span className={`softBeigeButton ${styles.headerButton}`}>입고결과 가져오기</span>
           ) : (
             <a
-              className={styles.linkButton}
+              className={`softBeigeButton ${styles.headerButton}`}
               href="https://supplier.coupang.com/ibs/asn/active"
               target="_blank"
               rel="noreferrer"
@@ -524,27 +478,8 @@ export default function ShipmentReceiptsPage() {
               입고결과 가져오기
             </a>
           )}
-          {!modeReady ? null : fixture ? (
-            <span className={styles.linkButton}>
-              개발용 예시자료에서는 백업 가져오기 불가
-            </span>
-          ) : (
-            <label className={styles.linkButton}>
-              .json 백업 가져오기
-              <input
-                className={styles.fileInput}
-                type="file"
-                accept=".json,application/json"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  event.target.value = "";
-                  if (file) void importBackup(file);
-                }}
-              />
-            </label>
-          )}
           <button
-            className={`${styles.button} ${styles.buttonPrimary}`}
+            className={`softSageButton ${styles.headerButton}`}
             type="button"
             disabled={busy}
             onClick={() => void load(true)}
@@ -571,8 +506,7 @@ export default function ShipmentReceiptsPage() {
       <p className={styles.notice}>
         {payload?.board.collectedAt
           ? `입고예정일 9/13 이후 마감 쉽먼트 ${payload.targets.length}건 · 가져온 시각 ${new Date(payload.board.collectedAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
-          : "아직 가져온 입고결과가 없습니다. 쿠팡 쉽먼트 화면 위 '입고결과 일괄 가져오기'를 눌러 주세요."}{" "}
-        <a href="https://supplier.coupang.com/ibs/asn/active" target="_blank" rel="noreferrer">쿠팡 쉽먼트 열기</a>
+          : "아직 가져온 입고결과가 없습니다. '입고결과 가져오기'로 쿠팡 쉽먼트 화면을 열고 '입고결과 일괄 가져오기'를 눌러 주세요."}
       </p>
       {payload?.board.warnings.map((warning, index) => (
         <p
@@ -604,8 +538,7 @@ export default function ShipmentReceiptsPage() {
       <section className={styles.panel}>
         {!payload && !busy && !error && (
           <p className={styles.empty}>
-            저장된 입고결과가 없습니다. 쿠팡에서 결과를 가져온 뒤 JSON 백업을
-            저장하거나 새로고침하세요.
+            저장된 입고결과가 없습니다.
           </p>
         )}
         {tab === "pending" &&
@@ -1067,9 +1000,6 @@ export default function ShipmentReceiptsPage() {
           </div>
         )}
       </section>
-      <p className={styles.meta}>
-        <Link href="/wms/work-center">작업센터로</Link>
-      </p>
     </main>
   );
 }

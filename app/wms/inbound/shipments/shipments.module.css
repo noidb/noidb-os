@@ -7,9 +7,14 @@
 .header {
   display: flex;
   justify-content: space-between;
-  gap: 20px;
-  align-items: flex-start;
-  margin-bottom: 20px;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.headerButton {
+  min-width: 148px;
+  text-decoration: none;
 }
 .eyebrow {
   margin: 0 0 5px;
@@ -30,9 +35,8 @@
   line-height: 1.6;
 }
 .actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 .button,
