@@ -1,0 +1,86 @@
+# 구글시트(제품DB)에 붙은 Apps Script를 저장소 파일로 자동 교체하고 기존 웹앱 배포를 새 버전으로 올린다.
+# 저장소 파일 첫 줄의 비밀번호는 자리표시이므로, 배포할 때만 GitHub 비밀값(LAURA_WEBHOOK_SECRET)으로 바꿔 넣는다.
+# 필요한 GitHub 비밀값: CLASPRC_JSON, APPS_SCRIPT_ID, APPS_SCRIPT_DEPLOYMENT_ID, LAURA_WEBHOOK_SECRET
+name: Apps Script 자동 배포
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "templates/구글시트_상품DB_연동.gs"
+      - ".github/workflows/deploy-apps-script.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: apps-script-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 비밀값 확인
+        id: check
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          APPS_SCRIPT_ID: ${{ secrets.APPS_SCRIPT_ID }}
+          APPS_SCRIPT_DEPLOYMENT_ID: ${{ secrets.APPS_SCRIPT_DEPLOYMENT_ID }}
+          LAURA_WEBHOOK_SECRET: ${{ secrets.LAURA_WEBHOOK_SECRET }}
+        run: |
+          missing=""
+          for name in CLASPRC_JSON APPS_SCRIPT_ID APPS_SCRIPT_DEPLOYMENT_ID LAURA_WEBHOOK_SECRET; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning::GitHub 비밀값이 없어 Apps Script 배포를 건너뜁니다:$missing"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.ready == 'true'
+        with:
+          node-version: 20
+
+      - name: 스크립트 교체 후 새 버전 배포
+        if: steps.check.outputs.ready == 'true'
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          APPS_SCRIPT_ID: ${{ secrets.APPS_SCRIPT_ID }}
+          APPS_SCRIPT_DEPLOYMENT_ID: ${{ secrets.APPS_SCRIPT_DEPLOYMENT_ID }}
+          LAURA_WEBHOOK_SECRET: ${{ secrets.LAURA_WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+          npm install -g @google/clasp@2.4.2 >/dev/null
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+
+          # 시트에 있는 프로젝트를 그대로 내려받는다. 다른 파일·설정(appsscript.json)은 그대로 다시 올린다.
+          work="$RUNNER_TEMP/apps-script"
+          mkdir -p "$work" && cd "$work"
+          clasp clone "$APPS_SCRIPT_ID" >/dev/null
+
+          # 비밀번호 첫 줄이 있는 파일이 교체 대상이다. 정확히 한 개여야 한다.
+          mapfile -t targets < <(grep -l "^const LAURA_WEBHOOK_SECRET" --include='*.js' --include='*.gs' -r . || true)
+          if [ "${#targets[@]}" -ne 1 ]; then
+            echo "::error::교체할 파일을 하나로 정할 수 없습니다 (찾은 수: ${#targets[@]}). 시트 스크립트는 변경하지 않았습니다."
+            exit 1
+          fi
+          target="${targets[0]}"
+
+          # 첫 줄만 실제 비밀번호로 바꾸고 나머지는 저장소 파일 그대로 쓴다.
+          node -e '
+            const fs = require("fs");
+            const [src, dest] = process.argv.slice(1);
+            const lines = fs.readFileSync(src, "utf8").split("\n");
+            if (!lines[0].startsWith("const LAURA_WEBHOOK_SECRET")) throw new Error("저장소 파일 첫 줄이 비밀번호 줄이 아닙니다.");
+            lines[0] = "const LAURA_WEBHOOK_SECRET = " + JSON.stringify(process.env.LAURA_WEBHOOK_SECRET) + ";";
+            fs.writeFileSync(dest, lines.join("\n"));
+          ' "$GITHUB_WORKSPACE/templates/구글시트_상품DB_연동.gs" "$target"
+
+          clasp push -f
+          clasp deploy -i "$APPS_SCRIPT_DEPLOYMENT_ID" -d "GitHub ${GITHUB_SHA::7}"
+          rm -f "$HOME/.clasprc.json"
+          echo "Apps Script 배포 완료: ${GITHUB_SHA::7}"
