@@ -45,4 +45,14 @@ assert.deepEqual(fillSnap.skuStatuses!.map(s => s.orderStatus), ["정상", "불�
 assert.deepEqual(fillSnap.skuStatusesFromProductDb, ["1"]); assert.equal(needsProductDbStatusFill(fillSnap), false);
 const filledBoard = buildLogisticsReceiptBoard({ targets: logisticsTargetsFromSnapshot(fillSnap), snapshot: fillSnap, baseline: { closedShipmentNumbers: [], pendingTargets: [], completedMarketingSkuIds: [], excludedMarketingSkuIds: [], handledLines: [], source: {} } });
 assert.equal(filledBoard.lines.find(l => l.kind === "shortage" && l.skuId === "1")!.state, "ready");
+// 다음 수집에서 예전 마감건이 쿠팡 목록에서 빠져도 남고, 새 마감건이 더해진다. 처리기록(routes)은 같은 줄 키로 유지된다.
+const later = payload(new Date(Date.now() - 10_000).toISOString(), {
+  requestedShipmentNumbers: ["50000002", "50000003"], shipments: [ship("50000002", [["A", "222", "2", 2, 2], ["B", "223", "3", 1, 1]]), ship("50000003", [["A", "333", "4", 2, 1]])],
+  skuStatuses: [{ skuId: "2", orderStatus: "정상" }, { skuId: "3", orderStatus: "정상" }, { skuId: "4", orderStatus: "정상" }],
+  shipmentMetadata: { "50000002": { expectedDate: "2026-10-01", centerName: "대구3" }, "50000003": { expectedDate: "2026-10-09", centerName: "고양1" } } });
+const kept = mergeHubClosedSnapshot(snapshot, later);
+assert.deepEqual(kept.shipments.map(x => x.shipmentNumber).sort(), ["50000001", "50000002", "50000003"]);
+const keptBoard = buildLogisticsReceiptBoard({ targets: logisticsTargetsFromSnapshot(kept), snapshot: kept, baseline: { closedShipmentNumbers: [], pendingTargets: [], completedMarketingSkuIds: [], excludedMarketingSkuIds: [], handledLines: [], source: {} } });
+assert.deepEqual(keptBoard.lines.filter(l => l.kind === "shortage").map(l => l.skuId).sort(), ["1", "4"]);
+assert.equal(keptBoard.lines.filter(l => l.kind === "shortage" && l.skuId === "1").length, 1, "no duplicate line for the same shipment");
 console.log("PASS hub-closed collection: one-time reset, 9/13 cutoff, targets from Supplier Hub list, shortage + first-arrival board, stale/old-extension guards");

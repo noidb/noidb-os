@@ -414,7 +414,32 @@ export function mergeHubClosedSnapshot(current: LogisticsReceiptSnapshot | undef
   }
   const shipmentMetadata: NonNullable<LogisticsReceiptSnapshot["shipmentMetadata"]> = {};
   for (const target of targets) shipmentMetadata[target.shipmentNumber] = { expectedDate: target.expectedDate, centerName: target.centerName };
-  return { ...incoming, mode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, shipmentMetadata };
+  const merged: LogisticsReceiptSnapshot = { ...incoming, mode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, shipmentMetadata };
+  // 마감 쉽먼트는 다시 바뀌지 않는다: 이전에 가져온 마감건이 이번 쿠팡 목록에서 빠졌으면 그대로 남긴다.
+  if (current?.mode === "hub-closed") {
+    const incomingIds = new Set(merged.shipments.map(shipment => shipment.shipmentNumber));
+    const statusIds = new Set((merged.skuStatuses || []).map(status => status.skuId));
+    const previousStatus = new Map((current.skuStatuses || []).map(status => [status.skuId, status]));
+    const fromProductDb = new Set(current.skuStatusesFromProductDb || []);
+    const carriedFromProductDb: string[] = [];
+    for (const shipment of current.shipments) {
+      const meta = current.shipmentMetadata?.[shipment.shipmentNumber];
+      if (incomingIds.has(shipment.shipmentNumber) || shipment.status !== "마감" || !meta || meta.expectedDate < LOGISTICS_RECEIPT_SINCE) continue;
+      merged.shipments.push(structuredClone(shipment));
+      merged.requestedShipmentNumbers.push(shipment.shipmentNumber);
+      merged.shipmentMetadata![shipment.shipmentNumber] = { ...meta };
+      for (const line of shipment.lines) {
+        if (statusIds.has(line.skuId)) continue;
+        const status = previousStatus.get(line.skuId);
+        merged.skuStatuses!.push(status ? { ...status } : { skuId: line.skuId, orderStatus: "조회안됨" });
+        statusIds.add(line.skuId);
+        if (fromProductDb.has(line.skuId)) carriedFromProductDb.push(line.skuId);
+      }
+    }
+    merged.skuStatuses!.sort((a, b) => a.skuId.localeCompare(b.skuId));
+    if (carriedFromProductDb.length) merged.skuStatusesFromProductDb = carriedFromProductDb.sort();
+  }
+  return merged;
 }
 
 const knownSkuStatuses = new Set(["정상", "불가", "일시중단"]);
