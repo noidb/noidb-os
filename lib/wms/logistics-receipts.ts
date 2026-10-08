@@ -393,7 +393,7 @@ export function logisticsTargetsFromSnapshot(snapshot: LogisticsReceiptSnapshot 
 /** 쿠팡 목록 전체 수집 저장. 기준일 이후 입고예정 + 마감 쉽먼트만 받고, 대상 목록은 수집 자료 자체가 정한다. */
 export function mergeHubClosedSnapshot(current: LogisticsReceiptSnapshot | undefined, raw: unknown): LogisticsReceiptSnapshot {
   if (!record(raw) || raw.mode !== "hub-closed" || raw.since !== LOGISTICS_RECEIPT_SINCE || !record(raw.shipmentMetadata) || !Array.isArray(raw.shipments)) {
-    throw new Error("확장프로그램을 최신 버전(0.9.7)으로 새로고침한 뒤 다시 가져와 주세요.");
+    throw new Error("확장프로그램을 최신 버전(0.9.8)으로 새로고침한 뒤 다시 가져와 주세요.");
   }
   if (!raw.shipments.length) throw new Error(`${LOGISTICS_RECEIPT_SINCE} 이후 입고예정인 마감 쉽먼트가 없습니다.`);
   const metadata = raw.shipmentMetadata as Record<string, unknown>;

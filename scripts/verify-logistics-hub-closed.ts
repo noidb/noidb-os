@@ -27,7 +27,7 @@ assert.deepEqual(shortage.map(l => [l.skuId, l.remainingQuantity, l.state]), [["
 assert.deepEqual(board.lines.filter(l => l.kind === "marketing").map(l => l.skuId), ["1", "3"], "1개 입고 SKU는 쿠폰·광고 후보");
 
 assert.throws(() => mergeHubClosedSnapshot(undefined, payload(now, { shipmentMetadata: { "50000001": { expectedDate: "2026-09-12", centerName: "동탄1" }, "50000002": { expectedDate: "2026-10-01", centerName: "대구3" } } })), /대상·상태·수량/);
-assert.throws(() => mergeHubClosedSnapshot(undefined, { ...payload(now), mode: undefined }), /0\.9\.7/);
+assert.throws(() => mergeHubClosedSnapshot(undefined, { ...payload(now), mode: undefined }), /0\.9\.8/);
 assert.throws(() => mergeHubClosedSnapshot(snapshot, payload(new Date(Date.now() - 120_000).toISOString())), /더 최신/);
 // 쿠팡에서 조회되지 않은 SKU도 저장되고, 검토(review)로 분류된다.
 const odd = payload(new Date(Date.now() - 30_000).toISOString()) as ReturnType<typeof payload> & { skuStatuses: Array<{ skuId: string; orderStatus: string }> };

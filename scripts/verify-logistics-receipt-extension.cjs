@@ -82,8 +82,10 @@ global.fetch = async (url, init = {}) => {
   assert.deepEqual((await reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }])).skuStatuses, [{ skuId: "1", orderStatus: "조회안됨" }]);
   skuStatusContent = skuId => [{ skuId: `${skuId}9`, orderStatus: "불가" }, { skuId, orderStatus: "정상" }];
   assert.deepEqual((await reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }])).skuStatuses, [{ skuId: "1", orderStatus: "정상" }]);
-  skuStatusContent = () => ({ error: "login" });
-  await assert.rejects(() => reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }]), /공급상태 조회에 실패/);
+  skuStatusContent = () => ({ error: "no content" });
+  assert.deepEqual((await reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }])).skuStatuses, [{ skuId: "1", orderStatus: "조회안됨" }]);
+  let calls = 0; skuStatusContent = skuId => (++calls === 1 ? null : [{ skuId, orderStatus: "정상" }]);
+  assert.deepEqual((await reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }])).skuStatuses, [{ skuId: "1", orderStatus: "정상" }], "retries once");
   skuStatusContent = null;
   global.fetch = async () => ({ ok: true, redirected: true, url: "https://supplier.coupang.com/login", text: async () => "" });
   await assert.rejects(() => reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }]), /다시 로그인/);

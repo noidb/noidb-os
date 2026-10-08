@@ -76,7 +76,14 @@
     return { totalPages: Number(total), rows };
   }
 
+// 응답에 목록이 없으면 한 번 더 묻고, 그래도 없으면 "조회안됨"으로 기록한다(로그인 문제는 응답 오류·이동으로 따로 걸러진다).
 async function getSkuStatusFor(skuId, signal) {
+  const first = await getSkuStatusOnce(skuId, signal);
+  if (first) return first;
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  return (await getSkuStatusOnce(skuId, signal)) || { skuId, orderStatus: "조회안됨" };
+}
+async function getSkuStatusOnce(skuId, signal) {
     const request = new AbortController(), abort = () => request.abort();
     if (signal?.aborted) abort();
     signal?.addEventListener("abort", abort, { once: true });
@@ -88,8 +95,8 @@ async function getSkuStatusFor(skuId, signal) {
         body: JSON.stringify({ skuId, skuName: "", barcode: "", orderingStatus: "", unit1: "", unit2: "", issueStatus: "", issueType: "", size: 10, page: 1 }),
       });
       if (!response.ok || response.redirected || new URL(response.url).origin !== location.origin) throw new Error(`SKU ${skuId} 공급상태 조회에 실패했습니다.`);
-      const body = await response.json(); const content = body?.content;
-      if (!Array.isArray(content)) throw new Error(`SKU ${skuId} 공급상태 조회에 실패했습니다. 다시 로그인한 뒤 가져와 주세요.`);
+      const body = await response.json().catch(() => null); const content = body?.content;
+      if (!Array.isArray(content)) return null;
       // 비슷한 번호가 함께 검색될 수 있어 정확히 같은 SKU만 쓴다. 없거나 처음 보는 상태는 멈추지 않고 그대로 기록한다(사이트에서 검토로 분류).
       const exact = content.find(item => String(item?.skuId) === skuId);
       const orderStatus = exact ? clean(exact.orderStatus).slice(0, 20) || "미확인" : "조회안됨";
