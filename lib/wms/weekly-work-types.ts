@@ -78,6 +78,8 @@ export interface WeeklyWorkspace {
   /** A completed follow-up queue connection; it does not mean the external work itself is complete. */
   logisticsReceiptRoutes?: Record<string, import("./logistics-receipts").LogisticsReceiptRoute>;
   logisticsFollowUp?: import("./logistics-follow-up-types").LogisticsFollowUpState;
+  /** 공급상태가 정상이 아닌 SKU 확인 결과(사용자 2026-10-08): 단종확인 또는 단종해제 대상. SKU별. */
+  supplyStatusChecks?: Record<string, { decision: "discontinued" | "release"; productName: string; at: string; releasedListClearedAt?: string }>;
   /** 입고결과 처리기록을 새로 시작한 기준. 값이 다르면 이전 처리기록을 한 번 비운다. */
   logisticsReceiptEpoch?: string;
   materialSnapshot?: WeeklySnapshot;

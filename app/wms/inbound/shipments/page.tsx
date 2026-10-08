@@ -35,6 +35,8 @@ type ApiPayload = {
   productDbLooks?: Record<string, { imageUrl: string; productLink: string }>;
   /** 마케팅 무조건 제외(같은 모델 전체) 현황 */
   marketingExclusion?: { listedSkuCount: number; models: string[]; skuCount: number };
+  /** 공급상태가 정상이 아닌 SKU 확인 결과(단종확인·단종해제) */
+  supplyStatusChecks?: Record<string, { decision: "discontinued" | "release"; productName: string; at: string; releasedListClearedAt?: string }>;
 };
 type FollowUpPayload = LogisticsFollowUpResponse;
 
@@ -351,6 +353,58 @@ export default function ShipmentReceiptsPage() {
     }
   }
 
+  // 단종확인·단종해제·되돌리기·단종해제 목록 비우기. 저장된 결과로 화면만 바로 바꾼다.
+  async function supplyCheck(action: "discontinued" | "release" | "undo" | "clear-release", skuId = "", productName = "") {
+    if (fixture) return;
+    setError("");
+    const key = `supply:${skuId || action}`;
+    setRoutingKeys((current) => ({ ...current, [key]: true }));
+    try {
+      const response = await fetch("/api/wms/logistics/supply-status-check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, skuId, productName }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "저장하지 못했습니다.");
+      setPayload((current) => current && { ...current, supplyStatusChecks: data.supplyStatusChecks });
+      setMessage(
+        action === "discontinued" ? `SKU ${skuId} 단종 확인했습니다.`
+        : action === "release" ? `SKU ${skuId}를 단종해제 대상에 넣었습니다.`
+        : action === "undo" ? `SKU ${skuId} 확인을 되돌렸습니다.`
+        : "단종해제 대상 목록을 비웠습니다.",
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "저장하지 못했습니다.");
+    } finally {
+      setRoutingKeys((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    }
+  }
+  const supplyButtons = (skuId: string, productName: string) => (
+    <div className={styles.decisionRow}>
+      <button
+        type="button"
+        className={`softBeigeButton ${styles.decisionButton}`}
+        disabled={routingKeys[`supply:${skuId}`]}
+        onClick={() => void supplyCheck("discontinued", skuId, productName)}
+      >
+        단종확인
+      </button>
+      <button
+        type="button"
+        className={`softSageButton ${styles.decisionButton}`}
+        disabled={routingKeys[`supply:${skuId}`]}
+        onClick={() => void supplyCheck("release", skuId, productName)}
+      >
+        단종해제
+      </button>
+    </div>
+  );
+
   // 분류 후 후속처리·처리이력 탭을 열 때만 최신 목록을 한 번 불러온다.
   function openTab(value: Tab) {
     setTab(value);
@@ -361,14 +415,21 @@ export default function ShipmentReceiptsPage() {
   }
 
   const lines = payload?.board.lines || [];
+  const supplyChecks = payload?.supplyStatusChecks || {};
+  // 공급상태가 정상이 아니어서 검토로 빠진 줄(단종확인·단종해제 대상)
+  const isSupplyReview = (line: LogisticsReceiptBoardLine) =>
+    line.state === "review" && (line.reviewReason || "").startsWith("공급상태");
+  const supplyDecided = (line: LogisticsReceiptBoardLine) => isSupplyReview(line) && Boolean(supplyChecks[line.skuId]);
   const shortageLines = lines.filter(
     (line) =>
+      !supplyDecided(line) &&
       line.kind === "shortage" &&
       (line.state === "ready" || line.state === "review") &&
       (line.remainingQuantity ?? 0) > 0,
   );
   const shortageReviewLines = lines.filter(
     (line) =>
+      !supplyDecided(line) &&
       line.kind === "shortage" &&
       line.state === "review" &&
       (line.remainingQuantity ?? 0) <= 0,
@@ -405,6 +466,11 @@ export default function ShipmentReceiptsPage() {
       left.shipmentNumber.localeCompare(right.shipmentNumber),
   );
   const routedLines = lines.filter((line) => line.state === "routed");
+  const unavailableShown = (payload?.board.unavailableSkus || []).filter((item) => !supplyChecks[item.skuId]);
+  const releaseList = Object.entries(supplyChecks)
+    .filter(([, check]) => check.decision === "release" && !check.releasedListClearedAt)
+    .map(([skuId, check]) => ({ skuId, productName: check.productName }))
+    .sort((a, b) => a.skuId.localeCompare(b.skuId));
   const activeFollowUpQueue = followUpData?.queues[followUpKind] || [];
   const completedSourceKeys = new Set(
     (followUpData?.proofs || [])
@@ -490,6 +556,8 @@ export default function ShipmentReceiptsPage() {
               미납분 재발주요청
             </button>
           </div>
+        ) : isSupplyReview(line) ? (
+          supplyButtons(line.skuId, line.productName)
         ) : line.state === "review" ? (
           "확인 필요"
         ) : (
@@ -552,10 +620,10 @@ export default function ShipmentReceiptsPage() {
             확인이 필요한 기록: {warning}
           </p>
         ))}
-      {(payload?.board.unavailableSkus?.length ?? 0) > 0 && (
+      {unavailableShown.length > 0 && (
         <details className={`${styles.notice} ${styles.error} ${styles.unavailable}`}>
           <summary>
-            확인이 필요한 기록: 공급상태가 정상이 아닌 SKU {payload!.board.unavailableSkus!.length}건(불가·일시중단·조회안됨)은 미납·쿠폰광고 분류에서 뺐습니다. <b>목록 보기</b>
+            확인이 필요한 기록: 공급상태가 정상이 아닌 SKU {unavailableShown.length}건(불가·일시중단·조회안됨)은 미납·쿠폰광고 분류에서 뺐습니다. <b>목록 보기</b>
           </summary>
           <div className={styles.tableWrap}>
             <table className={styles.table} aria-label="공급상태가 정상이 아닌 SKU">
@@ -568,10 +636,11 @@ export default function ShipmentReceiptsPage() {
                   <th>납품</th>
                   <th>입고</th>
                   <th>미납</th>
+                  <th className={styles.decisionCell}>확인</th>
                 </tr>
               </thead>
               <tbody>
-                {payload!.board.unavailableSkus!.map((item) => (
+                {unavailableShown.map((item) => (
                   <tr key={`${item.shipmentNumber}:${item.purchaseOrderNumber}:${item.skuId}`}>
                     <td className={styles.statusCell}>
                       {item.orderStatus}
@@ -591,6 +660,7 @@ export default function ShipmentReceiptsPage() {
                     <td>{item.deliveredQuantity}</td>
                     <td>{item.receivedQuantity}</td>
                     <td className={styles.shortageQty}>{Math.max(0, item.deliveredQuantity - item.receivedQuantity) || ""}</td>
+                    <td className={styles.decisionCell}>{supplyButtons(item.skuId, item.productName)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -684,6 +754,40 @@ export default function ShipmentReceiptsPage() {
             </div>
             {!resultLines.length && (
               <p className={styles.empty}>검토할 미납 상품이 없습니다.</p>
+            )}
+            {releaseList.length > 0 && (
+              <section>
+                <h2 className={styles.listTitle}>
+                  단종해제 대상 SKU <span>{releaseList.length}건</span>
+                </h2>
+                <p className={styles.meta}>표를 드래그해서 복사하세요. 엑셀에 붙이면 SKU와 상품명이 칸별로 들어가요.</p>
+                <div className={styles.tableWrap}>
+                  <table className={`${styles.table} ${styles.copyTable}`} aria-label="단종해제 대상 SKU">
+                    <thead>
+                      <tr>
+                        <th>SKU ID</th>
+                        <th>상품명</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {releaseList.map((item) => (
+                        <tr key={item.skuId}>
+                          <td>{item.skuId}</td>
+                          <td>{item.productName}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <button
+                  type="button"
+                  className={`softPinkButton ${styles.fullButton}`}
+                  disabled={routingKeys["supply:clear-release"]}
+                  onClick={() => void supplyCheck("clear-release")}
+                >
+                  단종해제 신청 완료 · 목록 비우기
+                </button>
+              </section>
             )}
             {marketingLines.length > 0 && (
               <section>

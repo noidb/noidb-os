@@ -524,3 +524,13 @@
   text-decoration-color: #60766a;
 }
 .marketingReview .choice { align-items: center; }
+
+/* 복사용 표: 최소폭 없이 SKU·상품명만 */
+.table.copyTable {
+  min-width: 0;
+  user-select: text;
+}
+.copyTable td:first-child {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
