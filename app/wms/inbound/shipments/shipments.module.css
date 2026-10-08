@@ -621,3 +621,13 @@
   font-size: 13px;
   cursor: pointer;
 }
+/* 과재고·누적입고 표시는 글자 폭만큼만(마케팅 목록의 span 규칙에 늘어나지 않게) */
+.choice .productDbBadge,
+.table .productDbBadge {
+  display: inline-block;
+  width: auto;
+  justify-self: start;
+}
+.choice .thumbEmpty {
+  display: inline-flex;
+}

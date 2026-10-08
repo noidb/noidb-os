@@ -1,1 +1,14 @@
-.heading{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:24px 0 16px}.heading h2{margin:0}.actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:24px}.actions button,.actions a{white-space:nowrap}.actions a{padding:12px 4px}@media(max-width:650px){.heading h2{font-size:20px}.actions{align-items:stretch}.actions button{width:100%;min-height:48px}.actions a{text-align:center;width:100%;order:2}.actions button:last-child{order:3}}
+.heading{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:20px 0 10px}.heading h2{margin:0}
+/* 위 바로가기: 같은 크기 라운드 버튼 3개 */
+.navButtons{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:0 0 16px}
+.navButtons a{text-decoration:none}
+.smallButton{min-height:38px!important;padding:6px 14px!important}
+.help{margin:0 0 10px;color:#52646d;font-size:14px}
+/* 표 글씨 크게 */
+.bigTable td,.bigTable th{font-size:15px!important}
+.bigTable td:first-child{font-weight:700;color:#1c2931;font-variant-numeric:tabular-nums}
+.bigTable td:nth-child(2){color:#1c2931}
+/* 아래 버튼: 같은 크기 3칸 */
+.actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:16px}
+.actions a,.actions button{text-decoration:none;white-space:nowrap}
+@media(max-width:650px){.heading h2{font-size:20px}.navButtons,.actions{grid-template-columns:1fr}}
