@@ -66,15 +66,20 @@ async function fillMissingStatuses(workspace: Awaited<ReturnType<typeof readWeek
   return readWeeklyWorkspace();
 }
 
-/** 제품DB 현재상태 중 화면에 표시할 값(과재고·단종)만 SKU별로 넘긴다. */
+/** 제품DB에서 화면에 표시할 값: 현재상태 과재고·단종, 누적입고 100개 이상. SKU별 표시 목록. */
 const shownProductDbStatuses = ["과재고", "단종"];
-function productDbStatusBySku(catalog: Catalog | null, skuIds: Iterable<string>): Record<string, string> {
+const CUMULATIVE_INBOUND_BADGE = 100;
+function productDbStatusBySku(catalog: Catalog | null, skuIds: Iterable<string>): Record<string, string[]> {
   if (!catalog) return {};
-  const wanted = new Set(skuIds), result: Record<string, string> = {};
+  const wanted = new Set(skuIds), result: Record<string, string[]> = {};
   for (const item of catalog.items) {
     if (!wanted.has(item.skuId)) continue;
+    const badges: string[] = [];
     const status = shownProductDbStatuses.find(value => item.currentStatus.includes(value));
-    if (status) result[item.skuId] = status;
+    if (status) badges.push(status);
+    const inbound = Number(String(item.cumulativeInbound || "").replace(/,/g, ""));
+    if (Number.isFinite(inbound) && inbound >= CUMULATIVE_INBOUND_BADGE) badges.push(`누적입고 ${inbound.toLocaleString("ko-KR")}`);
+    if (badges.length) result[item.skuId] = badges;
   }
   return result;
 }

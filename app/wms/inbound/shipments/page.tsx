@@ -29,8 +29,8 @@ type ApiPayload = {
   targets: LogisticsReceiptTarget[];
   board: LogisticsReceiptBoard;
   followUp?: LogisticsFollowUpResponse;
-  /** 제품DB 현재상태(과재고·단종) — SKU별 */
-  productDbStatuses?: Record<string, string>;
+  /** 제품DB 표시(과재고·단종·누적입고 100+) — SKU별 */
+  productDbStatuses?: Record<string, string[]>;
 };
 type FollowUpPayload = LogisticsFollowUpResponse;
 
@@ -421,8 +421,8 @@ export default function ShipmentReceiptsPage() {
     )
     .sort((left, right) => right.at.localeCompare(left.at))[0];
   const productDbBadge = (skuId: string) => {
-    const status = payload?.productDbStatuses?.[skuId];
-    return status ? <span className={styles.productDbBadge}>{status}</span> : null;
+    const badges = payload?.productDbStatuses?.[skuId];
+    return badges?.length ? <>{badges.map((badge) => <span key={badge} className={styles.productDbBadge}>{badge}</span>)}</> : null;
   };
   const renderResultRow = (line: LogisticsReceiptBoardLine) => (
     <tr key={line.lineKey}>
