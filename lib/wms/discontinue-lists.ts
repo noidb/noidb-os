@@ -49,6 +49,8 @@ export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId
   const addRelease = (skuId: string, fallbackName: string, reason: string) => {
     if (release.has(skuId)) return;
     const item = bySku.get(skuId);
+    // 이미 쿠팡 발주가능상태가 정상이면 해제할 필요가 없다(메모·화면 선택이라도 뺀다).
+    if (item && item.orderableStatus.trim() === "정상") { discontinue.delete(skuId); return; }
     release.set(skuId, { skuId, productName: item ? displayName(item) : fallbackName || options.nameFallback?.[skuId] || "제품DB에 없음", currentStatus: item?.currentStatus.trim() || "",
       orderableStatus: item?.orderableStatus.trim() || "미확인", reason, key: item ? itemKey(item, reason) : JSON.stringify([skuId, reason]) });
     discontinue.delete(skuId);
