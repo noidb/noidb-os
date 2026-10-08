@@ -33,6 +33,8 @@ type ApiPayload = {
   productDbStatuses?: Record<string, string[]>;
   /** 제품DB 이미지·제품링크 — SKU별 */
   productDbLooks?: Record<string, { imageUrl: string; productLink: string }>;
+  /** 마케팅 무조건 제외(같은 모델 전체) 현황 */
+  marketingExclusion?: { listedSkuCount: number; models: string[]; skuCount: number };
 };
 type FollowUpPayload = LogisticsFollowUpResponse;
 
@@ -689,7 +691,10 @@ export default function ShipmentReceiptsPage() {
                   마케팅 SKU 리스트 <span>{marketingLines.length}건</span>
                 </h2>
                 <div className={styles.listTools}>
-                  <p className={styles.meta}>처음 1개 입고된 SKU입니다. 쿠폰 할인율은 기본 20%, 과재고·누적입고 100개 이상은 30%로 만들어집니다.</p>
+                  <p className={styles.meta}>
+                    처음 1개 입고된 SKU입니다. 쿠폰 할인율은 기본 20%, 과재고·누적입고 100개 이상은 30%로 만들어집니다.
+                    {payload?.marketingExclusion?.models.length ? ` 무조건 제외 모델 ${payload.marketingExclusion.models.join(", ")}는 목록에서 뺐습니다.` : ""}
+                  </p>
                   <div className={styles.selectButtons}>
                     <button
                       type="button"

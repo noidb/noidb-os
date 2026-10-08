@@ -18,10 +18,18 @@ function baseline(): LogisticsAsideBaseline {
   const raw = asideBaseline as typeof asideBaseline & { source?: unknown; sources?: unknown };
   return { closedShipmentNumbers: raw.closedShipmentNumbers, pendingTargets: raw.pendingTargets as LogisticsAsideBaseline["pendingTargets"], completedMarketingSkuIds: raw.completedMarketingSkuIds as string[], excludedMarketingSkuIds: raw.excludedMarketingSkuIds as string[], handledLines: raw.handledLines as LogisticsAsideBaseline["handledLines"], source: raw.source ?? raw.sources ?? {} };
 }
+/** 입고결과 화면과 같은 기준으로 무조건 제외 SKU(같은 모델 전체)를 만든다. */
+async function marketingExcludedSkuIds(): Promise<string[]> {
+  const { fetchProductCatalog } = await import("@/lib/wms/product-catalog");
+  const { expandMarketingExclusions } = await import("@/lib/wms/marketing-permanent-exclusions");
+  const catalog = await fetchProductCatalog().catch(() => ({ configured: false, items: [] }));
+  return [...expandMarketingExclusions(catalog.configured ? catalog.items : []).skuIds];
+}
 async function current() {
   const stored = await readWeeklyWorkspace();
   if (stored.logisticsReceiptEpoch !== LOGISTICS_RECEIPT_EPOCH) throw new Error("먼저 쿠팡 쉽먼트 화면에서 입고결과를 가져와 주세요.");
-  const workspace = stored, base = baseline(); const targets = logisticsTargetsFromSnapshot(workspace.logisticsReceipts);
+  const excluded = await marketingExcludedSkuIds();
+  const workspace = stored, raw = baseline(), base = { ...raw, excludedMarketingSkuIds: [...new Set([...raw.excludedMarketingSkuIds, ...excluded])] }; const targets = logisticsTargetsFromSnapshot(workspace.logisticsReceipts);
   return { workspace, targets, board: buildLogisticsReceiptBoard({ targets, snapshot: workspace.logisticsReceipts, baseline: base, routes: workspace.logisticsReceiptRoutes, excludedMarketingLineKeys: [...activeMarketingExclusionKeys(workspace)] }) };
 }
 export async function GET(request: Request) {

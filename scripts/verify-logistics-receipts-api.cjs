@@ -14,6 +14,7 @@ const deps = {
   "next/server": { NextResponse: { json: (value, options) => new Response(JSON.stringify(value), { status: options?.status || 200, headers: options?.headers }) } },
   "@/lib/wms/logistics-aside-baseline.json": { closedShipmentNumbers: [], pendingTargets: [], completedMarketingSkuIds: [], excludedMarketingSkuIds: [], handledLines: [] },
   "@/lib/wms/product-catalog": { fetchProductCatalog: async () => ({ configured: true, items: [] }) },
+  "@/lib/wms/marketing-permanent-exclusions": { MARKETING_PERMANENT_EXCLUDED_SKU_IDS: ["1"], expandMarketingExclusions: () => ({ skuIds: new Set(["1"]), models: [] }) },
   "@/lib/wms/logistics-receipt-reset": { resetLogisticsReceiptHistory: () => { resetCalls++; return false; } },
   "@/lib/wms/logistics-receipts": {
     LOGISTICS_RECEIPT_EPOCH: "test-epoch", LOGISTICS_RECEIPT_SINCE: "2026-09-13",
@@ -40,6 +41,7 @@ vm.runInNewContext(compiled, { module: loaded, exports: loaded.exports, require:
   assert.equal(light.since, "2026-09-13"); assert.deepEqual(light.targets, []);
   await loaded.exports.GET(new Request("http://test/api/wms/logistics/receipts?view=board"));
   assert.deepEqual([...boardInput.excludedMarketingLineKeys], ["marketing::excluded"]);
+  assert(boardInput.baseline.excludedMarketingSkuIds.includes("1"), "permanent exclusions reach the board");
   assert.equal(resetCalls, 2, "every save runs the one-time history reset check (it no-ops after the first)");
   console.log("PASS receipt save answers fast with CORS for Supplier Hub; light collect GET; board keeps active marketing exclusions");
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -17,6 +17,8 @@ const deps={
  '@/lib/wms/picking-wave/server-store':{readPickingWaveStore:async()=>({vendorOrderLines:clone(vendorLines)})},
  '@/lib/wms/logistics-receipts':{LOGISTICS_RECEIPT_EPOCH:'test-epoch',logisticsTargetsFromSnapshot:()=>[],buildLogisticsReceiptBoard:()=>board()},
  '@/lib/wms/weekly-work-store':weekly,
+ '@/lib/wms/product-catalog':{fetchProductCatalog:async()=>({configured:true,items:[]})},
+ '@/lib/wms/marketing-permanent-exclusions':{expandMarketingExclusions:()=>({skuIds:new Set(),models:[]})},
  '@/lib/wms/weekly-work-files':{readWeeklyFile:async key=>files.get(key)||null,saveWeeklyFile:async(key,value)=>{if(files.has(key))throw Error('overwrite');files.set(key,Buffer.from(value))}},
  '@/lib/wms/noidb-action-auth':{isSameOriginActionRequest:()=>true},
  '@/lib/wms/weekly-discontinue-queue':{readWeeklyDiscontinueQueue:async()=>({requests:clone(requests),catalogItems:[]}),syncWeeklyDiscontinueQueue:(...args)=>actual('@/lib/wms/weekly-discontinue-queue').syncWeeklyDiscontinueQueue(...args)},
