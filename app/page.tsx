@@ -2946,7 +2946,7 @@ export default function Home() {
         <div className="quoteQueuePanel">
           <div className="quoteQueueHeader">
             <div><h3>카테고리별 묶음 견적서</h3><p>등록할 때 자동 누적되며 같은 성별·카테고리끼리 최대 1,000 SKU행으로 나뉩니다.</p></div>
-            <button type="button" className="softSageButton" disabled={Boolean(quoteQueueBusy)} onClick={() => void loadQuoteQueue()} style={{ flexShrink: 0, minWidth: "150px", padding: "12px 22px", whiteSpace: "nowrap" }}>
+            <button type="button" className="softSageButton" disabled={Boolean(quoteQueueBusy)} onClick={() => void loadQuoteQueue()} style={{ flexShrink: 0, minWidth: "160px", padding: "12px 22px", whiteSpace: "nowrap", fontSize: "16px" }}>
               {quoteQueueBusy === "목록" ? "불러오는 중..." : "대기목록 불러오기"}
             </button>
           </div>
