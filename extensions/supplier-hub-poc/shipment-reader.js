@@ -77,6 +77,29 @@
     return { totalPages: Number(total), rows };
   }
 
+async function getSkuStatusFor(skuId, signal) {
+    const request = new AbortController(), abort = () => request.abort();
+    if (signal?.aborted) abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(abort, 30000);
+    try {
+      const response = await fetch("/plan/v1/ticket/sku/listTicketSku?locale=ko", {
+        method: "POST", credentials: "same-origin", cache: "no-store", signal: request.signal,
+        headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
+        body: JSON.stringify({ skuId, skuName: "", barcode: "", orderingStatus: "", unit1: "", unit2: "", issueStatus: "", issueType: "", size: 10, page: 1 }),
+      });
+      if (!response.ok || response.redirected || new URL(response.url).origin !== location.origin) throw new Error(`SKU ${skuId} 공급상태 조회에 실패했습니다.`);
+      const body = await response.json(); const content = body?.content;
+      if (!Array.isArray(content) || content.length !== 1 || String(content[0]?.skuId) !== skuId || !allowedOrderStatuses.has(content[0]?.orderStatus)) {
+        throw new Error(`SKU ${skuId} 공급상태를 정확히 확인하지 못했습니다.`);
+      }
+      return { skuId, orderStatus: content[0].orderStatus };
+    } catch (error) {
+      if (request.signal.aborted && !signal?.aborted) throw new Error("SKU 공급상태 조회 응답이 30초 이상 지연됐습니다. 잠시 후 다시 가져와 주세요.");
+      throw error;
+    } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
+  }
+
   async function collect(purchaseOrderNumbers, progress = () => {}, signal) {
     if (location.origin !== "https://supplier.coupang.com") throw new Error("Supplier Hub에서 실행해 주세요.");
     const pos = [...new Set(purchaseOrderNumbers)];
@@ -168,28 +191,7 @@
         throw error;
       } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
     }
-    async function getSkuStatus(skuId) {
-      const request = new AbortController(), abort = () => request.abort();
-      if (signal?.aborted) abort();
-      signal?.addEventListener("abort", abort, { once: true });
-      const timer = setTimeout(abort, 30000);
-      try {
-        const response = await fetch("/plan/v1/ticket/sku/listTicketSku?locale=ko", {
-          method: "POST", credentials: "same-origin", cache: "no-store", signal: request.signal,
-          headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
-          body: JSON.stringify({ skuId, skuName: "", barcode: "", orderingStatus: "", unit1: "", unit2: "", issueStatus: "", issueType: "", size: 10, page: 1 }),
-        });
-        if (!response.ok || response.redirected || new URL(response.url).origin !== location.origin) throw new Error(`SKU ${skuId} 공급상태 조회에 실패했습니다.`);
-        const body = await response.json(); const content = body?.content;
-        if (!Array.isArray(content) || content.length !== 1 || String(content[0]?.skuId) !== skuId || !allowedOrderStatuses.has(content[0]?.orderStatus)) {
-          throw new Error(`SKU ${skuId} 공급상태를 정확히 확인하지 못했습니다.`);
-        }
-        return { skuId, orderStatus: content[0].orderStatus };
-      } catch (error) {
-        if (request.signal.aborted && !signal?.aborted) throw new Error("SKU 공급상태 조회 응답이 30초 이상 지연됐습니다. 잠시 후 다시 가져와 주세요.");
-        throw error;
-      } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
-    }
+    const getSkuStatus = skuId => getSkuStatusFor(skuId, signal);
     const shipments = [];
     for (const [index, shipmentNumber] of shipmentNumbers.entries()) {
       progress(`쉽먼트 ${index + 1}/${shipmentNumbers.length} · ${shipmentNumber} 조회 중`);
@@ -213,7 +215,82 @@
     }
     return { source: "supplier-hub-shipments", schemaVersion: 3, collectedAt: new Date().toISOString(), requestedShipmentNumbers: shipmentNumbers, shipments, skuStatuses };
   }
-  const api = { expandRows, parseDetail, parseList, collect, collectShipments };
+  // 목록 표의 머리글로 열 위치를 찾는다. 상태 열은 기존 확인대로 두 번째 칸이다.
+  function listColumns(table) {
+    const headRows = [...table.querySelectorAll("tr")].filter(row => !row.hasAttribute("data-id") && row.querySelector("th"));
+    if (!headRows.length) throw new Error("쉽먼트 목록의 머리글을 찾지 못했습니다.");
+    const grid = tableRows({ rows: headRows });
+    const header = grid[grid.length - 1];
+    const find = test => header.findIndex(value => test(value.replace(/\s+/g, "")));
+    const date = find(value => /입고예정|도착예정|납품예정/.test(value));
+    const center = find(value => /센터/.test(value));
+    if (date < 0 || center < 0) throw new Error(`쉽먼트 목록에서 입고예정일·센터 열을 찾지 못했습니다. (머리글: ${header.join(" | ")}) 이 문구를 Claude에게 알려 주세요.`);
+    return { date, center };
+  }
+  const isoDate = value => {
+    const match = clean(value).match(/(\d{4})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})/);
+    return match ? `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}` : "";
+  };
+  function parseListWithDates(doc, page) {
+    const base = parseList(doc, page), table = doc.querySelector("#parcel-tab"), columns = listColumns(table);
+    const rows = [...table.querySelectorAll("tr[data-id]")].map(row => {
+      const expectedDate = isoDate(row.cells[columns.date]?.textContent), centerName = clean(row.cells[columns.center]?.textContent);
+      if (!expectedDate || !centerName) throw new Error(`쉽먼트 ${row.getAttribute("data-id")}의 입고예정일·센터를 읽지 못했습니다.`);
+      return { expectedDate, centerName };
+    });
+    return { totalPages: base.totalPages, rows: base.rows.map((row, index) => ({ ...row, ...rows[index] })) };
+  }
+
+  // 사용자 확정(2026-10-08): 쿠팡 쉽먼트 목록 전체를 훑어 기준일 이후 입고예정인 '마감' 쉽먼트를 모두 가져온다.
+  async function collectClosedSince(since, progress = () => {}, signal) {
+    if (location.origin !== "https://supplier.coupang.com") throw new Error("Supplier Hub에서 실행해 주세요.");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(since || "")) throw new Error("NOID-B의 시작 기준일을 확인하지 못했습니다.");
+    async function getDocument(url) {
+      const request = new AbortController(), abort = () => request.abort();
+      if (signal?.aborted) abort();
+      signal?.addEventListener("abort", abort, { once: true });
+      const timer = setTimeout(abort, 30000);
+      try {
+        const response = await fetch(url, { credentials: "same-origin", cache: "no-store", signal: request.signal,
+          ...(url.includes("/list?") ? { headers: { "X-Requested-With": "XMLHttpRequest" } } : {}) });
+        if (!response.ok || response.redirected || new URL(response.url).origin !== location.origin) throw new Error("쿠팡 조회가 실패했습니다. 다시 로그인한 뒤 가져와 주세요.");
+        return new DOMParser().parseFromString(await response.text(), "text/html");
+      } catch (error) {
+        if (request.signal.aborted && !signal?.aborted) throw new Error("쿠팡 조회 응답이 30초 이상 지연됐습니다. 잠시 후 다시 가져와 주세요.");
+        throw error;
+      } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
+    }
+    const found = new Map();
+    let pages = 1;
+    for (let page = 1; page <= pages; page++) {
+      progress(`쿠팡 쉽먼트 목록 ${page}/${pages}쪽 확인 중`);
+      const query = new URLSearchParams({ pageNumber: String(page), centerCode: "", carrierCode: "", estimatedDeliveryDate: "", shipmentSeq: "", purchaseOrderSeq: "" });
+      const result = parseListWithDates(await getDocument(`/ibs/shipment/parcel/list?${query}`), page);
+      pages = result.totalPages;
+      for (const row of result.rows) {
+        if (row.status === "마감" && row.expectedDate >= since && !found.has(row.shipmentNumber)) found.set(row.shipmentNumber, row);
+      }
+    }
+    const targets = [...found.values()].sort((a, b) => a.shipmentNumber.localeCompare(b.shipmentNumber));
+    if (!targets.length) throw new Error(`${since} 이후 입고예정인 마감 쉽먼트가 쿠팡 목록에 없습니다.`);
+    const shipments = [], shipmentMetadata = {};
+    for (const [index, target] of targets.entries()) {
+      progress(`마감 쉽먼트 ${index + 1}/${targets.length} · ${target.shipmentNumber} 상세 조회 중`);
+      const receipt = parseDetail(await getDocument(`/ibs/shipment/parcel/${target.shipmentNumber}`), target.shipmentNumber);
+      if (receipt.status !== "마감") throw new Error(`쉽먼트 ${target.shipmentNumber}의 상태가 목록과 다릅니다. 다시 가져와 주세요.`);
+      shipments.push(receipt);
+      shipmentMetadata[target.shipmentNumber] = { expectedDate: target.expectedDate, centerName: target.centerName };
+    }
+    const skuIds = [...new Set(shipments.flatMap(receipt => receipt.lines.map(line => line.skuId)))].sort();
+    const skuStatuses = [];
+    for (const [index, skuId] of skuIds.entries()) {
+      progress(`공급상태 ${index + 1}/${skuIds.length} · SKU ${skuId} 조회 중`);
+      skuStatuses.push(await getSkuStatusFor(skuId, signal));
+    }
+    return { source: "supplier-hub-shipments", schemaVersion: 3, mode: "hub-closed", since, collectedAt: new Date().toISOString(),
+      requestedShipmentNumbers: targets.map(target => target.shipmentNumber), shipments, skuStatuses, shipmentMetadata };
+  }
+  const api = { expandRows, parseDetail, parseList, collect, collectShipments, collectClosedSince, listColumns, parseListWithDates };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.NoidbShipmentReceipts = api;
 })(globalThis);

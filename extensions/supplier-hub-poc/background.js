@@ -36,7 +36,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!ready.ok || !info.ok || info.status !== "ready" || info.source !== "supplier-hub-shipments" || info.schemaVersion !== 3 || !Array.isArray(info.targets)) {
         throw new Error("NOID-B의 물류 입고결과 기능이 아직 준비되지 않았습니다. 자료 파일을 저장해 주세요.");
       }
-      if (message.type === "NOIDB_GET_LOGISTICS_RECEIPT_TARGETS") { sendResponse({ ok: true, targets: info.targets }); return; }
+      if (message.type === "NOIDB_GET_LOGISTICS_RECEIPT_TARGETS") { sendResponse({ ok: true, targets: info.targets, collectionMode: info.collectionMode, since: info.since }); return; }
       const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(message.payload), signal: controller.signal });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result.ok) throw new Error(result.error || "물류 입고결과를 저장하지 못했습니다.");

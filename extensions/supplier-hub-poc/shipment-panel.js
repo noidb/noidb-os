@@ -4,7 +4,7 @@
   const panel = document.createElement("section");
   panel.id = "noidb-shipment-reader";
   panel.style.cssText = "padding:16px;margin:16px;border:2px solid #55735c;border-radius:10px;background:#f3f7f1;color:#29352f";
-  panel.innerHTML = '<h3>NOID-B 쉽먼트 입고결과</h3><p>NOID-B가 확인한 쉽먼트만 읽습니다. 쿠팡 자료는 변경하지 않습니다.</p><div><button type="button" data-action="collect">입고결과 일괄 가져오기</button> <button type="button" data-action="cancel" hidden>중단</button> <button type="button" data-action="retry" disabled>NOID-B 전송 재시도</button> <button type="button" data-action="download" disabled>자료 파일 저장</button></div><p role="status" aria-live="polite"></p>';
+  panel.innerHTML = '<h3>NOID-B 쉽먼트 입고결과</h3><p>입고예정일 9/13 이후 마감된 쉽먼트를 모두 읽습니다. 쿠팡 자료는 변경하지 않습니다.</p><div><button type="button" data-action="collect">입고결과 일괄 가져오기</button> <button type="button" data-action="cancel" hidden>중단</button> <button type="button" data-action="retry" disabled>NOID-B 전송 재시도</button> <button type="button" data-action="download" disabled>자료 파일 저장</button></div><p role="status" aria-live="polite"></p>';
   const main = document.querySelector("#app") || document.body;
   main.prepend(panel);
   const status = panel.querySelector('[role="status"]');
@@ -32,7 +32,10 @@
       status.textContent = "NOID-B의 수집 대상을 확인 중…";
       const targets = await chrome.runtime.sendMessage({ type: "NOIDB_GET_LOGISTICS_RECEIPT_TARGETS" });
       if (!targets?.ok || !Array.isArray(targets.targets)) throw new Error(targets?.error || "NOID-B의 쉽먼트 수집 기능이 아직 준비되지 않았습니다.");
-      result = await NoidbShipmentReceipts.collectShipments(targets.targets, message => { status.textContent = message; }, controller.signal);
+      const report = message => { status.textContent = message; };
+      result = targets.collectionMode === "hub-closed"
+        ? await NoidbShipmentReceipts.collectClosedSince(targets.since, report, controller.signal)
+        : await NoidbShipmentReceipts.collectShipments(targets.targets, report, controller.signal);
       const closed = result.shipments.filter(item => item.status === "마감").length;
       status.textContent = `조회 완료 · 쉽먼트 ${result.shipments.length}건 중 마감 ${closed}건. NOID-B에 자동 전송합니다.`;
       await save();

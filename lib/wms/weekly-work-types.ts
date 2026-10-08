@@ -78,6 +78,8 @@ export interface WeeklyWorkspace {
   /** A completed follow-up queue connection; it does not mean the external work itself is complete. */
   logisticsReceiptRoutes?: Record<string, import("./logistics-receipts").LogisticsReceiptRoute>;
   logisticsFollowUp?: import("./logistics-follow-up-types").LogisticsFollowUpState;
+  /** 입고결과 처리기록을 새로 시작한 기준. 값이 다르면 이전 처리기록을 한 번 비운다. */
+  logisticsReceiptEpoch?: string;
   materialSnapshot?: WeeklySnapshot;
   statusCompletionIds?: string[];
   statusListSnapshot?: { requests: import("./vendor-order-actions").StatusRequestRecord[]; generations: import("./vendor-order-actions").StatusFileGenerationRecord[]; at: string };

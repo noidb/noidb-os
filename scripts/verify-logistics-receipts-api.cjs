@@ -8,13 +8,15 @@ const root = process.cwd();
 const routeFile = path.join(root, "app/api/wms/logistics/receipts/route.ts");
 let boardInput;
 const snapshot = { collectedAt: "2026-09-20T00:00:00.000Z" };
-const workspace = { logisticsReceiptRoutes: {}, logisticsFollowUp: { exclusions: [{ lineKey: "marketing::excluded", skuId: "222", sourceFingerprint: "x", at: snapshot.collectedAt }] } };
+let resetCalls = 0;
+const workspace = { logisticsReceiptEpoch: "test-epoch", logisticsReceiptRoutes: {}, logisticsFollowUp: { exclusions: [{ lineKey: "marketing::excluded", skuId: "222", sourceFingerprint: "x", at: snapshot.collectedAt }] } };
 const deps = {
   "next/server": { NextResponse: { json: (value, options) => new Response(JSON.stringify(value), { status: options?.status || 200, headers: options?.headers }) } },
   "@/lib/wms/logistics-aside-baseline.json": { closedShipmentNumbers: [], pendingTargets: [], completedMarketingSkuIds: [], excludedMarketingSkuIds: [], handledLines: [] },
-  "@/lib/wms/invoice-group/server-store": { readInvoiceGroupStore: async () => ({ groups: [] }) },
+  "@/lib/wms/logistics-receipt-reset": { resetLogisticsReceiptHistory: () => { resetCalls++; return false; } },
   "@/lib/wms/logistics-receipts": {
-    collectDispatchReceiptTargets: () => [], mergeLogisticsReceiptTargets: () => [], mergeLogisticsReceiptSnapshot: () => snapshot,
+    LOGISTICS_RECEIPT_EPOCH: "test-epoch", LOGISTICS_RECEIPT_SINCE: "2026-09-13",
+    logisticsTargetsFromSnapshot: () => [], mergeHubClosedSnapshot: () => ({ ...snapshot, shipments: [] }),
     buildLogisticsReceiptBoard: input => { boardInput = input; return { lines: [], targets: [], warnings: [] }; },
   },
   "@/lib/wms/weekly-work-store": { mutateWeeklyWorkspace: async callback => callback(structuredClone(workspace)), readWeeklyWorkspace: async () => structuredClone(workspace) },
@@ -31,5 +33,6 @@ vm.runInNewContext(compiled, { module: loaded, exports: loaded.exports, require:
   const response = await loaded.exports.POST(request);
   assert.equal(response.status, 200);
   assert.deepEqual([...boardInput.excludedMarketingLineKeys], ["marketing::excluded"]);
+  assert.equal(resetCalls, 1, "first hub collection save runs the one-time history reset check");
   console.log("PASS receipt save response retains active marketing exclusions");
 })().catch(error => { console.error(error); process.exitCode = 1; });

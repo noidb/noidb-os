@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import asideBaseline from "@/lib/wms/logistics-aside-baseline.json";
-import { readInvoiceGroupStore } from "@/lib/wms/invoice-group/server-store";
-import { buildLogisticsReceiptBoard, collectDispatchReceiptTargets, mergeLogisticsReceiptTargets, type LogisticsAsideBaseline } from "@/lib/wms/logistics-receipts";
+import { buildLogisticsReceiptBoard, LOGISTICS_RECEIPT_EPOCH, logisticsTargetsFromSnapshot, type LogisticsAsideBaseline } from "@/lib/wms/logistics-receipts";
 import { activeMarketingExclusionKeys, completeLogisticsFollowUp, completeVendorReceiptOrigins, generateLogisticsFollowUp, logisticsFollowUpResponse, logisticsFollowUpToken, queueMarketing, setMarketingExclusion } from "@/lib/wms/logistics-follow-up";
 import { readPickingWaveStore } from "@/lib/wms/picking-wave/server-store";
 import { mutateWeeklyWorkspace, readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
@@ -20,8 +19,9 @@ function baseline(): LogisticsAsideBaseline {
   return { closedShipmentNumbers: raw.closedShipmentNumbers, pendingTargets: raw.pendingTargets as LogisticsAsideBaseline["pendingTargets"], completedMarketingSkuIds: raw.completedMarketingSkuIds as string[], excludedMarketingSkuIds: raw.excludedMarketingSkuIds as string[], handledLines: raw.handledLines as LogisticsAsideBaseline["handledLines"], source: raw.source ?? raw.sources ?? {} };
 }
 async function current() {
-  const [workspace, invoices] = await Promise.all([readWeeklyWorkspace(), readInvoiceGroupStore()]);
-  const base = baseline(); const targets = mergeLogisticsReceiptTargets(collectDispatchReceiptTargets(invoices.groups), base.pendingTargets).filter(target => !base.closedShipmentNumbers.includes(target.shipmentNumber));
+  const stored = await readWeeklyWorkspace();
+  if (stored.logisticsReceiptEpoch !== LOGISTICS_RECEIPT_EPOCH) throw new Error("먼저 쿠팡 쉽먼트 화면에서 입고결과를 가져와 주세요.");
+  const workspace = stored, base = baseline(); const targets = logisticsTargetsFromSnapshot(workspace.logisticsReceipts);
   return { workspace, targets, board: buildLogisticsReceiptBoard({ targets, snapshot: workspace.logisticsReceipts, baseline: base, routes: workspace.logisticsReceiptRoutes, excludedMarketingLineKeys: [...activeMarketingExclusionKeys(workspace)] }) };
 }
 export async function GET(request: Request) {

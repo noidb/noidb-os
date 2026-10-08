@@ -2,7 +2,12 @@ import type { InvoiceGroup } from "./invoice-group/types";
 import type { ShipmentReceipt, ShipmentReceiptLine } from "./shipment-receipts";
 
 export type LogisticsReceiptStatus = "마감" | "발송 완료" | "발송 가능";
-export type LogisticsReceiptTargetSource = "dispatch" | "aside";
+export type LogisticsReceiptTargetSource = "dispatch" | "aside" | "hub";
+
+/** 입고결과 확인 시작 기준(사용자 확정 2026-10-08): 이 날짜 이전 입고예정 쉽먼트는 다루지 않는다. */
+export const LOGISTICS_RECEIPT_SINCE = "2026-09-13";
+/** 이 값이 바뀌면 이전 입고결과 처리기록을 한 번 비우고 새로 시작한다. */
+export const LOGISTICS_RECEIPT_EPOCH = "hub-closed-since-2026-09-13";
 
 export interface LogisticsReceiptTarget {
   shipmentNumber: string;
@@ -20,6 +25,9 @@ export interface LogisticsReceiptImport {
   shipments: ShipmentReceipt[];
   /** v3 exact Supplier Hub supply-state lookup for every SKU in a closed shipment. */
   skuStatuses?: LogisticsReceiptSkuStatus[];
+  /** "hub-closed": Supplier Hub 목록 전체에서 기준일 이후 마감 쉽먼트를 직접 찾은 수집. */
+  mode?: "hub-closed";
+  since?: string;
   /** Receipt-target identity captured with the collection so closed history survives later group cleanup. */
   shipmentMetadata?: Record<string, Pick<LogisticsReceiptTarget, "expectedDate" | "centerName">>;
 }
@@ -119,7 +127,7 @@ function validateTarget(target: unknown): asserts target is LogisticsReceiptTarg
     || !text(target.centerName) || !target.centerName.trim() || !Array.isArray(target.purchaseOrderNumbers)
     || (target.source === "dispatch" && target.purchaseOrderNumbers.length === 0)
     || !target.purchaseOrderNumbers.every(businessId) || !distinct(target.purchaseOrderNumbers)
-    || (target.source !== "dispatch" && target.source !== "aside")) invalid();
+    || (target.source !== "dispatch" && target.source !== "aside" && target.source !== "hub")) invalid();
 }
 
 /** Creates a stable, de-duplicated target list from only phase-1 dispatched groups. */
@@ -274,7 +282,7 @@ export function buildLogisticsReceiptBoard(input: {
   /** Persisted operator exclusions are line-specific; a later shipment of the same SKU stays reviewable. */
   excludedMarketingLineKeys?: readonly string[];
 }): LogisticsReceiptBoard {
-  const targets = mergeLogisticsReceiptTargets(input.targets.filter(target => target.source === "dispatch"), input.targets.filter(target => target.source === "aside"));
+  const targets = mergeLogisticsReceiptTargets(input.targets.filter(target => target.source === "dispatch"), input.targets.filter(target => target.source !== "dispatch"));
   const warnings: string[] = [];
   const snapshot = input.snapshot ? parseStoredLogisticsReceiptSnapshot(input.snapshot, targets) : undefined;
   const receiptByShipment = new Map(snapshot?.shipments.map(shipment => [shipment.shipmentNumber, shipment]) || []);
@@ -370,4 +378,37 @@ export function buildLogisticsReceiptBoard(input: {
   if (needsStatusRefresh) warnings.push("이전 수집자료에는 공급상태가 없습니다. 전체 쉽먼트를 다시 수집해 주세요.");
   if (unavailableSkuCount) warnings.push(`공급상태 불가·일시중단 SKU ${unavailableSkuCount}건은 미납·쿠폰광고 검토에서 제외했습니다.`);
   return { collectedAt: snapshot?.collectedAt, targets, lines, warnings };
+}
+
+/** 저장된 쿠팡 목록 수집에서 다시 만든 대상. 사이트 출고기록·예전 Aside 대기목록은 더 이상 쓰지 않는다. */
+export function logisticsTargetsFromSnapshot(snapshot: LogisticsReceiptSnapshot | undefined): LogisticsReceiptTarget[] {
+  if (!snapshot || snapshot.mode !== "hub-closed" || !snapshot.shipmentMetadata) return [];
+  return snapshot.shipments.map(shipment => {
+    const meta = snapshot.shipmentMetadata?.[shipment.shipmentNumber];
+    return { shipmentNumber: shipment.shipmentNumber, expectedDate: meta?.expectedDate || "", centerName: meta?.centerName || "",
+      purchaseOrderNumbers: [...new Set(shipment.lines.map(line => line.purchaseOrderNumber))].sort(), source: "hub" as const };
+  }).filter(target => target.expectedDate >= LOGISTICS_RECEIPT_SINCE).sort((a, b) => a.shipmentNumber.localeCompare(b.shipmentNumber));
+}
+
+/** 쿠팡 목록 전체 수집 저장. 기준일 이후 입고예정 + 마감 쉽먼트만 받고, 대상 목록은 수집 자료 자체가 정한다. */
+export function mergeHubClosedSnapshot(current: LogisticsReceiptSnapshot | undefined, raw: unknown): LogisticsReceiptSnapshot {
+  if (!record(raw) || raw.mode !== "hub-closed" || raw.since !== LOGISTICS_RECEIPT_SINCE || !record(raw.shipmentMetadata) || !Array.isArray(raw.shipments)) {
+    throw new Error("확장프로그램을 최신 버전(0.9.6)으로 새로고침한 뒤 다시 가져와 주세요.");
+  }
+  if (!raw.shipments.length) throw new Error(`${LOGISTICS_RECEIPT_SINCE} 이후 입고예정인 마감 쉽먼트가 없습니다.`);
+  const metadata = raw.shipmentMetadata as Record<string, unknown>;
+  const targets: LogisticsReceiptTarget[] = raw.shipments.map(shipment => {
+    if (!record(shipment) || shipment.status !== "마감" || !Array.isArray(shipment.lines)) invalid();
+    const meta = metadata[String(shipment.shipmentNumber)];
+    if (!record(meta) || typeof meta.expectedDate !== "string" || meta.expectedDate < LOGISTICS_RECEIPT_SINCE) invalid();
+    return { shipmentNumber: String(shipment.shipmentNumber), expectedDate: meta.expectedDate, centerName: String(meta.centerName || ""),
+      purchaseOrderNumbers: [...new Set((shipment.lines as Array<{ purchaseOrderNumber?: unknown }>).map(line => String(line?.purchaseOrderNumber)))].sort(), source: "hub" as const };
+  });
+  const incoming = parseLogisticsReceiptImport(raw, targets);
+  if (current?.collectedAt && current.mode === "hub-closed" && Date.parse(incoming.collectedAt) < Date.parse(current.collectedAt)) {
+    throw new Error("더 최신의 쉽먼트 수집 자료가 이미 저장돼 있습니다. 새로 수집해 주세요.");
+  }
+  const shipmentMetadata: NonNullable<LogisticsReceiptSnapshot["shipmentMetadata"]> = {};
+  for (const target of targets) shipmentMetadata[target.shipmentNumber] = { expectedDate: target.expectedDate, centerName: target.centerName };
+  return { ...incoming, mode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, shipmentMetadata };
 }

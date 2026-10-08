@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import asideBaseline from "@/lib/wms/logistics-aside-baseline.json";
 import {
   applyLogisticsFollowUpFixture,
   createLogisticsFollowUpFixture,
@@ -107,14 +106,6 @@ function groupedTargets(targets: ApiPayload["targets"]) {
     left.localeCompare(right),
   );
 }
-const koreanUnresolvedKind: Record<string, string> = {
-  multiple_purchase_orders: "복수 발주서",
-  purchase_unavailable_status: "공급 상태",
-};
-const unresolvedNote = (item: { kind: string; note: string }) =>
-  item.kind === "multiple_purchase_orders"
-    ? "발주번호는 다음 쉽먼트 상세 수집에서 확인합니다."
-    : item.note;
 const decisionLabel: Record<Decision, string> = {
   vendor: "거래처 발주",
   reorder: "미납 재발주",
@@ -130,7 +121,7 @@ const routeHref = (line: LogisticsReceiptBoardLine, fixture: boolean) => {
 
 export default function ShipmentReceiptsPage() {
   const [payload, setPayload] = useState<ApiPayload | null>(null);
-  const [tab, setTab] = useState<Tab>("pending");
+  const [tab, setTab] = useState<Tab>("results");
   const [busy, setBusy] = useState(false);
   const [fixture, setFixture] = useState(false);
   const [modeReady, setModeReady] = useState(false);
@@ -426,10 +417,6 @@ export default function ShipmentReceiptsPage() {
       .filter((line) => line.state === "pending" || line.state === "unknown")
       .map((line) => line.shipmentNumber),
   );
-  const pendingTargets =
-    payload?.targets.filter((target) =>
-      pendingShipmentNumbers.has(target.shipmentNumber),
-    ) || [];
   const resultLines = [...shortageLines].sort(
     (left, right) =>
       (left.state === "ready" ? 0 : 1) - (right.state === "ready" ? 0 : 1) ||
@@ -582,8 +569,10 @@ export default function ShipmentReceiptsPage() {
         </p>
       )}
       <p className={styles.notice}>
-        Aside의 9월 17일 기록을 반영했습니다. 당시 마감 25건은 다시 처리하지
-        않고, 남은 미마감 건과 추가 출고 건은 계속 확인합니다.
+        {payload?.board.collectedAt
+          ? `입고예정일 9/13 이후 마감 쉽먼트 ${payload.targets.length}건 · 가져온 시각 ${new Date(payload.board.collectedAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
+          : "아직 가져온 입고결과가 없습니다. 쿠팡 쉽먼트 화면 위 '입고결과 일괄 가져오기'를 눌러 주세요."}{" "}
+        <a href="https://supplier.coupang.com/ibs/asn/active" target="_blank" rel="noreferrer">쿠팡 쉽먼트 열기</a>
       </p>
       {payload?.board.warnings.map((warning, index) => (
         <p
@@ -596,8 +585,8 @@ export default function ShipmentReceiptsPage() {
       <nav className={styles.tabs} aria-label="입고결과 보기">
         {(
           [
-            ["pending", "마감대기"],
             ["results", "입고결과"],
+            ["pending", "가져온 쉽먼트"],
             ["followup", "후속처리"],
             ["history", "처리이력"],
           ] as const
@@ -621,8 +610,8 @@ export default function ShipmentReceiptsPage() {
         )}
         {tab === "pending" &&
           payload &&
-          (pendingTargets.length ? (
-            groupedTargets(pendingTargets).map(([date, centers]) => (
+          (payload.targets.length ? (
+            groupedTargets(payload.targets).map(([date, centers]) => (
               <section className={styles.dateBlock} key={date}>
                 <h2 className={styles.dateTitle}>{date}</h2>
                 {[...centers.entries()]
@@ -643,14 +632,9 @@ export default function ShipmentReceiptsPage() {
                                 ? target.purchaseOrderNumbers.join(", ")
                                 : "복수 발주서 상세 확인 필요"}
                             </p>
-                            <p className={styles.meta}>
-                              기준{" "}
-                              {fixture && target.source === "aside"
-                                ? "이전 미마감 예시"
-                                : target.source === "aside"
-                                  ? "이전 미마감 이력"
-                                  : "현재 출고 기록"}
-                            </p>
+                            {pendingShipmentNumbers.has(target.shipmentNumber) && (
+                              <p className={styles.meta}>마감 수량 미확인</p>
+                            )}
                           </article>
                         ))}
                       </div>
@@ -659,7 +643,7 @@ export default function ShipmentReceiptsPage() {
               </section>
             ))
           ) : (
-            <p className={styles.empty}>마감을 기다리는 쉽먼트가 없습니다.</p>
+            <p className={styles.empty}>가져온 마감 쉽먼트가 없습니다.</p>
           ))}
         {tab === "results" && payload && (
           <>
@@ -1049,12 +1033,6 @@ export default function ShipmentReceiptsPage() {
         )}
         {tab === "history" && (
           <div className={styles.history}>
-            <details className={styles.historyItem}>
-              <summary>2026-09-17 기준 당시 마감·분류 완료 쉽먼트 25건</summary>
-              <div className={styles.meta}>
-                {asideBaseline.closedShipmentNumbers.join(", ")}
-              </div>
-            </details>
             {routedLines.map((line) => (
               <article className={styles.historyItem} key={line.lineKey}>
                 <strong>
@@ -1086,38 +1064,6 @@ export default function ShipmentReceiptsPage() {
                 )}
               </article>
             ))}
-            {asideBaseline.handledLines.map((line) => (
-              <article
-                className={styles.historyItem}
-                key={`${line.shipmentNumber}:${line.purchaseOrderNumber}:${line.skuId}`}
-              >
-                <strong>
-                  {line.classification} · SKU {line.skuId} · {line.quantity}개
-                </strong>
-                <div className={styles.meta}>
-                  쉽먼트 {line.shipmentNumber} · 발주 {line.purchaseOrderNumber}{" "}
-                  · Aside 처리 기록 · {line.note || "처리 이력"}
-                </div>
-              </article>
-            ))}
-            <details className={styles.historyItem}>
-              <summary>
-                Aside 원본의 참고사항 ({asideBaseline.unresolved.length}건)
-              </summary>
-              {asideBaseline.unresolved.map((item, index) => (
-                <div
-                  className={styles.meta}
-                  key={`${item.kind}:${item.shipmentNumber || item.skuId || index}`}
-                >
-                  이전 기록 참고 · {koreanUnresolvedKind[item.kind] || "기록"} ·{" "}
-                  {item.shipmentNumber
-                    ? `쉽먼트 ${item.shipmentNumber} · `
-                    : ""}
-                  {item.skuId ? `SKU ${item.skuId} · ` : ""}
-                  {unresolvedNote(item)}
-                </div>
-              ))}
-            </details>
           </div>
         )}
       </section>

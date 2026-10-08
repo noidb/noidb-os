@@ -25,8 +25,20 @@ const docs = new Map([
   ["102", receiptDoc("102", "확인 필요")],
   ["103", { querySelectorAll: () => [], querySelector: () => null }],
 ]);
+const defaultHeader = ["선택", "상태", "쉽먼트번호", "물류센터", "입고 예정일"];
+let listHeader = defaultHeader;
+const listRow = (id, status, center, date) => ({ hasAttribute: name => name === "data-id", getAttribute: name => name === "data-id" ? id : name === "data-type" ? "PARCEL" : null,
+  querySelector: () => null, cells: [cell(""), cell(status), cell(id), cell(center), cell(date)] });
+function listDoc(page) {
+  const head = { hasAttribute: () => false, querySelector: selector => selector === "th" ? {} : null, cells: listHeader.map(text => cell(text)) };
+  const rows = page === 1 ? [listRow("100", "마감", "A센터", "2026-09-14"), listRow("101", "발송 완료", "A센터", "2026-09-20")]
+    : [listRow("104", "마감", "B센터", "2026.09.13 (토)"), listRow("105", "마감", "B센터", "2026-09-12")];
+  const tableNode = { querySelectorAll: selector => selector === "tr[data-id]" ? rows : selector === "tr" ? [head, ...rows] : [] };
+  const script = { textContent: `$('#parcel-pagination').bootpag({ total: 2, page: ${page} })` };
+  return { querySelector: selector => selector === "#parcel-tab" ? tableNode : null, querySelectorAll: selector => selector === "script" ? [script] : [] };
+}
 const asideBaseline = JSON.parse(fs.readFileSync("lib/wms/logistics-aside-baseline.json", "utf8"));
-global.DOMParser = class { parseFromString(text) { return docs.get(text) || receiptDoc(text, "발송 가능"); } };
+global.DOMParser = class { parseFromString(text) { return text.startsWith("list:") ? listDoc(Number(text.slice(5))) : docs.get(text) || receiptDoc(text, "발송 가능"); } };
 let skuStatusRequest, invalidSkuStatus = false;
 global.fetch = async (url, init = {}) => {
   if (String(url).includes("/plan/v1/ticket/sku/listTicketSku")) {
@@ -34,6 +46,7 @@ global.fetch = async (url, init = {}) => {
     skuStatusRequest = JSON.parse(init.body);
     return { ok: true, redirected: false, url: "https://supplier.coupang.com/plan/v1/ticket/sku/listTicketSku?locale=ko", json: async () => ({ content: [{ skuId, orderStatus: invalidSkuStatus ? "미확인" : skuId === "2" ? "일시중단" : "정상" }] }) };
   }
+  if (String(url).includes("/list?")) return { ok: true, redirected: false, url: `https://supplier.coupang.com${url}`, text: async () => `list:${new URL(url, "https://x").searchParams.get("pageNumber")}` };
   return { ok: true, redirected: false, url: `https://supplier.coupang.com${url}`, text: async () => String(url).match(/(\d+)$/)[1] };
 };
 
@@ -46,8 +59,16 @@ global.fetch = async (url, init = {}) => {
   assert.equal(result.shipments[0].totalReceived, 2); assert.deepEqual(result.shipments[1].lines, []);
   const aside = await reader.collectShipments([{ shipmentNumber: "104", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "aside" }]);
   assert.deepEqual(aside.shipments[0].lines.map(line => line.purchaseOrderNumber), ["900", "901"]); assert.deepEqual(aside.skuStatuses, [{ skuId: "1", orderStatus: "정상" }, { skuId: "2", orderStatus: "일시중단" }]);
-  const baselineResult = await reader.collectShipments(asideBaseline.pendingTargets);
-  assert.equal(baselineResult.requestedShipmentNumbers.length, asideBaseline.pendingTargets.length); assert(asideBaseline.pendingTargets.length >= 18);
+  // 예전 Aside 대기목록은 2026-10-08 사용자 요청으로 비웠다.
+  assert.equal(asideBaseline.pendingTargets.length, 0);
+  // 쿠팡 목록 전체에서 9/13 이후 입고예정 마감건만 찾는다(2쪽, 날짜 형식 혼합, 기준일 이전·미마감 제외).
+  const hub = await reader.collectClosedSince("2026-09-13");
+  assert.equal(hub.mode, "hub-closed"); assert.deepEqual(hub.requestedShipmentNumbers, ["100", "104"]);
+  assert.deepEqual(hub.shipmentMetadata, { "100": { expectedDate: "2026-09-14", centerName: "A센터" }, "104": { expectedDate: "2026-09-13", centerName: "B센터" } });
+  assert.deepEqual(hub.skuStatuses, [{ skuId: "1", orderStatus: "정상" }, { skuId: "2", orderStatus: "일시중단" }]);
+  listHeader = ["선택", "상태", "쉽먼트", "택배사"];
+  await assert.rejects(() => reader.collectClosedSince("2026-09-13"), /입고예정일·센터 열을 찾지 못했습니다/);
+  listHeader = defaultHeader;
   await assert.rejects(() => reader.collectShipments([{ shipmentNumber: "104", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }]), /출고 대상과 다릅니다/);
   await assert.rejects(() => reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }, { shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }]), /중복/);
   await assert.rejects(() => reader.collectShipments([{ shipmentNumber: "102", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }]), /처리할 수 없습니다/);
@@ -57,5 +78,5 @@ global.fetch = async (url, init = {}) => {
   invalidSkuStatus = false;
   global.fetch = async () => ({ ok: true, redirected: true, url: "https://supplier.coupang.com/login", text: async () => "" });
   await assert.rejects(() => reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }]), /다시 로그인/);
-  console.log("PASS logistics receipt v2 direct-detail collection, rowspan totals, PO identity, duplicate, missing, unknown-state and login blocks");
+  console.log("PASS hub-closed list collection since 9/13; logistics receipt v2 direct-detail collection, rowspan totals, PO identity, duplicate, missing, unknown-state and login blocks");
 })().finally(() => Object.assign(global, original));

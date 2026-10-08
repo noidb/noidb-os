@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import baselineData from "./logistics-aside-baseline.json";
-import { buildLogisticsReceiptBoard, collectDispatchReceiptTargets, mergeLogisticsReceiptTargets, logisticsReceiptSourceFingerprint,
+import { buildLogisticsReceiptBoard, logisticsTargetsFromSnapshot, logisticsReceiptSourceFingerprint,
   type LogisticsAsideBaseline, type LogisticsReceiptBoardLine, type LogisticsReceiptRoute, type LogisticsReceiptTarget } from "./logistics-receipts";
 import { readInvoiceGroupStore } from "./invoice-group/server-store";
 import { mutateWeeklyWorkspace } from "./weekly-work-store";
@@ -124,10 +124,7 @@ function vendorLine(run: WeeklyRun): VendorOrderDraftLine {
 
 const dependencies = { readInvoiceGroupStore, mutateWeeklyWorkspace, mutatePickingWaveStore };
 export async function routeLogisticsReceipt(input: RouteLogisticsReceiptInput, deps = dependencies) {
-  const groups = await deps.readInvoiceGroupStore();
-  const targets = mergeLogisticsReceiptTargets(collectDispatchReceiptTargets(groups.groups), baseline.pendingTargets)
-    .filter(target => !baseline.closedShipmentNumbers.includes(target.shipmentNumber));
-  const reservation = await deps.mutateWeeklyWorkspace(workspace => reserveLogisticsReceiptRoute(workspace, targets, input));
+  const reservation = await deps.mutateWeeklyWorkspace(workspace => reserveLogisticsReceiptRoute(workspace, logisticsTargetsFromSnapshot(workspace.logisticsReceipts), input));
   if (input.decision === "vendor" && !reservation.route.completed) {
     const source = vendorLine(reservation.run);
     const store = await deps.mutatePickingWaveStore({ action: "consolidateVendorOrders", operationId: reservation.run.id, lines: [source], now: reservation.route.at });
