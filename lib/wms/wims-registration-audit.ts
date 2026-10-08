@@ -7,7 +7,7 @@ import type { WimsRegistrationRow } from "./wims-registration";
 import { buildReregistrationDoneUpdates } from "./reregistration-tier";
 import { legacyModelSkuKey } from "./sku-normalize";
 
-export type WimsAuditResultType = "approved_candidate" | "reviewing" | "rejected" | "already_linked" | "conflict" | "unmatched";
+export type WimsAuditResultType = "approved_candidate" | "reviewing" | "rejected" | "already_linked" | "conflict" | "unmatched" | "superseded";
 
 export interface WimsAuditResultRow {
   type: WimsAuditResultType;
@@ -227,7 +227,12 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
     const base = { wims, sheetRowNumber: product.sheetRowNumber, productDbModelSku: product.modelSku, productDbSkuId: product.skuId, productDbStatus: product.status, productDbProductName: product.productName, productDbBarcode: product.barcode };
     const history = findReregistrationHistory(product.modelSku, reregistrations);
     const isReregistration = ["재등록파일생성", "기존상품승인대기"].includes(product.status) || (PENDING.has(product.status) && Boolean(history));
-    if ((product.status === "재등록파일생성" && !history) || (isReregistration && history && !isCurrentRegistration(wims, history))) {
+    // 재등록 기록보다 먼저 등록된 WIMS 건은 이번 재등록과 무관한 예전 기록이라 조치 목록에 올리지 않는다.
+    if (isReregistration && history && !isCurrentRegistration(wims, history)) {
+      rows.push({ ...base, sheetRowNumber: undefined, type: "superseded", message: "이번 재등록 전에 있던 예전 등록 기록입니다. 제품DB에 반영하지 않으며 따로 확인할 필요가 없습니다." });
+      continue;
+    }
+    if (product.status === "재등록파일생성" && !history) {
       rows.push({ ...base, sheetRowNumber: undefined, type: "unmatched", message: "이전 등록 이력이거나 재등록 이후 등록 건임을 확인할 수 없습니다. WIMS 등록일·시간을 포함해 이번 재등록 건을 다시 수집해주세요." });
       continue;
     }
