@@ -48,7 +48,7 @@ async function buildVendorWorkbook(run: WeeklyRun, vendorName: string): Promise<
   sheet.pageSetup={paperSize:9,orientation:"landscape",fitToPage:true,fitToWidth:1,fitToHeight:0};
   return Buffer.from(await book.xlsx.writeBuffer());
 }
-/** 쿠폰 할인율(사용자 확정 2026-10-08): 기본 20%, 제품DB 현재상태 과재고 SKU는 30%. */
+/** 쿠폰 할인율(사용자 확정 2026-10-08): 기본 20%, 제품DB 과재고 또는 누적입고 100개 이상 SKU는 30%. */
 export const COUPON_DISCOUNT_DEFAULT = 20;
 export const COUPON_DISCOUNT_OVERSTOCK = 30;
 export async function buildWeeklyOutput(run: WeeklyRun, kind: WeeklyOutputKind, now=new Date(), advertising?: WeeklyAdvertisingSelection, couponOptions: { overstockSkuIds?: ReadonlySet<string> } = {}): Promise<WeeklyOutput> {
@@ -72,7 +72,7 @@ export async function buildWeeklyOutput(run: WeeklyRun, kind: WeeklyOutputKind, 
   const overstockCoupons=coupons.filter(item=>couponOptions.overstockSkuIds?.has(item.skuId));
   const normalCoupons=coupons.filter(item=>!couponOptions.overstockSkuIds?.has(item.skuId));
   if(normalCoupons.length)zip.file(`쿠폰발행_${COUPON_DISCOUNT_DEFAULT}퍼센트_${range}.xlsx`,await buildCouponWorkbook(normalCoupons,COUPON_DISCOUNT_DEFAULT));
-  if(overstockCoupons.length)zip.file(`쿠폰발행_${COUPON_DISCOUNT_OVERSTOCK}퍼센트_과재고_${range}.xlsx`,await buildCouponWorkbook(overstockCoupons,COUPON_DISCOUNT_OVERSTOCK));
+  if(overstockCoupons.length)zip.file(`쿠폰발행_${COUPON_DISCOUNT_OVERSTOCK}퍼센트_과재고·누적입고100+_${range}.xlsx`,await buildCouponWorkbook(overstockCoupons,COUPON_DISCOUNT_OVERSTOCK));
   const advertisingFiles=includeAdvertising?await buildWeeklyAdvertisingFiles(advertising!.optionIds):[];
   for(const file of advertisingFiles)zip.file(file.fileName,file.buffer);
   if(reorders.length)zip.file(`재발주요청/재발주요청_${koreaDateParts(now).compact}.xlsx`,await buildWeeklyReorderWorkbook(reorders,now));

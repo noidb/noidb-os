@@ -119,12 +119,13 @@ function transientRun(runs: WeeklyRun[], kind: "marketing" | "discontinue"): Wee
   return { id, revision: 0, updatedAt: now(), sentVendors: {},
     snapshot: { id, rulesVersion: 5, sourceToken: hash(runs.map(sourceKey)), createdAt: now(), period: { startDate: weeklyKoreaDay(), endDate: weeklyKoreaDay() }, source: { files: [], latestActualDate: "", firstActualDate: "", eventCount: 0, duplicateCount: 0, selectedEventCount: 0, mode: "browser" }, couponItems: kind === "marketing" ? items as any : [], couponReceiptKeys, vendorItems: kind === "discontinue" ? items as any : [], warnings: [], blockers: [] }, reviews, reviewedSkuIds: Object.keys(reviews), itemRoutes: {} };
 }
-/** 제품DB 현재상태가 과재고인 SKU(쿠폰 30% 대상). 제품DB를 못 읽으면 생성을 멈춘다(할인율이 틀리게 나가지 않도록). */
+/** 쿠폰 30% 대상: 제품DB 현재상태 과재고 또는 누적입고 100개 이상. 제품DB를 못 읽으면 생성을 멈춘다(할인율이 틀리게 나가지 않도록). */
 async function loadOverstockSkuIds(): Promise<Set<string>> {
   const { fetchProductCatalog } = await import("./product-catalog");
   const catalog = await fetchProductCatalog();
   if (!catalog.configured) throw new Error("제품DB를 읽지 못해 과재고 할인율을 정할 수 없습니다. 잠시 후 다시 만들어 주세요.");
-  return new Set(catalog.items.filter(item => item.currentStatus.includes("과재고")).map(item => item.skuId));
+  const cumulative = (value: string) => Number(String(value || "").replace(/,/g, ""));
+  return new Set(catalog.items.filter(item => item.currentStatus.includes("과재고") || cumulative(item.cumulativeInbound) >= 100).map(item => item.skuId));
 }
 export async function generateLogisticsFollowUp(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, input: { token: unknown; expectedCollectedAt: unknown; kind: unknown }, deps: Partial<{ loadWeeklyAdvertisingSelection: typeof loadWeeklyAdvertisingSelection; buildWeeklyOutput: typeof buildWeeklyOutput; buildWeeklyReorderWorkbook: typeof buildWeeklyReorderWorkbook; loadOverstockSkuIds: typeof loadOverstockSkuIds }> = {}) {
   const services = { loadWeeklyAdvertisingSelection, buildWeeklyOutput, buildWeeklyReorderWorkbook, loadOverstockSkuIds, ...deps };
