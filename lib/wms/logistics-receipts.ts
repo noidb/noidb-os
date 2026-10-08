@@ -28,6 +28,10 @@ export interface LogisticsReceiptImport {
   /** "hub-closed": Supplier Hub 목록 전체에서 기준일 이후 마감 쉽먼트를 직접 찾은 수집. */
   mode?: "hub-closed";
   since?: string;
+  /** 쿠팡 조회가 안 돼 제품DB 발주가능상태로 채운 SKU. */
+  skuStatusesFromProductDb?: string[];
+  /** 제품DB로 채우기를 시도한 시각(같은 수집에 대해 한 번만). */
+  productDbStatusFillAt?: string;
   /** Receipt-target identity captured with the collection so closed history survives later group cleanup. */
   shipmentMetadata?: Record<string, Pick<LogisticsReceiptTarget, "expectedDate" | "centerName">>;
 }
@@ -376,7 +380,7 @@ export function buildLogisticsReceiptBoard(input: {
     if (remaining > 0 && closedHandledKeys.has(key)) warnings.push(`기준 처리수량이 확인된 미납수량보다 큽니다: ${handledLabels.get(key)}`);
   }
   if (needsStatusRefresh) warnings.push("이전 수집자료에는 공급상태가 없습니다. 전체 쉽먼트를 다시 수집해 주세요.");
-  if (unavailableSkuCount) warnings.push(`공급상태 불가·일시중단 SKU ${unavailableSkuCount}건은 미납·쿠폰광고 검토에서 제외했습니다.`);
+  if (unavailableSkuCount) warnings.push(`공급상태가 정상이 아닌 SKU ${unavailableSkuCount}건(불가·일시중단·조회안됨)은 미납·쿠폰광고 분류에서 뺐습니다.`);
   return { collectedAt: snapshot?.collectedAt, targets, lines, warnings };
 }
 
@@ -412,3 +416,21 @@ export function mergeHubClosedSnapshot(current: LogisticsReceiptSnapshot | undef
   for (const target of targets) shipmentMetadata[target.shipmentNumber] = { expectedDate: target.expectedDate, centerName: target.centerName };
   return { ...incoming, mode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, shipmentMetadata };
 }
+
+const knownSkuStatuses = new Set(["정상", "불가", "일시중단"]);
+/** 쿠팡 공급상태 조회가 안 된 SKU만 제품DB 발주가능상태(정상·불가·일시중단)로 채운다. 쿠팡이 준 값은 덮어쓰지 않는다. */
+export function fillSkuStatusesFromProductDb(snapshot: LogisticsReceiptSnapshot, productDbStatusBySku: ReadonlyMap<string, string>, at: string): number {
+  const fromProductDb = new Set(snapshot.skuStatusesFromProductDb || []);
+  let filled = 0;
+  for (const status of snapshot.skuStatuses || []) {
+    if (knownSkuStatuses.has(status.orderStatus)) continue;
+    const productDb = (productDbStatusBySku.get(status.skuId) || "").trim();
+    if (!knownSkuStatuses.has(productDb)) continue;
+    status.orderStatus = productDb; fromProductDb.add(status.skuId); filled++;
+  }
+  snapshot.skuStatusesFromProductDb = [...fromProductDb].sort();
+  snapshot.productDbStatusFillAt = at;
+  return filled;
+}
+export const needsProductDbStatusFill = (snapshot: LogisticsReceiptSnapshot | undefined) =>
+  Boolean(snapshot && !snapshot.productDbStatusFillAt && snapshot.skuStatuses?.some(status => !knownSkuStatuses.has(status.orderStatus)));

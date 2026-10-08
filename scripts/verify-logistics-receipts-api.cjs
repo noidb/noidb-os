@@ -13,10 +13,11 @@ const workspace = { logisticsReceiptEpoch: "test-epoch", logisticsReceiptRoutes:
 const deps = {
   "next/server": { NextResponse: { json: (value, options) => new Response(JSON.stringify(value), { status: options?.status || 200, headers: options?.headers }) } },
   "@/lib/wms/logistics-aside-baseline.json": { closedShipmentNumbers: [], pendingTargets: [], completedMarketingSkuIds: [], excludedMarketingSkuIds: [], handledLines: [] },
+  "@/lib/wms/product-catalog": { fetchProductCatalog: async () => ({ configured: true, items: [] }) },
   "@/lib/wms/logistics-receipt-reset": { resetLogisticsReceiptHistory: () => { resetCalls++; return false; } },
   "@/lib/wms/logistics-receipts": {
     LOGISTICS_RECEIPT_EPOCH: "test-epoch", LOGISTICS_RECEIPT_SINCE: "2026-09-13",
-    logisticsTargetsFromSnapshot: () => [], mergeHubClosedSnapshot: () => ({ ...snapshot, shipments: [] }),
+    logisticsTargetsFromSnapshot: () => [], needsProductDbStatusFill: () => false, fillSkuStatusesFromProductDb: () => 0, mergeHubClosedSnapshot: () => ({ ...snapshot, shipments: [] }),
     buildLogisticsReceiptBoard: input => { boardInput = input; return { lines: [], targets: [], warnings: [] }; },
   },
   "@/lib/wms/weekly-work-store": { mutateWeeklyWorkspace: async callback => callback(structuredClone(workspace)), readWeeklyWorkspace: async () => structuredClone(workspace) },

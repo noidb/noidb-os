@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { buildLogisticsReceiptBoard, LOGISTICS_RECEIPT_EPOCH, logisticsTargetsFromSnapshot, mergeHubClosedSnapshot } from "../lib/wms/logistics-receipts";
+import { buildLogisticsReceiptBoard, fillSkuStatusesFromProductDb, needsProductDbStatusFill, LOGISTICS_RECEIPT_EPOCH, logisticsTargetsFromSnapshot, mergeHubClosedSnapshot } from "../lib/wms/logistics-receipts";
 import { resetLogisticsReceiptHistory } from "../lib/wms/logistics-receipt-reset";
 import type { WeeklyWorkspace } from "../lib/wms/weekly-work-types";
 
@@ -36,4 +36,13 @@ const oddSnapshot = mergeHubClosedSnapshot(undefined, odd);
 const oddBoard = buildLogisticsReceiptBoard({ targets: logisticsTargetsFromSnapshot(oddSnapshot), snapshot: oddSnapshot, baseline: { closedShipmentNumbers: [], pendingTargets: [], completedMarketingSkuIds: [], excludedMarketingSkuIds: [], handledLines: [], source: {} } });
 const oddLine = oddBoard.lines.find(l => l.kind === "shortage" && l.skuId === "1")!;
 assert.equal(oddLine.state, "review"); assert.match(oddLine.reviewReason || "", /조회안됨/);
+// 조회안됨 SKU는 제품DB 발주가능상태로 한 번 채우고, 쿠팡이 준 값은 그대로 둔다.
+const fillSnap = mergeHubClosedSnapshot(undefined, odd);
+fillSnap.skuStatuses![1].orderStatus = "불가";
+assert.equal(needsProductDbStatusFill(fillSnap), true);
+assert.equal(fillSkuStatusesFromProductDb(fillSnap, new Map([["1", "정상"], ["2", "정상"]]), "2026-10-08T03:00:00.000Z"), 1);
+assert.deepEqual(fillSnap.skuStatuses!.map(s => s.orderStatus), ["정상", "불가", "정상"]);
+assert.deepEqual(fillSnap.skuStatusesFromProductDb, ["1"]); assert.equal(needsProductDbStatusFill(fillSnap), false);
+const filledBoard = buildLogisticsReceiptBoard({ targets: logisticsTargetsFromSnapshot(fillSnap), snapshot: fillSnap, baseline: { closedShipmentNumbers: [], pendingTargets: [], completedMarketingSkuIds: [], excludedMarketingSkuIds: [], handledLines: [], source: {} } });
+assert.equal(filledBoard.lines.find(l => l.kind === "shortage" && l.skuId === "1")!.state, "ready");
 console.log("PASS hub-closed collection: one-time reset, 9/13 cutoff, targets from Supplier Hub list, shortage + first-arrival board, stale/old-extension guards");

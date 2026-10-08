@@ -4,11 +4,14 @@ import {
   buildLogisticsReceiptBoard,
   LOGISTICS_RECEIPT_EPOCH,
   LOGISTICS_RECEIPT_SINCE,
+  fillSkuStatusesFromProductDb,
   logisticsTargetsFromSnapshot,
   mergeHubClosedSnapshot,
+  needsProductDbStatusFill,
   type LogisticsAsideBaseline,
 } from "@/lib/wms/logistics-receipts";
 import { resetLogisticsReceiptHistory } from "@/lib/wms/logistics-receipt-reset";
+import { fetchProductCatalog } from "@/lib/wms/product-catalog";
 import { mutateWeeklyWorkspace, readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { activeMarketingExclusionKeys, logisticsFollowUpResponse } from "@/lib/wms/logistics-follow-up";
 import { readWeeklyDiscontinueQueue } from "@/lib/wms/weekly-discontinue-queue";
@@ -45,8 +48,23 @@ function activeSnapshot(workspace: Awaited<ReturnType<typeof readWeeklyWorkspace
   return workspace.logisticsReceiptEpoch === LOGISTICS_RECEIPT_EPOCH ? workspace : { ...workspace, runs: [], logisticsReceipts: undefined, logisticsReceiptRoutes: undefined, logisticsFollowUp: undefined };
 }
 
+/** 쿠팡에서 공급상태가 조회되지 않은 SKU를 제품DB 발주가능상태로 한 번 채워 저장한다. */
+async function fillMissingStatuses(workspace: Awaited<ReturnType<typeof readWeeklyWorkspace>>) {
+  if (workspace.logisticsReceiptEpoch !== LOGISTICS_RECEIPT_EPOCH || !needsProductDbStatusFill(workspace.logisticsReceipts)) return workspace;
+  const catalog = await fetchProductCatalog();
+  if (!catalog.configured) return workspace;
+  const statusBySku = new Map(catalog.items.map(item => [item.skuId, item.orderableStatus]));
+  const collectedAt = workspace.logisticsReceipts!.collectedAt;
+  await mutateWeeklyWorkspace(next => {
+    if (next.logisticsReceipts?.collectedAt === collectedAt && needsProductDbStatusFill(next.logisticsReceipts)) {
+      fillSkuStatusesFromProductDb(next.logisticsReceipts, statusBySku, new Date().toISOString());
+    }
+  });
+  return readWeeklyWorkspace();
+}
+
 async function responseBoard() {
-  const workspace = activeSnapshot(await readWeeklyWorkspace());
+  const workspace = activeSnapshot(await fillMissingStatuses(await readWeeklyWorkspace()));
   const currentTargets = logisticsTargetsFromSnapshot(workspace.logisticsReceipts);
   const board = buildLogisticsReceiptBoard({
     targets: currentTargets,
