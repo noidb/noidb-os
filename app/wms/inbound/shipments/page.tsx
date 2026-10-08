@@ -437,6 +437,35 @@ export default function ShipmentReceiptsPage() {
       </span>
     );
   };
+  // 단종 대상 SKU로 단종신청 엑셀 + 공문 PDF(압축파일)를 만들어 바로 내려받는다.
+  async function downloadDiscontinueFiles(skuIds: string[]) {
+    setError("");
+    setRoutingKeys((current) => ({ ...current, "discontinue-file": true }));
+    try {
+      const response = await fetch("/api/wms/logistics/discontinue-file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skuIds }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "단종신청 파일을 만들지 못했습니다.");
+      const link = document.createElement("a");
+      link.href = `data:application/zip;base64,${data.base64}`;
+      link.download = data.fileName;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setMessage(`단종신청 엑셀과 공문을 만들었습니다(${data.count}건). 쿠팡에 신청한 뒤 '단종 신청 완료 · 목록 비우기'를 눌러 주세요.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "단종신청 파일을 만들지 못했습니다.");
+    } finally {
+      setRoutingKeys((current) => {
+        const next = { ...current };
+        delete next["discontinue-file"];
+        return next;
+      });
+    }
+  }
   const supplyButtons = (skuId: string, productName: string) => (
     <div className={styles.decisionRow}>
       <button
@@ -843,7 +872,9 @@ export default function ShipmentReceiptsPage() {
                 <h2 className={styles.listTitle}>
                   {section.title} <span>{section.rows.length}건</span>
                 </h2>
-                <p className={styles.meta}>{section.help} 표를 드래그해서 복사하세요.</p>
+                <p className={styles.meta}>
+                  {section.help} {section.kind === "release" ? "표를 드래그해서 복사하세요." : "아래 버튼으로 단종신청 엑셀과 공문을 만드세요."}
+                </p>
                 <div className={`${styles.tableWrap} ${styles.copyScroll}`}>
                   <table className={`${styles.table} ${styles.copyTable}`} aria-label={section.title}>
                     <thead>
@@ -862,14 +893,26 @@ export default function ShipmentReceiptsPage() {
                     </tbody>
                   </table>
                 </div>
-                <button
-                  type="button"
-                  className={`softPinkButton ${styles.fullButton}`}
-                  disabled={routingKeys[`supply:clear-list:${section.kind}`]}
-                  onClick={() => void supplyCheck("clear-list", "", "", { kind: section.kind, keys: section.rows.map((row) => row.key) })}
-                >
-                  {section.done}
-                </button>
+                <div className={section.kind === "discontinue" ? styles.pairButtons : undefined}>
+                  {section.kind === "discontinue" && (
+                    <button
+                      type="button"
+                      className={`softSageButton ${styles.fullButton}`}
+                      disabled={routingKeys["discontinue-file"]}
+                      onClick={() => void downloadDiscontinueFiles(section.rows.map((row) => row.skuId))}
+                    >
+                      {routingKeys["discontinue-file"] ? "만드는 중…" : "단종신청 엑셀·공문 만들기"}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className={`softPinkButton ${styles.fullButton}`}
+                    disabled={routingKeys[`supply:clear-list:${section.kind}`]}
+                    onClick={() => void supplyCheck("clear-list", "", "", { kind: section.kind, keys: section.rows.map((row) => row.key) })}
+                  >
+                    {section.done}
+                  </button>
+                </div>
               </section>
             ))}
             {marketingLines.length > 0 && (
