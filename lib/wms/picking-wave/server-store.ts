@@ -227,6 +227,12 @@ export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot,
   const next = normalizeSnapshot(structuredClone(current));
   if (mutation.action === "consolidateVendorOrders") {
     if (next.vendorQueueReceipts?.[mutation.operationId]) return current;
+    // 입고결과(미납 SKU)에서 사용자가 직접 '거래처발주'를 누른 줄은, 예전에 발주서에서 지워 생긴 제외 표시를 푼다(2026-10-08).
+    const explicit = mutation.lines.filter(line => line.isManuallyAdded && line.shipmentReceiptDetails?.length);
+    if (explicit.length && next.suppressedVendorSkuIds) {
+      next.suppressedVendorSkuIds = { ...next.suppressedVendorSkuIds };
+      for (const line of explicit) delete next.suppressedVendorSkuIds[normalizeSkuId(line.skuId)];
+    }
     const receipt = consolidateVendorOrders(next, mutation.operationId, mutation.lines, mutation.now, completionScope);
     if (catalogItems) {
       const queueLines = next.vendorOrderLines.filter(line => line.waveId === receipt.queueId);
