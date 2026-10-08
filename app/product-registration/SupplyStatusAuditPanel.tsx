@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { SupplyStatusAudit } from "@/lib/wms/supply-status-update";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
-import { wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
+import { wmsColors } from "@/lib/wms/ui-tokens";
 
 /**
  * 상품공급상태 (2026-10-07 간소화)
@@ -18,6 +18,8 @@ export default function SupplyStatusAuditPanel() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [audit, setAudit] = useState<SupplyStatusAudit | null>(null);
+  // 바뀔 항목 목록을 종류(상품명·발주가능상태·바코드)별로 골라 본다. ""는 전체.
+  const [filter, setFilter] = useState("");
 
   async function runAudit(preserveMessage = false): Promise<boolean> {
     if (loading) return false;
@@ -30,6 +32,7 @@ export default function SupplyStatusAuditPanel() {
       if (!response.ok) throw new Error(data.error || "상품공급상태 확인에 실패했습니다.");
       if (data.fileFound === false) throw new Error("G드라이브에서 상품공급상태 파일을 찾지 못했습니다.");
       setAudit(data as SupplyStatusAudit);
+      setFilter("");
       return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "상품공급상태 확인에 실패했습니다.");
@@ -68,63 +71,64 @@ export default function SupplyStatusAuditPanel() {
     }
   }
 
+  const filters = [
+    { key: "", label: "전체", count: audit?.changeCount ?? 0 },
+    { key: "상품명", label: "상품명", count: audit?.nameChangeCount ?? 0 },
+    { key: "발주가능상태", label: "발주상태", count: audit?.availabilityChangeCount ?? 0 },
+    { key: "바코드", label: "바코드", count: audit?.barcodeChangeCount ?? 0 },
+  ];
+  const shownChanges = audit ? audit.changes.filter(change => !filter || change.fields.some(field => field.startsWith(filter))) : [];
+
   return (
     <section id="supply-status-audit" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", background: wmsColors.surfaceBeige }}>
       <strong style={{ display: "block", fontSize: "14px" }}>상품공급상태</strong>
-      <span style={{ display: "block", color: wmsColors.muted, fontSize: "11px", marginTop: "2px" }}>
-        Supplier Hub 상품공급상태 화면에서 엑셀 다운로드한 파일을 G드라이브 `쿠팡데이터/상품공급상태관리 다운로드`에 넣고 누르면 SKU ID 기준으로 상품명·발주가능상태·바코드를 비교합니다.
-      </span>
-      <button type="button" onClick={() => void runAudit()} disabled={loading} style={{ ...wmsGhostButton, minHeight: "32px", marginTop: "9px", padding: "0 11px", fontSize: "11px" }}>
+      <button type="button" className="softBeigeButton" onClick={() => void runAudit()} disabled={loading} style={{ width: "100%", marginTop: "10px", fontSize: "15px" }}>
         {loading ? "비교 중..." : "G드라이브 최신 파일로 비교"}
       </button>
-
       {error && <p style={{ color: "#c0392b", fontSize: "12px", margin: "10px 0 0" }}>{error}</p>}
       {message && <p style={{ color: wmsColors.greenDark, fontSize: "12px", margin: "10px 0 0", fontWeight: 700 }}>{message}</p>}
-
       {audit && (
-        <div style={{ marginTop: "12px" }}>
-          <p style={{ color: wmsColors.muted, fontSize: "10px", margin: "0 0 8px", wordBreak: "break-all" }}>
-            {audit.fileName} · {new Date(audit.fileMtime).toLocaleString("ko-KR")} · 쿠팡 {audit.downloadedCount.toLocaleString()}건 중 제품DB 연결 {audit.matchedCount.toLocaleString()}건
+        <div style={{ marginTop: "10px" }}>
+          <p style={{ color: wmsColors.muted, fontSize: "11px", margin: "0 0 8px", wordBreak: "break-all" }}>
+            {audit.fileName} · {new Date(audit.fileMtime).toLocaleString("ko-KR")}
           </p>
-
           {audit.changeCount === 0 ? (
             <p style={{ margin: 0, padding: "10px", borderRadius: "9px", background: wmsColors.greenSoft, color: wmsColors.greenDark, fontSize: "12px", fontWeight: 700 }}>
               제품DB가 쿠팡 최신 상태와 같습니다.
             </p>
           ) : (
             <>
-              <div style={{ background: "#fff", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "10px 12px" }}>
-                <strong style={{ fontSize: "17px" }}>바뀔 항목 {audit.changeCount.toLocaleString()}건</strong>
-                <div style={{ color: wmsColors.muted, fontSize: "11px", marginTop: "2px" }}>
-                  상품명 {audit.nameChangeCount.toLocaleString()} · 발주가능상태 {audit.availabilityChangeCount.toLocaleString()} · 바코드 {audit.barcodeChangeCount.toLocaleString()}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={applyChanges}
-                disabled={applying}
-                style={{ ...wmsGhostButton, width: "100%", minHeight: "38px", marginTop: "8px", color: wmsColors.greenDark, fontWeight: 800, opacity: applying ? 0.55 : 1 }}
-              >
-                {applying ? "백업 후 반영 중..." : `${audit.changeCount.toLocaleString()}건 반영`}
+              <button type="button" className="softBeigeButton" onClick={applyChanges} disabled={applying} style={{ width: "100%", fontSize: "15px", opacity: applying ? 0.55 : 1 }}>
+                {applying ? "백업 후 반영 중..." : `바뀔 항목 ${audit.changeCount.toLocaleString()}건 반영`}
               </button>
-              <details style={{ marginTop: "8px" }}>
-                <summary style={{ cursor: "pointer", color: wmsColors.muted, fontSize: "11px", fontWeight: 700 }}>바뀔 항목 보기</summary>
-                <div style={{ display: "grid", gap: "6px", marginTop: "8px", maxHeight: "280px", overflowY: "auto" }}>
-                  {audit.changes.map(change => (
-                    <div key={change.skuId} style={{ background: "#fff", borderRadius: "8px", padding: "8px 10px", fontSize: "11px" }}>
-                      <strong>SKU {change.skuId}</strong> · {change.fields.join(" · ")}
-                      <div style={{ color: wmsColors.muted }}>{change.productName}</div>
-                    </div>
-                  ))}
-                </div>
-              </details>
+              <div role="group" aria-label="바뀔 항목 골라 보기" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "6px", marginTop: "8px" }}>
+                {filters.map(item => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    aria-pressed={filter === item.key}
+                    disabled={item.key !== "" && item.count === 0}
+                    className={filter === item.key ? "softSageButton" : "softApricotButton"}
+                    onClick={() => setFilter(item.key)}
+                    style={{ minHeight: "38px", padding: "6px 4px", fontSize: "12px", opacity: item.key !== "" && item.count === 0 ? 0.45 : 1 }}
+                  >
+                    {item.label} {item.count.toLocaleString()}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: "grid", gap: "6px", marginTop: "8px", maxHeight: "280px", overflowY: "auto" }}>
+                {shownChanges.map(change => (
+                  <div key={change.skuId} style={{ background: "#fff", borderRadius: "8px", padding: "8px 10px", fontSize: "12px" }}>
+                    <strong>SKU {change.skuId}</strong> · {change.fields.join(" · ")}
+                    <div style={{ color: wmsColors.muted }}>{change.productName}</div>
+                  </div>
+                ))}
+              </div>
             </>
           )}
-
-          {(audit.notInProductDbCount > 0 || audit.duplicateCount > 0) && (
-            <p style={{ color: wmsColors.muted, fontSize: "10px", margin: "8px 0 0" }}>
-              {audit.notInProductDbCount > 0 && `제품DB에 없는 쿠팡 SKU ${audit.notInProductDbCount.toLocaleString()}건은 건드리지 않습니다. `}
-              {audit.duplicateCount > 0 && `같은 SKU ID가 여러 번 있는 ${audit.duplicateCount.toLocaleString()}건은 건너뜁니다: ${audit.issues.map(issue => issue.skuId).filter(Boolean).slice(0, 10).join(", ")}`}
+          {audit.duplicateCount > 0 && (
+            <p style={{ color: wmsColors.muted, fontSize: "11px", margin: "8px 0 0" }}>
+              {`같은 SKU ID가 여러 번 있어 건너뜀 ${audit.duplicateCount.toLocaleString()}건: ${audit.issues.map(issue => issue.skuId).filter(Boolean).slice(0, 10).join(", ")}`}
             </p>
           )}
         </div>
