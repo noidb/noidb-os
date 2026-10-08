@@ -23,9 +23,9 @@ const squash = (value: string) => value.replace(/\s+/g, "");
 const matches = (value: string, list: readonly string[]) => list.some(item => squash(item) === squash(value));
 const itemKey = (item: Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus">, extra = "") =>
   JSON.stringify([item.skuId, squash(item.currentStatus), squash(item.orderableStatus), extra]);
-const displayName = (item: ProductCatalogItem) => [item.productName, item.optionLabel].filter(Boolean).join(", ");
+const displayName = (item: Pick<ProductCatalogItem, "productName" | "optionLabel">) => [item.productName, item.optionLabel].filter(Boolean).join(", ");
 
-export function buildStatusLists(items: readonly ProductCatalogItem[], options: {
+export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier">[], options: {
   releaseFromScreen?: Record<string, { productName: string }>;
   cleared?: StatusListCleared;
   memoReleaseSkuIds?: readonly string[];

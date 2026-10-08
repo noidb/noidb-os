@@ -79,7 +79,7 @@ export interface SheetTabProperties {
   gridColumnCount?: number;
 }
 
-async function fetchSpreadsheetTabs(): Promise<SheetTabProperties[]> {
+export async function fetchSpreadsheetTabs(): Promise<SheetTabProperties[]> {
   const accessToken = await getWmsGoogleAccessToken();
   const spreadsheetId = getWmsSpreadsheetId();
   const response = await fetch(`${SHEETS_API_BASE}/${spreadsheetId}?fields=sheets.properties`, {
@@ -271,3 +271,37 @@ export async function ensureHiddenSheetOptionalColumn(sheetName: string, baseHea
 }
 
 /** 기존 행을 건드리지 않고 한 행만 append한다. 호출 전에 ensureHiddenSheet로 헤더를 검증한다. */
+
+/** 여러 행을 탭 끝에 붙인다. 수식(=IMAGE 등)은 수식 그대로, 앞자리 0 숫자는 글자로 지킨다(USER_ENTERED). */
+export async function appendSheetRowsKeepingFormulas(sheetName: string, rows: string[][]): Promise<void> {
+  if (!rows.length) return;
+  const accessToken = await getWmsGoogleAccessToken();
+  const spreadsheetId = getWmsSpreadsheetId();
+  const safe = rows.map(row => row.map(value => {
+    const text = String(value ?? "");
+    return /^0\d+$/.test(text) || /^\d{16,}$/.test(text) ? `'${text}` : text;
+  }));
+  const range = encodeURIComponent(`'${sheetName}'!A1`);
+  const response = await fetch(`${SHEETS_API_BASE}/${spreadsheetId}/values/${range}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ values: safe }),
+  });
+  const data = await response.json().catch(() => ({} as any));
+  if (!response.ok) throw new Error(`[${sheetName}] 행 추가 실패: ${data?.error?.message || response.status}`);
+}
+
+/** 지정한 행(1-based, 헤더 포함 시트 행 번호)들을 아래부터 지운다. */
+export async function deleteSheetRows(sheetId: number, rowNumbers: number[]): Promise<void> {
+  const rows = [...new Set(rowNumbers)].filter(row => row >= 2).sort((a, b) => b - a);
+  if (!rows.length) return;
+  const accessToken = await getWmsGoogleAccessToken();
+  const spreadsheetId = getWmsSpreadsheetId();
+  const response = await fetch(`${SHEETS_API_BASE}/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ requests: rows.map(row => ({ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: row - 1, endIndex: row } } })) }),
+  });
+  const data = await response.json().catch(() => ({} as any));
+  if (!response.ok) throw new Error(`행 삭제 실패: ${data?.error?.message || response.status}`);
+}

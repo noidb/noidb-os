@@ -15,6 +15,7 @@ const deps = {
   "@/lib/wms/logistics-aside-baseline.json": { closedShipmentNumbers: [], pendingTargets: [], completedMarketingSkuIds: [], excludedMarketingSkuIds: [], handledLines: [] },
   "@/lib/wms/picking-wave/server-store": { readPickingWaveStore: async () => ({}) },
   "@/lib/wms/reregistration-lookup": { loadReregistrationLookup: async () => ({ reregisteredSkuIds: new Set(), names: {}, loaded: false }) },
+  "@/lib/wms/status-list-sources": { loadStatusSourceItems: async items => ({ items, storageLoaded: false }) },
   "@/lib/wms/discontinue-lists": { buildStatusLists: () => ({ discontinue: [], release: [] }) },
   "@/lib/wms/open-vendor-orders": { openVendorOrdersBySku: () => ({}) },
   "@/lib/wms/logistics-receipt-routing": { reconcileIncompleteVendorRoutes: () => 0 },

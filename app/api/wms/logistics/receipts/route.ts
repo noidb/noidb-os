@@ -17,6 +17,7 @@ import { openVendorOrdersBySku } from "@/lib/wms/open-vendor-orders";
 import { reconcileIncompleteVendorRoutes } from "@/lib/wms/logistics-receipt-routing";
 import { buildStatusLists } from "@/lib/wms/discontinue-lists";
 import { loadReregistrationLookup } from "@/lib/wms/reregistration-lookup";
+import { loadStatusSourceItems } from "@/lib/wms/status-list-sources";
 import { expandMarketingExclusions, MARKETING_PERMANENT_EXCLUDED_SKU_IDS } from "@/lib/wms/marketing-permanent-exclusions";
 import { mutateWeeklyWorkspace, readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { activeMarketingExclusionKeys, logisticsFollowUpResponse } from "@/lib/wms/logistics-follow-up";
@@ -102,6 +103,7 @@ function productDbLooksBySku(catalog: Catalog | null, skuIds: Iterable<string>):
 
 async function responseBoard() {
   const [firstRead, catalog, vendorStore, rereg] = await Promise.all([readWeeklyWorkspace(), readCatalog(), readPickingWaveStore().catch(() => null), loadReregistrationLookup()]);
+  const statusSource = catalog ? await loadStatusSourceItems(catalog.items) : null;
   const openOrders = vendorStore ? openVendorOrdersBySku(vendorStore) : {};
   // 끊긴 거래처발주 예약 정리(실제 발주서에 있으면 완료, 없으면 예약 삭제)
   let stored = firstRead;
@@ -128,7 +130,7 @@ async function responseBoard() {
   return { currentTargets, board, followUp, productDbStatuses: productDbStatusBySku(catalog, shownSkuIds), productDbLooks: productDbLooksBySku(catalog, shownSkuIds),
     supplyStatusChecks: stored.supplyStatusChecks || {},
     coveredByVendorOrder: stored.coveredByVendorOrder || {},
-    statusLists: catalog ? buildStatusLists(catalog.items, {
+    statusLists: statusSource ? buildStatusLists(statusSource.items, {
       releaseFromScreen: Object.fromEntries(Object.entries(stored.supplyStatusChecks || {}).filter(([, check]) => check.decision === "release" && !check.releasedListClearedAt)),
       cleared: stored.statusListCleared,
       nameFallback: { ...rereg.names, ...Object.fromEntries((stored.logisticsReceipts?.shipments || []).flatMap(shipment => shipment.lines.map(line => [line.skuId, line.productName]))) },

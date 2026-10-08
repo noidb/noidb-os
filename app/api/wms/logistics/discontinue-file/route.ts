@@ -5,6 +5,7 @@ import { fetchProductCatalog } from "@/lib/wms/product-catalog";
 import { readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { buildStatusLists } from "@/lib/wms/discontinue-lists";
 import { loadReregistrationLookup } from "@/lib/wms/reregistration-lookup";
+import { loadStatusSourceItems } from "@/lib/wms/status-list-sources";
 import { buildDiscontinueWorkbook, koreaDateParts, loadDiscontinueLetterTemplate, loadDiscontinueTemplate } from "@/lib/wms/discontinue-files";
 import { buildDiscontinueLetterFromTemplate } from "@/lib/wms/discontinue-letter";
 
@@ -21,7 +22,7 @@ export async function POST(request: NextRequest) {
     if (!wanted.size) throw new Error("단종 신청할 SKU가 없습니다.");
     const [catalog, workspace, rereg] = await Promise.all([fetchProductCatalog(), readWeeklyWorkspace(), loadReregistrationLookup()]);
     if (!catalog.configured) throw new Error("제품DB를 읽지 못했습니다. 잠시 후 다시 만들어 주세요.");
-    const lists = buildStatusLists(catalog.items, {
+    const lists = buildStatusLists((await loadStatusSourceItems(catalog.items)).items, {
       cleared: workspace.statusListCleared,
       releaseFromScreen: Object.fromEntries(Object.entries(workspace.supplyStatusChecks || {}).filter(([, check]) => check.decision === "release" && !check.releasedListClearedAt)),
       reregisteredSkuIds: rereg.reregisteredSkuIds,

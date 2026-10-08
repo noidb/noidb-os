@@ -17,6 +17,7 @@ import type {
   LogisticsReceiptTarget,
 } from "@/lib/wms/logistics-receipts";
 import styles from "./shipments.module.css";
+import WarehouseRecheckCleanup from "./WarehouseRecheckCleanup";
 
 type Tab = "pending" | "results" | "followup" | "history";
 type Decision = "vendor" | "discontinue" | "reorder" | "marketing";
@@ -912,7 +913,7 @@ export default function ShipmentReceiptsPage() {
               <p className={styles.empty}>검토할 미납 상품이 없습니다.</p>
             )}
             {[
-              { kind: "discontinue" as const, title: "단종 대상 SKU", rows: discontinueList, help: "제품DB 현재상태가 판매중지·단종·거래처단종·가품중단인데 쿠팡 발주가능상태가 아직 정상인 SKU예요.", done: "단종 신청 완료 · 목록 비우기" },
+              { kind: "discontinue" as const, title: "단종 대상 SKU", rows: discontinueList, help: "제품DB·보관 탭의 현재상태가 판매중지·단종·거래처단종·가품중단인데 쿠팡 발주가능상태가 아직 정상인 SKU예요.", done: "단종 신청 완료 · 목록 비우기" },
               { kind: "release" as const, title: "단종해제 대상 SKU", rows: releaseList, help: "제품DB 현재상태가 과재고·정상전환대상·제품DB로 이동(재고있음)인데 발주가능상태가 정상이 아닌 SKU, 메모로 주신 SKU, 화면에서 단종해제를 누른 SKU예요.", done: "단종해제 신청 완료 · 목록 비우기" },
             ].filter((section) => section.rows.length > 0).map((section) => (
               <section key={section.kind}>
@@ -973,6 +974,14 @@ export default function ShipmentReceiptsPage() {
                 </div>
               </section>
             ))}
+            {!fixture && (
+              <WarehouseRecheckCleanup
+                onDone={(text, isError) => {
+                  if (isError) setError(text);
+                  else { setError(""); setMessage(text); }
+                }}
+              />
+            )}
             {marketingLines.length > 0 && (
               <section>
                 <h2 className={styles.listTitle}>

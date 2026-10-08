@@ -5,6 +5,7 @@ import { fetchProductCatalog } from "@/lib/wms/product-catalog";
 import { readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { buildStatusLists } from "@/lib/wms/discontinue-lists";
 import { loadReregistrationLookup } from "@/lib/wms/reregistration-lookup";
+import { loadStatusSourceItems } from "@/lib/wms/status-list-sources";
 import { koreaDateParts } from "@/lib/wms/discontinue-files";
 
 export const runtime = "nodejs";
@@ -17,7 +18,7 @@ export async function POST(request: NextRequest) {
   try {
     const [catalog, workspace, rereg] = await Promise.all([fetchProductCatalog(), readWeeklyWorkspace(), loadReregistrationLookup()]);
     if (!catalog.configured) throw new Error("제품DB를 읽지 못했습니다. 잠시 후 다시 만들어 주세요.");
-    const rows = buildStatusLists(catalog.items, {
+    const rows = buildStatusLists((await loadStatusSourceItems(catalog.items)).items, {
       cleared: workspace.statusListCleared,
       releaseFromScreen: Object.fromEntries(Object.entries(workspace.supplyStatusChecks || {}).filter(([, check]) => check.decision === "release" && !check.releasedListClearedAt)),
       nameFallback: { ...rereg.names, ...Object.fromEntries((workspace.logisticsReceipts?.shipments || []).flatMap(shipment => shipment.lines.map(line => [line.skuId, line.productName]))) },
