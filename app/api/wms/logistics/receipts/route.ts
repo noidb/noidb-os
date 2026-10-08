@@ -13,7 +13,8 @@ import {
 import { resetLogisticsReceiptHistory } from "@/lib/wms/logistics-receipt-reset";
 import { fetchProductCatalog } from "@/lib/wms/product-catalog";
 import { readPickingWaveStore } from "@/lib/wms/picking-wave/server-store";
-import { openVendorOrdersBySku, type OpenVendorOrder } from "@/lib/wms/open-vendor-orders";
+import { openVendorOrdersBySku } from "@/lib/wms/open-vendor-orders";
+import { reconcileIncompleteVendorRoutes } from "@/lib/wms/logistics-receipt-routing";
 import { buildStatusLists } from "@/lib/wms/discontinue-lists";
 import { expandMarketingExclusions, MARKETING_PERMANENT_EXCLUDED_SKU_IDS } from "@/lib/wms/marketing-permanent-exclusions";
 import { mutateWeeklyWorkspace, readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
@@ -99,8 +100,14 @@ function productDbLooksBySku(catalog: Catalog | null, skuIds: Iterable<string>):
 }
 
 async function responseBoard() {
-  const [stored, catalog, openOrders] = await Promise.all([readWeeklyWorkspace(), readCatalog(),
-    readPickingWaveStore().then(openVendorOrdersBySku).catch(() => ({} as Record<string, OpenVendorOrder>))]);
+  const [firstRead, catalog, vendorStore] = await Promise.all([readWeeklyWorkspace(), readCatalog(), readPickingWaveStore().catch(() => null)]);
+  const openOrders = vendorStore ? openVendorOrdersBySku(vendorStore) : {};
+  // 끊긴 거래처발주 예약 정리(실제 발주서에 있으면 완료, 없으면 예약 삭제)
+  let stored = firstRead;
+  if (vendorStore && reconcileIncompleteVendorRoutes(structuredClone(firstRead), vendorStore) > 0) {
+    await mutateWeeklyWorkspace(workspace => { reconcileIncompleteVendorRoutes(workspace, vendorStore); });
+    stored = await readWeeklyWorkspace();
+  }
   const workspace = activeSnapshot(await fillMissingStatuses(stored, catalog));
   const currentTargets = logisticsTargetsFromSnapshot(workspace.logisticsReceipts);
   // 무조건 제외(같은 모델 전체). 제품DB를 못 읽으면 지정 SKU만 뺀다.

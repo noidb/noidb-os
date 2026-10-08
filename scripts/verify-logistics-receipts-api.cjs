@@ -16,6 +16,7 @@ const deps = {
   "@/lib/wms/picking-wave/server-store": { readPickingWaveStore: async () => ({}) },
   "@/lib/wms/discontinue-lists": { buildStatusLists: () => ({ discontinue: [], release: [] }) },
   "@/lib/wms/open-vendor-orders": { openVendorOrdersBySku: () => ({}) },
+  "@/lib/wms/logistics-receipt-routing": { reconcileIncompleteVendorRoutes: () => 0 },
   "@/lib/wms/product-catalog": { fetchProductCatalog: async () => ({ configured: true, items: [] }) },
   "@/lib/wms/marketing-permanent-exclusions": { MARKETING_PERMANENT_EXCLUDED_SKU_IDS: ["1"], expandMarketingExclusions: () => ({ skuIds: new Set(["1"]), models: [] }) },
   "@/lib/wms/logistics-receipt-reset": { resetLogisticsReceiptHistory: () => { resetCalls++; return false; } },

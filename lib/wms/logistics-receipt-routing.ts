@@ -4,7 +4,8 @@ import { buildLogisticsReceiptBoard, logisticsTargetsFromSnapshot, logisticsRece
   type LogisticsAsideBaseline, type LogisticsReceiptBoardLine, type LogisticsReceiptRoute, type LogisticsReceiptTarget } from "./logistics-receipts";
 import { readInvoiceGroupStore } from "./invoice-group/server-store";
 import { mutateWeeklyWorkspace } from "./weekly-work-store";
-import { mutatePickingWaveStore } from "./picking-wave/server-store";
+import { mutatePickingWaveStore, readPickingWaveStore } from "./picking-wave/server-store";
+import type { PickingWaveStoreSnapshot } from "./picking-wave/shared-store-types";
 import { WEEKLY_RULES_VERSION, type WeeklyRun, type WeeklyWorkspace } from "./weekly-work-types";
 import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraftLine } from "./vendor-order/types";
 
@@ -122,9 +123,44 @@ function vendorLine(run: WeeklyRun): VendorOrderDraftLine {
     shipmentReceiptDetails: [run.logisticsReceiptLine!], createdAt: run.updatedAt, updatedAt: run.updatedAt };
 }
 
-const dependencies = { readInvoiceGroupStore, mutateWeeklyWorkspace, mutatePickingWaveStore };
+/**
+ * 거래처발주는 ①분류 예약 ②거래처 발주서에 넣기 ③완료 표시 세 단계로 저장된다.
+ * 중간에 저장이 끊기면 '완료 안 된 거래처발주 예약'이 남아, 줄은 계속 보이는데 다른 버튼은 막힌다(2026-10-08 실사용).
+ * 실제 거래처 발주서에 들어가 있으면 완료로 고치고, 안 들어갔으면(2분 지난 예약) 예약을 지워 다시 고를 수 있게 한다.
+ */
+export function reconcileIncompleteVendorRoutes(workspace: WeeklyWorkspace, store: Pick<PickingWaveStoreSnapshot, "vendorOrderLines" | "deletedVendorLineIds" | "vendorQueueReceipts">, now = Date.now()): number {
+  let changed = 0;
+  for (const [lineKey, route] of Object.entries(workspace.logisticsReceiptRoutes || {})) {
+    if (route.decision !== "vendor" || route.completed) continue;
+    const placed = (store.vendorOrderLines || []).some(line => !store.deletedVendorLineIds?.[line.id] && !line.orderExclusion
+      && line.shipmentReceiptDetails?.some(detail => detail.lineKey === lineKey));
+    const receipt = store.vendorQueueReceipts?.[route.runId];
+    const run = workspace.runs.find(item => item.id === route.runId);
+    if (placed && receipt && run) {
+      route.completed = true;
+      const skuId = run.logisticsReceiptLine?.skuId;
+      if (skuId && run.itemRoutes?.[skuId]) run.itemRoutes[skuId].completed = true;
+      run.vendorQueueTransfers = [{ id: run.id, at: route.at, completed: true, queueId: receipt.queueId, lines: receipt.sourceLines }];
+      run.revision++; run.updatedAt = new Date(now).toISOString();
+      changed++;
+    } else if (!placed && now - Date.parse(route.at) > 120_000) {
+      const routes = { ...workspace.logisticsReceiptRoutes };
+      delete routes[lineKey];
+      workspace.logisticsReceiptRoutes = routes;
+      workspace.runs = workspace.runs.filter(item => item.id !== route.runId);
+      changed++;
+    }
+  }
+  return changed;
+}
+
+const dependencies = { readInvoiceGroupStore, mutateWeeklyWorkspace, mutatePickingWaveStore, readPickingWaveStore };
 export async function routeLogisticsReceipt(input: RouteLogisticsReceiptInput, deps = dependencies) {
-  const reservation = await deps.mutateWeeklyWorkspace(workspace => reserveLogisticsReceiptRoute(workspace, logisticsTargetsFromSnapshot(workspace.logisticsReceipts), input));
+  const vendorStore = await (deps.readPickingWaveStore ? deps.readPickingWaveStore() : Promise.resolve(null)).catch(() => null);
+  const reservation = await deps.mutateWeeklyWorkspace(workspace => {
+    if (vendorStore) reconcileIncompleteVendorRoutes(workspace, vendorStore);
+    return reserveLogisticsReceiptRoute(workspace, logisticsTargetsFromSnapshot(workspace.logisticsReceipts), input);
+  });
   if (input.decision === "vendor" && !reservation.route.completed) {
     const source = vendorLine(reservation.run);
     const store = await deps.mutatePickingWaveStore({ action: "consolidateVendorOrders", operationId: reservation.run.id, lines: [source], now: reservation.route.at });
