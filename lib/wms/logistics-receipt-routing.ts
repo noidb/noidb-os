@@ -8,6 +8,7 @@ import { mutatePickingWaveStore, readPickingWaveStore } from "./picking-wave/ser
 import type { PickingWaveStoreSnapshot } from "./picking-wave/shared-store-types";
 import { WEEKLY_RULES_VERSION, type WeeklyRun, type WeeklyWorkspace } from "./weekly-work-types";
 import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraftLine } from "./vendor-order/types";
+import { fetchProductCatalog, type ProductCatalogItem } from "./product-catalog";
 
 const baseline = baselineData as unknown as LogisticsAsideBaseline;
 export type LogisticsReceiptDecision = LogisticsReceiptRoute["decision"];
@@ -112,13 +113,17 @@ export function reserveLogisticsReceiptRoute(workspace: WeeklyWorkspace, targets
   return { route, run, line };
 }
 
-function vendorLine(run: WeeklyRun): VendorOrderDraftLine {
+/** 제품DB에서 거래처·모델명·바코드·사진·옵션을 채운다. 거래처 카드에 들어갈 메모는 비워 둔다(쉽먼트 출처는 shipmentReceiptDetails에 남음). */
+type CatalogRow = Pick<ProductCatalogItem, "skuId" | "vendorName" | "modelSku" | "modelName" | "category" | "optionLabel" | "productName" | "imageUrl" | "barcode" | "currentStock">;
+function vendorLine(run: WeeklyRun, catalog?: CatalogRow): VendorOrderDraftLine {
   const item = run.snapshot.vendorItems[0];
-  return { id: `${run.id}::${item.skuId}`, draftId: `${run.id}::${item.vendorName}`, waveId: run.id,
-    vendorName: item.vendorName, skuId: item.skuId, modelName: "", category: "", optionLabel: "", productName: item.productName,
-    imageUrl: "", barcode: item.barcode, actualShortageQuantity: item.shortageQuantity, shortageQuantity: item.shortageQuantity,
-    currentStock: "", relatedPurchaseOrderNumbers: item.relatedPurchaseOrderNumbers,
-    memo: `쉽먼트 ${run.logisticsReceiptLine!.shipmentNumber} · 거래처/이미지/주문수량 검토 필요`, isManuallyAdded: true,
+  const vendorName = catalog?.vendorName.trim() || item.vendorName;
+  return { id: `${run.id}::${item.skuId}`, draftId: `${run.id}::${vendorName}`, waveId: run.id,
+    vendorName, skuId: item.skuId, modelName: catalog?.modelSku || catalog?.modelName || "", category: catalog?.category || "",
+    optionLabel: catalog?.optionLabel || "", productName: catalog?.productName || item.productName,
+    imageUrl: catalog?.imageUrl || "", barcode: catalog?.barcode || item.barcode, actualShortageQuantity: item.shortageQuantity, shortageQuantity: item.shortageQuantity,
+    currentStock: catalog?.currentStock || "", relatedPurchaseOrderNumbers: item.relatedPurchaseOrderNumbers,
+    memo: "", isManuallyAdded: true,
     sourceType: "actual-inbound-shortage", actualInboundDetails: item.shortageDetails,
     shipmentReceiptDetails: [run.logisticsReceiptLine!], createdAt: run.updatedAt, updatedAt: run.updatedAt };
 }
@@ -154,7 +159,11 @@ export function reconcileIncompleteVendorRoutes(workspace: WeeklyWorkspace, stor
   return changed;
 }
 
-const dependencies = { readInvoiceGroupStore, mutateWeeklyWorkspace, mutatePickingWaveStore, readPickingWaveStore };
+const loadCatalogRow = async (skuId: string): Promise<CatalogRow | undefined> => {
+  const catalog = await fetchProductCatalog().catch(() => ({ configured: false, items: [] as ProductCatalogItem[] }));
+  return catalog.items.find(item => item.skuId === skuId);
+};
+const dependencies = { readInvoiceGroupStore, mutateWeeklyWorkspace, mutatePickingWaveStore, readPickingWaveStore, loadCatalogRow };
 export async function routeLogisticsReceipt(input: RouteLogisticsReceiptInput, deps = dependencies) {
   const vendorStore = await (deps.readPickingWaveStore ? deps.readPickingWaveStore() : Promise.resolve(null)).catch(() => null);
   const reservation = await deps.mutateWeeklyWorkspace(workspace => {
@@ -162,7 +171,7 @@ export async function routeLogisticsReceipt(input: RouteLogisticsReceiptInput, d
     return reserveLogisticsReceiptRoute(workspace, logisticsTargetsFromSnapshot(workspace.logisticsReceipts), input);
   });
   if (input.decision === "vendor" && !reservation.route.completed) {
-    const source = vendorLine(reservation.run);
+    const source = vendorLine(reservation.run, deps.loadCatalogRow ? await deps.loadCatalogRow(reservation.line.skuId) : undefined);
     const store = await deps.mutatePickingWaveStore({ action: "consolidateVendorOrders", operationId: reservation.run.id, lines: [source], now: reservation.route.at });
     const receipt = store.vendorQueueReceipts?.[reservation.run.id];
     if (!receipt || !store.vendorOrderLines.some(line => !store.deletedVendorLineIds[line.id] && !line.orderExclusion
