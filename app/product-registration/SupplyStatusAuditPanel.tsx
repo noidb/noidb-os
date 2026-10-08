@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { SupplyStatusAudit } from "@/lib/wms/supply-status-update";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
-import { wmsColors } from "@/lib/wms/ui-tokens";
+import { wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
 
 /**
  * 상품공급상태 (2026-10-07 간소화)
@@ -81,9 +81,12 @@ export default function SupplyStatusAuditPanel() {
 
   return (
     <section id="supply-status-audit" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", background: wmsColors.surfaceBeige }}>
-      <strong style={{ display: "block", fontSize: "14px" }}>상품공급상태</strong>
-      <button type="button" className="softBeigeButton" onClick={() => void runAudit()} disabled={loading} style={{ width: "100%", marginTop: "10px", fontSize: "15px" }}>
-        {loading ? "비교 중..." : "G드라이브 최신 파일로 비교"}
+      {/* 왼쪽 WIMS 칸의 "확장 기능 받기" 버튼과 같은 크기·모양의 제목 (2026-10-08 사용자 요청) */}
+      <div style={{ display: "flex", alignItems: "center", marginBottom: "4px" }}>
+        <strong style={{ ...wmsGhostButton, minHeight: "34px", padding: "0 11px", display: "inline-flex", alignItems: "center", cursor: "default" }}>상품공급상태</strong>
+      </div>
+      <button type="button" className="softBeigeButton" onClick={() => void runAudit()} disabled={loading} style={{ width: "100%", marginTop: "26px", fontSize: "15px" }}>
+        {loading ? "업데이트 확인 중..." : "최신파일 업데이트"}
       </button>
       {error && <p style={{ color: "#c0392b", fontSize: "12px", margin: "10px 0 0" }}>{error}</p>}
       {message && <p style={{ color: wmsColors.greenDark, fontSize: "12px", margin: "10px 0 0", fontWeight: 700 }}>{message}</p>}
@@ -98,10 +101,10 @@ export default function SupplyStatusAuditPanel() {
             </p>
           ) : (
             <>
-              <button type="button" className="softBeigeButton" onClick={applyChanges} disabled={applying} style={{ width: "100%", fontSize: "15px", opacity: applying ? 0.55 : 1 }}>
-                {applying ? "백업 후 반영 중..." : `바뀔 항목 ${audit.changeCount.toLocaleString()}건 반영`}
+              <button type="button" className="softPinkButton" onClick={applyChanges} disabled={applying} style={{ width: "100%", fontSize: "15px", opacity: applying ? 0.55 : 1 }}>
+                {applying ? "백업 후 반영 중..." : `변경항목 ${audit.changeCount.toLocaleString()}건 반영하기`}
               </button>
-              <div role="group" aria-label="바뀔 항목 골라 보기" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "6px", marginTop: "8px" }}>
+              <div role="group" aria-label="변경항목 골라 보기" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "6px", marginTop: "8px" }}>
                 {filters.map(item => (
                   <button
                     key={item.label}
