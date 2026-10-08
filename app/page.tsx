@@ -2012,7 +2012,9 @@ export default function Home() {
     let check = { duplicate: modelDuplicate, reregisterable: modelReregisterable, message: modelCheckMessage };
     // 화면의 중복확인은 모델명이 정해진 뒤 몇 초 늦게 끝나거나 Google 일시 오류로 실패할 수 있다.
     // 확인이 아직 안 끝났거나 실패한 상태로 저장을 누르면 막지 않고, 저장 직전에 Google DB를 다시 조회한다.
-    if (isActual && (!check.message || check.message.startsWith("중복확인 실패") || check.message.endsWith("..."))) {
+    // 중복·재등록 불가 결과도 다시 조회한다. 화면을 연 뒤 구글시트 상태(판매중지 등)를 고쳤을 수 있고,
+    // 재등록 화면은 모델명이 잠겨 있어 모델명을 다시 입력해 재확인할 방법이 없다.
+    if (isActual && (!check.message || check.message.startsWith("중복확인 실패") || check.message.endsWith("...") || (check.duplicate && !check.reregisterable))) {
       setBatchStatus("Google DB에서 모델명을 다시 확인하고 있습니다...");
       check = await checkModelInGoogleDb(model);
       setModelDuplicate(check.duplicate);
