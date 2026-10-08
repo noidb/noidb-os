@@ -488,3 +488,39 @@
   padding: 6px 12px;
   font-size: 13px;
 }
+
+/* 상품 사진·링크 */
+.productRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.thumb,
+.thumbEmpty {
+  flex: 0 0 56px;
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  border: 1px solid #e6edef;
+  background: #f5f2ec;
+}
+.thumb {
+  object-fit: cover;
+}
+.thumbEmpty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #8a9aa1;
+  font-size: 11px;
+}
+.productLink {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: #c7b9a8;
+  text-underline-offset: 3px;
+}
+.productLink:hover {
+  text-decoration-color: #60766a;
+}
+.marketingReview .choice { align-items: center; }

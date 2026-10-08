@@ -31,6 +31,8 @@ type ApiPayload = {
   followUp?: LogisticsFollowUpResponse;
   /** 제품DB 표시(과재고·단종·누적입고 100+) — SKU별 */
   productDbStatuses?: Record<string, string[]>;
+  /** 제품DB 이미지·제품링크 — SKU별 */
+  productDbLooks?: Record<string, { imageUrl: string; productLink: string }>;
 };
 type FollowUpPayload = LogisticsFollowUpResponse;
 
@@ -424,13 +426,27 @@ export default function ShipmentReceiptsPage() {
     const badges = payload?.productDbStatuses?.[skuId];
     return badges?.length ? <>{badges.map((badge) => <span key={badge} className={styles.productDbBadge}>{badge}</span>)}</> : null;
   };
+  // 상품 사진(작은 썸네일)과 상품명. 제품링크가 있으면 상품명을 눌러 새 창으로 연다.
+  const productThumb = (skuId: string) => {
+    const imageUrl = payload?.productDbLooks?.[skuId]?.imageUrl;
+    return imageUrl ? <img className={styles.thumb} src={imageUrl} alt="" loading="lazy" /> : <span className={styles.thumbEmpty}>사진 없음</span>;
+  };
+  const productTitle = (skuId: string, name: string) => {
+    const link = payload?.productDbLooks?.[skuId]?.productLink;
+    return link ? <a className={styles.productLink} href={link} target="_blank" rel="noreferrer">{name}</a> : name;
+  };
   const renderResultRow = (line: LogisticsReceiptBoardLine) => (
     <tr key={line.lineKey}>
       <td>{line.shipmentNumber}</td>
       <td>{line.purchaseOrderNumber}</td>
       <td className={styles.product}>
-        <strong>{productDbBadge(line.skuId)}{line.productName || "상품명 없음"}</strong>
-        <span className={styles.meta}>SKU {line.skuId}</span>
+        <div className={styles.productRow}>
+          {productThumb(line.skuId)}
+          <div>
+            <strong>{productDbBadge(line.skuId)}{productTitle(line.skuId, line.productName || "상품명 없음")}</strong>
+            <span className={styles.meta}>SKU {line.skuId}</span>
+          </div>
+        </div>
       </td>
       <td className={styles.expectedDate}>{line.target.expectedDate || "-"}</td>
       <td>{line.deliveredQuantity ?? "-"}</td>
@@ -560,8 +576,13 @@ export default function ShipmentReceiptsPage() {
                       {item.fromProductDb && <span className={styles.meta}> (제품DB)</span>}
                     </td>
                     <td className={styles.product}>
-                      <strong>{productDbBadge(item.skuId)}{item.productName}</strong>
-                      <span className={styles.meta}>SKU {item.skuId} · 발주 {item.purchaseOrderNumber}</span>
+                      <div className={styles.productRow}>
+                        {productThumb(item.skuId)}
+                        <div>
+                          <strong>{productDbBadge(item.skuId)}{productTitle(item.skuId, item.productName)}</strong>
+                          <span className={styles.meta}>SKU {item.skuId} · 발주 {item.purchaseOrderNumber}</span>
+                        </div>
+                      </div>
                     </td>
                     <td>{item.shipmentNumber}</td>
                     <td className={styles.expectedDate}>{item.expectedDate}</td>
@@ -700,8 +721,9 @@ export default function ShipmentReceiptsPage() {
                             }))
                           }
                         />
+                        {productThumb(line.skuId)}
                         <span>
-                          <strong>{productDbBadge(line.skuId)}{line.productName}</strong>
+                          <strong>{productDbBadge(line.skuId)}{productTitle(line.skuId, line.productName)}</strong>
                           <small>
                             SKU {line.skuId} · 쉽먼트 {line.shipmentNumber} ·
                             발주 {line.purchaseOrderNumber}

@@ -84,6 +84,16 @@ function productDbStatusBySku(catalog: Catalog | null, skuIds: Iterable<string>)
   return result;
 }
 
+/** 화면에서 상품을 알아보기 쉽게 제품DB 이미지·제품링크를 SKU별로 넘긴다. */
+function productDbLooksBySku(catalog: Catalog | null, skuIds: Iterable<string>): Record<string, { imageUrl: string; productLink: string }> {
+  if (!catalog) return {};
+  const wanted = new Set(skuIds), result: Record<string, { imageUrl: string; productLink: string }> = {};
+  for (const item of catalog.items) {
+    if (wanted.has(item.skuId) && (item.imageUrl || item.productLink)) result[item.skuId] = { imageUrl: item.imageUrl || "", productLink: item.productLink || "" };
+  }
+  return result;
+}
+
 async function responseBoard() {
   const [stored, catalog] = await Promise.all([readWeeklyWorkspace(), readCatalog()]);
   const workspace = activeSnapshot(await fillMissingStatuses(stored, catalog));
@@ -98,7 +108,8 @@ async function responseBoard() {
   const followUp = logisticsFollowUpResponse(workspace, board);
   const source = await readWeeklyDiscontinueQueue();
   followUp.queues.discontinue.push(...previewFollowUpDiscontinue(source).map(row => ({ lineKey: `status::${row.requestId}`, sourceLineKey: row.requestId, shipmentNumber: "", boxId: "", purchaseOrderNumber: row.purchaseOrderNumber, skuId: row.skuId, productName: row.productName, barcode: "", kind: "shortage" as const, sourceFingerprint: row.requestId, state: "ready" as const })));
-  return { currentTargets, board, followUp, productDbStatuses: productDbStatusBySku(catalog, [...board.lines.map(line => line.skuId), ...(board.unavailableSkus || []).map(item => item.skuId)]) };
+  const shownSkuIds = [...board.lines.map(line => line.skuId), ...(board.unavailableSkus || []).map(item => item.skuId)];
+  return { currentTargets, board, followUp, productDbStatuses: productDbStatusBySku(catalog, shownSkuIds), productDbLooks: productDbLooksBySku(catalog, shownSkuIds) };
 }
 
 /** Read-only: listing current dispatched and preserved Aside targets does not create business records. */
@@ -110,9 +121,9 @@ export async function GET(request: Request) {
       collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: [] }, { headers: withCors(request) });
   }
   try {
-    const { currentTargets, board, followUp, productDbStatuses } = await responseBoard();
+    const { currentTargets, board, followUp, productDbStatuses, productDbLooks } = await responseBoard();
     return NextResponse.json({ ok: true, status: "ready", source: "supplier-hub-shipments", schemaVersion: 3,
-      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, productDbStatuses }, { headers });
+      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, productDbStatuses, productDbLooks }, { headers });
   } catch {
     return NextResponse.json({ ok: false, error: "쉽먼트 입고 수집 대상과 기록을 불러오지 못했습니다." }, { status: 500, headers });
   }
