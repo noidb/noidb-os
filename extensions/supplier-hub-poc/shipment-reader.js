@@ -7,7 +7,6 @@
     if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) throw new Error("수량을 정확히 읽지 못했습니다.");
     return Number(raw);
   };
-  const allowedOrderStatuses = new Set(["정상", "불가", "일시중단"]);
 
   // Expand rowspan/colspan before assigning columns (one box spans multiple SKU rows).
   function expandRows(rows) {
@@ -90,10 +89,11 @@ async function getSkuStatusFor(skuId, signal) {
       });
       if (!response.ok || response.redirected || new URL(response.url).origin !== location.origin) throw new Error(`SKU ${skuId} 공급상태 조회에 실패했습니다.`);
       const body = await response.json(); const content = body?.content;
-      if (!Array.isArray(content) || content.length !== 1 || String(content[0]?.skuId) !== skuId || !allowedOrderStatuses.has(content[0]?.orderStatus)) {
-        throw new Error(`SKU ${skuId} 공급상태를 정확히 확인하지 못했습니다.`);
-      }
-      return { skuId, orderStatus: content[0].orderStatus };
+      if (!Array.isArray(content)) throw new Error(`SKU ${skuId} 공급상태 조회에 실패했습니다. 다시 로그인한 뒤 가져와 주세요.`);
+      // 비슷한 번호가 함께 검색될 수 있어 정확히 같은 SKU만 쓴다. 없거나 처음 보는 상태는 멈추지 않고 그대로 기록한다(사이트에서 검토로 분류).
+      const exact = content.find(item => String(item?.skuId) === skuId);
+      const orderStatus = exact ? clean(exact.orderStatus).slice(0, 20) || "미확인" : "조회안됨";
+      return { skuId, orderStatus };
     } catch (error) {
       if (request.signal.aborted && !signal?.aborted) throw new Error("SKU 공급상태 조회 응답이 30초 이상 지연됐습니다. 잠시 후 다시 가져와 주세요.");
       throw error;

@@ -32,7 +32,8 @@ export interface LogisticsReceiptImport {
   shipmentMetadata?: Record<string, Pick<LogisticsReceiptTarget, "expectedDate" | "centerName">>;
 }
 
-export type LogisticsReceiptSkuOrderStatus = "정상" | "불가" | "일시중단";
+/** 쿠팡이 준 공급상태 그대로. "정상"만 분류 대상이고 그 외(불가·일시중단·조회안됨 등)는 검토로 둔다. */
+export type LogisticsReceiptSkuOrderStatus = string;
 export interface LogisticsReceiptSkuStatus { skuId: string; orderStatus: LogisticsReceiptSkuOrderStatus; }
 
 /** Latest complete collection. It is deliberately separate from the v1 PO snapshots. */
@@ -104,7 +105,6 @@ const text = (value: unknown, max = 500): value is string => typeof value === "s
 const quantity = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const distinct = (values: string[]) => new Set(values).size === values.length;
 const supportedStatuses = new Set<LogisticsReceiptStatus>(["마감", "발송 완료", "발송 가능"]);
-const supportedSkuOrderStatuses = new Set<LogisticsReceiptSkuOrderStatus>(["정상", "불가", "일시중단"]);
 
 export const logisticsReceiptLineKey = (shipmentNumber: string, boxId: string, purchaseOrderNumber: string, skuId: string) =>
   JSON.stringify([shipmentNumber, boxId, purchaseOrderNumber, skuId]);
@@ -235,7 +235,7 @@ function parseImport(value: unknown, targets: LogisticsReceiptTarget[], requireE
     if (!Array.isArray(value.skuStatuses) || value.skuStatuses.length !== closedSkuIds.length) invalid();
     const statuses = value.skuStatuses as unknown[];
     const statusSkuIds = statuses.map(status => record(status) && businessId(status.skuId) ? status.skuId : "");
-    if (!statuses.every(status => record(status) && businessId(status.skuId) && supportedSkuOrderStatuses.has(status.orderStatus as LogisticsReceiptSkuOrderStatus))
+    if (!statuses.every(status => record(status) && businessId(status.skuId) && typeof status.orderStatus === "string" && status.orderStatus.trim().length > 0 && status.orderStatus.length <= 20)
       || !distinct(statusSkuIds) || !sameSet([...statusSkuIds].sort(), closedSkuIds)) invalid();
   } else if (requireExactTargetSet) invalid();
   return structuredClone(value as unknown as LogisticsReceiptImport);
@@ -393,7 +393,7 @@ export function logisticsTargetsFromSnapshot(snapshot: LogisticsReceiptSnapshot 
 /** 쿠팡 목록 전체 수집 저장. 기준일 이후 입고예정 + 마감 쉽먼트만 받고, 대상 목록은 수집 자료 자체가 정한다. */
 export function mergeHubClosedSnapshot(current: LogisticsReceiptSnapshot | undefined, raw: unknown): LogisticsReceiptSnapshot {
   if (!record(raw) || raw.mode !== "hub-closed" || raw.since !== LOGISTICS_RECEIPT_SINCE || !record(raw.shipmentMetadata) || !Array.isArray(raw.shipments)) {
-    throw new Error("확장프로그램을 최신 버전(0.9.6)으로 새로고침한 뒤 다시 가져와 주세요.");
+    throw new Error("확장프로그램을 최신 버전(0.9.7)으로 새로고침한 뒤 다시 가져와 주세요.");
   }
   if (!raw.shipments.length) throw new Error(`${LOGISTICS_RECEIPT_SINCE} 이후 입고예정인 마감 쉽먼트가 없습니다.`);
   const metadata = raw.shipmentMetadata as Record<string, unknown>;

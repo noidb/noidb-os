@@ -39,12 +39,12 @@ function listDoc(page) {
 }
 const asideBaseline = JSON.parse(fs.readFileSync("lib/wms/logistics-aside-baseline.json", "utf8"));
 global.DOMParser = class { parseFromString(text) { return text.startsWith("list:") ? listDoc(Number(text.slice(5))) : docs.get(text) || receiptDoc(text, "발송 가능"); } };
-let skuStatusRequest, invalidSkuStatus = false;
+let skuStatusRequest, invalidSkuStatus = false, skuStatusContent = null;
 global.fetch = async (url, init = {}) => {
   if (String(url).includes("/plan/v1/ticket/sku/listTicketSku")) {
     const skuId = JSON.parse(init.body).skuId;
     skuStatusRequest = JSON.parse(init.body);
-    return { ok: true, redirected: false, url: "https://supplier.coupang.com/plan/v1/ticket/sku/listTicketSku?locale=ko", json: async () => ({ content: [{ skuId, orderStatus: invalidSkuStatus ? "미확인" : skuId === "2" ? "일시중단" : "정상" }] }) };
+    return { ok: true, redirected: false, url: "https://supplier.coupang.com/plan/v1/ticket/sku/listTicketSku?locale=ko", json: async () => ({ content: skuStatusContent ? skuStatusContent(skuId) : [{ skuId, orderStatus: invalidSkuStatus ? "단종" : skuId === "2" ? "일시중단" : "정상" }] }) };
   }
   if (String(url).includes("/list?")) return { ok: true, redirected: false, url: `https://supplier.coupang.com${url}`, text: async () => `list:${new URL(url, "https://x").searchParams.get("pageNumber")}` };
   return { ok: true, redirected: false, url: `https://supplier.coupang.com${url}`, text: async () => String(url).match(/(\d+)$/)[1] };
@@ -73,9 +73,18 @@ global.fetch = async (url, init = {}) => {
   await assert.rejects(() => reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }, { shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }]), /중복/);
   await assert.rejects(() => reader.collectShipments([{ shipmentNumber: "102", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }]), /처리할 수 없습니다/);
   await assert.rejects(() => reader.collectShipments([{ shipmentNumber: "103", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }]), /상세를 확인하지 못했습니다/);
+  // 처음 보는 공급상태·검색 안 됨·비슷한 번호 동시 검색은 멈추지 않고 그대로 기록한다.
   invalidSkuStatus = true;
-  await assert.rejects(() => reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }]), /공급상태를 정확히/);
+  const unusual = await reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }]);
+  assert.deepEqual(unusual.skuStatuses, [{ skuId: "1", orderStatus: "단종" }]);
   invalidSkuStatus = false;
+  skuStatusContent = () => [];
+  assert.deepEqual((await reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }])).skuStatuses, [{ skuId: "1", orderStatus: "조회안됨" }]);
+  skuStatusContent = skuId => [{ skuId: `${skuId}9`, orderStatus: "불가" }, { skuId, orderStatus: "정상" }];
+  assert.deepEqual((await reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }])).skuStatuses, [{ skuId: "1", orderStatus: "정상" }]);
+  skuStatusContent = () => ({ error: "login" });
+  await assert.rejects(() => reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }]), /공급상태 조회에 실패/);
+  skuStatusContent = null;
   global.fetch = async () => ({ ok: true, redirected: true, url: "https://supplier.coupang.com/login", text: async () => "" });
   await assert.rejects(() => reader.collectShipments([{ shipmentNumber: "100", expectedDate: "2026-09-20", centerName: "A센터", purchaseOrderNumbers: ["900"], source: "dispatch" }]), /다시 로그인/);
   console.log("PASS hub-closed list collection since 9/13; logistics receipt v2 direct-detail collection, rowspan totals, PO identity, duplicate, missing, unknown-state and login blocks");
