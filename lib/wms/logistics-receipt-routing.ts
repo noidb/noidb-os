@@ -9,6 +9,7 @@ import type { PickingWaveStoreSnapshot } from "./picking-wave/shared-store-types
 import { WEEKLY_RULES_VERSION, type WeeklyRun, type WeeklyWorkspace } from "./weekly-work-types";
 import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraftLine } from "./vendor-order/types";
 import { fetchProductCatalog, type ProductCatalogItem } from "./product-catalog";
+import { normalizeSkuId } from "./sku-normalize";
 
 const baseline = baselineData as unknown as LogisticsAsideBaseline;
 export type LogisticsReceiptDecision = LogisticsReceiptRoute["decision"];
@@ -26,7 +27,8 @@ export function logisticsRouteHref(decision: LogisticsReceiptDecision, runId: st
 }
 
 function makeRun(line: LogisticsReceiptBoardLine, decision: LogisticsReceiptDecision, at: string): WeeklyRun {
-  const id = `LOGISTICS-${hash(line.lineKey).slice(0, 24)}`;
+  // 같은 줄을 지웠다가 다시 보내도 예전 '삭제된 줄' 번호와 겹치지 않도록 예약 시각을 넣는다(재시도는 기존 예약을 그대로 씀).
+  const id = `LOGISTICS-${hash([line.lineKey, at]).slice(0, 24)}`;
   const quantity = decision === "marketing" ? 1 : line.remainingQuantity!;
   const vendorName = UNASSIGNED_VENDOR_NAME;
   const reviewDecision = decision === "vendor" ? "order" : decision === "marketing" ? "hold" : decision;
@@ -174,8 +176,27 @@ export async function routeLogisticsReceipt(input: RouteLogisticsReceiptInput, d
     const source = vendorLine(reservation.run, deps.loadCatalogRow ? await deps.loadCatalogRow(reservation.line.skuId) : undefined);
     const store = await deps.mutatePickingWaveStore({ action: "consolidateVendorOrders", operationId: reservation.run.id, lines: [source], now: reservation.route.at });
     const receipt = store.vendorQueueReceipts?.[reservation.run.id];
-    if (!receipt || !store.vendorOrderLines.some(line => !store.deletedVendorLineIds[line.id] && !line.orderExclusion
-      && line.shipmentReceiptDetails?.some(detail => detail.lineKey === input.lineKey))) throw new Error("거래처 초안 저장을 확인하지 못했습니다. 같은 분류로 다시 시도해 주세요.");
+    const placed = store.vendorOrderLines.filter(line => !store.deletedVendorLineIds[line.id] && line.shipmentReceiptDetails?.some(detail => detail.lineKey === input.lineKey));
+    if (!receipt || !placed.some(line => !line.orderExclusion)) {
+      // 발주서가 이 줄을 받지 않은 이유를 알려 준다.
+      const sku = normalizeSkuId(reservation.line.skuId);
+      const excluded = placed.find(line => line.orderExclusion)?.orderExclusion;
+      const reason = excluded ? `${excluded.reason} 기록이 있어 거래처 발주에서 빠졌습니다`
+        : store.suppressedVendorSkuIds?.[sku] ? "이 SKU는 거래처 발주에서 제외(과재고 등)로 지정돼 있습니다"
+        : store.deletedVendorLineIds[source.id] ? "예전에 발주서에서 삭제한 줄과 겹쳤습니다"
+        : store.vendorQueueConsumedLineIds?.[source.id] ? "이미 발주 처리된 줄입니다"
+        : "발주서에 넣지 못했습니다";
+      // 받지 않은 예약은 지워서 다른 버튼(단종·재발주요청·기존 발주로 처리)을 바로 고를 수 있게 한다.
+      await deps.mutateWeeklyWorkspace(workspace => {
+        const route = workspace.logisticsReceiptRoutes?.[input.lineKey];
+        if (!route || route.completed || route.runId !== reservation.run.id) return;
+        const routes = { ...workspace.logisticsReceiptRoutes };
+        delete routes[input.lineKey];
+        workspace.logisticsReceiptRoutes = routes;
+        workspace.runs = workspace.runs.filter(item => item.id !== reservation.run.id);
+      });
+      throw new Error(`SKU ${reservation.line.skuId}: ${reason}. 단종·재발주요청·기존 발주로 처리 중에서 골라 주세요.`);
+    }
     await deps.mutateWeeklyWorkspace(workspace => {
       const route = workspace.logisticsReceiptRoutes?.[input.lineKey];
       const run = workspace.runs.find(item => item.id === reservation.run.id);
