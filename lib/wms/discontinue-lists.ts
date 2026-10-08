@@ -29,6 +29,8 @@ export function buildStatusLists(items: readonly ProductCatalogItem[], options: 
   releaseFromScreen?: Record<string, { productName: string }>;
   cleared?: StatusListCleared;
   memoReleaseSkuIds?: readonly string[];
+  /** 제품DB에 없는 SKU의 상품명 대신 쓸 이름(쿠팡 입고결과 등) */
+  nameFallback?: Record<string, string>;
 } = {}): StatusLists {
   const bySku = new Map(items.map(item => [item.skuId, item]));
   const discontinue = new Map<string, StatusListItem>();
@@ -45,7 +47,7 @@ export function buildStatusLists(items: readonly ProductCatalogItem[], options: 
   const addRelease = (skuId: string, fallbackName: string, reason: string) => {
     if (release.has(skuId)) return;
     const item = bySku.get(skuId);
-    release.set(skuId, { skuId, productName: item ? displayName(item) : fallbackName, currentStatus: item?.currentStatus.trim() || "",
+    release.set(skuId, { skuId, productName: item ? displayName(item) : fallbackName || options.nameFallback?.[skuId] || "제품DB에 없음", currentStatus: item?.currentStatus.trim() || "",
       orderableStatus: item?.orderableStatus.trim() || "미확인", reason, key: item ? itemKey(item, reason) : JSON.stringify([skuId, reason]) });
     discontinue.delete(skuId);
   };

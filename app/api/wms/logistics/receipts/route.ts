@@ -130,6 +130,7 @@ async function responseBoard() {
     statusLists: catalog ? buildStatusLists(catalog.items, {
       releaseFromScreen: Object.fromEntries(Object.entries(stored.supplyStatusChecks || {}).filter(([, check]) => check.decision === "release" && !check.releasedListClearedAt)),
       cleared: stored.statusListCleared,
+      nameFallback: Object.fromEntries((stored.logisticsReceipts?.shipments || []).flatMap(shipment => shipment.lines.map(line => [line.skuId, line.productName]))),
     }) : null,
     openVendorOrders: Object.fromEntries(board.lines.filter(line => line.kind === "shortage" && openOrders[line.skuId]).map(line => [line.skuId, openOrders[line.skuId]])),
     marketingExclusion: { listedSkuCount: MARKETING_PERMANENT_EXCLUDED_SKU_IDS.length, models: exclusions.models, skuCount: exclusions.skuIds.size } };
