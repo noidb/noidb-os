@@ -1,0 +1,57 @@
+import type { ProductCatalogItem } from "./product-catalog";
+
+/**
+ * 단종 대상·단종해제 대상 목록(사용자 확정 2026-10-08). 제품DB에서 매번 새로 계산한다.
+ * - 단종 대상: 현재상태가 아래 단종 계열인데 쿠팡 발주가능상태가 아직 '정상'인 SKU
+ * - 단종해제 대상: 현재상태가 아래 판매 계열인데 발주가능상태가 '정상'이 아닌 SKU
+ *   + 사용자가 메모로 준 SKU + 입고결과 화면에서 '단종해제'를 누른 SKU
+ */
+export const DISCONTINUE_CURRENT_STATUSES = ["판매중지", "단종", "거래처단종", "가품중단"];
+export const RELEASE_CURRENT_STATUSES = ["과재고", "발주가능상태 정상전환대상", "제품DB로 이동(재고있음)"];
+/** 사용자가 메모장에 모아 둔 단종해제 SKU(2026-10-08). */
+export const MEMO_RELEASE_SKU_IDS: readonly string[] = [
+  "58963350", "58963352", "59263874", "38921463", "37667186", "38921545", "38813805", "38248703",
+  "39399014", "38813802", "39399011", "36789607", "40284016", "39135983", "38921513", "39127489",
+];
+
+export interface StatusListItem { skuId: string; productName: string; currentStatus: string; orderableStatus: string; reason: string; key: string }
+export interface StatusLists { discontinue: StatusListItem[]; release: StatusListItem[] }
+/** '목록 비우기'로 처리완료한 항목. 키는 SKU·현재상태·발주가능상태 묶음이라 상태가 바뀌면 다시 나타난다. */
+export type StatusListCleared = { discontinue?: Record<string, string>; release?: Record<string, string> };
+
+const squash = (value: string) => value.replace(/\s+/g, "");
+const matches = (value: string, list: readonly string[]) => list.some(item => squash(item) === squash(value));
+const itemKey = (item: Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus">, extra = "") =>
+  JSON.stringify([item.skuId, squash(item.currentStatus), squash(item.orderableStatus), extra]);
+const displayName = (item: ProductCatalogItem) => [item.productName, item.optionLabel].filter(Boolean).join(", ");
+
+export function buildStatusLists(items: readonly ProductCatalogItem[], options: {
+  releaseFromScreen?: Record<string, { productName: string }>;
+  cleared?: StatusListCleared;
+  memoReleaseSkuIds?: readonly string[];
+} = {}): StatusLists {
+  const bySku = new Map(items.map(item => [item.skuId, item]));
+  const discontinue = new Map<string, StatusListItem>();
+  const release = new Map<string, StatusListItem>();
+  for (const item of items) {
+    if (!item.skuId) continue;
+    const orderable = item.orderableStatus.trim();
+    if (matches(item.currentStatus, DISCONTINUE_CURRENT_STATUSES) && orderable === "정상") {
+      discontinue.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable, reason: "제품DB", key: itemKey(item) });
+    } else if (matches(item.currentStatus, RELEASE_CURRENT_STATUSES) && orderable !== "정상") {
+      release.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable || "미확인", reason: "제품DB", key: itemKey(item) });
+    }
+  }
+  const addRelease = (skuId: string, fallbackName: string, reason: string) => {
+    if (release.has(skuId)) return;
+    const item = bySku.get(skuId);
+    release.set(skuId, { skuId, productName: item ? displayName(item) : fallbackName, currentStatus: item?.currentStatus.trim() || "",
+      orderableStatus: item?.orderableStatus.trim() || "미확인", reason, key: item ? itemKey(item, reason) : JSON.stringify([skuId, reason]) });
+    discontinue.delete(skuId);
+  };
+  for (const skuId of options.memoReleaseSkuIds ?? MEMO_RELEASE_SKU_IDS) addRelease(skuId, "", "메모");
+  for (const [skuId, check] of Object.entries(options.releaseFromScreen || {})) addRelease(skuId, check.productName, "입고결과");
+  const visible = (list: Map<string, StatusListItem>, cleared: Record<string, string> = {}) =>
+    [...list.values()].filter(item => !cleared[item.key]).sort((a, b) => a.skuId.localeCompare(b.skuId));
+  return { discontinue: visible(discontinue, options.cleared?.discontinue), release: visible(release, options.cleared?.release) };
+}

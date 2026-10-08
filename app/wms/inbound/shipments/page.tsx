@@ -35,6 +35,8 @@ type ApiPayload = {
   productDbLooks?: Record<string, { imageUrl: string; productLink: string }>;
   /** 마케팅 무조건 제외(같은 모델 전체) 현황 */
   marketingExclusion?: { listedSkuCount: number; models: string[]; skuCount: number };
+  /** 제품DB 기준 단종 대상·단종해제 대상 목록 */
+  statusLists?: { discontinue: StatusListRow[]; release: StatusListRow[] } | null;
   /** 이미 거래처에 보낸 발주(입고대기·입고지연) — SKU별 */
   openVendorOrders?: Record<string, { quantity: number; vendors: string[]; sentOn: string; delayed: boolean }>;
   /** 기존 발주로 처리한 미납 줄 */
@@ -43,6 +45,7 @@ type ApiPayload = {
   supplyStatusChecks?: Record<string, { decision: "discontinued" | "release"; productName: string; at: string; releasedListClearedAt?: string }>;
 };
 type FollowUpPayload = LogisticsFollowUpResponse;
+type StatusListRow = { skuId: string; productName: string; currentStatus: string; orderableStatus: string; reason: string; key: string };
 
 function isFixtureMode() {
   return (
@@ -358,24 +361,32 @@ export default function ShipmentReceiptsPage() {
   }
 
   // 단종확인·단종해제·되돌리기·단종해제 목록 비우기. 저장된 결과로 화면만 바로 바꾼다.
-  async function supplyCheck(action: "discontinued" | "release" | "undo" | "clear-release", skuId = "", productName = "") {
+  async function supplyCheck(action: "discontinued" | "release" | "undo" | "clear-release" | "clear-list", skuId = "", productName = "", list?: { kind: "discontinue" | "release"; keys: string[] }) {
     if (fixture) return;
     setError("");
-    const key = `supply:${skuId || action}`;
+    const key = `supply:${skuId || (list ? `${action}:${list.kind}` : action)}`;
     setRoutingKeys((current) => ({ ...current, [key]: true }));
     try {
       const response = await fetch("/api/wms/logistics/supply-status-check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, skuId, productName }),
+        body: JSON.stringify({ action, skuId, productName, ...(list || {}) }),
       });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "저장하지 못했습니다.");
-      setPayload((current) => current && { ...current, supplyStatusChecks: data.supplyStatusChecks });
+      setPayload((current) => current && {
+        ...current,
+        supplyStatusChecks: data.supplyStatusChecks,
+        statusLists: current.statusLists && list ? {
+          ...current.statusLists,
+          [list.kind]: current.statusLists[list.kind].filter((row) => !list.keys.includes(row.key)),
+        } : current.statusLists,
+      });
       setMessage(
         action === "discontinued" ? `SKU ${skuId} 단종 확인했습니다.`
         : action === "release" ? `SKU ${skuId}를 단종해제 대상에 넣었습니다.`
         : action === "undo" ? `SKU ${skuId} 확인을 되돌렸습니다.`
+        : list?.kind === "discontinue" ? "단종 대상 목록을 비웠습니다."
         : "단종해제 대상 목록을 비웠습니다.",
       );
     } catch (cause) {
@@ -511,10 +522,15 @@ export default function ShipmentReceiptsPage() {
   );
   const routedLines = lines.filter((line) => line.state === "routed");
   const unavailableShown = (payload?.board.unavailableSkus || []).filter((item) => !supplyChecks[item.skuId]);
-  const releaseList = Object.entries(supplyChecks)
-    .filter(([, check]) => check.decision === "release" && !check.releasedListClearedAt)
-    .map(([skuId, check]) => ({ skuId, productName: check.productName }))
-    .sort((a, b) => a.skuId.localeCompare(b.skuId));
+  // 단종해제 대상: 서버가 제품DB·메모·화면 선택을 합친 목록. 화면에서 방금 누른 SKU도 바로 보이게 더한다.
+  const serverRelease = payload?.statusLists?.release || [];
+  const releaseList: StatusListRow[] = [
+    ...serverRelease,
+    ...Object.entries(supplyChecks)
+      .filter(([skuId, check]) => check.decision === "release" && !check.releasedListClearedAt && !serverRelease.some((row) => row.skuId === skuId))
+      .map(([skuId, check]) => ({ skuId, productName: check.productName, currentStatus: "", orderableStatus: "", reason: "입고결과", key: skuId })),
+  ].sort((a, b) => a.skuId.localeCompare(b.skuId));
+  const discontinueList: StatusListRow[] = payload?.statusLists?.discontinue || [];
   const activeFollowUpQueue = followUpData?.queues[followUpKind] || [];
   const completedSourceKeys = new Set(
     (followUpData?.proofs || [])
@@ -819,14 +835,17 @@ export default function ShipmentReceiptsPage() {
             {!resultLines.length && (
               <p className={styles.empty}>검토할 미납 상품이 없습니다.</p>
             )}
-            {releaseList.length > 0 && (
-              <section>
+            {[
+              { kind: "discontinue" as const, title: "단종 대상 SKU", rows: discontinueList, help: "제품DB 현재상태가 판매중지·단종·거래처단종·가품중단인데 쿠팡 발주가능상태가 아직 정상인 SKU예요.", done: "단종 신청 완료 · 목록 비우기" },
+              { kind: "release" as const, title: "단종해제 대상 SKU", rows: releaseList, help: "제품DB 현재상태가 과재고·정상전환대상·제품DB로 이동(재고있음)인데 발주가능상태가 정상이 아닌 SKU, 메모로 주신 SKU, 화면에서 단종해제를 누른 SKU예요.", done: "단종해제 신청 완료 · 목록 비우기" },
+            ].filter((section) => section.rows.length > 0).map((section) => (
+              <section key={section.kind}>
                 <h2 className={styles.listTitle}>
-                  단종해제 대상 SKU <span>{releaseList.length}건</span>
+                  {section.title} <span>{section.rows.length}건</span>
                 </h2>
-                <p className={styles.meta}>표를 드래그해서 복사하세요. 엑셀에 붙이면 SKU와 상품명이 칸별로 들어가요.</p>
-                <div className={styles.tableWrap}>
-                  <table className={`${styles.table} ${styles.copyTable}`} aria-label="단종해제 대상 SKU">
+                <p className={styles.meta}>{section.help} 표를 드래그해서 복사하세요.</p>
+                <div className={`${styles.tableWrap} ${styles.copyScroll}`}>
+                  <table className={`${styles.table} ${styles.copyTable}`} aria-label={section.title}>
                     <thead>
                       <tr>
                         <th>SKU ID</th>
@@ -834,7 +853,7 @@ export default function ShipmentReceiptsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {releaseList.map((item) => (
+                      {section.rows.map((item) => (
                         <tr key={item.skuId}>
                           <td>{item.skuId}</td>
                           <td>{item.productName}</td>
@@ -846,13 +865,13 @@ export default function ShipmentReceiptsPage() {
                 <button
                   type="button"
                   className={`softPinkButton ${styles.fullButton}`}
-                  disabled={routingKeys["supply:clear-release"]}
-                  onClick={() => void supplyCheck("clear-release")}
+                  disabled={routingKeys[`supply:clear-list:${section.kind}`]}
+                  onClick={() => void supplyCheck("clear-list", "", "", { kind: section.kind, keys: section.rows.map((row) => row.key) })}
                 >
-                  단종해제 신청 완료 · 목록 비우기
+                  {section.done}
                 </button>
               </section>
-            )}
+            ))}
             {marketingLines.length > 0 && (
               <section>
                 <h2 className={styles.listTitle}>

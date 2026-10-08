@@ -551,3 +551,8 @@
   font-size: 13px;
   margin-top: 6px;
 }
+
+.copyScroll {
+  max-height: 420px;
+  overflow-y: auto;
+}
