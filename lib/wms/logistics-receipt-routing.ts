@@ -131,6 +131,40 @@ function vendorLine(run: WeeklyRun, catalog?: CatalogRow): VendorOrderDraftLine 
 }
 
 /**
+ * 이미 분류한 미납 줄을 '미납분 재발주요청'으로 바꾼다(실수로 단종·거래처발주·기존 발주 처리한 줄 바로잡기, 2026-10-08).
+ * - 기존 발주로 처리: 그 기록을 지운다
+ * - 단종: 아직 단종신청 파일을 만들거나 완료하지 않았을 때만 바꾼다
+ * - 거래처발주: 분류 기록은 지우고 바꾼다. 거래처 발주서에 들어간 그 상품은 사용자가 발주서에서 직접 지워야 한다(안내 문구 반환)
+ */
+export function rerouteToReorder(workspace: WeeklyWorkspace, targets: LogisticsReceiptTarget[], input: { lineKey: string; expectedCollectedAt: string }, at = new Date().toISOString()) {
+  let note = "";
+  if (workspace.coveredByVendorOrder?.[input.lineKey]) {
+    const covered = { ...workspace.coveredByVendorOrder };
+    delete covered[input.lineKey];
+    workspace.coveredByVendorOrder = covered;
+  }
+  const existing = workspace.logisticsReceiptRoutes?.[input.lineKey];
+  if (existing) {
+    if (existing.decision === "reorder") throw new Error("이미 재발주요청 목록에 있습니다.");
+    if (existing.decision === "marketing") throw new Error("쿠폰·광고 줄은 바꿀 수 없습니다.");
+    const run = workspace.runs.find(item => item.id === existing.runId);
+    if (existing.decision === "discontinue") {
+      const filed = workspace.logisticsFollowUp?.proofs?.some(proof => proof.kind === "discontinue" && proof.sourceKeys.includes(input.lineKey));
+      if (run?.discontinueSubmittedAt || run?.completedAt || run?.discontinueSubmittedSkuIds?.length || filed) {
+        throw new Error("이미 단종신청 파일을 만들었거나 신청을 마친 상품이라 바꿀 수 없습니다. 쿠팡 단종신청에서 먼저 빼 주세요.");
+      }
+    }
+    if (existing.decision === "vendor") note = "거래처 발주서에 들어간 이 상품은 발주서에서 직접 지워 주세요.";
+    const routes = { ...workspace.logisticsReceiptRoutes };
+    delete routes[input.lineKey];
+    workspace.logisticsReceiptRoutes = routes;
+    workspace.runs = workspace.runs.filter(item => item.id !== existing.runId);
+  }
+  const reservation = reserveLogisticsReceiptRoute(workspace, targets, { lineKey: input.lineKey, decision: "reorder", expectedCollectedAt: input.expectedCollectedAt }, baseline, at);
+  return { runId: reservation.run.id, note };
+}
+
+/**
  * 거래처발주는 ①분류 예약 ②거래처 발주서에 넣기 ③완료 표시 세 단계로 저장된다.
  * 중간에 저장이 끊기면 '완료 안 된 거래처발주 예약'이 남아, 줄은 계속 보이는데 다른 버튼은 막힌다(2026-10-08 실사용).
  * 실제 거래처 발주서에 들어가 있으면 완료로 고치고, 안 들어갔으면(2분 지난 예약) 예약을 지워 다시 고를 수 있게 한다.
