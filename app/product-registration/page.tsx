@@ -20,7 +20,6 @@ export default function ProductRegistrationPage() {
       <section id="product-registration-status" className="card full">
         <div className="wms-section-heading" style={{ marginTop: 0 }}>
           <div><span>PRODUCT REGISTRATION</span><h2>등록 진행상황 · 상품 운영정보</h2></div>
-          <p>WIMS 승인 확인 → SKU 연결 → 상품공급상태 갱신</p>
         </div>
         <div className="wms-automation-grid">
           <WimsRegistrationImportPanel />

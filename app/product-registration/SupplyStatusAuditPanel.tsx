@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { SupplyStatusAudit } from "@/lib/wms/supply-status-update";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
-import { wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
+import { wmsColors } from "@/lib/wms/ui-tokens";
 
 /**
  * 상품공급상태 (2026-10-07 간소화)
@@ -81,9 +81,9 @@ export default function SupplyStatusAuditPanel() {
 
   return (
     <section id="supply-status-audit" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", background: wmsColors.surfaceBeige }}>
-      {/* 왼쪽 WIMS 칸의 "확장 기능 받기" 버튼과 같은 크기·모양의 제목 (2026-10-08 사용자 요청) */}
+      {/* 왼쪽 "확장 기능 받기" 버튼과 같은 높이에 맞춘 제목. 버튼처럼 보이면 안 되므로 테두리 없이 글자만 키운다. */}
       <div style={{ display: "flex", alignItems: "center", marginBottom: "4px" }}>
-        <strong style={{ ...wmsGhostButton, minHeight: "34px", padding: "0 11px", display: "inline-flex", alignItems: "center", cursor: "default" }}>상품공급상태</strong>
+        <strong style={{ minHeight: "34px", display: "inline-flex", alignItems: "center", fontSize: "17px", fontWeight: 800, color: wmsColors.ink }}>상품공급상태</strong>
       </div>
       <button type="button" className="softBeigeButton" onClick={() => void runAudit()} disabled={loading} style={{ width: "100%", marginTop: "26px", fontSize: "15px" }}>
         {loading ? "업데이트 확인 중..." : "최신파일 업데이트"}

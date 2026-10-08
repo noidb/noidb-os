@@ -131,17 +131,6 @@ export default function WimsRegistrationImportPanel() {
     }
   }
 
-  function clearSnapshot() {
-    setText("");
-    setSnapshot(null);
-    setCapturedAt("");
-    setCapture(null);
-    setError("");
-    setAudit(null);
-    setMessage("");
-    localStorage.removeItem(STORAGE_KEY);
-  }
-
   async function applyApprovedCandidates() {
     if (!snapshot || !audit || applying || (audit.approvedCandidateCount + audit.reviewingCandidateCount) === 0) return;
     if (!window.confirm("검수완료 " + audit.approvedCandidateCount + "건 연결 · 검수중 " + audit.reviewingCandidateCount + "건 승인대기 상태 반영\n\n전체 시트를 먼저 백업합니다. 검수중은 현재상태만 변경하고, 검수완료는 상품명·SKU ID·R바코드·현재상태를 반영합니다. 누적입고·창고번호·발주가능상태 등 다른 정보는 유지합니다.")) return;
@@ -258,12 +247,11 @@ export default function WimsRegistrationImportPanel() {
       {snapshot && (
         <div style={{ marginTop: "12px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "8px" }}>
-            <span style={{ color: capture ? wmsColors.greenDark : wmsColors.muted, fontSize: "10px", fontWeight: capture ? 800 : 400 }}>
+            <span style={{ color: capture ? wmsColors.greenDark : wmsColors.muted, fontSize: "12px", fontWeight: capture ? 800 : 400 }}>
               {capture
                 ? `전체 ${capture.totalRowCount}건 · ${capture.pageCount}페이지 완전수집 · ${new Date(capturedAt).toLocaleString("ko-KR")}`
                 : capturedAt ? `현재 페이지만 확인 · ${new Date(capturedAt).toLocaleString("ko-KR")}` : "현재 붙여넣은 결과"}
             </span>
-            <button type="button" onClick={clearSnapshot} style={{ ...wmsGhostButton, minHeight: "30px", padding: "0 9px", fontSize: "10px" }}>저장 결과 지우기</button>
           </div>
           <div className="wms-supply-audit-grid">
             <Summary label="검수중" value={snapshot.reviewingCount} />
