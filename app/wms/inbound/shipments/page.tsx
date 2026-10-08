@@ -35,6 +35,10 @@ type ApiPayload = {
   productDbLooks?: Record<string, { imageUrl: string; productLink: string }>;
   /** 마케팅 무조건 제외(같은 모델 전체) 현황 */
   marketingExclusion?: { listedSkuCount: number; models: string[]; skuCount: number };
+  /** 이미 거래처에 보낸 발주(입고대기·입고지연) — SKU별 */
+  openVendorOrders?: Record<string, { quantity: number; vendors: string[]; sentOn: string; delayed: boolean }>;
+  /** 기존 발주로 처리한 미납 줄 */
+  coveredByVendorOrder?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; vendors: string[]; sentOn: string; at: string }>;
   /** 공급상태가 정상이 아닌 SKU 확인 결과(단종확인·단종해제) */
   supplyStatusChecks?: Record<string, { decision: "discontinued" | "release"; productName: string; at: string; releasedListClearedAt?: string }>;
 };
@@ -384,6 +388,44 @@ export default function ShipmentReceiptsPage() {
       });
     }
   }
+  // 미납분을 새로 발주하지 않고 이미 보낸 거래처 발주로 처리(되돌리기 가능)
+  async function coverByVendorOrder(line: LogisticsReceiptBoardLine, action: "cover" | "undo") {
+    if (fixture || !payload) return;
+    setError("");
+    const order = payload.openVendorOrders?.[line.skuId];
+    setRoutingKeys((current) => ({ ...current, [line.lineKey]: true }));
+    try {
+      const response = await fetch("/api/wms/logistics/cover-by-vendor-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, lineKey: line.lineKey, skuId: line.skuId, productName: line.productName, shipmentNumber: line.shipmentNumber,
+          quantity: line.remainingQuantity ?? 0, vendors: order?.vendors || [], sentOn: order?.sentOn || "" }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "저장하지 못했습니다.");
+      setPayload((current) => current && { ...current, coveredByVendorOrder: data.coveredByVendorOrder });
+      setMessage(action === "cover" ? `SKU ${line.skuId} · 기존 거래처 발주로 처리했습니다.` : `SKU ${line.skuId} · 미납 목록으로 되돌렸습니다.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "저장하지 못했습니다.");
+    } finally {
+      setRoutingKeys((current) => {
+        const next = { ...current };
+        delete next[line.lineKey];
+        return next;
+      });
+    }
+  }
+  const openOrderNote = (skuId: string) => {
+    const order = payload?.openVendorOrders?.[skuId];
+    if (!order) return null;
+    const sent = order.sentOn ? `${Number(order.sentOn.slice(5, 7))}/${Number(order.sentOn.slice(8, 10))} 발주` : "발주";
+    return (
+      <span className={styles.openOrder}>
+        거래처 발주중 {order.quantity}개 · {order.delayed ? "입고지연" : "입고대기"} · {sent}
+        {order.vendors.length ? ` · ${order.vendors.join(", ")}` : ""}
+      </span>
+    );
+  };
   const supplyButtons = (skuId: string, productName: string) => (
     <div className={styles.decisionRow}>
       <button
@@ -419,7 +461,9 @@ export default function ShipmentReceiptsPage() {
   // 공급상태가 정상이 아니어서 검토로 빠진 줄(단종확인·단종해제 대상)
   const isSupplyReview = (line: LogisticsReceiptBoardLine) =>
     line.state === "review" && (line.reviewReason || "").startsWith("공급상태");
-  const supplyDecided = (line: LogisticsReceiptBoardLine) => isSupplyReview(line) && Boolean(supplyChecks[line.skuId]);
+  const covered = payload?.coveredByVendorOrder || {};
+  const supplyDecided = (line: LogisticsReceiptBoardLine) =>
+    (isSupplyReview(line) && Boolean(supplyChecks[line.skuId])) || Boolean(covered[line.lineKey]);
   const shortageLines = lines.filter(
     (line) =>
       !supplyDecided(line) &&
@@ -513,6 +557,7 @@ export default function ShipmentReceiptsPage() {
           <div>
             <strong>{productDbBadge(line.skuId)}{productTitle(line.skuId, line.productName || "상품명 없음")}</strong>
             <span className={styles.meta}>SKU {line.skuId}</span>
+            {line.kind === "shortage" && openOrderNote(line.skuId)}
           </div>
         </div>
       </td>
@@ -541,13 +586,32 @@ export default function ShipmentReceiptsPage() {
             >
               단종
             </button>
-            <button
-              className={`softSageButton ${styles.decisionButton}`}
-              disabled={busy || routingKeys[line.lineKey]}
-              onClick={() => void submitDecision(line, "vendor")}
-            >
-              거래처발주
-            </button>
+            {payload?.openVendorOrders?.[line.skuId] ? (
+              <>
+                <button
+                  className={`softSageButton ${styles.decisionButton}`}
+                  disabled={busy || routingKeys[line.lineKey]}
+                  onClick={() => void coverByVendorOrder(line, "cover")}
+                >
+                  기존 발주로 처리
+                </button>
+                <button
+                  className={`softPinkButton ${styles.decisionButton}`}
+                  disabled={busy || routingKeys[line.lineKey]}
+                  onClick={() => void submitDecision(line, "vendor")}
+                >
+                  추가 발주
+                </button>
+              </>
+            ) : (
+              <button
+                className={`softSageButton ${styles.decisionButton}`}
+                disabled={busy || routingKeys[line.lineKey]}
+                onClick={() => void submitDecision(line, "vendor")}
+              >
+                거래처발주
+              </button>
+            )}
             <button
               className={`softApricotButton ${styles.decisionButton}`}
               disabled={busy || routingKeys[line.lineKey]}
@@ -1173,6 +1237,25 @@ export default function ShipmentReceiptsPage() {
         )}
         {tab === "history" && (
           <div className={styles.history}>
+            {Object.entries(covered).map(([lineKey, item]) => (
+              <article className={styles.historyItem} key={lineKey}>
+                <strong>기존 거래처 발주로 처리 · SKU {item.skuId} · {item.quantity}개</strong>
+                <div className={styles.meta}>
+                  {item.productName} · 쉽먼트 {item.shipmentNumber} · {item.vendors.join(", ") || "거래처"} {item.sentOn} 발주
+                </div>
+                <button
+                  type="button"
+                  className={`softApricotButton ${styles.decisionButton}`}
+                  disabled={routingKeys[lineKey]}
+                  onClick={() => {
+                    const line = lines.find((value) => value.lineKey === lineKey);
+                    if (line) void coverByVendorOrder(line, "undo");
+                  }}
+                >
+                  미납 목록으로 되돌리기
+                </button>
+              </article>
+            ))}
             {routedLines.map((line) => (
               <article className={styles.historyItem} key={line.lineKey}>
                 <strong>

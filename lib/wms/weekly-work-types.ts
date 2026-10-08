@@ -80,6 +80,8 @@ export interface WeeklyWorkspace {
   logisticsFollowUp?: import("./logistics-follow-up-types").LogisticsFollowUpState;
   /** 공급상태가 정상이 아닌 SKU 확인 결과(사용자 2026-10-08): 단종확인 또는 단종해제 대상. SKU별. */
   supplyStatusChecks?: Record<string, { decision: "discontinued" | "release"; productName: string; at: string; releasedListClearedAt?: string }>;
+  /** 미납분을 이미 거래처에 보낸 발주(입고대기·입고지연)로 처리한 기록. 미납 줄 키별. */
+  coveredByVendorOrder?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; vendors: string[]; sentOn: string; at: string }>;
   /** 입고결과 처리기록을 새로 시작한 기준. 값이 다르면 이전 처리기록을 한 번 비운다. */
   logisticsReceiptEpoch?: string;
   materialSnapshot?: WeeklySnapshot;

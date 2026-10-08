@@ -12,6 +12,8 @@ import {
 } from "@/lib/wms/logistics-receipts";
 import { resetLogisticsReceiptHistory } from "@/lib/wms/logistics-receipt-reset";
 import { fetchProductCatalog } from "@/lib/wms/product-catalog";
+import { readPickingWaveStore } from "@/lib/wms/picking-wave/server-store";
+import { openVendorOrdersBySku, type OpenVendorOrder } from "@/lib/wms/open-vendor-orders";
 import { expandMarketingExclusions, MARKETING_PERMANENT_EXCLUDED_SKU_IDS } from "@/lib/wms/marketing-permanent-exclusions";
 import { mutateWeeklyWorkspace, readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { activeMarketingExclusionKeys, logisticsFollowUpResponse } from "@/lib/wms/logistics-follow-up";
@@ -96,7 +98,8 @@ function productDbLooksBySku(catalog: Catalog | null, skuIds: Iterable<string>):
 }
 
 async function responseBoard() {
-  const [stored, catalog] = await Promise.all([readWeeklyWorkspace(), readCatalog()]);
+  const [stored, catalog, openOrders] = await Promise.all([readWeeklyWorkspace(), readCatalog(),
+    readPickingWaveStore().then(openVendorOrdersBySku).catch(() => ({} as Record<string, OpenVendorOrder>))]);
   const workspace = activeSnapshot(await fillMissingStatuses(stored, catalog));
   const currentTargets = logisticsTargetsFromSnapshot(workspace.logisticsReceipts);
   // 무조건 제외(같은 모델 전체). 제품DB를 못 읽으면 지정 SKU만 뺀다.
@@ -115,6 +118,8 @@ async function responseBoard() {
   const shownSkuIds = [...board.lines.map(line => line.skuId), ...(board.unavailableSkus || []).map(item => item.skuId)];
   return { currentTargets, board, followUp, productDbStatuses: productDbStatusBySku(catalog, shownSkuIds), productDbLooks: productDbLooksBySku(catalog, shownSkuIds),
     supplyStatusChecks: stored.supplyStatusChecks || {},
+    coveredByVendorOrder: stored.coveredByVendorOrder || {},
+    openVendorOrders: Object.fromEntries(board.lines.filter(line => line.kind === "shortage" && openOrders[line.skuId]).map(line => [line.skuId, openOrders[line.skuId]])),
     marketingExclusion: { listedSkuCount: MARKETING_PERMANENT_EXCLUDED_SKU_IDS.length, models: exclusions.models, skuCount: exclusions.skuIds.size } };
 }
 
@@ -127,9 +132,9 @@ export async function GET(request: Request) {
       collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: [] }, { headers: withCors(request) });
   }
   try {
-    const { currentTargets, board, followUp, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks } = await responseBoard();
+    const { currentTargets, board, followUp, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders } = await responseBoard();
     return NextResponse.json({ ok: true, status: "ready", source: "supplier-hub-shipments", schemaVersion: 3,
-      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks }, { headers });
+      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders }, { headers });
   } catch {
     return NextResponse.json({ ok: false, error: "쉽먼트 입고 수집 대상과 기록을 불러오지 못했습니다." }, { status: 500, headers });
   }

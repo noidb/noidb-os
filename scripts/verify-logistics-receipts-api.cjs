@@ -13,6 +13,8 @@ const workspace = { logisticsReceiptEpoch: "test-epoch", logisticsReceiptRoutes:
 const deps = {
   "next/server": { NextResponse: { json: (value, options) => new Response(JSON.stringify(value), { status: options?.status || 200, headers: options?.headers }) } },
   "@/lib/wms/logistics-aside-baseline.json": { closedShipmentNumbers: [], pendingTargets: [], completedMarketingSkuIds: [], excludedMarketingSkuIds: [], handledLines: [] },
+  "@/lib/wms/picking-wave/server-store": { readPickingWaveStore: async () => ({}) },
+  "@/lib/wms/open-vendor-orders": { openVendorOrdersBySku: () => ({}) },
   "@/lib/wms/product-catalog": { fetchProductCatalog: async () => ({ configured: true, items: [] }) },
   "@/lib/wms/marketing-permanent-exclusions": { MARKETING_PERMANENT_EXCLUDED_SKU_IDS: ["1"], expandMarketingExclusions: () => ({ skuIds: new Set(["1"]), models: [] }) },
   "@/lib/wms/logistics-receipt-reset": { resetLogisticsReceiptHistory: () => { resetCalls++; return false; } },

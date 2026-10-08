@@ -534,3 +534,20 @@
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+
+.openOrder {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: #e3ede6;
+  color: #3f5a4b;
+  font-size: 12px;
+  font-weight: 800;
+}
+.historyItem .decisionButton {
+  min-height: 32px;
+  padding: 5px 12px;
+  font-size: 13px;
+  margin-top: 6px;
+}
