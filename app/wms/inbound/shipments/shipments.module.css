@@ -417,3 +417,34 @@
   color: #b42318;
   font-weight: 800;
 }
+
+/* 미납·마케팅 SKU 리스트 제목(같은 모양) */
+.listTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 18px 0 8px;
+  padding-left: 10px;
+  border-left: 4px solid #60766a;
+  font-size: 18px;
+  color: #1c2931;
+}
+.listTitle span {
+  color: #b42318;
+  font-size: 15px;
+}
+.productDbBadge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: #f2dfd8;
+  color: #8a3b22;
+  font-size: 12px;
+  font-weight: 800;
+  vertical-align: 1px;
+}
+.fullButton {
+  width: 100%;
+  margin-top: 10px;
+}

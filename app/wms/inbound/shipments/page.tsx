@@ -29,6 +29,8 @@ type ApiPayload = {
   targets: LogisticsReceiptTarget[];
   board: LogisticsReceiptBoard;
   followUp?: LogisticsFollowUpResponse;
+  /** 제품DB 현재상태(과재고·단종) — SKU별 */
+  productDbStatuses?: Record<string, string>;
 };
 type FollowUpPayload = LogisticsFollowUpResponse;
 
@@ -141,7 +143,6 @@ export default function ShipmentReceiptsPage() {
   const [generatedDownloads, setGeneratedDownloads] = useState<
     Record<string, { fileName: string; href: string }>
   >({});
-  const [marketingReviewOpen, setMarketingReviewOpen] = useState(false);
   const initialLoad = useRef(false);
   const fixturePayload = useRef<ApiPayload | null>(null);
 
@@ -405,12 +406,16 @@ export default function ShipmentReceiptsPage() {
         ),
     )
     .sort((left, right) => right.at.localeCompare(left.at))[0];
+  const productDbBadge = (skuId: string) => {
+    const status = payload?.productDbStatuses?.[skuId];
+    return status ? <span className={styles.productDbBadge}>{status}</span> : null;
+  };
   const renderResultRow = (line: LogisticsReceiptBoardLine) => (
     <tr key={line.lineKey}>
       <td>{line.shipmentNumber}</td>
       <td>{line.purchaseOrderNumber}</td>
       <td className={styles.product}>
-        <strong>{line.productName || "상품명 없음"}</strong>
+        <strong>{productDbBadge(line.skuId)}{line.productName || "상품명 없음"}</strong>
         <span className={styles.meta}>SKU {line.skuId}</span>
       </td>
       <td className={styles.expectedDate}>{line.target.expectedDate || "-"}</td>
@@ -580,8 +585,11 @@ export default function ShipmentReceiptsPage() {
           ))}
         {tab === "results" && payload && (
           <>
+            <h2 className={styles.listTitle}>
+              미납 SKU 리스트 <span>{resultLines.length}건</span>
+            </h2>
             <div className={styles.tableWrap}>
-              <table className={styles.table} aria-label="미납 상품 검토">
+              <table className={styles.table} aria-label="미납 SKU 리스트">
                 <thead>
                   <tr>
                     <th>쉽먼트</th>
@@ -601,16 +609,12 @@ export default function ShipmentReceiptsPage() {
               <p className={styles.empty}>검토할 미납 상품이 없습니다.</p>
             )}
             {marketingLines.length > 0 && (
-              <details
-                className={styles.reviewDetails}
-                onToggle={(event) =>
-                  setMarketingReviewOpen(event.currentTarget.open)
-                }
-              >
-                <summary>
-                  초도입고 후보 · 쿠폰·광고 검토 {marketingLines.length}건
-                </summary>
-                {marketingReviewOpen && (
+              <section>
+                <h2 className={styles.listTitle}>
+                  마케팅 SKU 리스트 <span>{marketingLines.length}건</span>
+                </h2>
+                <p className={styles.meta}>처음 1개 입고된 SKU입니다. 쿠폰·광고에서 뺄 상품만 체크를 풀어 주세요.</p>
+                {(
                   <div className={styles.marketingReview}>
                     {marketingLines.map((line) => (
                       <label className={styles.choice} key={line.lineKey}>
@@ -625,7 +629,7 @@ export default function ShipmentReceiptsPage() {
                           }
                         />
                         <span>
-                          <strong>{line.productName}</strong>
+                          <strong>{productDbBadge(line.skuId)}{line.productName}</strong>
                           <small>
                             SKU {line.skuId} · 쉽먼트 {line.shipmentNumber} ·
                             발주 {line.purchaseOrderNumber}
@@ -637,7 +641,7 @@ export default function ShipmentReceiptsPage() {
                       </label>
                     ))}
                     <button
-                      className={`${styles.button} ${styles.buttonPrimary}`}
+                      className={`softPinkButton ${styles.fullButton}`}
                       disabled={busy}
                       onClick={() => {
                         const selected = marketingLines
@@ -663,11 +667,11 @@ export default function ShipmentReceiptsPage() {
                         );
                       }}
                     >
-                      검토완료 · 대기목록에 모으기
+                      체크한 상품 쿠폰·광고 대기목록에 모으기
                     </button>
                   </div>
                 )}
-              </details>
+              </section>
             )}
             {shortageReviewLines.length > 0 && (
               <details className={styles.reviewDetails}>

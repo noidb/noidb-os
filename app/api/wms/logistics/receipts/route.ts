@@ -48,11 +48,14 @@ function activeSnapshot(workspace: Awaited<ReturnType<typeof readWeeklyWorkspace
   return workspace.logisticsReceiptEpoch === LOGISTICS_RECEIPT_EPOCH ? workspace : { ...workspace, runs: [], logisticsReceipts: undefined, logisticsReceiptRoutes: undefined, logisticsFollowUp: undefined };
 }
 
+type Catalog = Awaited<ReturnType<typeof fetchProductCatalog>>;
+async function readCatalog(): Promise<Catalog | null> {
+  try { const catalog = await fetchProductCatalog(); return catalog.configured ? catalog : null; } catch { return null; }
+}
+
 /** 쿠팡에서 공급상태가 조회되지 않은 SKU를 제품DB 발주가능상태로 한 번 채워 저장한다. */
-async function fillMissingStatuses(workspace: Awaited<ReturnType<typeof readWeeklyWorkspace>>) {
-  if (workspace.logisticsReceiptEpoch !== LOGISTICS_RECEIPT_EPOCH || !needsProductDbStatusFill(workspace.logisticsReceipts)) return workspace;
-  const catalog = await fetchProductCatalog();
-  if (!catalog.configured) return workspace;
+async function fillMissingStatuses(workspace: Awaited<ReturnType<typeof readWeeklyWorkspace>>, catalog: Catalog | null) {
+  if (!catalog || workspace.logisticsReceiptEpoch !== LOGISTICS_RECEIPT_EPOCH || !needsProductDbStatusFill(workspace.logisticsReceipts)) return workspace;
   const statusBySku = new Map(catalog.items.map(item => [item.skuId, item.orderableStatus]));
   const collectedAt = workspace.logisticsReceipts!.collectedAt;
   await mutateWeeklyWorkspace(next => {
@@ -63,8 +66,22 @@ async function fillMissingStatuses(workspace: Awaited<ReturnType<typeof readWeek
   return readWeeklyWorkspace();
 }
 
+/** 제품DB 현재상태 중 화면에 표시할 값(과재고·단종)만 SKU별로 넘긴다. */
+const shownProductDbStatuses = ["과재고", "단종"];
+function productDbStatusBySku(catalog: Catalog | null, skuIds: Iterable<string>): Record<string, string> {
+  if (!catalog) return {};
+  const wanted = new Set(skuIds), result: Record<string, string> = {};
+  for (const item of catalog.items) {
+    if (!wanted.has(item.skuId)) continue;
+    const status = shownProductDbStatuses.find(value => item.currentStatus.includes(value));
+    if (status) result[item.skuId] = status;
+  }
+  return result;
+}
+
 async function responseBoard() {
-  const workspace = activeSnapshot(await fillMissingStatuses(await readWeeklyWorkspace()));
+  const [stored, catalog] = await Promise.all([readWeeklyWorkspace(), readCatalog()]);
+  const workspace = activeSnapshot(await fillMissingStatuses(stored, catalog));
   const currentTargets = logisticsTargetsFromSnapshot(workspace.logisticsReceipts);
   const board = buildLogisticsReceiptBoard({
     targets: currentTargets,
@@ -76,7 +93,7 @@ async function responseBoard() {
   const followUp = logisticsFollowUpResponse(workspace, board);
   const source = await readWeeklyDiscontinueQueue();
   followUp.queues.discontinue.push(...previewFollowUpDiscontinue(source).map(row => ({ lineKey: `status::${row.requestId}`, sourceLineKey: row.requestId, shipmentNumber: "", boxId: "", purchaseOrderNumber: row.purchaseOrderNumber, skuId: row.skuId, productName: row.productName, barcode: "", kind: "shortage" as const, sourceFingerprint: row.requestId, state: "ready" as const })));
-  return { currentTargets, board, followUp };
+  return { currentTargets, board, followUp, productDbStatuses: productDbStatusBySku(catalog, board.lines.map(line => line.skuId)) };
 }
 
 /** Read-only: listing current dispatched and preserved Aside targets does not create business records. */
@@ -88,9 +105,9 @@ export async function GET(request: Request) {
       collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: [] }, { headers: withCors(request) });
   }
   try {
-    const { currentTargets, board, followUp } = await responseBoard();
+    const { currentTargets, board, followUp, productDbStatuses } = await responseBoard();
     return NextResponse.json({ ok: true, status: "ready", source: "supplier-hub-shipments", schemaVersion: 3,
-      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp }, { headers });
+      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, productDbStatuses }, { headers });
   } catch {
     return NextResponse.json({ ok: false, error: "쉽먼트 입고 수집 대상과 기록을 불러오지 못했습니다." }, { status: 500, headers });
   }
