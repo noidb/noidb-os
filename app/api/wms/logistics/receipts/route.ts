@@ -16,6 +16,7 @@ import { readPickingWaveStore } from "@/lib/wms/picking-wave/server-store";
 import { openVendorOrdersBySku } from "@/lib/wms/open-vendor-orders";
 import { reconcileIncompleteVendorRoutes } from "@/lib/wms/logistics-receipt-routing";
 import { buildStatusLists } from "@/lib/wms/discontinue-lists";
+import { loadReregistrationLookup } from "@/lib/wms/reregistration-lookup";
 import { expandMarketingExclusions, MARKETING_PERMANENT_EXCLUDED_SKU_IDS } from "@/lib/wms/marketing-permanent-exclusions";
 import { mutateWeeklyWorkspace, readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { activeMarketingExclusionKeys, logisticsFollowUpResponse } from "@/lib/wms/logistics-follow-up";
@@ -100,7 +101,7 @@ function productDbLooksBySku(catalog: Catalog | null, skuIds: Iterable<string>):
 }
 
 async function responseBoard() {
-  const [firstRead, catalog, vendorStore] = await Promise.all([readWeeklyWorkspace(), readCatalog(), readPickingWaveStore().catch(() => null)]);
+  const [firstRead, catalog, vendorStore, rereg] = await Promise.all([readWeeklyWorkspace(), readCatalog(), readPickingWaveStore().catch(() => null), loadReregistrationLookup()]);
   const openOrders = vendorStore ? openVendorOrdersBySku(vendorStore) : {};
   // 끊긴 거래처발주 예약 정리(실제 발주서에 있으면 완료, 없으면 예약 삭제)
   let stored = firstRead;
@@ -130,7 +131,8 @@ async function responseBoard() {
     statusLists: catalog ? buildStatusLists(catalog.items, {
       releaseFromScreen: Object.fromEntries(Object.entries(stored.supplyStatusChecks || {}).filter(([, check]) => check.decision === "release" && !check.releasedListClearedAt)),
       cleared: stored.statusListCleared,
-      nameFallback: Object.fromEntries((stored.logisticsReceipts?.shipments || []).flatMap(shipment => shipment.lines.map(line => [line.skuId, line.productName]))),
+      nameFallback: { ...rereg.names, ...Object.fromEntries((stored.logisticsReceipts?.shipments || []).flatMap(shipment => shipment.lines.map(line => [line.skuId, line.productName]))) },
+      reregisteredSkuIds: rereg.reregisteredSkuIds,
     }) : null,
     openVendorOrders: Object.fromEntries(board.lines.filter(line => line.kind === "shortage" && openOrders[line.skuId]).map(line => [line.skuId, openOrders[line.skuId]])),
     marketingExclusion: { listedSkuCount: MARKETING_PERMANENT_EXCLUDED_SKU_IDS.length, models: exclusions.models, skuCount: exclusions.skuIds.size } };

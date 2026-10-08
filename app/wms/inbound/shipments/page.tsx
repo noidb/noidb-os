@@ -36,7 +36,7 @@ type ApiPayload = {
   /** 마케팅 무조건 제외(같은 모델 전체) 현황 */
   marketingExclusion?: { listedSkuCount: number; models: string[]; skuCount: number };
   /** 제품DB 기준 단종 대상·단종해제 대상 목록 */
-  statusLists?: { discontinue: StatusListRow[]; release: StatusListRow[] } | null;
+  statusLists?: { discontinue: StatusListRow[]; release: StatusListRow[]; reregisteredExcluded?: string[] } | null;
   /** 이미 거래처에 보낸 발주(입고대기·입고지연) — SKU별 */
   openVendorOrders?: Record<string, { quantity: number; vendors: string[]; sentOn: string; delayed: boolean }>;
   /** 기존 발주로 처리한 미납 줄 */
@@ -462,6 +462,31 @@ export default function ShipmentReceiptsPage() {
       setRoutingKeys((current) => {
         const next = { ...current };
         delete next["discontinue-file"];
+        return next;
+      });
+    }
+  }
+  // 단종해제 대상 SKU 엑셀 파일(SKU ID·상품명) — 누를 때만 만든다.
+  async function downloadReleaseFile() {
+    setError("");
+    setRoutingKeys((current) => ({ ...current, "release-file": true }));
+    try {
+      const response = await fetch("/api/wms/logistics/status-list-file", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "엑셀 파일을 만들지 못했습니다.");
+      const link = document.createElement("a");
+      link.href = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${data.base64}`;
+      link.download = data.fileName;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setMessage(`단종해제 대상 엑셀을 만들었습니다(${data.count}건).`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "엑셀 파일을 만들지 못했습니다.");
+    } finally {
+      setRoutingKeys((current) => {
+        const next = { ...current };
+        delete next["release-file"];
         return next;
       });
     }
@@ -895,7 +920,8 @@ export default function ShipmentReceiptsPage() {
                   {section.title} <span>{section.rows.length}건</span>
                 </h2>
                 <p className={styles.meta}>
-                  {section.help} {section.kind === "release" ? "표를 드래그해서 복사하세요." : "아래 버튼으로 단종신청 엑셀과 공문을 만드세요."}
+                  {section.help} {section.kind === "release" ? "표를 드래그해서 복사하거나, 많으면 엑셀 파일로 받으세요." : "아래 버튼으로 단종신청 엑셀과 공문을 만드세요."}
+                  {section.kind === "release" && payload?.statusLists?.reregisteredExcluded?.length ? ` 재등록 대상 SKU(재등록SKU 탭·판매량저조영구정지 등) ${payload.statusLists.reregisteredExcluded.length}건은 해제가 아니라 신규 재등록 대상이라 뺐습니다.` : ""}
                 </p>
                 <div className={`${styles.tableWrap} ${styles.copyScroll}`}>
                   <table className={`${styles.table} ${styles.copyTable}`} aria-label={section.title}>
@@ -915,7 +941,17 @@ export default function ShipmentReceiptsPage() {
                     </tbody>
                   </table>
                 </div>
-                <div className={section.kind === "discontinue" ? styles.pairButtons : undefined}>
+                <div className={styles.pairButtons}>
+                  {section.kind === "release" && (
+                    <button
+                      type="button"
+                      className={`softSageButton ${styles.fullButton}`}
+                      disabled={routingKeys["release-file"]}
+                      onClick={() => void downloadReleaseFile()}
+                    >
+                      {routingKeys["release-file"] ? "만드는 중…" : "엑셀 파일 만들기"}
+                    </button>
+                  )}
                   {section.kind === "discontinue" && (
                     <button
                       type="button"

@@ -8,4 +8,7 @@ assert.deepEqual(lists.discontinue.map(x => x.skuId), ["1", "3"], "단종 계열
 assert.deepEqual(lists.release.map(x => x.skuId), ["2", "4", "5", "7", "8", "99"], "판매 계열 + 비정상, 메모·화면 해제, 중복 하나");
 const cleared = buildStatusLists(items, { memoReleaseSkuIds: [], cleared: { discontinue: { [lists.discontinue[0].key]: "t" } } });
 assert.deepEqual(cleared.discontinue.map(x => x.skuId), ["3", "8"]);
+const rr = buildStatusLists([...items, { skuId: "10", currentStatus: "과재고", orderableStatus: "불가", productName: "x", optionLabel: "", reregistrationTier: "2차_판매량저조영구정지" } as never], { memoReleaseSkuIds: ["7", "4"], reregisteredSkuIds: new Set(["4"]) });
+assert.equal(rr.release.some(x => x.skuId === "4" || x.skuId === "10"), false, "재등록SKU·판매량저조영구정지는 단종해제에서 뺌");
+assert.deepEqual(rr.reregisteredExcluded, ["10", "4"]);
 console.log("PASS discontinue/release lists from 제품DB, memo merge, dedupe, cleared");

@@ -15,7 +15,7 @@ export const MEMO_RELEASE_SKU_IDS: readonly string[] = [
 ];
 
 export interface StatusListItem { skuId: string; productName: string; currentStatus: string; orderableStatus: string; reason: string; key: string }
-export interface StatusLists { discontinue: StatusListItem[]; release: StatusListItem[] }
+export interface StatusLists { discontinue: StatusListItem[]; release: StatusListItem[]; /** 재등록으로 바뀐 옛 SKU라서 뺀 SKU */ reregisteredExcluded: string[] }
 /** '목록 비우기'로 처리완료한 항목. 키는 SKU·현재상태·발주가능상태 묶음이라 상태가 바뀌면 다시 나타난다. */
 export type StatusListCleared = { discontinue?: Record<string, string>; release?: Record<string, string> };
 
@@ -31,6 +31,8 @@ export function buildStatusLists(items: readonly ProductCatalogItem[], options: 
   memoReleaseSkuIds?: readonly string[];
   /** 제품DB에 없는 SKU의 상품명 대신 쓸 이름(쿠팡 입고결과 등) */
   nameFallback?: Record<string, string>;
+  /** 재등록SKU·교체이력에 있는 옛 SKU — 두 목록 모두에서 뺀다 */
+  reregisteredSkuIds?: ReadonlySet<string>;
 } = {}): StatusLists {
   const bySku = new Map(items.map(item => [item.skuId, item]));
   const discontinue = new Map<string, StatusListItem>();
@@ -55,5 +57,11 @@ export function buildStatusLists(items: readonly ProductCatalogItem[], options: 
   for (const [skuId, check] of Object.entries(options.releaseFromScreen || {})) addRelease(skuId, check.productName, "입고결과");
   const visible = (list: Map<string, StatusListItem>, cleared: Record<string, string> = {}) =>
     [...list.values()].filter(item => !cleared[item.key]).sort((a, b) => a.skuId.localeCompare(b.skuId));
-  return { discontinue: visible(discontinue, options.cleared?.discontinue), release: visible(release, options.cleared?.release) };
+  // 재등록SKU 탭·교체이력의 SKU, 제품DB 재등록구분이 판매량저조영구정지·영구제외·재등록완료인 SKU는
+  // 단종해제가 아니라 신규 재등록 대상이다(사용자 확인 2026-10-08) → 두 목록 모두에서 뺀다.
+  const reregistered = new Set<string>(options.reregisteredSkuIds || []);
+  for (const item of items) if (/판매량저조|영구|재등록완료/.test(item.reregistrationTier || "")) reregistered.add(item.skuId);
+  const excluded = [...new Set([...discontinue.keys(), ...release.keys()].filter(skuId => reregistered.has(skuId)))].sort();
+  for (const skuId of excluded) { discontinue.delete(skuId); release.delete(skuId); }
+  return { discontinue: visible(discontinue, options.cleared?.discontinue), release: visible(release, options.cleared?.release), reregisteredExcluded: excluded };
 }

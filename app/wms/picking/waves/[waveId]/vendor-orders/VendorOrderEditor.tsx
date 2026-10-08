@@ -1565,8 +1565,8 @@ function VendorOrderLineCard({
         ) : null}
       </div>
 
-      {/* 발주결과처리에서만 SKU 번호와 쿠팡 바코드를 보여준다 — 거래처에 보내는 발주서 화면은 그대로 둔다(2026-10-07). */}
-      {processingSent && <div data-vendor-sku-ids style={{ marginTop: "6px", width: "100%", maxWidth: "92%", marginInline: "auto", display: "flex", flexWrap: "wrap", gap: "4px 12px", fontSize: "12px", color: wmsColors.muted, fontVariantNumeric: "tabular-nums" }}>
+      {/* SKU 번호와 쿠팡 바코드는 화면에만 보여준다(발주서 작성·발주결과처리 모두). 거래처에 보내는 카드 이미지에는 넣지 않는다(2026-10-08). */}
+      {<div data-vendor-sku-ids style={{ marginTop: "6px", width: "100%", maxWidth: "92%", marginInline: "auto", display: "flex", flexWrap: "wrap", gap: "4px 12px", fontSize: "12px", color: wmsColors.muted, fontVariantNumeric: "tabular-nums" }}>
         <span>SKU <b style={{ color: wmsColors.ink, userSelect: "all" }}>{line.skuId || "미확인"}</b></span>
         <span>바코드 <b style={{ color: wmsColors.ink, userSelect: "all" }}>{line.barcode || "미등록"}</b></span>
       </div>}

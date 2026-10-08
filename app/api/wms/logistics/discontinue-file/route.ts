@@ -4,6 +4,7 @@ import { isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
 import { fetchProductCatalog } from "@/lib/wms/product-catalog";
 import { readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { buildStatusLists } from "@/lib/wms/discontinue-lists";
+import { loadReregistrationLookup } from "@/lib/wms/reregistration-lookup";
 import { buildDiscontinueWorkbook, koreaDateParts, loadDiscontinueLetterTemplate, loadDiscontinueTemplate } from "@/lib/wms/discontinue-files";
 import { buildDiscontinueLetterFromTemplate } from "@/lib/wms/discontinue-letter";
 
@@ -18,11 +19,12 @@ export async function POST(request: NextRequest) {
     const body = await request.json() as { skuIds?: unknown };
     const wanted = new Set(Array.isArray(body.skuIds) ? body.skuIds.filter((value): value is string => typeof value === "string") : []);
     if (!wanted.size) throw new Error("단종 신청할 SKU가 없습니다.");
-    const [catalog, workspace] = await Promise.all([fetchProductCatalog(), readWeeklyWorkspace()]);
+    const [catalog, workspace, rereg] = await Promise.all([fetchProductCatalog(), readWeeklyWorkspace(), loadReregistrationLookup()]);
     if (!catalog.configured) throw new Error("제품DB를 읽지 못했습니다. 잠시 후 다시 만들어 주세요.");
     const lists = buildStatusLists(catalog.items, {
       cleared: workspace.statusListCleared,
       releaseFromScreen: Object.fromEntries(Object.entries(workspace.supplyStatusChecks || {}).filter(([, check]) => check.decision === "release" && !check.releasedListClearedAt)),
+      reregisteredSkuIds: rereg.reregisteredSkuIds,
     });
     const items = lists.discontinue.filter(item => wanted.has(item.skuId)).map(item => ({ skuId: item.skuId, productName: item.productName }));
     if (!items.length) throw new Error("단종 대상 목록이 바뀌었습니다. 새로고침 후 다시 만들어 주세요.");
