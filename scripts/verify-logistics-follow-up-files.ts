@@ -37,15 +37,16 @@ async function xlsxContains(zip: JSZip, fileName: string, value: string) {
 }
 
 async function main() {
-  const deps = { loadWeeklyAdvertisingSelection: async () => advertising, buildWeeklyOutput };
+  const deps = { loadWeeklyAdvertisingSelection: async () => advertising, buildWeeklyOutput, loadOverstockSkuIds: async () => new Set(["222"]) };
   const marketingOutput = await generateLogisticsFollowUp(workspace, currentBoard, { token: logisticsFollowUpToken(workspace, currentBoard), expectedCollectedAt: at, kind: "marketing" }, deps);
   const marketingZip = await JSZip.loadAsync(Buffer.from(marketingOutput.base64, "base64"));
   const marketingFiles = Object.keys(marketingZip.files).filter(name => !marketingZip.files[name].dir).sort();
   assert.equal(marketingOutput.proof.couponCount, 1);
   assert.equal(marketingOutput.proof.advertisingCount, 1);
-  assert(marketingFiles.some(name => name.startsWith("쿠폰발행_30퍼센트_") && name.endsWith(".xlsx")), "쿠폰 일괄파일이 있어야 합니다.");
+  assert(marketingFiles.some(name => name.startsWith("쿠폰발행_30퍼센트_과재고_") && name.endsWith(".xlsx")), "과재고 SKU는 30% 쿠폰 파일로 가야 합니다.");
+  assert(!marketingFiles.some(name => name.startsWith("쿠폰발행_20퍼센트_")), "과재고만 있으면 20% 파일은 없어야 합니다.");
   assert(marketingFiles.some(name => /^3-\d+_광고등록\.xlsx$/.test(name)), "광고 일괄파일이 있어야 합니다.");
-  await xlsxContains(marketingZip, marketingFiles.find(name => name.startsWith("쿠폰발행_30퍼센트_"))!, "222");
+  await xlsxContains(marketingZip, marketingFiles.find(name => name.startsWith("쿠폰발행_30퍼센트_과재고_"))!, "222");
   await xlsxContains(marketingZip, marketingFiles.find(name => /^3-\d+_광고등록\.xlsx$/.test(name))!, "9001");
 
   const discontinueOutput = await generateLogisticsFollowUp(workspace, currentBoard, { token: logisticsFollowUpToken(workspace, currentBoard), expectedCollectedAt: at, kind: "discontinue" }, deps);

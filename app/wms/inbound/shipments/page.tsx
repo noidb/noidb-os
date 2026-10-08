@@ -667,7 +667,25 @@ export default function ShipmentReceiptsPage() {
                 <h2 className={styles.listTitle}>
                   마케팅 SKU 리스트 <span>{marketingLines.length}건</span>
                 </h2>
-                <p className={styles.meta}>처음 1개 입고된 SKU입니다. 쿠폰·광고에서 뺄 상품만 체크를 풀어 주세요.</p>
+                <div className={styles.listTools}>
+                  <p className={styles.meta}>처음 1개 입고된 SKU입니다. 쿠폰 할인율은 기본 20%, 과재고는 30%로 만들어집니다.</p>
+                  <div className={styles.selectButtons}>
+                    <button
+                      type="button"
+                      className={`softSageButton ${styles.decisionButton}`}
+                      onClick={() => setMarketingSelected(Object.fromEntries(marketingLines.map((line) => [line.lineKey, true])))}
+                    >
+                      전체선택
+                    </button>
+                    <button
+                      type="button"
+                      className={`softApricotButton ${styles.decisionButton}`}
+                      onClick={() => setMarketingSelected(Object.fromEntries(marketingLines.map((line) => [line.lineKey, false])))}
+                    >
+                      전체해제
+                    </button>
+                  </div>
+                </div>
                 {(
                   <div className={styles.marketingReview}>
                     {marketingLines.map((line) => (

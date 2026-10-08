@@ -466,3 +466,25 @@
   font-weight: 800;
   color: #b42318;
 }
+
+.listTools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.listTools .meta {
+  margin: 0;
+}
+.selectButtons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(88px, 1fr));
+  gap: 6px;
+}
+.selectButtons .decisionButton {
+  min-height: 34px;
+  padding: 6px 12px;
+  font-size: 13px;
+}

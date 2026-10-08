@@ -28,7 +28,7 @@ setMarketingExclusion(workspace, board, { token: restoreToken, expectedCollected
 assert.equal(workspace.logisticsFollowUp?.exclusions?.[0].restoredAt, at, "history restoration is line-specific");
 assert.throws(() => setMarketingExclusion(workspace, board, { token: restoreToken, expectedCollectedAt: at, lineKeys: [keys[0]] }, false, at), /목록이 변경/);
   void (async () => {
-    const deps = {
+    const deps = { loadOverstockSkuIds: async () => new Set<string>(),
       loadWeeklyAdvertisingSelection: async () => ({ resolved: [{ skuId: "222", optionId: "9001" }], missingSkuIds: [], conflictingSkuIds: [], optionIds: ["9001"], token: "mock-ad" }),
       buildWeeklyOutput: async () => ({ fileName: "mock.zip", base64: "bW9jaw==", generated: { at, reviewToken: "mock", couponCount: 1, vendors: [], discontinueCount: 0, advertisingCount: 1, advertisingFiles: ["3-1.xlsx"], advertisingToken: "mock-ad" } }),
     };

@@ -119,8 +119,15 @@ function transientRun(runs: WeeklyRun[], kind: "marketing" | "discontinue"): Wee
   return { id, revision: 0, updatedAt: now(), sentVendors: {},
     snapshot: { id, rulesVersion: 5, sourceToken: hash(runs.map(sourceKey)), createdAt: now(), period: { startDate: weeklyKoreaDay(), endDate: weeklyKoreaDay() }, source: { files: [], latestActualDate: "", firstActualDate: "", eventCount: 0, duplicateCount: 0, selectedEventCount: 0, mode: "browser" }, couponItems: kind === "marketing" ? items as any : [], couponReceiptKeys, vendorItems: kind === "discontinue" ? items as any : [], warnings: [], blockers: [] }, reviews, reviewedSkuIds: Object.keys(reviews), itemRoutes: {} };
 }
-export async function generateLogisticsFollowUp(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, input: { token: unknown; expectedCollectedAt: unknown; kind: unknown }, deps: Partial<{ loadWeeklyAdvertisingSelection: typeof loadWeeklyAdvertisingSelection; buildWeeklyOutput: typeof buildWeeklyOutput; buildWeeklyReorderWorkbook: typeof buildWeeklyReorderWorkbook }> = {}) {
-  const services = { loadWeeklyAdvertisingSelection, buildWeeklyOutput, buildWeeklyReorderWorkbook, ...deps };
+/** 제품DB 현재상태가 과재고인 SKU(쿠폰 30% 대상). 제품DB를 못 읽으면 생성을 멈춘다(할인율이 틀리게 나가지 않도록). */
+async function loadOverstockSkuIds(): Promise<Set<string>> {
+  const { fetchProductCatalog } = await import("./product-catalog");
+  const catalog = await fetchProductCatalog();
+  if (!catalog.configured) throw new Error("제품DB를 읽지 못해 과재고 할인율을 정할 수 없습니다. 잠시 후 다시 만들어 주세요.");
+  return new Set(catalog.items.filter(item => item.currentStatus.includes("과재고")).map(item => item.skuId));
+}
+export async function generateLogisticsFollowUp(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, input: { token: unknown; expectedCollectedAt: unknown; kind: unknown }, deps: Partial<{ loadWeeklyAdvertisingSelection: typeof loadWeeklyAdvertisingSelection; buildWeeklyOutput: typeof buildWeeklyOutput; buildWeeklyReorderWorkbook: typeof buildWeeklyReorderWorkbook; loadOverstockSkuIds: typeof loadOverstockSkuIds }> = {}) {
+  const services = { loadWeeklyAdvertisingSelection, buildWeeklyOutput, buildWeeklyReorderWorkbook, loadOverstockSkuIds, ...deps };
   assertCurrent(workspace, board, input.token, input.expectedCollectedAt); const kind = input.kind;
   if (kind !== "marketing" && kind !== "discontinue" && kind !== "reorder") throw new Error("생성할 후속 업무를 확인해 주세요.");
   if (kind === "reorder") {
@@ -150,7 +157,8 @@ export async function generateLogisticsFollowUp(workspace: WeeklyWorkspace, boar
   }
   const advertising = kind === "marketing" ? await services.loadWeeklyAdvertisingSelection(run) : undefined;
   if (kind === "marketing") assertWeeklyCouponEligibility(workspace, run);
-  const output = await services.buildWeeklyOutput(run, kind === "marketing" ? "marketing" : "discontinue", new Date(), advertising);
+  const overstockSkuIds = kind === "marketing" ? await services.loadOverstockSkuIds() : undefined;
+  const output = await services.buildWeeklyOutput(run, kind === "marketing" ? "marketing" : "discontinue", new Date(), advertising, { overstockSkuIds });
   const baseKey = weeklyOutputKey(run, kind === "marketing" ? "marketing" : "discontinue", new Date(), advertising?.token);
   // Every saved output is immutable; repeat generation must not share a writable artifact key.
   const outputKey = hash([baseKey, output.fileName, output.base64, randomUUID()]);
