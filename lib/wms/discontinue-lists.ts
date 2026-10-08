@@ -10,9 +10,11 @@ export const DISCONTINUE_CURRENT_STATUSES = ["판매중지", "단종", "거래�
 export const RELEASE_CURRENT_STATUSES = ["과재고", "발주가능상태 정상전환대상", "제품DB로 이동(재고있음)"];
 /** 사용자가 메모장에 모아 둔 단종해제 SKU(2026-10-08). */
 export const MEMO_RELEASE_SKU_IDS: readonly string[] = [
-  "58963350", "58963352", "59263874", "38921463", "37667186", "38921545", "38813805", "38248703",
-  "39399014", "38813802", "39399011", "36789607", "40284016", "39135983", "38921513", "39127489",
+  "58963350", "58963352", "59263874", "38921463", "37667186", "38921545", "38813805",
+  "39399014", "38813802", "39399011", "40284016", "39135983", "38921513",
 ];
+/** 사용자가 단종 대상이라고 알려 준 SKU(2026-10-08) — 판매중지(제품링크 중단)·재등록완료된 옛 SKU라 발주가능상태가 불가여야 한다. */
+export const MEMO_DISCONTINUE_SKU_IDS: readonly string[] = ["39127489", "38248703", "36789607"];
 
 export interface StatusListItem { skuId: string; productName: string; currentStatus: string; orderableStatus: string; reason: string; key: string }
 export interface StatusLists { discontinue: StatusListItem[]; release: StatusListItem[]; /** 재등록으로 바뀐 옛 SKU라서 뺀 SKU */ reregisteredExcluded: string[] }
@@ -29,6 +31,7 @@ export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId
   releaseFromScreen?: Record<string, { productName: string }>;
   cleared?: StatusListCleared;
   memoReleaseSkuIds?: readonly string[];
+  memoDiscontinueSkuIds?: readonly string[];
   /** 제품DB에 없는 SKU의 상품명 대신 쓸 이름(쿠팡 입고결과 등) */
   nameFallback?: Record<string, string>;
   /** 재등록SKU·교체이력에 있는 옛 SKU — 두 목록 모두에서 뺀다 */
@@ -59,11 +62,23 @@ export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId
   for (const [skuId, check] of Object.entries(options.releaseFromScreen || {})) addRelease(skuId, check.productName, "입고결과");
   const visible = (list: Map<string, StatusListItem>, cleared: Record<string, string> = {}) =>
     [...list.values()].filter(item => !cleared[item.key]).sort((a, b) => a.skuId.localeCompare(b.skuId));
-  // 재등록SKU 탭·교체이력의 SKU, 제품DB 재등록구분이 판매량저조영구정지·영구제외·재등록완료인 SKU는
-  // 단종해제가 아니라 신규 재등록 대상이다(사용자 확인 2026-10-08) → 두 목록 모두에서 뺀다.
+  // 재등록SKU 탭·교체이력의 옛 SKU, 제품DB 재등록구분이 판매량저조영구정지·영구제외·재등록완료인 SKU는
+  // 단종해제 대상이 아니다(신규 재등록 대상, 사용자 확인 2026-10-08) → 단종해제에서 뺀다.
+  // 그중 재등록이 끝난 옛 SKU는 발주가능상태가 '불가'여야 정상이므로, 아직 '정상'이면 단종 대상에 넣는다.
   const reregistered = new Set<string>(options.reregisteredSkuIds || []);
   for (const item of items) if (/판매량저조|영구|재등록완료/.test(item.reregistrationTier || "")) reregistered.add(item.skuId);
-  const excluded = [...new Set([...discontinue.keys(), ...release.keys()].filter(skuId => reregistered.has(skuId)))].sort();
-  for (const skuId of excluded) { discontinue.delete(skuId); release.delete(skuId); }
+  const excluded = [...release.keys()].filter(skuId => reregistered.has(skuId)).sort();
+  for (const skuId of excluded) release.delete(skuId);
+  const addDiscontinue = (skuId: string, reason: string) => {
+    if (discontinue.has(skuId)) return;
+    const item = bySku.get(skuId);
+    if (item && item.orderableStatus.trim() !== "정상") return; // 이미 불가·일시중단이면 할 일 없음
+    release.delete(skuId);
+    discontinue.set(skuId, { skuId, productName: item ? displayName(item) : options.nameFallback?.[skuId] || "제품DB에 없음",
+      currentStatus: item?.currentStatus.trim() || "", orderableStatus: item?.orderableStatus.trim() || "미확인", reason,
+      key: item ? itemKey(item, reason) : JSON.stringify([skuId, reason]) });
+  };
+  for (const skuId of reregistered) if (bySku.get(skuId)?.orderableStatus.trim() === "정상") addDiscontinue(skuId, "재등록완료 옛 SKU");
+  for (const skuId of options.memoDiscontinueSkuIds ?? MEMO_DISCONTINUE_SKU_IDS) addDiscontinue(skuId, "메모");
   return { discontinue: visible(discontinue, options.cleared?.discontinue), release: visible(release, options.cleared?.release), reregisteredExcluded: excluded };
 }

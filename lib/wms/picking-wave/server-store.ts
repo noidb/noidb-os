@@ -14,7 +14,6 @@ import { getVendorLineDeletionBlockReason, VendorLineBatchDeleteConflictError } 
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { BlobPreconditionFailedError, get, put } from "@vercel/blob";
-import { readWeeklyBlob } from "../weekly-work-blob";
 import { basketKey, emptyPickingWaveStoreSnapshot, type PickingWaveStoreMutation, type PickingWaveStoreSnapshot } from "./shared-store-types";
 import { mergePoConfirmationRecords, removeTransientPoConfirmationRecordsForWave } from "../po-confirm-state";
 import { createShipmentsInState, deleteShipmentFromState, renameShipmentInState, updateShipmentGenerationInState, updateShipmentStatusInState } from "../shipment/state";
@@ -138,8 +137,14 @@ function useBlobStore(): boolean {
 
 async function readBlobSnapshot(): Promise<LoadedSnapshot> {
   ioStats.blobGets += 1;
-  // 캐시된 옛 사본을 읽으면 저장이 충돌하므로 항상 최신본을 읽는다(weekly-work-blob과 같은 방식).
-  const result = await readWeeklyBlob(BLOB_PATH);
+  let result;
+  try {
+    result = await get(BLOB_PATH, { access: "private", useCache: false });
+  } catch (error) {
+    if (!isForbiddenConsistentRead(error)) throw error;
+    ioStats.blobGets += 1;
+    result = await get(BLOB_PATH, { access: "private" });
+  }
   if (!result || result.statusCode !== 200) return { snapshot: emptyPickingWaveStoreSnapshot() };
   const body = await new Response(result.stream).text();
   return { snapshot: normalizeSnapshot(JSON.parse(body)), etag: result.blob.etag };
