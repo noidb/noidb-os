@@ -395,3 +395,25 @@
     font-size: 25px;
   }
 }
+
+/* 후속 처리: 세 버튼을 한 줄·같은 폭으로, 칸 가운데 정렬 */
+.table th.decisionCell,
+.table td.decisionCell {
+  text-align: center;
+}
+.decisionRow {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 6px;
+}
+.decisionRow .decisionButton {
+  min-height: 34px;
+  padding: 6px 12px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.table td.shortageQty {
+  color: #b42318;
+  font-weight: 800;
+}

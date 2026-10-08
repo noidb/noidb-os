@@ -416,43 +416,43 @@ export default function ShipmentReceiptsPage() {
       <td className={styles.expectedDate}>{line.target.expectedDate || "-"}</td>
       <td>{line.deliveredQuantity ?? "-"}</td>
       <td>{line.receivedQuantity ?? "-"}</td>
-      <td>
+      <td className={styles.shortageQty}>
         {line.remainingQuantity ??
           (typeof line.deliveredQuantity === "number" &&
           typeof line.receivedQuantity === "number"
             ? Math.max(0, line.deliveredQuantity - line.receivedQuantity)
             : "-")}
       </td>
-      <td>
+      <td className={styles.decisionCell}>
         {line.reviewReason && (
           <div className={styles.meta}>{line.reviewReason}</div>
         )}
         {line.kind === "shortage" &&
         line.state === "ready" &&
         (line.remainingQuantity ?? 0) > 0 ? (
-          <>
+          <div className={styles.decisionRow}>
             <button
-              className={styles.button}
+              className={`softBeigeButton ${styles.decisionButton}`}
               disabled={busy}
               onClick={() => void submitDecision(line, "discontinue")}
             >
               단종
             </button>
             <button
-              className={styles.button}
+              className={`softSageButton ${styles.decisionButton}`}
               disabled={busy}
               onClick={() => void submitDecision(line, "vendor")}
             >
               거래처발주
             </button>
             <button
-              className={styles.button}
+              className={`softApricotButton ${styles.decisionButton}`}
               disabled={busy}
               onClick={() => void submitDecision(line, "reorder")}
             >
               미납분 재발주요청
             </button>
-          </>
+          </div>
         ) : line.state === "review" ? (
           "확인 필요"
         ) : (
@@ -591,7 +591,7 @@ export default function ShipmentReceiptsPage() {
                     <th>납품</th>
                     <th>입고</th>
                     <th>미납</th>
-                    <th>후속 처리</th>
+                    <th className={styles.decisionCell}>후속 처리</th>
                   </tr>
                 </thead>
                 <tbody>{resultLines.map(renderResultRow)}</tbody>
@@ -683,7 +683,7 @@ export default function ShipmentReceiptsPage() {
                         <th>납품</th>
                         <th>입고</th>
                         <th>미납</th>
-                        <th>후속 처리</th>
+                        <th className={styles.decisionCell}>후속 처리</th>
                       </tr>
                     </thead>
                     <tbody>{shortageReviewLines.map(renderResultRow)}</tbody>
