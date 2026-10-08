@@ -527,14 +527,54 @@ export default function ShipmentReceiptsPage() {
           ? `입고예정일 9/13 이후 마감 쉽먼트 ${payload.targets.length}건 · 가져온 시각 ${new Date(payload.board.collectedAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
           : "아직 가져온 입고결과가 없습니다. '입고결과 가져오기'로 쿠팡 쉽먼트 화면을 열고 '입고결과 일괄 가져오기'를 눌러 주세요."}
       </p>
-      {payload?.board.warnings.map((warning, index) => (
-        <p
-          className={`${styles.notice} ${styles.error}`}
-          key={`${warning}:${index}`}
-        >
-          확인이 필요한 기록: {warning}
-        </p>
-      ))}
+      {payload?.board.warnings
+        .filter((warning) => !warning.startsWith("공급상태가 정상이 아닌"))
+        .map((warning, index) => (
+          <p className={`${styles.notice} ${styles.error}`} key={`${warning}:${index}`}>
+            확인이 필요한 기록: {warning}
+          </p>
+        ))}
+      {(payload?.board.unavailableSkus?.length ?? 0) > 0 && (
+        <details className={`${styles.notice} ${styles.error} ${styles.unavailable}`}>
+          <summary>
+            확인이 필요한 기록: 공급상태가 정상이 아닌 SKU {payload!.board.unavailableSkus!.length}건(불가·일시중단·조회안됨)은 미납·쿠폰광고 분류에서 뺐습니다. <b>목록 보기</b>
+          </summary>
+          <div className={styles.tableWrap}>
+            <table className={styles.table} aria-label="공급상태가 정상이 아닌 SKU">
+              <thead>
+                <tr>
+                  <th>공급상태</th>
+                  <th>상품명</th>
+                  <th>쉽먼트</th>
+                  <th>입고예정일</th>
+                  <th>납품</th>
+                  <th>입고</th>
+                  <th>미납</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payload!.board.unavailableSkus!.map((item) => (
+                  <tr key={`${item.shipmentNumber}:${item.purchaseOrderNumber}:${item.skuId}`}>
+                    <td className={styles.statusCell}>
+                      {item.orderStatus}
+                      {item.fromProductDb && <span className={styles.meta}> (제품DB)</span>}
+                    </td>
+                    <td className={styles.product}>
+                      <strong>{productDbBadge(item.skuId)}{item.productName}</strong>
+                      <span className={styles.meta}>SKU {item.skuId} · 발주 {item.purchaseOrderNumber}</span>
+                    </td>
+                    <td>{item.shipmentNumber}</td>
+                    <td className={styles.expectedDate}>{item.expectedDate}</td>
+                    <td>{item.deliveredQuantity}</td>
+                    <td>{item.receivedQuantity}</td>
+                    <td className={styles.shortageQty}>{Math.max(0, item.deliveredQuantity - item.receivedQuantity) || ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
       <nav className={styles.tabs} aria-label="입고결과 보기">
         {(
           [

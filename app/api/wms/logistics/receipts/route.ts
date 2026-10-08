@@ -98,7 +98,7 @@ async function responseBoard() {
   const followUp = logisticsFollowUpResponse(workspace, board);
   const source = await readWeeklyDiscontinueQueue();
   followUp.queues.discontinue.push(...previewFollowUpDiscontinue(source).map(row => ({ lineKey: `status::${row.requestId}`, sourceLineKey: row.requestId, shipmentNumber: "", boxId: "", purchaseOrderNumber: row.purchaseOrderNumber, skuId: row.skuId, productName: row.productName, barcode: "", kind: "shortage" as const, sourceFingerprint: row.requestId, state: "ready" as const })));
-  return { currentTargets, board, followUp, productDbStatuses: productDbStatusBySku(catalog, board.lines.map(line => line.skuId)) };
+  return { currentTargets, board, followUp, productDbStatuses: productDbStatusBySku(catalog, [...board.lines.map(line => line.skuId), ...(board.unavailableSkus || []).map(item => item.skuId)]) };
 }
 
 /** Read-only: listing current dispatched and preserved Aside targets does not create business records. */

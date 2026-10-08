@@ -448,3 +448,21 @@
   width: 100%;
   margin-top: 10px;
 }
+
+.unavailable summary {
+  cursor: pointer;
+}
+.unavailable summary b {
+  margin-left: 6px;
+  text-decoration: underline;
+}
+.unavailable .tableWrap {
+  margin-top: 10px;
+  background: #fff;
+  border-radius: 8px;
+}
+.table td.statusCell {
+  white-space: nowrap;
+  font-weight: 800;
+  color: #b42318;
+}

@@ -95,8 +95,16 @@ export interface LogisticsReceiptBoardLine {
   target: LogisticsReceiptTarget;
 }
 
+export interface LogisticsReceiptUnavailableSku {
+  skuId: string; productName: string; orderStatus: string; fromProductDb: boolean;
+  shipmentNumber: string; purchaseOrderNumber: string; expectedDate: string;
+  deliveredQuantity: number; receivedQuantity: number;
+}
+
 export interface LogisticsReceiptBoard {
   collectedAt?: string;
+  /** 공급상태가 정상이 아니어서 분류에서 뺀 줄(화면 확인용). */
+  unavailableSkus?: LogisticsReceiptUnavailableSku[];
   targets: LogisticsReceiptTarget[];
   lines: LogisticsReceiptBoardLine[];
   warnings: string[];
@@ -309,6 +317,8 @@ export function buildLogisticsReceiptBoard(input: {
 
   const lines: LogisticsReceiptBoardLine[] = [];
   let unavailableSkuCount = 0;
+  const unavailableSkus: LogisticsReceiptUnavailableSku[] = [];
+  const fromProductDb = new Set(snapshot?.skuStatusesFromProductDb || []);
   for (const target of targets) {
     const shipment = receiptByShipment.get(target.shipmentNumber);
     if (!shipment) {
@@ -336,7 +346,12 @@ export function buildLogisticsReceiptBoard(input: {
       const route = input.routes?.[sourceLineKey];
       const orderStatus = statusBySku.get(line.skuId);
       const statusBlocked = needsStatusRefresh || orderStatus !== "정상";
-      if (orderStatus && orderStatus !== "정상") unavailableSkuCount++;
+      if (orderStatus && orderStatus !== "정상") {
+        unavailableSkuCount++;
+        unavailableSkus.push({ skuId: line.skuId, productName: line.productName, orderStatus, fromProductDb: fromProductDb.has(line.skuId),
+          shipmentNumber: shipment.shipmentNumber, purchaseOrderNumber: line.purchaseOrderNumber, expectedDate: target.expectedDate,
+          deliveredQuantity: line.deliveredQuantity, receivedQuantity: line.receivedQuantity });
+      }
       if (remaining > 0 || route?.completed) {
         const boardLine: LogisticsReceiptBoardLine = { lineKey: sourceLineKey, sourceLineKey, shipmentNumber: shipment.shipmentNumber,
         boxId: line.boxId, purchaseOrderNumber: line.purchaseOrderNumber, skuId: line.skuId, productName: line.productName, barcode: line.barcode,
@@ -381,7 +396,7 @@ export function buildLogisticsReceiptBoard(input: {
   }
   if (needsStatusRefresh) warnings.push("이전 수집자료에는 공급상태가 없습니다. 전체 쉽먼트를 다시 수집해 주세요.");
   if (unavailableSkuCount) warnings.push(`공급상태가 정상이 아닌 SKU ${unavailableSkuCount}건(불가·일시중단·조회안됨)은 미납·쿠폰광고 분류에서 뺐습니다.`);
-  return { collectedAt: snapshot?.collectedAt, targets, lines, warnings };
+  return { collectedAt: snapshot?.collectedAt, targets, lines, warnings, unavailableSkus };
 }
 
 /** 저장된 쿠팡 목록 수집에서 다시 만든 대상. 사이트 출고기록·예전 Aside 대기목록은 더 이상 쓰지 않는다. */
