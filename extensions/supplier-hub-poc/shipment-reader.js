@@ -249,7 +249,9 @@ async function getSkuStatusOnce(skuId, signal) {
   }
 
   // 사용자 확정(2026-10-08): 쿠팡 쉽먼트 목록 전체를 훑어 기준일 이후 입고예정인 '마감' 쉽먼트를 모두 가져온다.
-  async function collectClosedSince(since, progress = () => {}, signal) {
+  // 0.9.9(2026-10-11): 사이트가 이미 받은 마감 쉽먼트(knownShipmentNumbers)는 상세를 다시 열지 않는다.
+  // 마감은 다시 바뀌지 않고 사이트가 그대로 보관한다. 공급상태도 새 쉽먼트의 SKU만 조회한다(이미 받은 건 사이트가 예전 값 유지).
+  async function collectClosedSince(since, progress = () => {}, signal, knownShipmentNumbers = []) {
     if (location.origin !== "https://supplier.coupang.com") throw new Error("Supplier Hub에서 실행해 주세요.");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(since || "")) throw new Error("NOID-B의 시작 기준일을 확인하지 못했습니다.");
     async function getDocument(url) {
@@ -278,8 +280,11 @@ async function getSkuStatusOnce(skuId, signal) {
         if (row.status === "마감" && row.expectedDate >= since && !found.has(row.shipmentNumber)) found.set(row.shipmentNumber, row);
       }
     }
-    const targets = [...found.values()].sort((a, b) => a.shipmentNumber.localeCompare(b.shipmentNumber));
-    if (!targets.length) throw new Error(`${since} 이후 입고예정인 마감 쉽먼트가 쿠팡 목록에 없습니다.`);
+    const allClosed = [...found.values()].sort((a, b) => a.shipmentNumber.localeCompare(b.shipmentNumber));
+    if (!allClosed.length) throw new Error(`${since} 이후 입고예정인 마감 쉽먼트가 쿠팡 목록에 없습니다.`);
+    const known = new Set((Array.isArray(knownShipmentNumbers) ? knownShipmentNumbers : []).map(value => String(value)));
+    const targets = allClosed.filter(target => !known.has(target.shipmentNumber));
+    if (!targets.length) return { nothingNew: true, closedCount: allClosed.length };
     const shipments = [], shipmentMetadata = {};
     for (const [index, target] of targets.entries()) {
       progress(`마감 쉽먼트 ${index + 1}/${targets.length} · ${target.shipmentNumber} 상세 조회 중`);

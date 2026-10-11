@@ -1,4 +1,4 @@
-import { LOGISTICS_RECEIPT_EPOCH } from "./logistics-receipts";
+import { LOGISTICS_RECEIPT_EPOCH, LOGISTICS_RECEIPT_SINCE } from "./logistics-receipts";
 import type { WeeklyWorkspace } from "./weekly-work-types";
 
 /**
@@ -18,4 +18,17 @@ export function resetLogisticsReceiptHistory(workspace: WeeklyWorkspace): boolea
   delete workspace.statusCompletionIds;
   workspace.logisticsReceiptEpoch = LOGISTICS_RECEIPT_EPOCH;
   return true;
+}
+
+/**
+ * 이미 저장된 마감 쉽먼트 번호(2026-10-11, 확장 0.9.9용). 초기화 전(기준이 다른) 기록이면 빈 목록 —
+ * 그때는 확장이 전부 다시 읽는다. 저장 때 mergeHubClosedSnapshot이 이 쉽먼트들을 그대로 이어 붙인다.
+ */
+export function knownClosedShipmentNumbers(workspace: WeeklyWorkspace): string[] {
+  const snapshot = workspace.logisticsReceipts;
+  if (workspace.logisticsReceiptEpoch !== LOGISTICS_RECEIPT_EPOCH || snapshot?.mode !== "hub-closed") return [];
+  return snapshot.shipments
+    .filter(shipment => shipment.status === "마감" && (snapshot.shipmentMetadata?.[shipment.shipmentNumber]?.expectedDate || "") >= LOGISTICS_RECEIPT_SINCE)
+    .map(shipment => shipment.shipmentNumber)
+    .sort();
 }

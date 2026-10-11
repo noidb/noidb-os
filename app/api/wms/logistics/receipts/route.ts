@@ -10,7 +10,7 @@ import {
   needsProductDbStatusFill,
   type LogisticsAsideBaseline,
 } from "@/lib/wms/logistics-receipts";
-import { resetLogisticsReceiptHistory } from "@/lib/wms/logistics-receipt-reset";
+import { knownClosedShipmentNumbers, resetLogisticsReceiptHistory } from "@/lib/wms/logistics-receipt-reset";
 import { fetchProductCatalog } from "@/lib/wms/product-catalog";
 import { readPickingWaveStore } from "@/lib/wms/picking-wave/server-store";
 import { openVendorOrdersBySku } from "@/lib/wms/open-vendor-orders";
@@ -145,8 +145,12 @@ export async function GET(request: Request) {
   // 확장프로그램(설치된 0.9.8)은 이 주소를 그대로 부른다 → 시작 기준만 바로 알려 준다.
   // 사이트 화면은 ?view=board 로 무거운 목록 계산을 요청한다.
   if (new URL(request.url).searchParams.get("view") !== "board") {
+    // 0.9.9(2026-10-11): 이미 받은 마감 쉽먼트 번호를 알려 줘, 확장이 새로 마감된 것만 상세를 열게 한다(마감은 다시 바뀌지 않음).
+    // 0.9.8은 이 값을 모르고 예전처럼 전부 읽는다. 읽기에 실패하면 빈 목록 = 전부 읽기로 안전하게 돌아간다.
+    let knownShipmentNumbers: string[] = [];
+    try { knownShipmentNumbers = knownClosedShipmentNumbers(await readWeeklyWorkspace()); } catch { /* 전부 읽기 */ }
     return NextResponse.json({ ok: true, status: "ready", source: "supplier-hub-shipments", schemaVersion: 3,
-      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: [] }, { headers: withCors(request) });
+      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: [], knownShipmentNumbers }, { headers: withCors(request) });
   }
   try {
     const { currentTargets, board, followUp, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists } = await responseBoard();

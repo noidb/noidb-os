@@ -66,6 +66,10 @@ global.fetch = async (url, init = {}) => {
   assert.equal(hub.mode, "hub-closed"); assert.deepEqual(hub.requestedShipmentNumbers, ["100", "104"]);
   assert.deepEqual(hub.shipmentMetadata, { "100": { expectedDate: "2026-09-14", centerName: "A센터" }, "104": { expectedDate: "2026-09-13", centerName: "B센터" } });
   assert.deepEqual(hub.skuStatuses, [{ skuId: "1", orderStatus: "정상" }, { skuId: "2", orderStatus: "일시중단" }]);
+  // 0.9.9: 사이트가 이미 받은 마감건은 다시 읽지 않고, 새 쉽먼트의 SKU만 공급상태를 조회한다.
+  const partial = await reader.collectClosedSince("2026-09-13", () => {}, undefined, ["100"]);
+  assert.deepEqual(partial.requestedShipmentNumbers, ["104"]); assert.deepEqual(partial.shipments.map(item => item.shipmentNumber), ["104"]);
+  assert.deepEqual(await reader.collectClosedSince("2026-09-13", () => {}, undefined, ["100", "104"]), { nothingNew: true, closedCount: 2 });
   listHeader = ["선택", "상태", "쉽먼트", "택배사"];
   await assert.rejects(() => reader.collectClosedSince("2026-09-13"), /입고예정일·센터 열을 찾지 못했습니다/);
   listHeader = defaultHeader;
