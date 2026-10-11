@@ -239,7 +239,9 @@ export default function ShipmentReceiptsPage() {
       // 다시 검사하므로, 보내기 직전에 최신 확인값을 받아 쓴다.
       let token = followUp.token;
       let expectedCollectedAt = payload.collectedAt || payload.board.collectedAt;
-      if (input.action === "queueMarketing" || input.action === "excludeMarketing" || input.action === "restoreMarketing") {
+      // 파일 생성·처리완료도 같은 문제가 나서(화면 목록과 서버 저장본 읽는 시점 차이) 모든 후속처리에 적용한다.
+      // 서버는 생성·완료 때 대상과 증빙을 다시 검사한다.
+      {
         const fresh = await fetch("/api/wms/logistics/follow-up", { cache: "no-store" });
         const freshData = await fresh.json().catch(() => ({}));
         if (!fresh.ok || !freshData.token) throw new Error(freshData.error || "최신 후속 처리 목록을 확인하지 못했습니다.");
@@ -1357,7 +1359,7 @@ export default function ShipmentReceiptsPage() {
                       {/* 2026-10-11 사용자 요청: SKU만으로는 뭔지 몰라 상품명도 표시 */}
                       <strong>
                         {lineByKey.get(line.lineKey)?.productName || lineBySku.get(line.skuId)?.productName || "상품명 없음"}
-                        <small style={{ display: "block", fontWeight: 400 }}>SKU {line.skuId}{lineByKey.get(line.lineKey)?.shipmentNumber ? ` · 쉽먼트 ${lineByKey.get(line.lineKey)!.shipmentNumber}` : ""}</small>
+                        <small style={{ display: "block", fontWeight: 400 }}>SKU {line.skuId}</small>
                       </strong>
                       {line.restoredAt ? (
                         <span className={styles.meta}>복원완료</span>
