@@ -59,6 +59,18 @@ export async function POST(request: NextRequest) {
   try {
     if (!isSameOriginActionRequest(request)) return NextResponse.json({ ok: false, error: "허용되지 않은 요청입니다." }, { status: 403, headers });
     const body = await request.json() as Record<string, unknown>;
+    // 2026-10-11: '마케팅 제외' 누적/해제는 목록 계산 없이 바로 저장한다(화면에서 기다리지 않게).
+    if (body.action === "excludeMarketingSku" || body.action === "includeMarketingSku") {
+      const skuId = typeof body.skuId === "string" ? body.skuId.trim() : "";
+      if (!/^\d+$/.test(skuId)) throw new Error("SKU를 확인해 주세요.");
+      const list = await mutateWeeklyWorkspace(workspace => {
+        const next = (workspace.marketingExcludedSkuIds || []).filter(item => item.skuId !== skuId);
+        if (body.action === "excludeMarketingSku") next.push({ skuId, productName: typeof body.productName === "string" ? body.productName.slice(0, 200) : "", at: new Date().toISOString() });
+        workspace.marketingExcludedSkuIds = next;
+        return next;
+      });
+      return NextResponse.json({ ok: true, marketingExcludedSkuIds: list }, { headers });
+    }
     const value = await current(); let response: unknown;
     let completedStatusRun: typeof value.workspace.runs[number] | undefined;
     let completedVendorLineKeys: string[] = [];
@@ -126,15 +138,6 @@ export async function POST(request: NextRequest) {
         if (body.action === "queueMarketing") return queueMarketing(workspace, value.targets, value.board, body as any);
         if (body.action === "excludeMarketing") return setMarketingExclusion(workspace, value.board, body as any, false);
         if (body.action === "unqueueMarketing") return unqueueMarketing(workspace, value.board, body as any);
-        // 2026-10-11: '마케팅 제외' SKU 누적/해제 — 같은 모델 전체가 다음 목록부터 자동으로 빠진다.
-        if (body.action === "excludeMarketingSku" || body.action === "includeMarketingSku") {
-          const skuId = typeof body.skuId === "string" ? body.skuId.trim() : "";
-          if (!/^\d+$/.test(skuId)) throw new Error("SKU를 확인해 주세요.");
-          const list = (workspace.marketingExcludedSkuIds || []).filter(item => item.skuId !== skuId);
-          if (body.action === "excludeMarketingSku") list.push({ skuId, productName: typeof body.productName === "string" ? body.productName.slice(0, 200) : "", at: new Date().toISOString() });
-          workspace.marketingExcludedSkuIds = list;
-          return { ok: true, marketingExcludedSkuIds: list };
-        }
         if (body.action === "restoreMarketing") return setMarketingExclusion(workspace, value.board, body as any, true);
         if (body.action === "complete") {
           const proof = completeLogisticsFollowUp(workspace, value.board, body as any);

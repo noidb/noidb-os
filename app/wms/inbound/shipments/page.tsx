@@ -166,6 +166,33 @@ export default function ShipmentReceiptsPage() {
   const initialLoad = useRef(false);
   const followUpStale = useRef(false);
   const [routingKeys, setRoutingKeys] = useState<Record<string, boolean>>({});
+  // 2026-10-11: '마케팅 제외'는 그 줄만 잠깐 막고, 성공하면 화면에서 바로 뺀다(전체 새로 불러오기 없음).
+  const [skuExcludePending, setSkuExcludePending] = useState<Record<string, boolean>>({});
+  const [skuExcludedNow, setSkuExcludedNow] = useState<Record<string, boolean>>({});
+  async function excludeMarketingSkuQuick(skuId: string, productName: string) {
+    setSkuExcludePending((current) => ({ ...current, [skuId]: true }));
+    setError("");
+    try {
+      const response = await fetch("/api/wms/logistics/follow-up", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "excludeMarketingSku", skuId, productName }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || "마케팅 제외를 저장하지 못했습니다.");
+      setSkuExcludedNow((current) => ({ ...current, [skuId]: true }));
+      setPayload((current) => current && current.marketingExclusion ? {
+        ...current,
+        marketingExclusion: { ...current.marketingExclusion, userSkus: data.response?.marketingExcludedSkuIds || data.marketingExcludedSkuIds || current.marketingExclusion.userSkus },
+      } : current);
+      setMessage(`SKU ${skuId}를 마케팅 제외 목록에 넣었습니다. 같은 모델의 다른 SKU는 다음 새로고침 때 빠집니다.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "마케팅 제외를 저장하지 못했습니다.");
+    } finally {
+      setSkuExcludePending((current) => { const next = { ...current }; delete next[skuId]; return next; });
+    }
+  }
   const fixturePayload = useRef<ApiPayload | null>(null);
 
   async function loadFollowUp(nextPayload: ApiPayload, fixtureMode: boolean) {
@@ -585,6 +612,7 @@ export default function ShipmentReceiptsPage() {
       ? fixtureMarketingCandidates(payload, followUpData as FixtureFollowUp)
       : rawMarketingLines.filter(
           (line) =>
+            !skuExcludedNow[line.skuId] &&
             !followUpData?.queues.marketing.some(
               (item) => item.lineKey === line.lineKey,
             ) &&
@@ -1103,9 +1131,13 @@ export default function ShipmentReceiptsPage() {
                           </small>
                           <small>
                             입고예정일 {line.target.expectedDate || "-"}
-                            {payload?.marketingPrices?.[line.lineKey]
-                              ? ` · 매입가 ${payload.marketingPrices[line.lineKey].price.toLocaleString("ko-KR")}원${payload.marketingPrices[line.lineKey].fromOtherOrder ? " (다른 발주 기준)" : ""}`
-                              : ""}
+                            {(() => {
+                              // 예전 응답(숫자)과 새 응답({ price }) 모두 받는다.
+                              const raw = payload?.marketingPrices?.[line.lineKey] as unknown;
+                              const price = typeof raw === "number" ? raw : (raw as { price?: number } | undefined)?.price;
+                              const other = typeof raw === "object" && raw !== null && Boolean((raw as { fromOtherOrder?: boolean }).fromOtherOrder);
+                              return price ? ` · 매입가 ${price.toLocaleString("ko-KR")}원${other ? " (다른 발주 기준)" : ""}` : "";
+                            })()}
                           </small>
                           {/* 2026-10-11 사용자 요청: 정상은 표시하지 않고, 정상이 아닌 것만 빨간색으로 눈에 띄게 */}
                           {payload?.orderStatuses?.[line.skuId] && payload.orderStatuses[line.skuId] !== "정상" && (
@@ -1126,15 +1158,15 @@ export default function ShipmentReceiptsPage() {
                             <button
                               type="button"
                               className="softApricotButton"
-                              disabled={busy}
+                              disabled={Boolean(skuExcludePending[line.skuId])}
                               style={{ width: "100%", minHeight: "32px", padding: "4px 8px", fontSize: "12px" }}
                               onClick={(event) => {
                                 event.preventDefault();
                                 if (!window.confirm(`${line.productName}\n이 SKU(같은 모델 전체)를 마케팅 제외 목록에 넣을까요? 앞으로 이 목록에 나오지 않습니다.`)) return;
-                                void followUpAction({ action: "excludeMarketingSku", skuId: line.skuId, productName: line.productName }, `SKU ${line.skuId}를 마케팅 제외 목록에 넣었습니다.`);
+                                void excludeMarketingSkuQuick(line.skuId, line.productName);
                               }}
                             >
-                              마케팅 제외
+                              {skuExcludePending[line.skuId] ? "넣는 중…" : "마케팅 제외"}
                             </button>
                           )}
                           {payload?.orderStatuses?.[line.skuId] && payload.orderStatuses[line.skuId] !== "정상" && !fixture && (
