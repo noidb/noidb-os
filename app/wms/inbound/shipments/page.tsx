@@ -234,14 +234,26 @@ export default function ShipmentReceiptsPage() {
         );
         return;
       }
+      // 2026-10-11: 같은 화면에서 단종·거래처발주·단종확인 등을 누르면 저장소가 바뀌어, 화면을 열 때 받은
+      // 확인값(token)이 낡아 "목록이 변경됐습니다"가 났다. 쿠폰·광고 모으기는 서버가 고른 줄이 지금도 후보인지
+      // 다시 검사하므로, 보내기 직전에 최신 확인값을 받아 쓴다.
+      let token = followUp.token;
+      let expectedCollectedAt = payload.collectedAt || payload.board.collectedAt;
+      if (input.action === "queueMarketing") {
+        const fresh = await fetch("/api/wms/logistics/follow-up", { cache: "no-store" });
+        const freshData = await fresh.json().catch(() => ({}));
+        if (!fresh.ok || !freshData.token) throw new Error(freshData.error || "최신 후속 처리 목록을 확인하지 못했습니다.");
+        token = freshData.token;
+        expectedCollectedAt = freshData.collectedAt;
+      }
       const response = await fetch("/api/wms/logistics/follow-up", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...input,
-          token: followUp.token,
-          expectedCollectedAt: payload.collectedAt || payload.board.collectedAt,
+          token,
+          expectedCollectedAt,
         }),
       });
       const data = await response.json();
@@ -383,6 +395,7 @@ export default function ShipmentReceiptsPage() {
           [list.kind]: current.statusLists[list.kind].filter((row) => !list.keys.includes(row.key)),
         } : current.statusLists,
       });
+      followUpStale.current = true;
       setMessage(
         action === "discontinued" ? `SKU ${skuId} 단종 확인했습니다.`
         : action === "release" ? `SKU ${skuId}를 단종해제 대상에 넣었습니다.`
@@ -416,6 +429,7 @@ export default function ShipmentReceiptsPage() {
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "저장하지 못했습니다.");
       setPayload((current) => current && { ...current, coveredByVendorOrder: data.coveredByVendorOrder });
+      followUpStale.current = true;
       setMessage(action === "cover" ? `SKU ${line.skuId} · 기존 거래처 발주로 처리했습니다.` : `SKU ${line.skuId} · 미납 목록으로 되돌렸습니다.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "저장하지 못했습니다.");
