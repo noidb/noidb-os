@@ -17,6 +17,13 @@ import type { SkuSummaryPurchaseOrder, SkuSummaryRow } from "@/app/api/wms/logis
  * SKU별로 합산해 보여준다(/api/wms/logistics/sku-summary, 읽기 전용). 쉽먼트 생성 후에는 같은
  * 자리에서 "쉽먼트별 SKU리스트"(../sku-list)를 쓴다. 이미지·제품링크는 제품DB에서 SKU ID로 붙인다.
  */
+const won = (value: number) => `${value.toLocaleString("ko-KR")}원`;
+/** 매입가 표시 — 발주서마다 다르면 "최저~최고". 공급가를 못 읽었으면 빈 문자열. */
+function priceText(min: number, max: number): string {
+  if (!max) return "";
+  return min && min !== max ? `${min.toLocaleString("ko-KR")}~${won(max)}` : won(max);
+}
+
 export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expectedDate: string } }) {
   const expectedDate = decodeURIComponent(params.expectedDate);
   const { repository, ready, fixture } = useInvoiceGroupRepositoryState();
@@ -126,6 +133,9 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
                       {" "}· 센터 {row.fulfillmentCenters.length}곳
                     </div>
                     <div style={{ fontSize: "12px", fontFamily: "monospace", marginTop: "2px" }}>{row.barcode}</div>
+                    {row.maxUnitPrice > 0 && (
+                      <div style={{ fontSize: "12px", fontWeight: 700, marginTop: "2px" }}>매입가 {priceText(row.minUnitPrice, row.maxUnitPrice)}</div>
+                    )}
                     {catalog?.productLink && (
                       <a href={catalog.productLink} target="_blank" rel="noreferrer" style={{ fontSize: "12px", color: wmsColors.slateDark, display: "inline-block", marginTop: "3px" }}>제품링크 ↗</a>
                     )}
@@ -179,6 +189,7 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
                         <div style={{ minWidth: 0 }}>
                           <div style={{ fontSize: "12px", fontWeight: 700, lineHeight: 1.35 }}>{lineDisplay.name}{lineDisplay.option ? ` · ${lineDisplay.option}` : ""}</div>
                           <div style={{ fontSize: "11px", color: wmsColors.muted, marginTop: "2px" }}>SKU {line.skuId || "-"} · {line.barcode}</div>
+                          {line.unitPrice > 0 && <div style={{ fontSize: "11px", fontWeight: 700, marginTop: "2px" }}>매입가 {won(line.unitPrice)}</div>}
                         </div>
                         <div style={{ fontSize: "16px", fontWeight: 800 }}>{line.orderedQuantity}<span style={{ fontSize: "11px", fontWeight: 600 }}>개</span></div>
                       </li>

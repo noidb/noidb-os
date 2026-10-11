@@ -15,6 +15,8 @@ export interface PurchaseOrderSourceRecord {
   productName: string;
   optionName: string;
   orderedQuantity: number;
+  /** 2026-10-11: 발주서 "공급가 > 매입가"(부가세 포함 단가). 양식에 없으면 비어 있다. */
+  unitPrice?: number;
 }
 
 export interface PurchaseOrderSourceDocument {

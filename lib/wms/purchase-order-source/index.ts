@@ -37,7 +37,7 @@ async function parseInputs(inputs: PurchaseOrderBinaryInput[]): Promise<ParsedCo
 async function loadInputs(fresh: boolean): Promise<{ containers: number; parsed: ParsedContainer[] }> {
   const parsed: ParsedContainer[] = [];
   async function load(name: string, descriptor: unknown, download: () => Promise<Buffer>) {
-    return cachedParsedFile("purchase-order-parser-1", descriptor, async () => {
+    return cachedParsedFile("purchase-order-parser-2", descriptor, async () => {
       const buffer = await download();
       const value = await parseInputs(await expand(name, buffer));
       return { value, contentHash: createHash("sha256").update(buffer).digest("hex"), purchaseOrders: value.documents.map(item => item.purchaseOrderNumber) };

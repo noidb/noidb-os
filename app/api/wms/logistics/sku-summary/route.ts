@@ -20,6 +20,9 @@ export interface SkuSummaryRow {
   totalQuantity: number;
   purchaseOrderCount: number;
   fulfillmentCenters: string[];
+  /** 2026-10-11: 원발주서 공급가(매입가, 부가세 포함 단가). 발주서마다 다르면 최저~최고. 없으면 0. */
+  minUnitPrice: number;
+  maxUnitPrice: number;
   /** 2026-10-11: "발주 N건"을 누르면 이 SKU가 들어 있는 발주서를 보여주기 위한 발주서별 수량. */
   purchaseOrders: { purchaseOrderNumber: string; fulfillmentCenter: string; quantity: number }[];
 }
@@ -28,7 +31,7 @@ export interface SkuSummaryRow {
 export interface SkuSummaryPurchaseOrder {
   purchaseOrderNumber: string;
   fulfillmentCenter: string;
-  lines: { skuId: string; barcode: string; productName: string; optionName: string; orderedQuantity: number }[];
+  lines: { skuId: string; barcode: string; productName: string; optionName: string; orderedQuantity: number; unitPrice: number }[];
 }
 
 export async function POST(request: NextRequest) {
@@ -47,16 +50,20 @@ export async function POST(request: NextRequest) {
       documents.push({
         purchaseOrderNumber: document.purchaseOrderNumber,
         fulfillmentCenter: document.fulfillmentCenterName,
-        lines: document.records.map(record => ({ skuId: record.skuId.trim(), barcode: record.barcode, productName: record.productName, optionName: record.optionName, orderedQuantity: Number.isFinite(record.orderedQuantity) ? record.orderedQuantity : 0 })),
+        lines: document.records.map(record => ({ skuId: record.skuId.trim(), barcode: record.barcode, productName: record.productName, optionName: record.optionName, orderedQuantity: Number.isFinite(record.orderedQuantity) ? record.orderedQuantity : 0, unitPrice: record.unitPrice || 0 })),
       });
       for (const record of document.records) {
         const key = record.skuId.trim() || `바코드:${record.barcode}`;
         const entry = bySku.get(key) || {
           skuId: record.skuId.trim(), barcode: record.barcode, productName: record.productName, optionName: record.optionName,
-          totalQuantity: 0, purchaseOrderCount: 0, fulfillmentCenters: [], poSet: new Set<string>(), centerSet: new Set<string>(), poQuantity: new Map(),
+          totalQuantity: 0, purchaseOrderCount: 0, fulfillmentCenters: [], minUnitPrice: 0, maxUnitPrice: 0, poSet: new Set<string>(), centerSet: new Set<string>(), poQuantity: new Map(),
         };
         const quantity = Number.isFinite(record.orderedQuantity) ? record.orderedQuantity : 0;
         entry.totalQuantity += quantity;
+        if (record.unitPrice) {
+          entry.minUnitPrice = entry.minUnitPrice ? Math.min(entry.minUnitPrice, record.unitPrice) : record.unitPrice;
+          entry.maxUnitPrice = Math.max(entry.maxUnitPrice, record.unitPrice);
+        }
         const perPo = entry.poQuantity.get(record.purchaseOrderNumber) || { fulfillmentCenter: record.fulfillmentCenterName, quantity: 0 };
         perPo.quantity += quantity;
         entry.poQuantity.set(record.purchaseOrderNumber, perPo);

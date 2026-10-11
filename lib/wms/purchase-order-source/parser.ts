@@ -57,8 +57,8 @@ function splitNameAndOption(value: string): { productName: string; optionName: s
     : { productName: value.slice(0, comma).trim(), optionName: value.slice(comma + 1).trim() };
 }
 
-function findItemHeader(sheet: ExcelJS.Worksheet): { row: number; line: number; sku: number; product: number; quantity: number } {
-  let found: { row: number; line: number; sku: number; product: number; quantity: number } | null = null;
+function findItemHeader(sheet: ExcelJS.Worksheet): { row: number; line: number; sku: number; product: number; quantity: number; price?: number } {
+  let found: { row: number; line: number; sku: number; product: number; quantity: number; price?: number } | null = null;
   for (let row = 1; row <= Math.min(35, sheet.rowCount); row += 1) {
     const columns: Record<string, number> = {};
     for (let column = 1; column <= sheet.columnCount; column += 1) {
@@ -67,8 +67,10 @@ function findItemHeader(sheet: ExcelJS.Worksheet): { row: number; line: number; 
       if (value === "상품코드") columns.sku = column;
       if (value === "상품명/옵션/BARCODE") columns.product = column;
       if (value === "발주수량") columns.quantity = column;
+      // "공급가" 아래 첫 "매입가"가 단가(부가세 포함), 두 번째 "매입가"는 발주금액 합계라 첫 번째만 쓴다.
+      if (value === "매입가" && !columns.price) columns.price = column;
     }
-    if (columns.line && columns.sku && columns.product && columns.quantity) found = { row, line: columns.line, sku: columns.sku, product: columns.product, quantity: columns.quantity };
+    if (columns.line && columns.sku && columns.product && columns.quantity) found = { row, line: columns.line, sku: columns.sku, product: columns.product, quantity: columns.quantity, price: columns.price };
   }
   if (found) return found;
   throw new Error("상품정보 필수 헤더(No./상품코드/상품명·옵션·BARCODE/발주수량)를 찾지 못했습니다.");
@@ -98,6 +100,7 @@ export async function parsePurchaseOrderSource(input: PurchaseOrderBinaryInput):
     const combinedName = text(sheet.getCell(row, header.product).value);
     const barcode = text(sheet.getCell(row + 1, header.product).value);
     const orderedQuantity = quantity(sheet.getCell(row, header.quantity).value);
+    const unitPrice = header.price ? quantity(sheet.getCell(row, header.price).value) : Number.NaN;
     const display = splitNameAndOption(combinedName);
     records.push({
       purchaseOrderNumber: po.value,
@@ -116,6 +119,7 @@ export async function parsePurchaseOrderSource(input: PurchaseOrderBinaryInput):
       productName: display.productName,
       optionName: display.optionName,
       orderedQuantity,
+      ...(Number.isFinite(unitPrice) && unitPrice > 0 ? { unitPrice } : {}),
     });
   }
   if (records.length === 0) throw new Error(`발주서 ${po.value}: 상품행을 찾지 못했습니다.`);
