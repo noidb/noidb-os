@@ -55,7 +55,13 @@ export function logisticsFollowUpResponse(workspace: WeeklyWorkspace, board: Log
   });
   return { ok: true, token: logisticsFollowUpToken(workspace, board), collectedAt: board.collectedAt,
     queues: { marketing: select(run => isMarketing(run) && !run.couponUploadedAt && !run.completedAt && !excluded.has(sourceKey(run))).map(row => ({ ...row, blockedReason: workspace.logisticsFollowUp?.blockedMarketingSkuIds?.includes(row.skuId) ? "단종 분류되어 쿠폰·광고 생성이 차단되었습니다." : undefined, couponNote: couponBlockReasons.get(row.skuId) })), discontinue: select(run => isDiscontinue(run) && !run.discontinueSubmittedAt && !run.discontinueSubmittedSkuIds?.includes(run.logisticsReceiptLine!.skuId) && !run.completedAt), reorder, vendor: select(run => isVendor(run) && !run.completedAt) },
-    exclusionHistory: (workspace.logisticsFollowUp?.exclusions || []).filter(item => !item.dismissed), proofs: workspace.logisticsFollowUp?.proofs || [] };
+    exclusionHistory: (() => {
+      // 2026-10-11: 단종으로 분류된 SKU는 쿠폰·광고 후보에서 자동으로 빠진다(사용자가 직접 뺀 게 아님). 이유를 붙여 구분한다.
+      const discontinuedSkus = new Set([...(workspace.logisticsFollowUp?.blockedMarketingSkuIds || []), ...workspace.runs.filter(isDiscontinue).map(run => run.logisticsReceiptLine!.skuId)]);
+      return (workspace.logisticsFollowUp?.exclusions || []).filter(item => !item.dismissed).map(item => discontinuedSkus.has(item.skuId)
+        ? { ...item, reason: "단종 분류로 자동 제외", autoBlocked: true }
+        : { ...item, reason: item.reason || "직접 제외" });
+    })(), proofs: workspace.logisticsFollowUp?.proofs || [] };
 }
 function assertCurrent(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, token: unknown, collectedAt: unknown) {
   if (typeof token !== "string" || token !== logisticsFollowUpToken(workspace, board) || collectedAt !== board.collectedAt || workspace.logisticsReceipts?.collectedAt !== board.collectedAt) throw new Error("목록이 변경됐습니다. 새로고침 후 다시 확인해 주세요.");

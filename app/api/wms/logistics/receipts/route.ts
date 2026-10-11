@@ -182,8 +182,16 @@ async function responseBoard() {
       }
     }
   } catch { /* 원발주서를 못 읽어도 화면은 그대로 */ }
+  // 2026-10-11 사용자 요청: 제외 이력 등 화면에 SKU만 보이는 곳의 상품명 — 제품DB, 보관·창고재확인 등 상태 탭, 재등록 탭, 가져온 쉽먼트 순으로 찾는다.
+  const wantedNames = new Set([...(followUp.exclusionHistory || []).map(item => item.skuId), ...(workspace.marketingExcludedSkuIds || []).map(item => item.skuId)]);
+  const skuNames: Record<string, string> = {};
+  const offerName = (skuId: string, name: string | undefined) => { if (wantedNames.has(skuId) && name?.trim() && !skuNames[skuId]) skuNames[skuId] = name.trim(); };
+  for (const item of catalog?.items || []) offerName(item.skuId, [item.productName, item.optionLabel].filter(Boolean).join(", "));
+  for (const item of statusSource?.items || []) offerName(item.skuId, [item.productName, item.optionLabel].filter(Boolean).join(", "));
+  for (const [skuId, name] of Object.entries(rereg.names)) offerName(skuId, name);
+  for (const shipment of workspace.logisticsReceipts?.shipments || []) for (const line of shipment.lines) offerName(line.skuId, line.productName);
   const laterOrders = laterOrdersForMarketing(board.lines, (vendorStore?.supplierHubPurchaseOrders || []) as StoredOrder[]);
-  return { currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, productDbStatuses: productDbStatusBySku(catalog, shownSkuIds), productDbLooks: productDbLooksBySku(catalog, shownSkuIds),
+  return { currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, skuNames, productDbStatuses: productDbStatusBySku(catalog, shownSkuIds), productDbLooks: productDbLooksBySku(catalog, shownSkuIds),
     supplyStatusChecks: stored.supplyStatusChecks || {},
     coveredByVendorOrder: stored.coveredByVendorOrder || {},
     statusLists: statusSource ? buildStatusLists(statusSource.items, {
@@ -209,9 +217,9 @@ export async function GET(request: Request) {
       collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: [], knownShipmentNumbers }, { headers: withCors(request) });
   }
   try {
-    const { currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists } = await responseBoard();
+    const { currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, skuNames, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists } = await responseBoard();
     return NextResponse.json({ ok: true, status: "ready", source: "supplier-hub-shipments", schemaVersion: 3,
-      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists }, { headers });
+      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, skuNames, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists }, { headers });
   } catch {
     return NextResponse.json({ ok: false, error: "쉽먼트 입고 수집 대상과 기록을 불러오지 못했습니다." }, { status: 500, headers });
   }

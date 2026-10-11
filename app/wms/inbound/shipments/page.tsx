@@ -46,6 +46,8 @@ type ApiPayload = {
   orderStatuses?: Record<string, string>;
   /** 마케팅 후보 줄별 원발주서 매입가(부가세 포함 단가) */
   marketingPrices?: Record<string, { price: number; fromOtherOrder?: boolean }>;
+  /** SKU만 있는 곳에 보여 줄 상품명(제품DB·상태 탭·재등록·쉽먼트) */
+  skuNames?: Record<string, string>;
   /** 기존 발주로 처리한 미납 줄 */
   coveredByVendorOrder?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; vendors: string[]; sentOn: string; at: string }>;
   /** 공급상태가 정상이 아닌 SKU 확인 결과(단종확인·단종해제) */
@@ -1537,11 +1539,16 @@ export default function ShipmentReceiptsPage() {
                     >
                       {/* 2026-10-11 사용자 요청: SKU만으로는 뭔지 몰라 상품명도 표시 */}
                       <strong>
-                        {lineByKey.get(line.lineKey)?.productName || lineBySku.get(line.skuId)?.productName || "상품명 없음"}
-                        <small style={{ display: "block", fontWeight: 400 }}>SKU {line.skuId}</small>
+                        {lineByKey.get(line.lineKey)?.productName || lineBySku.get(line.skuId)?.productName || payload?.skuNames?.[line.skuId] || "상품명 없음"}
+                        <small style={{ display: "block", fontWeight: 400 }}>
+                          SKU {line.skuId}
+                          {(line as { reason?: string }).reason ? ` · ${(line as { reason?: string }).reason}` : ""}
+                        </small>
                       </strong>
                       {line.restoredAt ? (
                         <span className={styles.meta}>복원완료</span>
+                      ) : (line as { autoBlocked?: boolean }).autoBlocked ? (
+                        <span className={styles.meta}>단종 처리 상품이라 복원할 수 없어요</span>
                       ) : (
                         <button
                           className={styles.button}

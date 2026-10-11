@@ -11,7 +11,9 @@ export interface LogisticsFollowUpLine {
 }
 export interface LogisticsMarketingExclusion { lineKey: string; sourceFingerprint: string; skuId: string; at: string; restoredAt?: string;
   /** 2026-10-11: '이번 목록 비우기'로 빠진 줄 — 이번 입고분만 빠지고 제외 이력에는 보이지 않는다(다음 입고 줄은 새로 나온다). */
-  dismissed?: boolean }
+  dismissed?: boolean;
+  /** 화면 표시용: 왜 빠졌는지(단종 분류로 자동 제외 / 직접 제외). */
+  reason?: string; autoBlocked?: boolean }
 export interface LogisticsFollowUpProof {
   kind: "marketing" | "discontinue" | "reorder"; outputKey: string; fileName: string; at: string; token: string;
   sourceKeys: string[]; sourceFingerprints: string[]; couponCount: number; discontinueCount: number;
