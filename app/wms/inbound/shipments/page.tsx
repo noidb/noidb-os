@@ -40,6 +40,8 @@ type ApiPayload = {
   statusLists?: { discontinue: StatusListRow[]; release: StatusListRow[]; reregisteredExcluded?: string[] } | null;
   /** 이미 거래처에 보낸 발주(입고대기·입고지연) — SKU별 */
   openVendorOrders?: Record<string, { quantity: number; vendors: string[]; sentOn: string; delayed: boolean }>;
+  /** 마케팅 후보 줄별: 그 입고예정일 뒤에 같은 SKU로 나온 쿠팡 추가 발주(초도가 이미 팔린 신호) */
+  laterOrders?: Record<string, { orderCount: number; quantity: number; latestExpectedDate: string }>;
   /** 기존 발주로 처리한 미납 줄 */
   coveredByVendorOrder?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; vendors: string[]; sentOn: string; at: string }>;
   /** 공급상태가 정상이 아닌 SKU 확인 결과(단종확인·단종해제) */
@@ -544,6 +546,9 @@ export default function ShipmentReceiptsPage() {
   const lines = payload?.board.lines || [];
   const lineByKey = new Map(lines.map((line) => [line.lineKey, line]));
   const lineBySku = new Map(lines.map((line) => [line.skuId, line]));
+  // 2026-10-11: 추가 발주가 나온(초도가 이미 팔린) 마케팅 후보는 기본으로 체크를 뺀다. 사용자가 직접 바꾸면 그 값을 따른다.
+  const laterOrders = payload?.laterOrders || {};
+  const isMarketingChecked = (lineKey: string) => marketingSelected[lineKey] ?? !laterOrders[lineKey];
   const supplyChecks = payload?.supplyStatusChecks || {};
   // 공급상태가 정상이 아니어서 검토로 빠진 줄(단종확인·단종해제 대상)
   const isSupplyReview = (line: LogisticsReceiptBoardLine) =>
@@ -1028,6 +1033,15 @@ export default function ShipmentReceiptsPage() {
                     >
                       전체해제
                     </button>
+                    {marketingLines.some((line) => laterOrders[line.lineKey]) && (
+                      <button
+                        type="button"
+                        className={`softBeigeButton ${styles.decisionButton}`}
+                        onClick={() => setMarketingSelected((current) => ({ ...current, ...Object.fromEntries(marketingLines.filter((line) => laterOrders[line.lineKey]).map((line) => [line.lineKey, false])) }))}
+                      >
+                        추가발주 나온 SKU 해제 ({marketingLines.filter((line) => laterOrders[line.lineKey]).length})
+                      </button>
+                    )}
                   </div>
                 </div>
                 {(
@@ -1037,7 +1051,7 @@ export default function ShipmentReceiptsPage() {
                       .sort((a, b) => b.localeCompare(a))
                       .map((date) => {
                         const dateLines = marketingLines.filter((line) => (line.target.expectedDate || "") === date);
-                        const checkedCount = dateLines.filter((line) => marketingSelected[line.lineKey] !== false).length;
+                        const checkedCount = dateLines.filter((line) => isMarketingChecked(line.lineKey)).length;
                         return (
                           <div key={date || "none"} style={{ display: "contents" }}>
                             <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 4px 2px", borderTop: "1px solid #e5dace", fontSize: "14px" }}>
@@ -1053,7 +1067,7 @@ export default function ShipmentReceiptsPage() {
                       <label className={styles.choice} key={line.lineKey}>
                         <input
                           type="checkbox"
-                          checked={marketingSelected[line.lineKey] !== false}
+                          checked={isMarketingChecked(line.lineKey)}
                           onChange={(event) =>
                             setMarketingSelected((current) => ({
                               ...current,
@@ -1071,6 +1085,11 @@ export default function ShipmentReceiptsPage() {
                           <small>
                             입고예정일 {line.target.expectedDate || "-"}
                           </small>
+                          {laterOrders[line.lineKey] && (
+                            <small style={{ color: "#a6614e", fontWeight: 700 }}>
+                              추가발주 있음 · 발주 {laterOrders[line.lineKey].orderCount}건 {laterOrders[line.lineKey].quantity}개 · 최근 입고예정 {laterOrders[line.lineKey].latestExpectedDate || "-"}
+                            </small>
+                          )}
                         </span>
                       </label>
                     ))}
@@ -1083,12 +1102,12 @@ export default function ShipmentReceiptsPage() {
                       onClick={() => {
                         const selected = marketingLines
                           .filter(
-                            (line) => marketingSelected[line.lineKey] !== false,
+                            (line) => isMarketingChecked(line.lineKey),
                           )
                           .map((line) => line.lineKey);
                         const excluded = marketingLines
                           .filter(
-                            (line) => marketingSelected[line.lineKey] === false,
+                            (line) => !isMarketingChecked(line.lineKey),
                           )
                           .map((line) => line.lineKey);
                         void followUpAction(

@@ -101,6 +101,32 @@ function productDbLooksBySku(catalog: Catalog | null, skuIds: Iterable<string>):
   return result;
 }
 
+/**
+ * 2026-10-11 사용자 요청: 초도 1개 입고 후 이미 품절돼 쿠팡이 추가 발주를 낸 SKU는 쿠폰·광고가 필요 없다.
+ * 마케팅 후보 줄마다, 그 입고예정일보다 뒤의 다른 발주서(저장된 쿠팡 발주서 목록)에 같은 SKU가 있으면 알려 준다.
+ */
+type StoredOrder = { purchaseOrderNumber: string; expectedDate: string; items: { productCode: string; orderedQuantity: number }[] };
+function laterOrdersForMarketing(lines: readonly { lineKey: string; kind: string; skuId: string; purchaseOrderNumber: string; target: { expectedDate: string } }[], orders: readonly StoredOrder[]) {
+  const bySku = new Map<string, { purchaseOrderNumber: string; expectedDate: string; quantity: number }[]>();
+  for (const order of orders) for (const item of order.items || []) {
+    const skuId = String(item.productCode || "").trim();
+    if (!skuId || !(Number(item.orderedQuantity) > 0)) continue;
+    const list = bySku.get(skuId) || [];
+    list.push({ purchaseOrderNumber: String(order.purchaseOrderNumber), expectedDate: String(order.expectedDate || ""), quantity: Number(item.orderedQuantity) });
+    bySku.set(skuId, list);
+  }
+  const result: Record<string, { orderCount: number; quantity: number; latestExpectedDate: string }> = {};
+  for (const line of lines) {
+    if (line.kind !== "marketing") continue;
+    const since = line.target?.expectedDate || "";
+    const later = (bySku.get(line.skuId) || []).filter(order => order.purchaseOrderNumber !== line.purchaseOrderNumber && (!since || order.expectedDate > since));
+    if (!later.length) continue;
+    const unique = new Map(later.map(order => [order.purchaseOrderNumber, order]));
+    result[line.lineKey] = { orderCount: unique.size, quantity: [...unique.values()].reduce((sum, order) => sum + order.quantity, 0), latestExpectedDate: [...unique.values()].map(order => order.expectedDate).sort().at(-1) || "" };
+  }
+  return result;
+}
+
 async function responseBoard() {
   const [firstRead, catalog, vendorStore, rereg] = await Promise.all([readWeeklyWorkspace(), readCatalog(), readPickingWaveStore().catch(() => null), loadReregistrationLookup()]);
   const statusSource = catalog ? await loadStatusSourceItems(catalog.items) : null;
@@ -127,7 +153,8 @@ async function responseBoard() {
   const source = await readWeeklyDiscontinueQueue();
   followUp.queues.discontinue.push(...previewFollowUpDiscontinue(source).map(row => ({ lineKey: `status::${row.requestId}`, sourceLineKey: row.requestId, shipmentNumber: "", boxId: "", purchaseOrderNumber: row.purchaseOrderNumber, skuId: row.skuId, productName: row.productName, barcode: "", kind: "shortage" as const, sourceFingerprint: row.requestId, state: "ready" as const })));
   const shownSkuIds = [...board.lines.map(line => line.skuId), ...(board.unavailableSkus || []).map(item => item.skuId)];
-  return { currentTargets, board, followUp, productDbStatuses: productDbStatusBySku(catalog, shownSkuIds), productDbLooks: productDbLooksBySku(catalog, shownSkuIds),
+  const laterOrders = laterOrdersForMarketing(board.lines, (vendorStore?.supplierHubPurchaseOrders || []) as StoredOrder[]);
+  return { currentTargets, board, followUp, laterOrders, productDbStatuses: productDbStatusBySku(catalog, shownSkuIds), productDbLooks: productDbLooksBySku(catalog, shownSkuIds),
     supplyStatusChecks: stored.supplyStatusChecks || {},
     coveredByVendorOrder: stored.coveredByVendorOrder || {},
     statusLists: statusSource ? buildStatusLists(statusSource.items, {
@@ -153,9 +180,9 @@ export async function GET(request: Request) {
       collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: [], knownShipmentNumbers }, { headers: withCors(request) });
   }
   try {
-    const { currentTargets, board, followUp, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists } = await responseBoard();
+    const { currentTargets, board, followUp, laterOrders, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists } = await responseBoard();
     return NextResponse.json({ ok: true, status: "ready", source: "supplier-hub-shipments", schemaVersion: 3,
-      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists }, { headers });
+      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, laterOrders, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists }, { headers });
   } catch {
     return NextResponse.json({ ok: false, error: "쉽먼트 입고 수집 대상과 기록을 불러오지 못했습니다." }, { status: 500, headers });
   }
