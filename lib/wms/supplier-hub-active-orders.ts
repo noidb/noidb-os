@@ -3,6 +3,7 @@ import type { SupplierHubPurchaseOrder, SupplierHubPurchaseOrderSnapshotConflict
 import { selectLatestSupplierHubPurchaseOrderSnapshots } from "./supplier-hub-orders";
 import type { WeeklyWorkspace } from "./weekly-work-types";
 import type { HistoricalInboundEvent } from "./vendor-order/actual-inbound-history";
+import { LOGISTICS_RECEIPT_SINCE } from "./logistics-receipts";
 
 const clean = (value: unknown) => String(value ?? "").trim();
 const pairKey = (purchaseOrderNumber: string, skuId: string) => JSON.stringify([clean(purchaseOrderNumber), clean(skuId)]);
@@ -103,6 +104,14 @@ export function projectActiveSupplierHubPurchaseOrders(input: {
 
   const completedPurchaseOrderNumbers: string[] = [];
   const activeOrders = input.orders.filter(order => {
+    // 2026-10-11: 10/8 입고결과 처리기록 초기화(runs 비움)로 예전 재발주요청 기록이 사라지면서
+    // 8월 미납 발주서가 신규발주서에 다시 나타났다. 9/13 이전 입고예정 발주서는 예전에 처리를
+    // 끝낸 것으로 보고 항상 완료 처리한다(입고결과 확인도 9/13 이후만 다룸).
+    const expectedDate = clean(order.expectedDate).slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(expectedDate) && expectedDate < LOGISTICS_RECEIPT_SINCE) {
+      completedPurchaseOrderNumbers.push(order.purchaseOrderNumber);
+      return false;
+    }
     const complete = order.items.every(item => {
       const key = pairKey(order.purchaseOrderNumber, item.productCode);
       const actualReceived = Math.max(item.receivedQuantity, receivedByPair.get(key) || 0);
