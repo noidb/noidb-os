@@ -1113,12 +1113,21 @@ export default function ShipmentReceiptsPage() {
                               발주상태 {payload.orderStatuses[line.skuId]}
                             </small>
                           )}
+                          {laterOrders[line.lineKey] && (
+                            <small style={{ color: "#a6614e", fontWeight: 700 }}>
+                              추가발주 있음 · 발주 {laterOrders[line.lineKey].orderCount}건 {laterOrders[line.lineKey].quantity}개 · 최근 입고예정 {laterOrders[line.lineKey].latestExpectedDate || "-"}
+                            </small>
+                          )}
+                        </span>
+                        {/* 2026-10-11 사용자 요청: 버튼을 상품명 길이와 상관없이 오른쪽 같은 폭으로 */}
+                        {!fixture && (
+                          <span style={{ marginLeft: "auto", width: "132px", flexShrink: 0, display: "grid", gap: "6px", alignContent: "start" }}>
                           {!fixture && (
                             <button
                               type="button"
                               className="softApricotButton"
                               disabled={busy}
-                              style={{ minHeight: "30px", padding: "4px 10px", fontSize: "12px", alignSelf: "flex-start", marginTop: "2px" }}
+                              style={{ width: "100%", minHeight: "32px", padding: "4px 8px", fontSize: "12px" }}
                               onClick={(event) => {
                                 event.preventDefault();
                                 if (!window.confirm(`${line.productName}\n이 SKU(같은 모델 전체)를 마케팅 제외 목록에 넣을까요? 앞으로 이 목록에 나오지 않습니다.`)) return;
@@ -1136,19 +1145,15 @@ export default function ShipmentReceiptsPage() {
                                 type="button"
                                 className="softBeigeButton"
                                 disabled={busy}
-                                style={{ minHeight: "30px", padding: "4px 10px", fontSize: "12px", alignSelf: "flex-start", marginTop: "2px" }}
+                                style={{ width: "100%", minHeight: "32px", padding: "4px 8px", fontSize: "12px" }}
                                 onClick={(event) => { event.preventDefault(); void supplyCheck("release", line.skuId, line.productName); }}
                               >
                                 단종해제 대상에 넣기
                               </button>
                             )
                           )}
-                          {laterOrders[line.lineKey] && (
-                            <small style={{ color: "#a6614e", fontWeight: 700 }}>
-                              추가발주 있음 · 발주 {laterOrders[line.lineKey].orderCount}건 {laterOrders[line.lineKey].quantity}개 · 최근 입고예정 {laterOrders[line.lineKey].latestExpectedDate || "-"}
-                            </small>
-                          )}
-                        </span>
+                          </span>
+                        )}
                       </label>
                     ))}
                           </div>
