@@ -55,7 +55,7 @@ export function logisticsFollowUpResponse(workspace: WeeklyWorkspace, board: Log
   });
   return { ok: true, token: logisticsFollowUpToken(workspace, board), collectedAt: board.collectedAt,
     queues: { marketing: select(run => isMarketing(run) && !run.couponUploadedAt && !run.completedAt && !excluded.has(sourceKey(run))).map(row => ({ ...row, blockedReason: workspace.logisticsFollowUp?.blockedMarketingSkuIds?.includes(row.skuId) ? "단종 분류되어 쿠폰·광고 생성이 차단되었습니다." : undefined, couponNote: couponBlockReasons.get(row.skuId) })), discontinue: select(run => isDiscontinue(run) && !run.discontinueSubmittedAt && !run.discontinueSubmittedSkuIds?.includes(run.logisticsReceiptLine!.skuId) && !run.completedAt), reorder, vendor: select(run => isVendor(run) && !run.completedAt) },
-    exclusionHistory: workspace.logisticsFollowUp?.exclusions || [], proofs: workspace.logisticsFollowUp?.proofs || [] };
+    exclusionHistory: (workspace.logisticsFollowUp?.exclusions || []).filter(item => !item.dismissed), proofs: workspace.logisticsFollowUp?.proofs || [] };
 }
 function assertCurrent(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, token: unknown, collectedAt: unknown) {
   if (typeof token !== "string" || token !== logisticsFollowUpToken(workspace, board) || collectedAt !== board.collectedAt || workspace.logisticsReceipts?.collectedAt !== board.collectedAt) throw new Error("목록이 변경됐습니다. 새로고침 후 다시 확인해 주세요.");
@@ -83,7 +83,7 @@ export function queueMarketing(workspace: WeeklyWorkspace, targets: LogisticsRec
   }
   if (excluded.length) {
     const history = workspace.logisticsFollowUp?.exclusions || [];
-    workspace.logisticsFollowUp = { ...workspace.logisticsFollowUp, exclusions: [...history, ...excluded.map(key => ({ lineKey: key, sourceFingerprint: receiptSourceFingerprint(candidates.get(key)!), skuId: candidates.get(key)!.skuId, at }))] };
+    workspace.logisticsFollowUp = { ...workspace.logisticsFollowUp, exclusions: [...history, ...excluded.map(key => ({ lineKey: key, sourceFingerprint: receiptSourceFingerprint(candidates.get(key)!), skuId: candidates.get(key)!.skuId, at, dismissed: true }))] };
   }
   return logisticsFollowUpResponse(workspace, board);
 }

@@ -9,7 +9,9 @@ export interface LogisticsFollowUpLine {
   /** 2026-10-11: 쿠폰이 아직 걸려 있거나 예전 쿠폰 종료일을 확인하지 못해 이번 쿠폰 파일에서 빠지는 이유. */
   couponNote?: string;
 }
-export interface LogisticsMarketingExclusion { lineKey: string; sourceFingerprint: string; skuId: string; at: string; restoredAt?: string }
+export interface LogisticsMarketingExclusion { lineKey: string; sourceFingerprint: string; skuId: string; at: string; restoredAt?: string;
+  /** 2026-10-11: '이번 목록 비우기'로 빠진 줄 — 이번 입고분만 빠지고 제외 이력에는 보이지 않는다(다음 입고 줄은 새로 나온다). */
+  dismissed?: boolean }
 export interface LogisticsFollowUpProof {
   kind: "marketing" | "discontinue" | "reorder"; outputKey: string; fileName: string; at: string; token: string;
   sourceKeys: string[]; sourceFingerprints: string[]; couponCount: number; discontinueCount: number;

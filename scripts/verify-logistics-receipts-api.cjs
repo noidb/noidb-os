@@ -20,7 +20,9 @@ const deps = {
   "@/lib/wms/open-vendor-orders": { openVendorOrdersBySku: () => ({}) },
   "@/lib/wms/logistics-receipt-routing": { reconcileIncompleteVendorRoutes: () => 0 },
   "@/lib/wms/product-catalog": { fetchProductCatalog: async () => ({ configured: true, items: [] }) },
-  "@/lib/wms/marketing-permanent-exclusions": { MARKETING_PERMANENT_EXCLUDED_SKU_IDS: ["1"], expandMarketingExclusions: () => ({ skuIds: new Set(["1"]), models: [] }) },
+  "@/lib/wms/purchase-order-source/index": { getCachedPurchaseOrderIndex: async () => ({ byPurchaseOrderNumber: new Map() }) },
+  "@/lib/wms/sku-normalize": { normalizeSkuId: value => String(value).trim() },
+  "@/lib/wms/marketing-permanent-exclusions": { MARKETING_PERMANENT_EXCLUDED_SKU_IDS: ["1"], marketingExcludedListed: () => ["1"], expandMarketingExclusions: () => ({ skuIds: new Set(["1"]), models: [] }) },
   "@/lib/wms/logistics-receipt-reset": { resetLogisticsReceiptHistory: () => { resetCalls++; return false; } },
   "@/lib/wms/logistics-receipts": {
     LOGISTICS_RECEIPT_EPOCH: "test-epoch", LOGISTICS_RECEIPT_SINCE: "2026-09-13",

@@ -35,7 +35,7 @@ type ApiPayload = {
   /** 제품DB 이미지·제품링크 — SKU별 */
   productDbLooks?: Record<string, { imageUrl: string; productLink: string }>;
   /** 마케팅 무조건 제외(같은 모델 전체) 현황 */
-  marketingExclusion?: { listedSkuCount: number; models: string[]; skuCount: number };
+  marketingExclusion?: { listedSkuCount: number; models: string[]; skuCount: number; userSkus?: Array<{ skuId: string; productName: string; at: string }> };
   /** 제품DB 기준 단종 대상·단종해제 대상 목록 */
   statusLists?: { discontinue: StatusListRow[]; release: StatusListRow[]; reregisteredExcluded?: string[] } | null;
   /** 이미 거래처에 보낸 발주(입고대기·입고지연) — SKU별 */
@@ -44,6 +44,8 @@ type ApiPayload = {
   laterOrders?: Record<string, { orderCount: number; quantity: number; latestExpectedDate: string }>;
   /** 마케팅 SKU의 발주상태(제품DB 발주가능상태, 없으면 쿠팡 조회값) */
   orderStatuses?: Record<string, string>;
+  /** 마케팅 후보 줄별 원발주서 매입가(부가세 포함 단가) */
+  marketingPrices?: Record<string, number>;
   /** 기존 발주로 처리한 미납 줄 */
   coveredByVendorOrder?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; vendors: string[]; sentOn: string; at: string }>;
   /** 공급상태가 정상이 아닌 SKU 확인 결과(단종확인·단종해제) */
@@ -1020,6 +1022,22 @@ export default function ShipmentReceiptsPage() {
                     처음 1개 입고된 SKU입니다. 쿠폰 할인율은 기본 20%, 과재고·누적입고 100개 이상은 30%로 만들어집니다.
                     {payload?.marketingExclusion?.models.length ? ` 무조건 제외 모델 ${payload.marketingExclusion.models.join(", ")}는 목록에서 뺐습니다.` : ""}
                   </p>
+                  {(payload?.marketingExclusion?.userSkus?.length || 0) > 0 && (
+                    <details style={{ fontSize: "13px" }}>
+                      <summary style={{ cursor: "pointer" }}>마케팅 제외 SKU {payload!.marketingExclusion!.userSkus!.length}개 (같은 모델 전체 자동 제외)</summary>
+                      <div style={{ display: "grid", gap: "4px", marginTop: "6px" }}>
+                        {payload!.marketingExclusion!.userSkus!.map((item) => (
+                          <div key={item.skuId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
+                            <span>{item.productName || "상품명 없음"} <small>SKU {item.skuId}</small></span>
+                            <button type="button" className="softBeigeButton" disabled={busy || fixture} style={{ minHeight: "28px", padding: "2px 10px", fontSize: "12px" }}
+                              onClick={() => void followUpAction({ action: "includeMarketingSku", skuId: item.skuId }, `SKU ${item.skuId}를 마케팅 제외 목록에서 뺐습니다.`)}>
+                              제외 해제
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
                   <div className={styles.selectButtons} style={marketingLines.some((line) => laterOrders[line.lineKey]) ? { gridTemplateColumns: "repeat(3, minmax(88px, 1fr))" } : undefined}>
                     <button
                       type="button"
@@ -1085,12 +1103,28 @@ export default function ShipmentReceiptsPage() {
                           </small>
                           <small>
                             입고예정일 {line.target.expectedDate || "-"}
+                            {payload?.marketingPrices?.[line.lineKey] ? ` · 매입가 ${payload.marketingPrices[line.lineKey].toLocaleString("ko-KR")}원` : ""}
                           </small>
                           {/* 2026-10-11 사용자 요청: 정상은 표시하지 않고, 정상이 아닌 것만 빨간색으로 눈에 띄게 */}
                           {payload?.orderStatuses?.[line.skuId] && payload.orderStatuses[line.skuId] !== "정상" && (
                             <small style={{ color: "#fff", background: "#b5524a", borderRadius: "6px", padding: "2px 8px", fontWeight: 800, alignSelf: "flex-start" }}>
                               발주상태 {payload.orderStatuses[line.skuId]}
                             </small>
+                          )}
+                          {!fixture && (
+                            <button
+                              type="button"
+                              className="softApricotButton"
+                              disabled={busy}
+                              style={{ minHeight: "30px", padding: "4px 10px", fontSize: "12px", alignSelf: "flex-start", marginTop: "2px" }}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                if (!window.confirm(`${line.productName}\n이 SKU(같은 모델 전체)를 마케팅 제외 목록에 넣을까요? 앞으로 이 목록에 나오지 않습니다.`)) return;
+                                void followUpAction({ action: "excludeMarketingSku", skuId: line.skuId, productName: line.productName }, `SKU ${line.skuId}를 마케팅 제외 목록에 넣었습니다.`);
+                              }}
+                            >
+                              마케팅 제외
+                            </button>
                           )}
                           {payload?.orderStatuses?.[line.skuId] && payload.orderStatuses[line.skuId] !== "정상" && !fixture && (
                             supplyChecks[line.skuId]?.decision === "release" ? (
@@ -1133,7 +1167,7 @@ export default function ShipmentReceiptsPage() {
                           )
                           .map((line) => line.lineKey);
                         // 2026-10-11 사용자 요청: 한 번 처리하면 목록을 비운다 — 체크한 건 쿠폰·광고로, 체크 안 한 건 제외 이력으로.
-                        if (!window.confirm(`체크한 ${selected.length}건은 쿠폰·광고 대기목록으로, 체크 안 한 ${excluded.length}건은 제외 이력으로 보내 이 목록을 비웁니다. 진행할까요?`)) return;
+                        if (!window.confirm(`체크한 ${selected.length}건은 쿠폰·광고 대기목록으로 보내고, 체크 안 한 ${excluded.length}건은 이번 입고분만 목록에서 뺍니다(다음에 입고되면 다시 나옵니다). 진행할까요?`)) return;
                         void followUpAction(
                           {
                             action: "queueMarketing",
@@ -1141,11 +1175,11 @@ export default function ShipmentReceiptsPage() {
                             excludedLineKeys: excluded,
                             confirmMarketing: true,
                           },
-                          `쿠폰·광고 ${selected.length}건 모으고, ${excluded.length}건은 제외 이력으로 보내 목록을 비웠습니다.`,
+                          `쿠폰·광고 ${selected.length}건 모으고, 나머지 ${excluded.length}건은 이번 목록에서 뺐습니다.`,
                         );
                       }}
                     >
-                      체크한 상품은 쿠폰·광고로, 나머지는 제외하고 목록 비우기
+                      체크한 상품은 쿠폰·광고로 보내고 이번 목록 비우기
                     </button>
                   </div>
                 )}

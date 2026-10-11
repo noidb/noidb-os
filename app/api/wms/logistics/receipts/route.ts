@@ -12,13 +12,15 @@ import {
 } from "@/lib/wms/logistics-receipts";
 import { knownClosedShipmentNumbers, resetLogisticsReceiptHistory } from "@/lib/wms/logistics-receipt-reset";
 import { fetchProductCatalog } from "@/lib/wms/product-catalog";
+import { getCachedPurchaseOrderIndex } from "@/lib/wms/purchase-order-source/index";
+import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 import { readPickingWaveStore } from "@/lib/wms/picking-wave/server-store";
 import { openVendorOrdersBySku } from "@/lib/wms/open-vendor-orders";
 import { reconcileIncompleteVendorRoutes } from "@/lib/wms/logistics-receipt-routing";
 import { buildStatusLists } from "@/lib/wms/discontinue-lists";
 import { loadReregistrationLookup } from "@/lib/wms/reregistration-lookup";
 import { loadStatusSourceItems } from "@/lib/wms/status-list-sources";
-import { expandMarketingExclusions, MARKETING_PERMANENT_EXCLUDED_SKU_IDS } from "@/lib/wms/marketing-permanent-exclusions";
+import { expandMarketingExclusions, marketingExcludedListed, MARKETING_PERMANENT_EXCLUDED_SKU_IDS } from "@/lib/wms/marketing-permanent-exclusions";
 import { mutateWeeklyWorkspace, readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { activeMarketingExclusionKeys, logisticsFollowUpResponse } from "@/lib/wms/logistics-follow-up";
 import { readWeeklyDiscontinueQueue } from "@/lib/wms/weekly-discontinue-queue";
@@ -140,7 +142,7 @@ async function responseBoard() {
   const workspace = activeSnapshot(await fillMissingStatuses(stored, catalog));
   const currentTargets = logisticsTargetsFromSnapshot(workspace.logisticsReceipts);
   // 무조건 제외(같은 모델 전체). 제품DB를 못 읽으면 지정 SKU만 뺀다.
-  const exclusions = expandMarketingExclusions(catalog?.items || []);
+  const exclusions = expandMarketingExclusions(catalog?.items || [], marketingExcludedListed(workspace.marketingExcludedSkuIds));
   const base = baseline();
   const board = buildLogisticsReceiptBoard({
     targets: currentTargets,
@@ -159,8 +161,21 @@ async function responseBoard() {
   const marketingSkuIds = new Set(board.lines.filter(line => line.kind === "marketing").map(line => line.skuId));
   for (const item of catalog?.items || []) if (marketingSkuIds.has(item.skuId) && item.orderableStatus?.trim()) orderStatuses[item.skuId] = item.orderableStatus.trim();
   for (const key of Object.keys(orderStatuses)) if (!marketingSkuIds.has(key)) delete orderStatuses[key];
+  // 2026-10-11 사용자 요청: 마케팅 SKU에도 원발주서 매입가(공급가 > 매입가, 부가세 포함 단가)를 보여 준다. 못 읽으면 표시만 빠진다.
+  const marketingPrices: Record<string, number> = {};
+  try {
+    const marketingRows = board.lines.filter(line => line.kind === "marketing");
+    if (marketingRows.length) {
+      const index = await getCachedPurchaseOrderIndex();
+      for (const line of marketingRows) {
+        const document = index.byPurchaseOrderNumber.get(normalizeSkuId(line.purchaseOrderNumber));
+        const price = document?.records.find(record => record.skuId.trim() === line.skuId)?.unitPrice;
+        if (price) marketingPrices[line.lineKey] = price;
+      }
+    }
+  } catch { /* 원발주서를 못 읽어도 화면은 그대로 */ }
   const laterOrders = laterOrdersForMarketing(board.lines, (vendorStore?.supplierHubPurchaseOrders || []) as StoredOrder[]);
-  return { currentTargets, board, followUp, laterOrders, orderStatuses, productDbStatuses: productDbStatusBySku(catalog, shownSkuIds), productDbLooks: productDbLooksBySku(catalog, shownSkuIds),
+  return { currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, productDbStatuses: productDbStatusBySku(catalog, shownSkuIds), productDbLooks: productDbLooksBySku(catalog, shownSkuIds),
     supplyStatusChecks: stored.supplyStatusChecks || {},
     coveredByVendorOrder: stored.coveredByVendorOrder || {},
     statusLists: statusSource ? buildStatusLists(statusSource.items, {
@@ -170,7 +185,7 @@ async function responseBoard() {
       reregisteredSkuIds: rereg.reregisteredSkuIds,
     }) : null,
     openVendorOrders: Object.fromEntries(board.lines.filter(line => line.kind === "shortage" && openOrders[line.skuId]).map(line => [line.skuId, openOrders[line.skuId]])),
-    marketingExclusion: { listedSkuCount: MARKETING_PERMANENT_EXCLUDED_SKU_IDS.length, models: exclusions.models, skuCount: exclusions.skuIds.size } };
+    marketingExclusion: { listedSkuCount: MARKETING_PERMANENT_EXCLUDED_SKU_IDS.length, models: exclusions.models, skuCount: exclusions.skuIds.size, userSkus: workspace.marketingExcludedSkuIds || [] } };
 }
 
 /** Read-only: listing current dispatched and preserved Aside targets does not create business records. */
@@ -186,9 +201,9 @@ export async function GET(request: Request) {
       collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: [], knownShipmentNumbers }, { headers: withCors(request) });
   }
   try {
-    const { currentTargets, board, followUp, laterOrders, orderStatuses, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists } = await responseBoard();
+    const { currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists } = await responseBoard();
     return NextResponse.json({ ok: true, status: "ready", source: "supplier-hub-shipments", schemaVersion: 3,
-      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, laterOrders, orderStatuses, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists }, { headers });
+      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists }, { headers });
   } catch {
     return NextResponse.json({ ok: false, error: "쉽먼트 입고 수집 대상과 기록을 불러오지 못했습니다." }, { status: 500, headers });
   }

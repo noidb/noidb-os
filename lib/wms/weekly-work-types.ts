@@ -84,6 +84,8 @@ export interface WeeklyWorkspace {
   statusListCleared?: import("./discontinue-lists").StatusListCleared;
   /** 미납분을 이미 거래처에 보낸 발주(입고대기·입고지연)로 처리한 기록. 미납 줄 키별. */
   coveredByVendorOrder?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; vendors: string[]; sentOn: string; at: string }>;
+  /** 사용자가 화면에서 '마케팅 제외'로 누적한 SKU(2026-10-11). 같은 모델 전체가 쿠폰·광고 후보에서 자동으로 빠진다. */
+  marketingExcludedSkuIds?: Array<{ skuId: string; productName: string; at: string }>;
   /** 입고결과 처리기록을 새로 시작한 기준. 값이 다르면 이전 처리기록을 한 번 비운다. */
   logisticsReceiptEpoch?: string;
   materialSnapshot?: WeeklySnapshot;

@@ -14,6 +14,11 @@ export interface MarketingExclusionResult {
   models: string[];
 }
 
+/** 코드 목록 + 사용자가 화면에서 누적한 '마케팅 제외' SKU. */
+export function marketingExcludedListed(stored?: ReadonlyArray<{ skuId: string }>): string[] {
+  return [...new Set([...MARKETING_PERMANENT_EXCLUDED_SKU_IDS, ...(stored || []).map(item => item.skuId)])];
+}
+
 /** 지정 SKU → 같은 모델 SKU 전체로 넓힌다. 모델명이 비어 있는 SKU는 그 SKU만 제외한다. */
 export function expandMarketingExclusions(items: readonly Pick<ProductCatalogItem, "skuId" | "modelName">[], listed: readonly string[] = MARKETING_PERMANENT_EXCLUDED_SKU_IDS): MarketingExclusionResult {
   const skuIds = new Set(listed);

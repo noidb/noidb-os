@@ -19,16 +19,16 @@ function baseline(): LogisticsAsideBaseline {
   return { closedShipmentNumbers: raw.closedShipmentNumbers, pendingTargets: raw.pendingTargets as LogisticsAsideBaseline["pendingTargets"], completedMarketingSkuIds: raw.completedMarketingSkuIds as string[], excludedMarketingSkuIds: raw.excludedMarketingSkuIds as string[], handledLines: raw.handledLines as LogisticsAsideBaseline["handledLines"], source: raw.source ?? raw.sources ?? {} };
 }
 /** 입고결과 화면과 같은 기준으로 무조건 제외 SKU(같은 모델 전체)를 만든다. */
-async function marketingExcludedSkuIds(): Promise<string[]> {
+async function marketingExcludedSkuIds(stored?: ReadonlyArray<{ skuId: string }>): Promise<string[]> {
   const { fetchProductCatalog } = await import("@/lib/wms/product-catalog");
-  const { expandMarketingExclusions } = await import("@/lib/wms/marketing-permanent-exclusions");
+  const { expandMarketingExclusions, marketingExcludedListed } = await import("@/lib/wms/marketing-permanent-exclusions");
   const catalog = await fetchProductCatalog().catch(() => ({ configured: false, items: [] }));
-  return [...expandMarketingExclusions(catalog.configured ? catalog.items : []).skuIds];
+  return [...expandMarketingExclusions(catalog.configured ? catalog.items : [], marketingExcludedListed(stored)).skuIds];
 }
 async function current() {
   const stored = await readWeeklyWorkspace();
   if (stored.logisticsReceiptEpoch !== LOGISTICS_RECEIPT_EPOCH) throw new Error("먼저 쿠팡 쉽먼트 화면에서 입고결과를 가져와 주세요.");
-  const excluded = await marketingExcludedSkuIds();
+  const excluded = await marketingExcludedSkuIds(stored.marketingExcludedSkuIds);
   const workspace = stored, raw = baseline(), base = { ...raw, excludedMarketingSkuIds: [...new Set([...raw.excludedMarketingSkuIds, ...excluded])] }; const targets = logisticsTargetsFromSnapshot(workspace.logisticsReceipts);
   return { workspace, targets, board: buildLogisticsReceiptBoard({ targets, snapshot: workspace.logisticsReceipts, baseline: base, routes: workspace.logisticsReceiptRoutes, excludedMarketingLineKeys: [...activeMarketingExclusionKeys(workspace)] }) };
 }
@@ -126,6 +126,15 @@ export async function POST(request: NextRequest) {
         if (body.action === "queueMarketing") return queueMarketing(workspace, value.targets, value.board, body as any);
         if (body.action === "excludeMarketing") return setMarketingExclusion(workspace, value.board, body as any, false);
         if (body.action === "unqueueMarketing") return unqueueMarketing(workspace, value.board, body as any);
+        // 2026-10-11: '마케팅 제외' SKU 누적/해제 — 같은 모델 전체가 다음 목록부터 자동으로 빠진다.
+        if (body.action === "excludeMarketingSku" || body.action === "includeMarketingSku") {
+          const skuId = typeof body.skuId === "string" ? body.skuId.trim() : "";
+          if (!/^\d+$/.test(skuId)) throw new Error("SKU를 확인해 주세요.");
+          const list = (workspace.marketingExcludedSkuIds || []).filter(item => item.skuId !== skuId);
+          if (body.action === "excludeMarketingSku") list.push({ skuId, productName: typeof body.productName === "string" ? body.productName.slice(0, 200) : "", at: new Date().toISOString() });
+          workspace.marketingExcludedSkuIds = list;
+          return { ok: true, marketingExcludedSkuIds: list };
+        }
         if (body.action === "restoreMarketing") return setMarketingExclusion(workspace, value.board, body as any, true);
         if (body.action === "complete") {
           const proof = completeLogisticsFollowUp(workspace, value.board, body as any);
