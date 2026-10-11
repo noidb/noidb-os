@@ -45,7 +45,7 @@ type ApiPayload = {
   /** 마케팅 SKU의 발주상태(제품DB 발주가능상태, 없으면 쿠팡 조회값) */
   orderStatuses?: Record<string, string>;
   /** 마케팅 후보 줄별 원발주서 매입가(부가세 포함 단가) */
-  marketingPrices?: Record<string, number>;
+  marketingPrices?: Record<string, { price: number; fromOtherOrder?: boolean }>;
   /** 기존 발주로 처리한 미납 줄 */
   coveredByVendorOrder?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; vendors: string[]; sentOn: string; at: string }>;
   /** 공급상태가 정상이 아닌 SKU 확인 결과(단종확인·단종해제) */
@@ -1103,7 +1103,9 @@ export default function ShipmentReceiptsPage() {
                           </small>
                           <small>
                             입고예정일 {line.target.expectedDate || "-"}
-                            {payload?.marketingPrices?.[line.lineKey] ? ` · 매입가 ${payload.marketingPrices[line.lineKey].toLocaleString("ko-KR")}원` : ""}
+                            {payload?.marketingPrices?.[line.lineKey]
+                              ? ` · 매입가 ${payload.marketingPrices[line.lineKey].price.toLocaleString("ko-KR")}원${payload.marketingPrices[line.lineKey].fromOtherOrder ? " (다른 발주 기준)" : ""}`
+                              : ""}
                           </small>
                           {/* 2026-10-11 사용자 요청: 정상은 표시하지 않고, 정상이 아닌 것만 빨간색으로 눈에 띄게 */}
                           {payload?.orderStatuses?.[line.skuId] && payload.orderStatuses[line.skuId] !== "정상" && (

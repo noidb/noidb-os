@@ -162,15 +162,23 @@ async function responseBoard() {
   for (const item of catalog?.items || []) if (marketingSkuIds.has(item.skuId) && item.orderableStatus?.trim()) orderStatuses[item.skuId] = item.orderableStatus.trim();
   for (const key of Object.keys(orderStatuses)) if (!marketingSkuIds.has(key)) delete orderStatuses[key];
   // 2026-10-11 사용자 요청: 마케팅 SKU에도 원발주서 매입가(공급가 > 매입가, 부가세 포함 단가)를 보여 준다. 못 읽으면 표시만 빠진다.
-  const marketingPrices: Record<string, number> = {};
+  // 그 발주의 원발주서가 폴더에 없으면 같은 SKU의 가장 최근 원발주서 매입가로 채우고 표시를 구분한다(2026-10-11 사용자 확정).
+  const marketingPrices: Record<string, { price: number; fromOtherOrder?: boolean }> = {};
   try {
     const marketingRows = board.lines.filter(line => line.kind === "marketing");
     if (marketingRows.length) {
       const index = await getCachedPurchaseOrderIndex();
+      const latestBySku = new Map<string, { price: number; date: string }>();
+      for (const document of index.byPurchaseOrderNumber.values()) for (const record of document.records) {
+        if (!record.unitPrice) continue;
+        const skuId = record.skuId.trim(), previous = latestBySku.get(skuId);
+        if (!previous || (document.expectedArrivalDate || "") >= previous.date) latestBySku.set(skuId, { price: record.unitPrice, date: document.expectedArrivalDate || "" });
+      }
       for (const line of marketingRows) {
         const document = index.byPurchaseOrderNumber.get(normalizeSkuId(line.purchaseOrderNumber));
         const price = document?.records.find(record => record.skuId.trim() === line.skuId)?.unitPrice;
-        if (price) marketingPrices[line.lineKey] = price;
+        if (price) marketingPrices[line.lineKey] = { price };
+        else if (latestBySku.has(line.skuId)) marketingPrices[line.lineKey] = { price: latestBySku.get(line.skuId)!.price, fromOtherOrder: true };
       }
     }
   } catch { /* 원발주서를 못 읽어도 화면은 그대로 */ }
