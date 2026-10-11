@@ -1,13 +1,7 @@
-import { get } from "@vercel/blob";
+import { getFreshPrivateBlob } from "./fresh-blob-get";
 
-/** Match the existing WMS store on accounts without uncached Blob reads.
- * Mutable writes still use the returned ETag, so a cached read cannot overwrite newer data. */
+/** 캐시 없는 읽기가 막힌 계정에서도 최신 저장본을 읽는다(2026-10-11, fresh-blob-get 참고).
+ * Mutable writes still use the returned ETag, so a stale read cannot overwrite newer data. */
 export async function readWeeklyBlob(pathname: string) {
-  try {
-    return await get(pathname, { access: "private", useCache: false });
-  } catch (error) {
-    const value = error as { status?: unknown; statusCode?: unknown; message?: unknown } | null;
-    if (Number(value?.status ?? value?.statusCode) !== 403 && !/403 forbidden/i.test(String(value?.message || error))) throw error;
-    return get(pathname, { access: "private" });
-  }
+  return getFreshPrivateBlob(pathname);
 }

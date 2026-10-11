@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { BlobPreconditionFailedError, get, put } from "@vercel/blob";
+import { BlobPreconditionFailedError, put } from "@vercel/blob";
+import { getFreshPrivateBlob } from "../fresh-blob-get";
 import {
   emptyInvoiceGroupStoreSnapshot,
   type InvoiceGroupStoreMutation,
@@ -43,11 +44,6 @@ function normalizeEtag(value: string): string {
   return value.trim().replace(/^W\//i, "").replace(/^"|"$/g, "");
 }
 
-function isForbiddenConsistentRead(error: unknown): boolean {
-  if (!error || typeof error !== "object") return /403 forbidden/i.test(String(error));
-  const candidate = error as { status?: unknown; statusCode?: unknown; message?: unknown };
-  return Number(candidate.status ?? candidate.statusCode) === 403 || /403 forbidden/i.test(String(candidate.message || ""));
-}
 
 export function isBlobWriteConflict(error: unknown): boolean {
   if (error instanceof BlobPreconditionFailedError) return true;
@@ -77,12 +73,8 @@ export class InvoiceGroupStoreBusyError extends Error {
 
 async function readBlobSnapshot(): Promise<LoadedSnapshot> {
   let result;
-  try {
-    result = await get(BLOB_PATH, { access: "private", useCache: false });
-  } catch (error) {
-    if (!isForbiddenConsistentRead(error)) throw error;
-    result = await get(BLOB_PATH, { access: "private" });
-  }
+  // 2026-10-11: 캐시 없는 읽기가 막힌 계정에서도 최신 저장본을 읽는다(fresh-blob-get 참고).
+  result = await getFreshPrivateBlob(BLOB_PATH);
   if (!result || result.statusCode !== 200) return { snapshot: emptyInvoiceGroupStoreSnapshot() };
   const body = await new Response(result.stream).text();
   return { snapshot: normalizeSnapshot(JSON.parse(body)), etag: result.blob.etag };

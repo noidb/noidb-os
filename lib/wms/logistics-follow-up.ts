@@ -144,7 +144,11 @@ function transientRun(runs: WeeklyRun[], kind: "marketing" | "discontinue"): Wee
   const seenSku = new Set<string>();
   const items = runs.map(run => kind === "marketing" ? run.snapshot.couponItems[0] : run.snapshot.vendorItems[0])
     .filter(item => { if (!item || seenSku.has(item.skuId)) return false; seenSku.add(item.skuId); return true; });
-  const reviews = Object.fromEntries(runs.map(run => [run.logisticsReceiptLine!.skuId, { ...run.reviews[run.logisticsReceiptLine!.skuId], decision: "discontinue" as const }]));
+  // 2026-10-11: 쿠폰·광고 묶음에는 검토(reviews)가 없다. 예전엔 빈 검토(skuId 없음)를 만들어 파일 키 계산에서
+  // "Cannot read properties of undefined (reading 'localeCompare')"로 생성이 실패했다. 단종 묶음만 검토를 넣는다.
+  const reviews = kind === "discontinue"
+    ? Object.fromEntries(runs.map(run => [run.logisticsReceiptLine!.skuId, { ...run.reviews[run.logisticsReceiptLine!.skuId], skuId: run.logisticsReceiptLine!.skuId, decision: "discontinue" as const }]))
+    : {};
   const id = `LOGISTICS-FOLLOWUP-${hash([kind, runs.map(sourceKey)]).slice(0, 24)}`;
   const couponReceiptKeys: Record<string, string[]> | undefined = kind === "marketing" ? {} : undefined;
   if (couponReceiptKeys) for (const run of runs) (couponReceiptKeys[run.logisticsReceiptLine!.skuId] ||= []).push(sourceKey(run));

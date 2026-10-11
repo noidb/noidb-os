@@ -74,6 +74,21 @@ export async function POST(request: NextRequest) {
     const value = await current(); let response: unknown;
     let completedStatusRun: typeof value.workspace.runs[number] | undefined;
     let completedVendorLineKeys: string[] = [];
+    // 2026-10-11 사용자 요청: 미납분 재발주요청은 파일을 받지 않아도 '처리완료'로 이번 건을 끝낼 수 있게 한다.
+    // 같은 검사를 거치도록 파일을 만들어 근거로 저장한 뒤 바로 완료 처리한다.
+    if (body.action === "completeWithoutFile") {
+      if (body.kind !== "reorder") throw new Error("파일 없이 완료는 미납분 재발주요청만 할 수 있습니다.");
+      if (body.token !== logisticsFollowUpToken(value.workspace, value.board) || body.expectedCollectedAt !== value.board.collectedAt) throw new Error("목록이 변경됐습니다. 새로고침 후 다시 확인해 주세요.");
+      const generated = await generateLogisticsFollowUp(value.workspace, value.board, { ...body, kind: "reorder" } as any);
+      await saveWeeklyFile(`output-${generated.outputKey}.json`, Buffer.from(JSON.stringify(generated.saved)));
+      response = await mutateWeeklyWorkspace(workspace => {
+        if (logisticsFollowUpToken(workspace, value.board) !== body.token) throw new Error("처리 중 목록이 변경됐습니다. 새로고침 후 다시 눌러 주세요.");
+        workspace.logisticsFollowUp = { ...workspace.logisticsFollowUp, proofs: [...(workspace.logisticsFollowUp?.proofs || []), generated.proof] };
+        const proof = completeLogisticsFollowUp(workspace, value.board, { token: logisticsFollowUpToken(workspace, value.board), expectedCollectedAt: value.board.collectedAt, kind: "reorder", outputKey: generated.outputKey, confirmRequested: true, validatedSavedProof: structuredClone(generated.proof) });
+        return { proof, followUp: logisticsFollowUpResponse(workspace, value.board) };
+      });
+      return NextResponse.json({ ok: true, ...response as object }, { headers });
+    }
     if (body.action === "generate") {
       if (body.token !== logisticsFollowUpToken(value.workspace, value.board) || body.expectedCollectedAt !== value.board.collectedAt) throw new Error("목록이 변경됐습니다. 새로고침 후 다시 확인해 주세요.");
       const prepared = structuredClone(value.workspace);

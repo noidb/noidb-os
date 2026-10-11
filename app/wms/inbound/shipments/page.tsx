@@ -1451,6 +1451,18 @@ export default function ShipmentReceiptsPage() {
                             ? "미납분 재발주요청 파일 생성"
                             : "쿠폰·광고 파일 생성"}
                       </button>
+                      {followUpKind === "reorder" && !fixture && (
+                        <button
+                          className={styles.button}
+                          disabled={busy || !activeFollowUpQueue.length}
+                          onClick={() => {
+                            if (!window.confirm(`미납분 재발주요청 ${activeFollowUpQueue.length}건을 파일 없이 처리완료로 끝낼까요? (쿠팡에 요청을 이미 했거나 하지 않기로 한 경우)`)) return;
+                            void followUpAction({ action: "completeWithoutFile", kind: "reorder" }, `미납분 재발주요청 ${activeFollowUpQueue.length}건을 처리완료했습니다.`);
+                          }}
+                        >
+                          파일 없이 처리완료
+                        </button>
+                      )}
                       <button
                         className={`${styles.button} ${styles.buttonPrimary}`}
                         disabled={

@@ -13,7 +13,8 @@ import { deriveVendorOrderDrafts } from "../vendor-order/derive-drafts";
 import { getVendorLineDeletionBlockReason, VendorLineBatchDeleteConflictError } from "../vendor-order/delete-lines";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { BlobPreconditionFailedError, get, put } from "@vercel/blob";
+import { BlobPreconditionFailedError, put } from "@vercel/blob";
+import { getFreshPrivateBlob } from "../fresh-blob-get";
 import { basketKey, emptyPickingWaveStoreSnapshot, type PickingWaveStoreMutation, type PickingWaveStoreSnapshot } from "./shared-store-types";
 import { mergePoConfirmationRecords, removeTransientPoConfirmationRecordsForWave } from "../po-confirm-state";
 import { createShipmentsInState, deleteShipmentFromState, renameShipmentInState, updateShipmentGenerationInState, updateShipmentStatusInState } from "../shipment/state";
@@ -138,13 +139,8 @@ function useBlobStore(): boolean {
 async function readBlobSnapshot(): Promise<LoadedSnapshot> {
   ioStats.blobGets += 1;
   let result;
-  try {
-    result = await get(BLOB_PATH, { access: "private", useCache: false });
-  } catch (error) {
-    if (!isForbiddenConsistentRead(error)) throw error;
-    ioStats.blobGets += 1;
-    result = await get(BLOB_PATH, { access: "private" });
-  }
+  // 2026-10-11: 캐시 없는 읽기가 막힌 계정에서도 최신 저장본을 읽는다(fresh-blob-get 참고).
+  result = await getFreshPrivateBlob(BLOB_PATH);
   if (!result || result.statusCode !== 200) return { snapshot: emptyPickingWaveStoreSnapshot() };
   const body = await new Response(result.stream).text();
   return { snapshot: normalizeSnapshot(JSON.parse(body)), etag: result.blob.etag };
@@ -185,11 +181,6 @@ export function isRateLimit(error: unknown): boolean {
   return Number(candidate.status ?? candidate.statusCode) === 429 || /too many requests|rate.?limit|429/i.test(`${candidate.code || ""} ${candidate.message || ""}`);
 }
 
-function isForbiddenConsistentRead(error: unknown): boolean {
-  if (!error || typeof error !== "object") return /403 forbidden/i.test(String(error));
-  const candidate = error as { status?: unknown; statusCode?: unknown; message?: unknown };
-  return Number(candidate.status ?? candidate.statusCode) === 403 || /403 forbidden/i.test(String(candidate.message || ""));
-}
 
 export function retryAfterMs(error: unknown): number | null {
   const candidate = error && typeof error === "object" ? error as { retryAfter?: unknown; message?: unknown } : {};
