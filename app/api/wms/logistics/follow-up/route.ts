@@ -127,6 +127,9 @@ export async function POST(request: NextRequest) {
     } else {
       if (body.action === "complete") {
         if (typeof body.outputKey !== "string" || !/^[a-f0-9]{64}$/.test(body.outputKey)) throw new Error("완료할 생성 파일을 확인해 주세요.");
+        // 2026-10-11: 화면이 본 목록과 지금 저장본이 같은지는 여기서 한 번 확인한다. 단종 완료는 아래에서 상태요청 시트·
+        // 완료기록을 먼저 저장해 저장본 번호(revision)가 바뀌므로, 마지막 저장 단계에서는 그 뒤의 저장본 기준으로 완료한다.
+        if (body.token !== logisticsFollowUpToken(value.workspace, value.board) || body.expectedCollectedAt !== value.board.collectedAt) throw new Error("목록이 변경됐습니다. 새로고침 후 다시 확인해 주세요.");
         const saved = await readWeeklyFile(`output-${body.outputKey}.json`);
         if (!saved) throw new Error("생성한 파일 근거를 찾지 못했습니다. 파일을 다시 생성해 주세요.");
         try {
@@ -155,7 +158,7 @@ export async function POST(request: NextRequest) {
         if (body.action === "unqueueMarketing") return unqueueMarketing(workspace, value.board, body as any);
         if (body.action === "restoreMarketing") return setMarketingExclusion(workspace, value.board, body as any, true);
         if (body.action === "complete") {
-          const proof = completeLogisticsFollowUp(workspace, value.board, body as any);
+          const proof = completeLogisticsFollowUp(workspace, value.board, { ...(body as any), token: logisticsFollowUpToken(workspace, value.board) });
           const statusRun = completedStatusRun;
           if (statusRun) { const target = workspace.runs.find(run => run.id === statusRun.id); if (!target) throw new Error("단종 대기 업무를 찾지 못했습니다."); Object.assign(target, statusRun); }
           completeVendorReceiptOrigins(workspace, completedVendorLineKeys);
