@@ -67,3 +67,10 @@
 
 .completeButton { display: flex; width: 100%; justify-content: center; align-items: center; min-height: 48px; margin-top: 10px; border: 1px solid transparent; border-radius: 10px; background: #e3ece6; color: #4d6358; font-size: 14px; font-weight: 800; cursor: pointer; }
 .completeButton:disabled { opacity: .5; cursor: not-allowed; }
+
+/* 2026-10-11 사용자 요청: 메인 "진행 중 발주"와 아래 작업 메뉴가 똑같아 헷갈림 → 진행 중 발주는
+   세이지 테두리 패널 + 흰 카드 + 왼쪽 세이지 강조선, 메뉴는 제목·구분선으로 분리. 사이트 기존 색만 사용. */
+.inProgressPanel { padding: 14px; border: 1px solid #b7c8bb; border-radius: 14px; background: #e3ede6; }
+.inProgressPanel .row h2 { color: #4d6358; }
+.inProgressCard { background: #fff; border-color: #cfdcd3; border-left: 4px solid #60766a; }
+.menuHeading { margin: 22px 0 10px; padding: 14px 0 0 4px; border-top: 1px solid #e5dace; font-size: 15px; line-height: 1.5; color: #77716a; }

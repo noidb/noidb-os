@@ -20,6 +20,15 @@ export interface SkuSummaryRow {
   totalQuantity: number;
   purchaseOrderCount: number;
   fulfillmentCenters: string[];
+  /** 2026-10-11: "발주 N건"을 누르면 이 SKU가 들어 있는 발주서를 보여주기 위한 발주서별 수량. */
+  purchaseOrders: { purchaseOrderNumber: string; fulfillmentCenter: string; quantity: number }[];
+}
+
+/** 2026-10-11: 발주서 한 장의 전체 품목(화면에서 "발주서 보기"로 연다). */
+export interface SkuSummaryPurchaseOrder {
+  purchaseOrderNumber: string;
+  fulfillmentCenter: string;
+  lines: { skuId: string; barcode: string; productName: string; optionName: string; orderedQuantity: number }[];
 }
 
 export async function POST(request: NextRequest) {
@@ -30,26 +39,39 @@ export async function POST(request: NextRequest) {
 
     const index = await getCachedPurchaseOrderIndex();
     const missing: string[] = [];
-    const bySku = new Map<string, SkuSummaryRow & { poSet: Set<string>; centerSet: Set<string> }>();
+    const bySku = new Map<string, Omit<SkuSummaryRow, "purchaseOrders"> & { poSet: Set<string>; centerSet: Set<string>; poQuantity: Map<string, { fulfillmentCenter: string; quantity: number }> }>();
+    const documents: SkuSummaryPurchaseOrder[] = [];
     for (const po of requested) {
       const document = index.byPurchaseOrderNumber.get(po);
       if (!document) { missing.push(po); continue; }
+      documents.push({
+        purchaseOrderNumber: document.purchaseOrderNumber,
+        fulfillmentCenter: document.fulfillmentCenterName,
+        lines: document.records.map(record => ({ skuId: record.skuId.trim(), barcode: record.barcode, productName: record.productName, optionName: record.optionName, orderedQuantity: Number.isFinite(record.orderedQuantity) ? record.orderedQuantity : 0 })),
+      });
       for (const record of document.records) {
         const key = record.skuId.trim() || `바코드:${record.barcode}`;
         const entry = bySku.get(key) || {
           skuId: record.skuId.trim(), barcode: record.barcode, productName: record.productName, optionName: record.optionName,
-          totalQuantity: 0, purchaseOrderCount: 0, fulfillmentCenters: [], poSet: new Set<string>(), centerSet: new Set<string>(),
+          totalQuantity: 0, purchaseOrderCount: 0, fulfillmentCenters: [], poSet: new Set<string>(), centerSet: new Set<string>(), poQuantity: new Map(),
         };
-        entry.totalQuantity += Number.isFinite(record.orderedQuantity) ? record.orderedQuantity : 0;
+        const quantity = Number.isFinite(record.orderedQuantity) ? record.orderedQuantity : 0;
+        entry.totalQuantity += quantity;
+        const perPo = entry.poQuantity.get(record.purchaseOrderNumber) || { fulfillmentCenter: record.fulfillmentCenterName, quantity: 0 };
+        perPo.quantity += quantity;
+        entry.poQuantity.set(record.purchaseOrderNumber, perPo);
         entry.poSet.add(record.purchaseOrderNumber);
         entry.centerSet.add(record.fulfillmentCenterName);
         bySku.set(key, entry);
       }
     }
     const rows: SkuSummaryRow[] = [...bySku.values()]
-      .map(({ poSet, centerSet, ...row }) => ({ ...row, purchaseOrderCount: poSet.size, fulfillmentCenters: [...centerSet].sort((a, b) => a.localeCompare(b, "ko")) }))
+      .map(({ poSet, centerSet, poQuantity, ...row }) => ({
+        ...row, purchaseOrderCount: poSet.size, fulfillmentCenters: [...centerSet].sort((a, b) => a.localeCompare(b, "ko")),
+        purchaseOrders: [...poQuantity.entries()].map(([purchaseOrderNumber, value]) => ({ purchaseOrderNumber, ...value })).sort((a, b) => a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber)),
+      }))
       .sort((a, b) => a.productName.localeCompare(b.productName, "ko") || a.optionName.localeCompare(b.optionName, "ko") || a.skuId.localeCompare(b.skuId));
-    return NextResponse.json({ ok: true, rows, missingPurchaseOrderNumbers: missing });
+    return NextResponse.json({ ok: true, rows, documents, missingPurchaseOrderNumbers: missing });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "발주서 원본을 읽지 못했습니다." }, { status: 500 });
   }

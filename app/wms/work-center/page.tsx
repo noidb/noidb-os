@@ -162,7 +162,7 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
   if (groupsByDate.length === 0) return null;
 
   return (
-    <section className={styles.section} aria-labelledby="in-progress-orders-title">
+    <section className={`${styles.section} ${styles.inProgressPanel}`} aria-labelledby="in-progress-orders-title">
       <div className={styles.row}>
         <h2 id="in-progress-orders-title">진행 중 발주 · {groupsByDate.length}개</h2>
         <button type="button" disabled={refreshing} onClick={() => void refresh()}
@@ -178,7 +178,7 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
           const centers = [...new Set(groups.map(group => group.fulfillmentCenter))];
           const currentStage = groups.map(group => group.stage).sort((a, b) => INVOICE_GROUP_STAGE_ORDER.indexOf(a) - INVOICE_GROUP_STAGE_ORDER.indexOf(b))[0];
           return (
-            <div key={expectedDate} className={styles.work}>
+            <div key={expectedDate} className={`${styles.work} ${styles.inProgressCard}`}>
               <div className={styles.row}>
                 <h3>{formatInboundDateTitle(expectedDate)}</h3>
                 <span className={styles.badge}>● {INVOICE_GROUP_STAGE_LABEL[currentStage]}</span>
@@ -251,6 +251,8 @@ export default function WmsWorkCenterPage() {
 
       {/* 상단 메뉴 4개 — 예전 "오늘 할 일" 화면의 .tasks(태스크 카드) 패턴 재사용. 첫 카드는
        *  .task:first-child 규칙으로 자동으로 전체폭이 된다(기존 CSS 그대로, 새로 안 건드림). */}
+      {/* 2026-10-11 사용자 요청: 진행 중 발주 카드와 메뉴 카드가 똑같아 헷갈려서 제목·구분선으로 나눈다. */}
+      <h2 className={styles.menuHeading}>작업 메뉴</h2>
       <div className={styles.tasks}>
         <section className={styles.task}>
           <h2>발주서작업</h2>

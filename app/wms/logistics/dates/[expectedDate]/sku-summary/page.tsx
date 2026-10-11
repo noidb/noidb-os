@@ -8,7 +8,7 @@ import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import ProductThumb from "../ProductThumb";
 import { WMS_MOBILE_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
-import type { SkuSummaryRow } from "@/app/api/wms/logistics/sku-summary/route";
+import type { SkuSummaryPurchaseOrder, SkuSummaryRow } from "@/app/api/wms/logistics/sku-summary/route";
 
 /**
  * 발주 SKU별 총수량 (2026-10-02 신규 — 사용자 요청).
@@ -25,6 +25,10 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
   const [catalogBySku, setCatalogBySku] = useState<Map<string, ProductCatalogItem>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  // 2026-10-11 사용자 요청: "발주 N건"을 누르면 그 발주서를 본다(1건이면 바로 열고, 여러 건이면 목록을 펼침).
+  const [documents, setDocuments] = useState<Map<string, SkuSummaryPurchaseOrder>>(new Map());
+  const [expandedSku, setExpandedSku] = useState<string | null>(null);
+  const [openPo, setOpenPo] = useState<{ purchaseOrderNumber: string; highlightSku: string } | null>(null);
 
   useEffect(() => {
     if (!ready) return;
@@ -44,7 +48,7 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
           }).then(async response => {
             const data = await response.json().catch(() => ({}));
             if (!response.ok || !data.ok) throw new Error(data.error || "발주서 원본을 읽지 못했습니다.");
-            return data as { rows: SkuSummaryRow[]; missingPurchaseOrderNumbers: string[] };
+            return data as { rows: SkuSummaryRow[]; documents?: SkuSummaryPurchaseOrder[]; missingPurchaseOrderNumbers: string[] };
           }),
           fetch("/api/wms/product-catalog", { cache: "no-store" })
             .then(response => response.json())
@@ -54,6 +58,7 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
         if (cancelled) return;
         setCatalogBySku(new Map(catalogItems.map(item => [item.skuId, item])));
         setSummary({ poCount: purchaseOrderNumbers.length, centerCount: new Set(groups.map(group => group.fulfillmentCenter)).size, missing: result.missingPurchaseOrderNumbers });
+        setDocuments(new Map((result.documents || []).map(document => [document.purchaseOrderNumber, document])));
         setRows(result.rows);
       } catch (loadError) {
         if (!cancelled) setError(loadError instanceof Error ? loadError.message : "SKU 목록을 불러오지 못했습니다.");
@@ -99,24 +104,92 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
             {visibleRows.map(row => {
               const catalog = catalogBySku.get(row.skuId);
               const display = resolveDisplayNameAndOption(row.productName, row.optionName);
+              const rowKey = row.skuId || row.barcode;
               return (
-                <li key={row.skuId || row.barcode} style={{ display: "grid", gridTemplateColumns: "72px 1fr auto", gap: "10px", alignItems: "center", padding: "10px", borderRadius: "14px", background: "#fff", border: "1px solid #e5dace" }}>
+                <li key={rowKey} style={{ display: "grid", gridTemplateColumns: "72px 1fr auto", gap: "10px", alignItems: "center", padding: "10px", borderRadius: "14px", background: "#fff", border: "1px solid #e5dace" }}>
                   <ProductThumb key={row.skuId} catalog={catalog} skuId={row.skuId} alt={display.name} />
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: "13px", fontWeight: 700, lineHeight: 1.35 }}>{display.name}{display.option ? ` · ${display.option}` : ""}</div>
-                    <div style={{ fontSize: "12px", color: wmsColors.muted, marginTop: "3px" }}>SKU {row.skuId || "-"} · 발주 {row.purchaseOrderCount}건 · 센터 {row.fulfillmentCenters.length}곳</div>
+                    <div style={{ fontSize: "12px", color: wmsColors.muted, marginTop: "3px" }}>
+                      SKU {row.skuId || "-"} ·{" "}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const pos = row.purchaseOrders || [];
+                          if (pos.length === 1) setOpenPo({ purchaseOrderNumber: pos[0].purchaseOrderNumber, highlightSku: row.skuId });
+                          else setExpandedSku(previous => (previous === rowKey ? null : rowKey));
+                        }}
+                        style={{ border: 0, background: "none", padding: 0, font: "inherit", color: wmsColors.slateDark, textDecoration: "underline", cursor: "pointer" }}
+                      >
+                        발주 {row.purchaseOrderCount}건
+                      </button>
+                      {" "}· 센터 {row.fulfillmentCenters.length}곳
+                    </div>
                     <div style={{ fontSize: "12px", fontFamily: "monospace", marginTop: "2px" }}>{row.barcode}</div>
                     {catalog?.productLink && (
                       <a href={catalog.productLink} target="_blank" rel="noreferrer" style={{ fontSize: "12px", color: wmsColors.slateDark, display: "inline-block", marginTop: "3px" }}>제품링크 ↗</a>
                     )}
                   </div>
                   <div style={{ fontSize: "20px", fontWeight: 800, minWidth: "36px", textAlign: "right" }}>{row.totalQuantity}<span style={{ fontSize: "11px", fontWeight: 600 }}>개</span></div>
+                  {expandedSku === rowKey && (
+                    <div style={{ gridColumn: "1 / -1", display: "grid", gap: "6px" }}>
+                      {(row.purchaseOrders || []).map(po => (
+                        <button
+                          key={po.purchaseOrderNumber}
+                          type="button"
+                          className="softBeigeButton"
+                          onClick={() => setOpenPo({ purchaseOrderNumber: po.purchaseOrderNumber, highlightSku: row.skuId })}
+                          style={{ width: "100%", justifyContent: "space-between", minHeight: "40px", fontSize: "13px" }}
+                        >
+                          <span>발주서 {po.purchaseOrderNumber} · {po.fulfillmentCenter}</span>
+                          <span>이 상품 {po.quantity}개 →</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </li>
               );
             })}
           </ol>
         </>
       )}
+
+      {openPo && (() => {
+        const document = documents.get(openPo.purchaseOrderNumber);
+        const lineTotal = (document?.lines || []).reduce((sum, line) => sum + line.orderedQuantity, 0);
+        return (
+          <div role="dialog" aria-modal="true" onClick={() => setOpenPo(null)} style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,.3)", display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
+            <div onClick={event => event.stopPropagation()} style={{ width: "100%", maxWidth: "560px", maxHeight: "85vh", overflowY: "auto", boxSizing: "border-box", background: "#faf8f4", borderRadius: "14px", padding: "16px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
+                <div style={{ minWidth: 0 }}>
+                  <h2 style={{ margin: 0, fontSize: "17px" }}>발주서 {openPo.purchaseOrderNumber}</h2>
+                  {document && <p style={{ margin: "4px 0 0", fontSize: "12px", color: wmsColors.muted }}>{document.fulfillmentCenter} · 입고예정일 {expectedDate} · SKU {document.lines.length}종 · 총 {lineTotal}개</p>}
+                </div>
+                <button type="button" className="softBeigeButton" onClick={() => setOpenPo(null)} style={{ minHeight: "36px", padding: "6px 12px", fontSize: "13px", flexShrink: 0 }}>닫기</button>
+              </div>
+              {!document && <p style={{ fontSize: "13px", color: wmsColors.warn }}>이 발주서 원본을 찾지 못했습니다.</p>}
+              {document && (
+                <ol style={{ listStyle: "none", margin: "12px 0 0", padding: 0, display: "grid", gap: "6px" }}>
+                  {document.lines.map((line, index) => {
+                    const lineDisplay = resolveDisplayNameAndOption(line.productName, line.optionName);
+                    const highlighted = Boolean(openPo.highlightSku) && line.skuId === openPo.highlightSku;
+                    return (
+                      <li key={`${line.skuId}-${index}`} style={{ display: "grid", gridTemplateColumns: "72px 1fr auto", gap: "8px", alignItems: "center", padding: "8px", borderRadius: "10px", background: highlighted ? "#e3ede6" : "#fff", border: `1px solid ${highlighted ? "#60766a" : "#e5dace"}` }}>
+                        <ProductThumb catalog={catalogBySku.get(line.skuId)} skuId={line.skuId} alt={lineDisplay.name} />
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: "12px", fontWeight: 700, lineHeight: 1.35 }}>{lineDisplay.name}{lineDisplay.option ? ` · ${lineDisplay.option}` : ""}</div>
+                          <div style={{ fontSize: "11px", color: wmsColors.muted, marginTop: "2px" }}>SKU {line.skuId || "-"} · {line.barcode}</div>
+                        </div>
+                        <div style={{ fontSize: "16px", fontWeight: 800 }}>{line.orderedQuantity}<span style={{ fontSize: "11px", fontWeight: 600 }}>개</span></div>
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </main>
   );
 }
