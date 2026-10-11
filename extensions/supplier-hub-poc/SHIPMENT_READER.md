@@ -4,7 +4,7 @@
 
 - 사이트가 이미 받은 마감 쉽먼트는 상세를 다시 열지 않고, 새로 마감된 쉽먼트만 읽는다. 공급상태도 새 쉽먼트의 SKU만 조회한다.
 - 쿠팡 메뉴로 쉽먼트 목록에 들어와도(새로고침 없이) 칸이 뜬다.
-- 설치 파일: https://noidb-os.vercel.app/downloads/noidb-supplier-hub-0.9.9.zip — 압축을 풀고 `noidb-supplier-hub` 폴더를 크롬에서 "압축해제된 확장 프로그램을 로드합니다"로 불러온다(예전 0.9.8은 끈다).
+- 설치 파일: https://noidb-os.vercel.app/downloads/noidb-supplier-hub.zip (이름 고정) — 처음 한 번만 압축을 풀어 `noidb-supplier-hub` 폴더를 "압축해제된 확장 프로그램을 로드합니다"로 불러온다(예전 0.9.8은 끈다). 다음부터는 같은 폴더에 덮어쓰고 chrome://extensions에서 새로고침만 한다. 확장을 고치면 이 zip도 같은 이름으로 다시 만든다.
 
 발주번호를 하나씩 입력하지 않습니다. 사이트에 저장된 출고 건과 Aside에서 이어받은 대기 쉽먼트를 한 번에 확인합니다.
 
