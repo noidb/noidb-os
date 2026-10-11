@@ -42,6 +42,8 @@ type ApiPayload = {
   openVendorOrders?: Record<string, { quantity: number; vendors: string[]; sentOn: string; delayed: boolean }>;
   /** 마케팅 후보 줄별: 그 입고예정일 뒤에 같은 SKU로 나온 쿠팡 추가 발주(초도가 이미 팔린 신호) */
   laterOrders?: Record<string, { orderCount: number; quantity: number; latestExpectedDate: string }>;
+  /** 마케팅 SKU의 발주상태(제품DB 발주가능상태, 없으면 쿠팡 조회값) */
+  orderStatuses?: Record<string, string>;
   /** 기존 발주로 처리한 미납 줄 */
   coveredByVendorOrder?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; vendors: string[]; sentOn: string; at: string }>;
   /** 공급상태가 정상이 아닌 SKU 확인 결과(단종확인·단종해제) */
@@ -1084,7 +1086,26 @@ export default function ShipmentReceiptsPage() {
                           </small>
                           <small>
                             입고예정일 {line.target.expectedDate || "-"}
+                            {" · "}
+                            <b style={{ color: (payload?.orderStatuses?.[line.skuId] || "") === "정상" ? "#4d6358" : "#a6614e" }}>
+                              발주상태 {payload?.orderStatuses?.[line.skuId] || "확인안됨"}
+                            </b>
                           </small>
+                          {payload?.orderStatuses?.[line.skuId] && payload.orderStatuses[line.skuId] !== "정상" && !fixture && (
+                            supplyChecks[line.skuId]?.decision === "release" ? (
+                              <small style={{ color: "#4d6358", fontWeight: 700 }}>단종해제 대상에 넣음</small>
+                            ) : (
+                              <button
+                                type="button"
+                                className="softBeigeButton"
+                                disabled={busy}
+                                style={{ minHeight: "30px", padding: "4px 10px", fontSize: "12px", alignSelf: "flex-start", marginTop: "2px" }}
+                                onClick={(event) => { event.preventDefault(); void supplyCheck("release", line.skuId, line.productName); }}
+                              >
+                                단종해제 대상에 넣기
+                              </button>
+                            )
+                          )}
                           {laterOrders[line.lineKey] && (
                             <small style={{ color: "#a6614e", fontWeight: 700 }}>
                               추가발주 있음 · 발주 {laterOrders[line.lineKey].orderCount}건 {laterOrders[line.lineKey].quantity}개 · 최근 입고예정 {laterOrders[line.lineKey].latestExpectedDate || "-"}
