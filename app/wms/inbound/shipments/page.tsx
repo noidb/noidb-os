@@ -1132,6 +1132,8 @@ export default function ShipmentReceiptsPage() {
                             (line) => !isMarketingChecked(line.lineKey),
                           )
                           .map((line) => line.lineKey);
+                        // 2026-10-11 사용자 요청: 한 번 처리하면 목록을 비운다 — 체크한 건 쿠폰·광고로, 체크 안 한 건 제외 이력으로.
+                        if (!window.confirm(`체크한 ${selected.length}건은 쿠폰·광고 대기목록으로, 체크 안 한 ${excluded.length}건은 제외 이력으로 보내 이 목록을 비웁니다. 진행할까요?`)) return;
                         void followUpAction(
                           {
                             action: "queueMarketing",
@@ -1139,13 +1141,11 @@ export default function ShipmentReceiptsPage() {
                             excludedLineKeys: excluded,
                             confirmMarketing: true,
                           },
-                          selected.length
-                            ? `쿠폰·광고 대상 ${selected.length}건을 후속처리 목록에 모았습니다.`
-                            : "선택한 후보를 모두 제외로 저장했습니다.",
+                          `쿠폰·광고 ${selected.length}건 모으고, ${excluded.length}건은 제외 이력으로 보내 목록을 비웠습니다.`,
                         );
                       }}
                     >
-                      체크한 상품 쿠폰·광고 대기목록에 모으기
+                      체크한 상품은 쿠폰·광고로, 나머지는 제외하고 목록 비우기
                     </button>
                   </div>
                 )}
