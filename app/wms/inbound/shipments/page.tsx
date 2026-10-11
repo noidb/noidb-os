@@ -1519,6 +1519,7 @@ export default function ShipmentReceiptsPage() {
                         : "쿠폰·광고"}{" "}
                     처리완료 이력 · {proof.fileName} · 대상{" "}
                     {proofTargetCount(proof)}건
+                    {proof.completedAt ? ` · 완료 ${new Date(proof.completedAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}` : ""}
                   </p>
                 ))}
             </article>
