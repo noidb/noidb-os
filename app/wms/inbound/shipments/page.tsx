@@ -1020,7 +1020,7 @@ export default function ShipmentReceiptsPage() {
                     처음 1개 입고된 SKU입니다. 쿠폰 할인율은 기본 20%, 과재고·누적입고 100개 이상은 30%로 만들어집니다.
                     {payload?.marketingExclusion?.models.length ? ` 무조건 제외 모델 ${payload.marketingExclusion.models.join(", ")}는 목록에서 뺐습니다.` : ""}
                   </p>
-                  <div className={styles.selectButtons}>
+                  <div className={styles.selectButtons} style={marketingLines.some((line) => laterOrders[line.lineKey]) ? { gridTemplateColumns: "repeat(3, minmax(88px, 1fr))" } : undefined}>
                     <button
                       type="button"
                       className={`softSageButton ${styles.decisionButton}`}
@@ -1039,7 +1039,6 @@ export default function ShipmentReceiptsPage() {
                       <button
                         type="button"
                         className={`softBeigeButton ${styles.decisionButton}`}
-                        style={{ gridColumn: "1 / -1" }}
                         onClick={() => setMarketingSelected((current) => ({ ...current, ...Object.fromEntries(marketingLines.filter((line) => laterOrders[line.lineKey]).map((line) => [line.lineKey, false])) }))}
                       >
                         추가발주 나온 SKU 해제 ({marketingLines.filter((line) => laterOrders[line.lineKey]).length})
