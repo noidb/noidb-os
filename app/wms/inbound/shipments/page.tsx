@@ -1039,6 +1039,7 @@ export default function ShipmentReceiptsPage() {
                       <button
                         type="button"
                         className={`softBeigeButton ${styles.decisionButton}`}
+                        style={{ gridColumn: "1 / -1" }}
                         onClick={() => setMarketingSelected((current) => ({ ...current, ...Object.fromEntries(marketingLines.filter((line) => laterOrders[line.lineKey]).map((line) => [line.lineKey, false])) }))}
                       >
                         추가발주 나온 SKU 해제 ({marketingLines.filter((line) => laterOrders[line.lineKey]).length})
@@ -1081,16 +1082,17 @@ export default function ShipmentReceiptsPage() {
                         <span>
                           <strong>{productDbBadge(line.skuId)}{productTitle(line.skuId, line.productName)}</strong>
                           <small>
-                            SKU {line.skuId} · 쉽먼트 {line.shipmentNumber} ·
-                            발주 {line.purchaseOrderNumber}
+                            SKU {line.skuId} · 발주 {line.purchaseOrderNumber}
                           </small>
                           <small>
                             입고예정일 {line.target.expectedDate || "-"}
-                            {" · "}
-                            <b style={{ color: (payload?.orderStatuses?.[line.skuId] || "") === "정상" ? "#4d6358" : "#a6614e" }}>
-                              발주상태 {payload?.orderStatuses?.[line.skuId] || "확인안됨"}
-                            </b>
                           </small>
+                          {/* 2026-10-11 사용자 요청: 정상은 표시하지 않고, 정상이 아닌 것만 빨간색으로 눈에 띄게 */}
+                          {payload?.orderStatuses?.[line.skuId] && payload.orderStatuses[line.skuId] !== "정상" && (
+                            <small style={{ color: "#fff", background: "#b5524a", borderRadius: "6px", padding: "2px 8px", fontWeight: 800, alignSelf: "flex-start" }}>
+                              발주상태 {payload.orderStatuses[line.skuId]}
+                            </small>
+                          )}
                           {payload?.orderStatuses?.[line.skuId] && payload.orderStatuses[line.skuId] !== "정상" && !fixture && (
                             supplyChecks[line.skuId]?.decision === "release" ? (
                               <small style={{ color: "#4d6358", fontWeight: 700 }}>단종해제 대상에 넣음</small>

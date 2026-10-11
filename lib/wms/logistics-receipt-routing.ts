@@ -71,8 +71,12 @@ export function reserveLogisticsReceiptRoute(workspace: WeeklyWorkspace, targets
   if (input.decision === "marketing") {
     if (workspace.logisticsFollowUp?.blockedMarketingSkuIds?.includes(line.skuId)) throw new Error("단종 분류된 SKU는 쿠폰·광고 후보로 다시 보낼 수 없습니다.");
     if (!line.firstArrivalCandidate || !input.confirmMarketing) throw new Error("누적 입고·기존 쿠폰/광고를 확인한 후보만 보내 주세요.");
-    const other = Object.entries(workspace.logisticsReceiptRoutes || {}).find(([key, route]) => key !== input.lineKey && route.decision === "marketing"
-      && workspace.runs.find(run => run.id === route.runId)?.snapshot.couponItems.some(item => item.skuId === line.skuId));
+    // 2026-10-11: 재입고 때 다시 마케팅할 수 있도록, 쿠폰 등록을 마친(또는 완료된) 이전 마케팅은 겹침으로 보지 않는다.
+    const other = Object.entries(workspace.logisticsReceiptRoutes || {}).find(([key, route]) => {
+      if (key === input.lineKey || route.decision !== "marketing") return false;
+      const run = workspace.runs.find(item => item.id === route.runId);
+      return Boolean(run && !run.couponUploadedAt && !run.completedAt && run.snapshot.couponItems.some(item => item.skuId === line.skuId));
+    });
     if (other) throw new Error("이 SKU는 이미 쿠폰·광고 검토 목록에 있습니다.");
   } else if (line.kind !== "shortage" || line.state !== "ready" || !line.remainingQuantity || line.remainingQuantity <= 0) {
     throw new Error("확정된 미납수량이 있는 상품만 분류할 수 있습니다.");

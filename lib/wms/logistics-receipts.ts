@@ -366,9 +366,17 @@ export function buildLogisticsReceiptBoard(input: {
       }
     }
   }
-  const receivedBySku = new Map<string, number>();
+  // 2026-10-11 사용자 확정(소량 재입고 기준): 쉽먼트마다 SKU 입고량을 모아, 그 쉽먼트에서 1개 들어왔고
+  // 다른 쉽먼트에서도 매번 1개 이하로만 들어온 SKU를 후보로 올린다. 초도 1개 → 품절 → 추가발주 1개 재입고 때도 다시 마케팅한다.
+  const receivedByShipmentSku = new Map<string, number>();
+  const maxPerShipmentBySku = new Map<string, number>();
   for (const shipment of snapshot?.shipments || []) if (shipment.status === "마감") for (const line of shipment.lines) {
-    receivedBySku.set(line.skuId, (receivedBySku.get(line.skuId) || 0) + line.receivedQuantity);
+    const key = JSON.stringify([shipment.shipmentNumber, line.skuId]);
+    receivedByShipmentSku.set(key, (receivedByShipmentSku.get(key) || 0) + line.receivedQuantity);
+  }
+  for (const [key, quantity] of receivedByShipmentSku) {
+    const skuId = (JSON.parse(key) as [string, string])[1];
+    maxPerShipmentBySku.set(skuId, Math.max(maxPerShipmentBySku.get(skuId) || 0, quantity));
   }
   for (const target of targets) {
     const shipment = receiptByShipment.get(target.shipmentNumber);
@@ -376,7 +384,8 @@ export function buildLogisticsReceiptBoard(input: {
     for (const line of shipment.lines) {
       const sourceLineKey = logisticsReceiptLineKey(shipment.shipmentNumber, line.boxId, line.purchaseOrderNumber, line.skuId);
       const lineKey = `marketing::${sourceLineKey}`;
-      const isCandidate = !needsStatusRefresh && statusBySku.get(line.skuId) === "정상" && line.receivedQuantity > 0 && receivedBySku.get(line.skuId) === 1
+      const isCandidate = !needsStatusRefresh && statusBySku.get(line.skuId) === "정상" && line.receivedQuantity > 0
+        && receivedByShipmentSku.get(JSON.stringify([shipment.shipmentNumber, line.skuId])) === 1 && maxPerShipmentBySku.get(line.skuId) === 1
         && !completedMarketing.has(line.skuId) && !excludedMarketing.has(line.skuId);
       if (!isCandidate || excludedMarketingLines.has(lineKey)) continue;
       const route = input.routes?.[lineKey];
