@@ -1032,7 +1032,24 @@ export default function ShipmentReceiptsPage() {
                 </div>
                 {(
                   <div className={styles.marketingReview}>
-                    {marketingLines.map((line) => (
+                    {/* 2026-10-11 사용자 요청: 입고예정일별로 묶어 최근 날짜부터 보이고, 날짜마다 선택/해제 */}
+                    {[...new Set(marketingLines.map((line) => line.target.expectedDate || ""))]
+                      .sort((a, b) => b.localeCompare(a))
+                      .map((date) => {
+                        const dateLines = marketingLines.filter((line) => (line.target.expectedDate || "") === date);
+                        const checkedCount = dateLines.filter((line) => marketingSelected[line.lineKey] !== false).length;
+                        return (
+                          <div key={date || "none"} style={{ display: "contents" }}>
+                            <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 4px 2px", borderTop: "1px solid #e5dace", fontSize: "14px" }}>
+                              <strong>입고예정일 {date || "미정"} · {dateLines.length}건 (선택 {checkedCount})</strong>
+                              <span style={{ display: "flex", gap: "6px" }}>
+                                <button type="button" className={`softSageButton ${styles.decisionButton}`} style={{ minHeight: "32px", padding: "4px 10px", fontSize: "12px" }}
+                                  onClick={() => setMarketingSelected((current) => ({ ...current, ...Object.fromEntries(dateLines.map((line) => [line.lineKey, true])) }))}>이 날짜 선택</button>
+                                <button type="button" className={`softApricotButton ${styles.decisionButton}`} style={{ minHeight: "32px", padding: "4px 10px", fontSize: "12px" }}
+                                  onClick={() => setMarketingSelected((current) => ({ ...current, ...Object.fromEntries(dateLines.map((line) => [line.lineKey, false])) }))}>이 날짜 해제</button>
+                              </span>
+                            </div>
+                    {dateLines.map((line) => (
                       <label className={styles.choice} key={line.lineKey}>
                         <input
                           type="checkbox"
@@ -1057,6 +1074,9 @@ export default function ShipmentReceiptsPage() {
                         </span>
                       </label>
                     ))}
+                          </div>
+                        );
+                      })}
                     <button
                       className={`softPinkButton ${styles.fullButton}`}
                       disabled={busy}
@@ -1149,6 +1169,24 @@ export default function ShipmentReceiptsPage() {
               <p className={styles.meta}>
                 현재 대기 {activeFollowUpQueue.length}건
               </p>
+              {/* 2026-10-11 사용자 요청: 쿠폰·광고로 보낸 상품을 입고결과 마케팅 SKU 리스트로 되돌리기 */}
+              {followUpKind === "marketing" && !fixture && activeFollowUpQueue.length > 0 && (
+                <button
+                  type="button"
+                  className={styles.button}
+                  disabled={busy}
+                  style={{ marginBottom: "8px" }}
+                  onClick={() => {
+                    if (!window.confirm(`쿠폰·광고 대기 ${activeFollowUpQueue.length}건을 모두 입고결과의 마케팅 SKU 리스트로 되돌릴까요?`)) return;
+                    void followUpAction(
+                      { action: "unqueueMarketing", lineKeys: activeFollowUpQueue.map((item) => item.lineKey) },
+                      `쿠폰·광고 대기 ${activeFollowUpQueue.length}건을 마케팅 SKU 리스트로 되돌렸습니다.`,
+                    );
+                  }}
+                >
+                  전체 입고결과로 되돌리기
+                </button>
+              )}
               {activeFollowUpQueue.length ? (
                 <ul className={styles.workList}>
                   {activeFollowUpQueue.map((line) => (
@@ -1175,20 +1213,34 @@ export default function ShipmentReceiptsPage() {
                         <small className={styles.error}>{(line as { couponNote?: string }).couponNote}</small>
                       )}
                       {followUpKind === "marketing" && !fixture && (
-                        <button
-                          type="button"
-                          className={styles.button}
-                          disabled={busy}
-                          style={{ marginTop: "4px", alignSelf: "flex-start" }}
-                          onClick={() =>
-                            void followUpAction(
-                              { action: "excludeMarketing", lineKeys: [line.lineKey] },
-                              `${line.productName} · 쿠폰·광고에서 제외했습니다.`,
-                            )
-                          }
-                        >
-                          제외
-                        </button>
+                        <span style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
+                          <button
+                            type="button"
+                            className={styles.button}
+                            disabled={busy}
+                            onClick={() =>
+                              void followUpAction(
+                                { action: "unqueueMarketing", lineKeys: [line.lineKey] },
+                                `${line.productName} · 마케팅 SKU 리스트로 되돌렸습니다.`,
+                              )
+                            }
+                          >
+                            입고결과로 되돌리기
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.button}
+                            disabled={busy}
+                            onClick={() =>
+                              void followUpAction(
+                                { action: "excludeMarketing", lineKeys: [line.lineKey] },
+                                `${line.productName} · 쿠폰·광고에서 제외했습니다.`,
+                              )
+                            }
+                          >
+                            제외
+                          </button>
+                        </span>
                       )}
                       {line.blockedReason && (
                         <small className={styles.error}>

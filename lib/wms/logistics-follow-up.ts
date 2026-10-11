@@ -102,6 +102,28 @@ export function setMarketingExclusion(workspace: WeeklyWorkspace, board: Logisti
   workspace.logisticsFollowUp = { ...workspace.logisticsFollowUp, exclusions: history };
   return logisticsFollowUpResponse(workspace, board);
 }
+/**
+ * 2026-10-11 사용자 요청: 쿠폰·광고 대기목록으로 보낸 상품을 입고결과의 마케팅 SKU 리스트로 되돌린다.
+ * 쿠폰 등록을 완료했거나, 아직 처리완료 전인 생성 파일에 들어간 상품은 되돌리지 않는다.
+ */
+export function unqueueMarketing(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, input: { token: unknown; expectedCollectedAt: unknown; lineKeys: unknown }) {
+  assertCurrent(workspace, board, input.token, input.expectedCollectedAt); const keys = exactKeys(input.lineKeys);
+  const openProofKeys = new Set((workspace.logisticsFollowUp?.proofs || []).filter(proof => proof.kind === "marketing" && !proof.completedAt).flatMap(proof => proof.sourceKeys));
+  const routes = { ...workspace.logisticsReceiptRoutes };
+  const removeRunIds = new Set<string>();
+  for (const key of keys) {
+    const route = routes[key];
+    if (!route || route.decision !== "marketing") throw new Error("쿠폰·광고 대기목록에 있는 상품만 되돌릴 수 있습니다.");
+    const run = workspace.runs.find(item => item.id === route.runId);
+    if (run && (run.couponUploadedAt || run.completedAt)) throw new Error("쿠폰 등록을 완료한 상품은 되돌릴 수 없습니다.");
+    if (openProofKeys.has(key)) throw new Error("이미 쿠폰·광고 파일을 만든 상품입니다. 그 파일을 처리완료하거나 새로 만든 뒤 되돌려 주세요.");
+    removeRunIds.add(route.runId);
+    delete routes[key];
+  }
+  workspace.runs = workspace.runs.filter(run => !removeRunIds.has(run.id));
+  workspace.logisticsReceiptRoutes = routes;
+  return logisticsFollowUpResponse(workspace, board);
+}
 function batchRuns(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, kind: "marketing" | "discontinue") {
   const rows = allSourceLines(board); const excluded = activeMarketingExclusionKeys(workspace); const rejectedSku = new Set([...(workspace.logisticsFollowUp?.blockedMarketingSkuIds || []), ...workspace.runs.filter(isDiscontinue).map(run => run.logisticsReceiptLine!.skuId)]);
   const candidates = workspace.runs.filter(kind === "marketing" ? isMarketing : isDiscontinue).filter(run => !run.completedAt && (kind === "marketing" ? !run.couponUploadedAt && !excluded.has(sourceKey(run)) : !run.discontinueSubmittedAt && !run.discontinueSubmittedSkuIds?.includes(run.logisticsReceiptLine!.skuId)));
