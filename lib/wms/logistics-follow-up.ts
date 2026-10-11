@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { buildWeeklyOutput, weeklyOutputKey } from "./weekly-work-output";
 import { loadWeeklyAdvertisingSelection } from "./weekly-advertising-source";
-import { assertWeeklyCouponEligibility, validWeeklyCouponDate, weeklyKoreaDay, weeklyReviewToken } from "./weekly-work-state";
+import { assertWeeklyCouponEligibility, validWeeklyCouponDate, weeklyCouponBlocks, weeklyKoreaDay, weeklyReviewToken } from "./weekly-work-state";
 import { LOGISTICS_DISCONTINUE_STATUS_RUN_ID } from "./logistics-discontinue-adapter";
 import { weeklyDiscontinueQueueRequestIds } from "./weekly-discontinue-queue";
 import { receiptSourceFingerprint, reserveLogisticsReceiptRoute, type RouteLogisticsReceiptInput } from "./logistics-receipt-routing";
@@ -33,7 +33,8 @@ export function completeVendorReceiptOrigins(workspace: WeeklyWorkspace, lineKey
 function line(row: LogisticsReceiptBoardLine): LogisticsFollowUpLine {
   return { lineKey: row.lineKey, sourceLineKey: row.sourceLineKey, shipmentNumber: row.shipmentNumber, boxId: row.boxId,
     purchaseOrderNumber: row.purchaseOrderNumber, skuId: row.skuId, productName: row.productName, barcode: row.barcode,
-    kind: row.kind, sourceFingerprint: receiptSourceFingerprint(row), state: row.state, route: row.route && { decision: row.route.decision, runId: row.route.runId, completed: row.route.completed } };
+    kind: row.kind, sourceFingerprint: receiptSourceFingerprint(row), state: row.state, route: row.route && { decision: row.route.decision, runId: row.route.runId, completed: row.route.completed },
+    expectedDate: row.target?.expectedDate || undefined, ...(row.kind === "shortage" && row.remainingQuantity != null ? { shortageQuantity: row.remainingQuantity } : {}) };
 }
 export function activeMarketingExclusionKeys(workspace: WeeklyWorkspace) { return new Set((workspace.logisticsFollowUp?.exclusions || []).filter(item => !item.restoredAt).map(item => item.lineKey)); }
 function allSourceLines(board: LogisticsReceiptBoard) { return new Map(board.lines.map(row => [row.lineKey, row])); }
@@ -45,13 +46,15 @@ export function logisticsFollowUpResponse(workspace: WeeklyWorkspace, board: Log
   const select = (predicate: (run: WeeklyRun) => boolean): LogisticsFollowUpLine[] => workspace.runs.filter(predicate).map(run => lines.get(sourceKey(run))).filter((row): row is LogisticsReceiptBoardLine => Boolean(row)).map(line);
   const marketing = board.lines.filter(row => row.kind === "marketing" && row.state === "ready" && !excluded.has(row.lineKey)).map(line);
   const reorderQueue = pendingReorderQueue(workspace);
+  const couponBlockReasons = new Map(weeklyCouponBlocks(workspace).map(block => [block.skuId, `쿠폰 파일에서 빠짐 · ${block.reason}`]));
   const reorder = reorderQueue.sources.flatMap(source => {
     const run = workspace.runs.find(item => item.id === source.id); const sourceRows = source.kind === "logistics" ? source.rows || [] : reorderQueue.rows.filter(row => source.pairs.includes(reorderPair(row)));
     const receipt = run && logisticsReorderLines(run).find(line => line.lineKey === source.lineKey);
-    return sourceRows.map(row => ({ lineKey: source.kind === "logistics" ? source.lineKey! : JSON.stringify([source.id, reorderPair(row)]), sourceLineKey: source.kind === "logistics" ? source.lineKey! : source.id, shipmentNumber: receipt?.shipmentNumber || "", boxId: receipt?.boxId || "", purchaseOrderNumber: row.purchaseOrderNumber, skuId: row.skuId, productName: row.productName, barcode: run?.snapshot.vendorItems.find(item => item.skuId === row.skuId)?.barcode || "", kind: "shortage" as const, sourceFingerprint: reorderDigest([source.id, source.lineKey, row]), state: "ready" as const }));
+    return sourceRows.map(row => ({ lineKey: source.kind === "logistics" ? source.lineKey! : JSON.stringify([source.id, reorderPair(row)]), sourceLineKey: source.kind === "logistics" ? source.lineKey! : source.id, shipmentNumber: receipt?.shipmentNumber || "", boxId: receipt?.boxId || "", purchaseOrderNumber: row.purchaseOrderNumber, skuId: row.skuId, productName: row.productName, barcode: run?.snapshot.vendorItems.find(item => item.skuId === row.skuId)?.barcode || "", kind: "shortage" as const, sourceFingerprint: reorderDigest([source.id, source.lineKey, row]), state: "ready" as const,
+      expectedDate: (receipt?.shipmentNumber && workspace.logisticsReceipts?.shipmentMetadata?.[receipt.shipmentNumber]?.expectedDate) || undefined, shortageQuantity: row.shortageQuantity }));
   });
   return { ok: true, token: logisticsFollowUpToken(workspace, board), collectedAt: board.collectedAt,
-    queues: { marketing: select(run => isMarketing(run) && !run.couponUploadedAt && !run.completedAt && !excluded.has(sourceKey(run))).map(row => ({ ...row, blockedReason: workspace.logisticsFollowUp?.blockedMarketingSkuIds?.includes(row.skuId) ? "단종 분류되어 쿠폰·광고 생성이 차단되었습니다." : undefined })), discontinue: select(run => isDiscontinue(run) && !run.discontinueSubmittedAt && !run.discontinueSubmittedSkuIds?.includes(run.logisticsReceiptLine!.skuId) && !run.completedAt), reorder, vendor: select(run => isVendor(run) && !run.completedAt) },
+    queues: { marketing: select(run => isMarketing(run) && !run.couponUploadedAt && !run.completedAt && !excluded.has(sourceKey(run))).map(row => ({ ...row, blockedReason: workspace.logisticsFollowUp?.blockedMarketingSkuIds?.includes(row.skuId) ? "단종 분류되어 쿠폰·광고 생성이 차단되었습니다." : undefined, couponNote: couponBlockReasons.get(row.skuId) })), discontinue: select(run => isDiscontinue(run) && !run.discontinueSubmittedAt && !run.discontinueSubmittedSkuIds?.includes(run.logisticsReceiptLine!.skuId) && !run.completedAt), reorder, vendor: select(run => isVendor(run) && !run.completedAt) },
     exclusionHistory: workspace.logisticsFollowUp?.exclusions || [], proofs: workspace.logisticsFollowUp?.proofs || [] };
 }
 function assertCurrent(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, token: unknown, collectedAt: unknown) {
@@ -90,7 +93,10 @@ export function setMarketingExclusion(workspace: WeeklyWorkspace, board: Logisti
   for (const key of keys) {
     const item = [...history].reverse().find(value => value.lineKey === key && !value.restoredAt);
     if (restore) { if (!item) throw new Error("복원할 제외 이력이 없습니다."); if (workspace.logisticsFollowUp?.blockedMarketingSkuIds?.includes(item.skuId)) throw new Error("단종 분류된 SKU는 마케팅 후보로 복원할 수 없습니다."); item.restoredAt = at; continue; }
-    const row = rows.get(key); if (!row || row.kind !== "marketing" || item || row.state !== "ready") throw new Error("현재 초도 입고 후보만 제외할 수 있습니다.");
+    // 2026-10-11: 쿠폰·광고 대기목록에 이미 모은 줄(routed)도 파일 생성 전이면 제외할 수 있다(batchRuns가 제외 키를 뺀다).
+    const row = rows.get(key);
+    const queuedRun = row?.state === "routed" ? workspace.runs.find(run => isMarketing(run) && sourceKey(run) === key && !run.couponUploadedAt && !run.completedAt) : undefined;
+    if (!row || row.kind !== "marketing" || item || (row.state !== "ready" && !queuedRun)) throw new Error("현재 초도 입고 후보나 쿠폰·광고 대기 상품만 제외할 수 있습니다.");
     history.push({ lineKey: key, sourceFingerprint: receiptSourceFingerprint(row), skuId: row.skuId, at });
   }
   workspace.logisticsFollowUp = { ...workspace.logisticsFollowUp, exclusions: history };
@@ -112,10 +118,14 @@ function batchRuns(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, kin
   return deduped;
 }
 function transientRun(runs: WeeklyRun[], kind: "marketing" | "discontinue"): WeeklyRun {
-  const items = runs.map(run => kind === "marketing" ? run.snapshot.couponItems[0] : run.snapshot.vendorItems[0]);
+  // 2026-10-11: 같은 SKU가 여러 쉽먼트에서 모이면 쿠폰 파일에는 한 줄만 넣는다(입고 근거는 모두 남김).
+  const seenSku = new Set<string>();
+  const items = runs.map(run => kind === "marketing" ? run.snapshot.couponItems[0] : run.snapshot.vendorItems[0])
+    .filter(item => { if (!item || seenSku.has(item.skuId)) return false; seenSku.add(item.skuId); return true; });
   const reviews = Object.fromEntries(runs.map(run => [run.logisticsReceiptLine!.skuId, { ...run.reviews[run.logisticsReceiptLine!.skuId], decision: "discontinue" as const }]));
   const id = `LOGISTICS-FOLLOWUP-${hash([kind, runs.map(sourceKey)]).slice(0, 24)}`;
-  const couponReceiptKeys = kind === "marketing" ? Object.fromEntries(runs.map(run => [run.logisticsReceiptLine!.skuId, [sourceKey(run)]])) : undefined;
+  const couponReceiptKeys: Record<string, string[]> | undefined = kind === "marketing" ? {} : undefined;
+  if (couponReceiptKeys) for (const run of runs) (couponReceiptKeys[run.logisticsReceiptLine!.skuId] ||= []).push(sourceKey(run));
   return { id, revision: 0, updatedAt: now(), sentVendors: {},
     snapshot: { id, rulesVersion: 5, sourceToken: hash(runs.map(sourceKey)), createdAt: now(), period: { startDate: weeklyKoreaDay(), endDate: weeklyKoreaDay() }, source: { files: [], latestActualDate: "", firstActualDate: "", eventCount: 0, duplicateCount: 0, selectedEventCount: 0, mode: "browser" }, couponItems: kind === "marketing" ? items as any : [], couponReceiptKeys, vendorItems: kind === "discontinue" ? items as any : [], warnings: [], blockers: [] }, reviews, reviewedSkuIds: Object.keys(reviews), itemRoutes: {} };
 }
@@ -141,7 +151,20 @@ export async function generateLogisticsFollowUp(workspace: WeeklyWorkspace, boar
     const output = { fileName: proof.fileName, base64: buffer.toString("base64"), generated: { at: proof.at, reviewToken: queue.token, couponCount: 0, vendors: [], discontinueCount: 0, reorderCount: rows.length } };
     return { fileName: output.fileName, base64: output.base64, outputKey, proof, saved: { output, proof, digest: hash([output.fileName, output.base64, output.generated, proof]) } };
   }
-  const runs = batchRuns(workspace, board, kind);
+  let runs = batchRuns(workspace, board, kind);
+  // 2026-10-11: 쿠폰이 아직 걸려 있거나 예전 쿠폰 종료일을 확인하지 못한 SKU가 하나라도 있으면 전체 생성이 막혔다.
+  // 그 SKU만 이번 파일에서 빼고(대기목록에 남김) 나머지로 만든다. 빠진 목록은 화면에 알린다.
+  const skippedCoupons: Array<{ skuId: string; productName: string; reason: string }> = [];
+  if (kind === "marketing") {
+    const blocks = new Map(weeklyCouponBlocks(workspace).map(block => [block.skuId, block.reason]));
+    const seen = new Set<string>();
+    for (const run of runs) {
+      const skuId = run.logisticsReceiptLine?.skuId || run.snapshot.couponItems[0]?.skuId || "";
+      if (blocks.has(skuId) && !seen.has(skuId)) { seen.add(skuId); skippedCoupons.push({ skuId, productName: run.snapshot.couponItems[0]?.productName || "", reason: blocks.get(skuId)! }); }
+    }
+    runs = runs.filter(run => !blocks.has(run.logisticsReceiptLine?.skuId || run.snapshot.couponItems[0]?.skuId || ""));
+    if (!runs.length && skippedCoupons.length) throw new Error(`쿠폰이 아직 걸려 있거나 예전 쿠폰 종료일을 확인하지 못한 상품만 남아 파일을 만들 수 없습니다: ${skippedCoupons.slice(0, 5).map(item => `SKU ${item.skuId}(${item.reason})`).join(", ")}${skippedCoupons.length > 5 ? ` 외 ${skippedCoupons.length - 5}건` : ""}`);
+  }
   const statusRun = kind === "discontinue" ? workspace.runs.find(item => item.id === LOGISTICS_DISCONTINUE_STATUS_RUN_ID) : undefined;
   const statusSkuIds = statusRun ? Object.values(statusRun.reviews).filter(review => review.decision === "discontinue" && statusRun.discontinueQueueRequestIds?.[review.skuId]?.length && !statusRun.discontinueSubmittedSkuIds?.includes(review.skuId)).map(review => review.skuId).sort() : [];
   const requestIds = statusRun ? weeklyDiscontinueQueueRequestIds(statusRun, statusSkuIds) : [];
@@ -171,7 +194,7 @@ export async function generateLogisticsFollowUp(workspace: WeeklyWorkspace, boar
     proof.sourceKeys.push(...requestIds.map(id => `status::${id}`));
   }
   const digest = hash([output.fileName, output.base64, output.generated, proof]);
-  return { fileName: output.fileName, base64: output.base64, outputKey, proof, saved: { output, proof, digest } };
+  return { fileName: output.fileName, base64: output.base64, outputKey, proof, saved: { output, proof, digest }, skippedCoupons };
 }
 export function completeLogisticsFollowUp(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, input: { token: unknown; expectedCollectedAt: unknown; kind: unknown; outputKey: unknown; confirmCoupon?: unknown; confirmAdvertising?: unknown; confirmSubmitted?: unknown; confirmRequested?: unknown; couponStartsOn?: unknown; couponExpiresOn?: unknown; validatedSavedProof?: LogisticsFollowUpProof }, at = now()) {
   assertCurrent(workspace, board, input.token, input.expectedCollectedAt); if (input.kind !== "marketing" && input.kind !== "discontinue" && input.kind !== "reorder" || typeof input.outputKey !== "string") throw new Error("완료할 생성 파일을 확인해 주세요.");

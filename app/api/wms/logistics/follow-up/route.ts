@@ -95,7 +95,7 @@ export async function POST(request: NextRequest) {
           workspace.logisticsFollowUp = prepared.logisticsFollowUp;
         }
         workspace.logisticsFollowUp = { ...workspace.logisticsFollowUp, proofs: [...(workspace.logisticsFollowUp?.proofs || []).filter(item => item.outputKey !== generated.outputKey), generated.proof] };
-        return { fileName: generated.fileName, base64: generated.base64, outputKey: generated.outputKey, proof: generated.proof, followUp: logisticsFollowUpResponse(workspace, value.board) };
+        return { fileName: generated.fileName, base64: generated.base64, outputKey: generated.outputKey, proof: generated.proof, followUp: logisticsFollowUpResponse(workspace, value.board), skippedCoupons: "skippedCoupons" in generated ? generated.skippedCoupons : [] };
       });
     } else {
       if (body.action === "complete") {

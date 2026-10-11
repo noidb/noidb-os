@@ -239,7 +239,7 @@ export default function ShipmentReceiptsPage() {
       // 다시 검사하므로, 보내기 직전에 최신 확인값을 받아 쓴다.
       let token = followUp.token;
       let expectedCollectedAt = payload.collectedAt || payload.board.collectedAt;
-      if (input.action === "queueMarketing") {
+      if (input.action === "queueMarketing" || input.action === "excludeMarketing" || input.action === "restoreMarketing") {
         const fresh = await fetch("/api/wms/logistics/follow-up", { cache: "no-store" });
         const freshData = await fresh.json().catch(() => ({}));
         if (!fresh.ok || !freshData.token) throw new Error(freshData.error || "최신 후속 처리 목록을 확인하지 못했습니다.");
@@ -269,7 +269,10 @@ export default function ShipmentReceiptsPage() {
         }));
       }
       await load(true);
-      setMessage(success);
+      const skipped = Array.isArray(data.skippedCoupons) ? (data.skippedCoupons as Array<{ skuId: string; reason: string }>) : [];
+      setMessage(skipped.length
+        ? `${success} 쿠폰이 아직 걸려 있거나 예전 쿠폰 종료일을 모르는 ${skipped.length}건은 이번 파일에서 빼고 대기목록에 남겼습니다(목록에 이유 표시).`
+        : success);
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -537,6 +540,8 @@ export default function ShipmentReceiptsPage() {
   }
 
   const lines = payload?.board.lines || [];
+  const lineByKey = new Map(lines.map((line) => [line.lineKey, line]));
+  const lineBySku = new Map(lines.map((line) => [line.skuId, line]));
   const supplyChecks = payload?.supplyStatusChecks || {};
   // 공급상태가 정상이 아니어서 검토로 빠진 줄(단종확인·단종해제 대상)
   const isSupplyReview = (line: LogisticsReceiptBoardLine) =>
@@ -1151,6 +1156,38 @@ export default function ShipmentReceiptsPage() {
                         SKU {line.skuId} · 쉽먼트 {line.shipmentNumber} · 발주{" "}
                         {line.purchaseOrderNumber}
                       </small>
+                      {/* 2026-10-11 사용자 요청: 어느 입고예정일 건의 미납인지, 몇 개 미납인지 */}
+                      {(() => {
+                        const extra = line as { expectedDate?: string; shortageQuantity?: number };
+                        const shortage = line.kind === "shortage" && extra.shortageQuantity ? extra.shortageQuantity : 0;
+                        if (!extra.expectedDate && !shortage) return null;
+                        return (
+                          <small>
+                            {extra.expectedDate ? `입고예정일 ${extra.expectedDate}` : ""}
+                            {extra.expectedDate && shortage ? " · " : ""}
+                            {shortage ? <b style={{ color: "#a6614e" }}>미납 {shortage}개</b> : null}
+                          </small>
+                        );
+                      })()}
+                      {(line as { couponNote?: string }).couponNote && (
+                        <small className={styles.error}>{(line as { couponNote?: string }).couponNote}</small>
+                      )}
+                      {followUpKind === "marketing" && !fixture && (
+                        <button
+                          type="button"
+                          className={styles.button}
+                          disabled={busy}
+                          style={{ marginTop: "4px", alignSelf: "flex-start" }}
+                          onClick={() =>
+                            void followUpAction(
+                              { action: "excludeMarketing", lineKeys: [line.lineKey] },
+                              `${line.productName} · 쿠폰·광고에서 제외했습니다.`,
+                            )
+                          }
+                        >
+                          제외
+                        </button>
+                      )}
                       {line.blockedReason && (
                         <small className={styles.error}>
                           {line.blockedReason}
@@ -1317,7 +1354,11 @@ export default function ShipmentReceiptsPage() {
                       className={styles.historyItem}
                       key={`${line.lineKey}:${line.at}:${index}`}
                     >
-                      <strong>SKU {line.skuId}</strong>
+                      {/* 2026-10-11 사용자 요청: SKU만으로는 뭔지 몰라 상품명도 표시 */}
+                      <strong>
+                        {lineByKey.get(line.lineKey)?.productName || lineBySku.get(line.skuId)?.productName || "상품명 없음"}
+                        <small style={{ display: "block", fontWeight: 400 }}>SKU {line.skuId}{lineByKey.get(line.lineKey)?.shipmentNumber ? ` · 쉽먼트 ${lineByKey.get(line.lineKey)!.shipmentNumber}` : ""}</small>
+                      </strong>
                       {line.restoredAt ? (
                         <span className={styles.meta}>복원완료</span>
                       ) : (
