@@ -3,7 +3,9 @@ export type CenterAddressVerificationSource =
   | "kakao-postcode"
   | "center-address-ledger"
   | "verified-postal-codes"
-  | "hanjin-template";
+  | "hanjin-template"
+  /** 사용자가 화면에서 직접 확인해 입력한 우편번호 */
+  | "manual";
 
 export interface CenterAddressLedgerEntry {
   key: string;

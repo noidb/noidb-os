@@ -38,6 +38,10 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
   const [invoiceMessage, setInvoiceMessage] = useState<string | null>(null);
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
 
+  const [postalCodeDrafts, setPostalCodeDrafts] = useState<Record<string, string>>({});
+  const [savingPostalCode, setSavingPostalCode] = useState(false);
+  const [postalCodeError, setPostalCodeError] = useState<string | null>(null);
+
   const [generatingShipment, setGeneratingShipment] = useState(false);
   const [shipmentMessage, setShipmentMessage] = useState<string | null>(null);
   const [shipmentError, setShipmentError] = useState<string | null>(null);
@@ -115,6 +119,24 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     } catch (cause) {
       if (requestId === loadRequestId.current) setPreviewError(cause instanceof Error ? cause.message : "송장 완전성 검사에 실패했습니다.");
     } finally { if (requestId === loadRequestId.current) setPreviewLoading(false); }
+  }
+
+  /** 자동 주소검색으로 못 찾은 센터의 우편번호를 사용자가 직접 입력해 센터주소 원장에 저장한다. 다음부터는 원장 값을 그대로 쓴다. */
+  async function handleSaveManualPostalCode(fulfillmentCenterName: string, sourceAddress: string) {
+    const key = `${fulfillmentCenterName}\0${sourceAddress}`;
+    const postalCode = (postalCodeDrafts[key] || "").trim();
+    if (!/^\d{5}$/.test(postalCode) || savingPostalCode) return;
+    setSavingPostalCode(true);
+    setPostalCodeError(null);
+    try {
+      const response = await fetch("/api/wms/center-address/manual", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fulfillmentCenterName, sourceAddress, postalCode }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "우편번호를 저장하지 못했습니다.");
+      setPostalCodeDrafts(current => { const next = { ...current }; delete next[key]; return next; });
+      await handlePreview(groups);
+    } catch (error) {
+      setPostalCodeError(error instanceof Error ? error.message : "우편번호를 저장하지 못했습니다.");
+    } finally { setSavingPostalCode(false); }
   }
 
   async function handleRefresh(force = false) {
@@ -518,10 +540,24 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
           {preview && <span style={{ display: "block", color: preview.canGenerate ? wmsColors.greenDark : wmsColors.warnText }}>{preview.canGenerate ? "송장 생성 준비 완료" : "송장 생성 전 확인이 필요합니다"}</span>}
           {preview?.blockingReasons?.length ? <div style={{ color: "#b33f35", marginTop: "4px" }}>{preview.blockingReasons.join(" · ")}</div> : null}
           {preview?.destinationResolutions?.filter(item => item.status !== "approved").map(item => (
-            <div key={`${item.fulfillmentCenterName}\0${item.sourceAddress}`} style={{ color: "#b33f35", marginTop: "4px", fontSize: "13px" }}>
+            <div key={`${item.fulfillmentCenterName}\0${item.sourceAddress}`} style={{ color: "#b33f35", marginTop: "6px", fontSize: "13px" }}>
               우편번호 미등록: {item.fulfillmentCenterName} · {item.sourceAddress}{item.reason ? ` (${item.reason})` : ""}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginTop: "6px" }}>
+                <input
+                  inputMode="numeric"
+                  maxLength={5}
+                  placeholder="우편번호 5자리"
+                  value={postalCodeDrafts[`${item.fulfillmentCenterName}\0${item.sourceAddress}`] ?? ""}
+                  onChange={event => { const value = event.target.value.replace(/\D/g, "").slice(0, 5); setPostalCodeDrafts(current => ({ ...current, [`${item.fulfillmentCenterName}\0${item.sourceAddress}`]: value })); }}
+                  style={{ minHeight: "44px", padding: "0 10px", borderRadius: "8px", border: "1px solid #d8d3cc", fontSize: "15px", background: "#fff", color: "#252525", minWidth: 0 }}
+                />
+                <button type="button" className="softPinkButton" disabled={savingPostalCode || !/^\d{5}$/.test(postalCodeDrafts[`${item.fulfillmentCenterName}\0${item.sourceAddress}`] ?? "")} onClick={() => void handleSaveManualPostalCode(item.fulfillmentCenterName, item.sourceAddress)}>
+                  {savingPostalCode ? "저장 중…" : "우편번호 저장"}
+                </button>
+              </div>
             </div>
           ))}
+          {postalCodeError && <div style={{ color: "#b33f35", marginTop: "4px" }}>{postalCodeError}</div>}
         </div>
         {invoiceError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{invoiceError}</p>}
         {invoiceMessage && <p style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{invoiceMessage}</p>}
