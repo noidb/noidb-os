@@ -89,7 +89,7 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
   }, [openCenters, persistenceKey, selected, stateHydrated, invoiceGroups]);
   const selectedPoNumbers = useMemo(() => allPoNumbers.filter(po => selected.has(po)), [allPoNumbers, selected]);
   const selectedKey = [...selectedPoNumbers].sort().join("|");
-  const selectionFingerprint = JSON.stringify(["250-balanced-v1", selectedKey, invoiceGroups]);
+  const selectionFingerprint = JSON.stringify(["200-balanced-v1", selectedKey, invoiceGroups]);
   function setSelected(value: Set<string> | ((current: Set<string>) => Set<string>)) {
     setInvoiceGroups(null);
     setSelectedState(value);
@@ -224,10 +224,10 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
     </div>
     {preview?.shippingGroups?.length ? <details open={groupsOpen} onToggle={event => setGroupsOpen(event.currentTarget.open)} style={{ marginBottom: "9px", border: `1px solid ${wmsColors.border}`, borderRadius: "9px", background: "#fff" }}>
       <summary style={{ padding: "10px", cursor: "pointer", fontSize: "12px", fontWeight: 800 }}>
-        자동 송장 묶음 {preview.shippingGroups.length}개 · 발주서 단위 최대 250개 · 직접 변경 가능
+        자동 송장 묶음 {preview.shippingGroups.length}개 · 발주서 단위 최대 200개 · 직접 변경 가능
       </summary>
       <div style={{ display: "grid", gap: "6px", padding: "0 9px 9px" }}>
-        <button type="button" disabled={generating} onClick={() => setInvoiceGroups(null)} style={wmsGhostButton}>250개 자동 추천으로 되돌리기</button>
+        <button type="button" disabled={generating} onClick={() => setInvoiceGroups(null)} style={wmsGhostButton}>200개 자동 추천으로 되돌리기</button>
         {preview.shippingGroups.map((group, index) => <div key={`${group.fulfillmentCenterName}-${group.expectedArrivalDate}-${index}`} style={{ padding: "8px", borderRadius: "8px", background: wmsColors.surfaceBeige, fontSize: "11px", lineHeight: 1.55 }}>
           <strong>묶음 {index + 1} · {group.fulfillmentCenterName} · 수량 {group.totalQuantity}개</strong><br />
           <span style={{ color: wmsColors.muted }}>{group.expectedArrivalDate} · 발주 {group.purchaseOrderNumbers.length}건</span>
@@ -266,7 +266,7 @@ export default function HanjinUploadSection({ baskets, items, generations, onGen
       })}
     </div>
     {invoiceGroups && !preview && !previewLoading && <button type="button" onClick={() => setInvoiceGroups(previousGroups.current)} style={wmsGhostButton}>마지막 변경 취소</button>}
-    {invoiceGroups && !preview && <button type="button" onClick={() => setInvoiceGroups(null)} style={wmsGhostButton}>250개 자동 추천으로 되돌리기</button>}
+    {invoiceGroups && !preview && <button type="button" onClick={() => setInvoiceGroups(null)} style={wmsGhostButton}>200개 자동 추천으로 되돌리기</button>}
     {error && <p style={{ fontSize: "11px", color: "#c0392b", marginBottom: "8px" }}>{error}</p>}
     {resultMessage && <p style={{ fontSize: "11px", color: wmsColors.greenDark, marginBottom: "8px" }}>{resultMessage}</p>}
     <button onClick={handleGenerate} disabled={generating || previewLoading || !preview?.canGenerate || selectedPoNumbers.length === 0} style={{ ...wmsPrimaryButton, width: "100%", opacity: generating || previewLoading || !preview?.canGenerate ? 0.6 : 1 }}>{generating ? "생성 중..." : previewLoading ? "원본 검증 중..." : exactGeneration ? "동일 선택 송장파일 다시 생성" : "선택 발주 송장파일 생성"}</button>

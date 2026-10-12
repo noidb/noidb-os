@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useInvoiceGroupRepositoryState } from "@/lib/wms/invoice-group/context";
 import { INVOICE_GROUP_STAGE_LABEL, missingInvoiceGroupDispatchRequirements, type InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import type { ShipmentOutputPreview } from "@/lib/wms/shipment-output-context";
+import { DEFAULT_MAX_INVOICE_QUANTITY } from "@/lib/wms/shipment-output-split";
 import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsGhostButton, wmsPrimaryButton, wmsSecondaryButton } from "@/lib/wms/ui-tokens";
 import ShipmentWorkflowStepCard from "../../ShipmentWorkflowStepCard";
@@ -106,7 +107,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     try {
       const response = await fetch("/api/wms/hanjin-upload/preview", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ purchaseOrderNumbers: targetPurchaseOrderNumbers, invoiceGroups: targetInvoiceGroups }),
+      body: JSON.stringify({ purchaseOrderNumbers: targetPurchaseOrderNumbers, invoiceGroups: targetInvoiceGroups, rebalanceOversizedInvoiceGroups: true }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "송장 완전성 검사에 실패했습니다.");
@@ -234,7 +235,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     try {
       const response = await fetch("/api/wms/hanjin-upload/generate", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ purchaseOrderNumbers, invoiceGroups }),
+        body: JSON.stringify({ purchaseOrderNumbers, invoiceGroups, rebalanceOversizedInvoiceGroups: true }),
       });
       if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error || "한진택배 업로드파일 생성에 실패했습니다."); }
       const included = responsePoNumbers(response, "X-Added-Po-Numbers");
@@ -265,7 +266,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     try {
       const response = await fetch("/api/wms/logistics/build-shipment", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ purchaseOrderNumbers, invoiceGroups }),
+        body: JSON.stringify({ purchaseOrderNumbers, invoiceGroups, rebalanceOversizedInvoiceGroups: true }),
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
@@ -594,12 +595,12 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
 }
 
 /** 같은 입고예정일·같은 물류센터의 발주묶음은 나중에 추가로 확정된 것까지 한 송장(합배송)으로 합친다.
- *  송장 1건당 총수량 250개를 넘으면 넘지 않는 단위로만 나눠 담는다(발주묶음 단위, 큰 것부터 first-fit). */
-function mergeInvoiceGroupsByCenter(list: readonly InvoiceGroup[], max = 250): string[][] {
+ *  송장 1건당 총수량 200개를 넘으면 넘지 않는 단위로만 나눠 담는다(발주묶음 단위, 큰 것부터 first-fit). */
+function mergeInvoiceGroupsByCenter(list: readonly InvoiceGroup[], max = DEFAULT_MAX_INVOICE_QUANTITY): string[][] {
   return mergeGroupsByCenter(list, max).map(bin => bin.flatMap(group => group.purchaseOrderNumbers));
 }
 
-function mergeGroupsByCenter(list: readonly InvoiceGroup[], max = 250): InvoiceGroup[][] {
+function mergeGroupsByCenter(list: readonly InvoiceGroup[], max = DEFAULT_MAX_INVOICE_QUANTITY): InvoiceGroup[][] {
   const byCenter = new Map<string, InvoiceGroup[]>();
   for (const group of list) byCenter.set(group.fulfillmentCenter, [...(byCenter.get(group.fulfillmentCenter) || []), group]);
   const result: InvoiceGroup[][] = [];

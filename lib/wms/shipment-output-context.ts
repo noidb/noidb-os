@@ -4,7 +4,7 @@ import type { CenterAddressResolution } from "./center-address/types";
 import { resolveDestinationSupplements } from "./purchase-order-source/destination";
 import { buildPurchaseOrderIndex } from "./purchase-order-source/index";
 import type { PurchaseOrderIndex, PurchaseOrderSourceDocument, PurchaseOrderSourceRecord } from "./purchase-order-source/types";
-import { DEFAULT_MAX_INVOICE_QUANTITY, splitShipmentOutputDocuments, validateInvoiceGroups } from "./shipment-output-split";
+import { DEFAULT_MAX_INVOICE_QUANTITY, sourceDocumentQuantity, splitShipmentOutputDocuments, validateInvoiceGroups } from "./shipment-output-split";
 
 export interface ShipmentOutputGroup {
   key: string;
@@ -66,7 +66,7 @@ function normalizedAddress(value: string) {
 
 export async function buildShipmentOutputContext(
   requestedPurchaseOrderNumbers: readonly string[],
-  options: { index?: PurchaseOrderIndex; requireDestination?: boolean; invoiceGroups?: unknown } = {}
+  options: { index?: PurchaseOrderIndex; requireDestination?: boolean; invoiceGroups?: unknown; rebalanceOversizedInvoiceGroups?: boolean } = {}
 ): Promise<ShipmentOutputContext> {
   const index = options.index || await buildPurchaseOrderIndex();
   const purchaseOrderNumbers = [...new Set(requestedPurchaseOrderNumbers.map(normalizeSkuId).filter(Boolean))];
@@ -96,11 +96,21 @@ export async function buildShipmentOutputContext(
   const oversizedPurchaseOrderNumbers: string[] = [];
   const destinationByPo = new Map([...destinationGroups].flatMap(([key, entries]) => entries.map(entry => [entry.document.purchaseOrderNumber, key] as const)));
   // 원본 미매칭/충돌 발주가 있으면 수동 묶음 검증 대신 아래 blockingReasons로 정확한 원인을 보여준다.
-  const manualGroups = options.invoiceGroups === undefined || missing.length || conflicts.length ? null : validateInvoiceGroups(options.invoiceGroups, documents, destinationByPo);
+  const manualGroups = options.invoiceGroups === undefined || missing.length || conflicts.length ? null : validateInvoiceGroups(options.invoiceGroups, documents, destinationByPo, { rebalanceOversized: options.rebalanceOversizedInvoiceGroups });
   const groups: ShipmentOutputGroup[] = [];
   for (const [destinationKey, entries] of destinationGroups) {
     const entryByPo = new Map(entries.map(entry => [entry.document.purchaseOrderNumber, entry]));
-    const batches = manualGroups ? manualGroups.filter(group => destinationByPo.get(group[0]) === destinationKey).map(group => ({ documents: group.map(po => entryByPo.get(po)!.document), manualReviewRequired: false })) : splitShipmentOutputDocuments(entries.map(entry => entry.document));
+    const batches = manualGroups
+      ? manualGroups.filter(group => destinationByPo.get(group[0]) === destinationKey).flatMap(group => {
+        const groupDocuments = group.map(po => entryByPo.get(po)!.document);
+        // 발주묶음 단위 묶음이 최대수량(200개)을 넘으면(발주묶음 하나가 250개 초과 등) 같은 배송지 안에서 발주서 단위로 다시 나눈다.
+        // 발주서 한 건이 최대수량을 넘는 경우만 기존처럼 수동 확인으로 남긴다.
+        const total = groupDocuments.reduce((sum, document) => sum + sourceDocumentQuantity(document), 0);
+        return options.rebalanceOversizedInvoiceGroups && total > DEFAULT_MAX_INVOICE_QUANTITY
+          ? splitShipmentOutputDocuments(groupDocuments)
+          : [{ documents: groupDocuments, manualReviewRequired: false }];
+      })
+      : splitShipmentOutputDocuments(entries.map(entry => entry.document));
     batches.forEach((batch, batchIndex) => {
       const first = batch.documents[0];
       const firstEntry = entryByPo.get(first.purchaseOrderNumber)!;

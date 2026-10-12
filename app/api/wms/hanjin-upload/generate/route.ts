@@ -13,6 +13,7 @@ export const runtime = "nodejs";
 interface RequestBody {
   waveId?: string;
   invoiceGroups?: unknown;
+  rebalanceOversizedInvoiceGroups?: boolean;
   requests?: HanjinShipmentRequest[];
   purchaseOrderNumbers?: string[];
 }
@@ -32,7 +33,7 @@ export async function POST(request: NextRequest) {
       catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "출고완료 상태를 확인하지 못했습니다." }, { status: 409 }); }
     }
 
-    const result = await buildHanjinUploadFile(purchaseOrderNumbers, body.invoiceGroups);
+    const result = await buildHanjinUploadFile(purchaseOrderNumbers, body.invoiceGroups, { rebalanceOversizedInvoiceGroups: body.rebalanceOversizedInvoiceGroups === true });
     if (result.addedPurchaseOrderNumbers.length === 0) {
       return NextResponse.json(
         {

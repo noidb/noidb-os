@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
     const purchaseOrderNumbers = Array.isArray(body.purchaseOrderNumbers) ? body.purchaseOrderNumbers.map(String) : [];
     if (!purchaseOrderNumbers.length) return NextResponse.json({ error: "대상 발주서가 없습니다." }, { status: 400 });
 
-    const context = await buildShipmentOutputContext(purchaseOrderNumbers, { requireDestination: false, invoiceGroups: body.invoiceGroups });
+    const context = await buildShipmentOutputContext(purchaseOrderNumbers, { requireDestination: false, invoiceGroups: body.invoiceGroups, rebalanceOversizedInvoiceGroups: body.rebalanceOversizedInvoiceGroups === true });
     if (!context.preview.canGenerate) throw new ShipmentOutputValidationError(context.preview);
     if (context.purchaseOrderNumbers.length !== new Set(purchaseOrderNumbers).size) {
       return NextResponse.json({ error: "발주묶음의 발주번호 집합을 정확히 확인하지 못했습니다." }, { status: 409 });
@@ -35,7 +35,10 @@ export async function POST(request: NextRequest) {
     const templateBuffer = await readFile(templatePath);
     // A source order quantity is not a confirmed quantity.  The auto builder
     // resolves a downloaded confirmation form (or blocks) for every PO.
-    const result = await buildAutoShipmentFile(requests, context.records, templateBuffer, { invoiceGroups: body.invoiceGroups });
+    const result = await buildAutoShipmentFile(requests, context.records, templateBuffer, {
+      // 송장 생성 때와 같은 규칙으로 나뉜 실제 송장 묶음으로 한진 결과를 대조한다(최대수량 초과 묶음 재분할 포함).
+      invoiceGroups: body.invoiceGroups === undefined ? undefined : context.groups.map(group => [...group.purchaseOrderNumbers]),
+    });
 
     const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
     const fileName = `쉽먼트생성_업로드파일_${timestamp}.xlsx`;

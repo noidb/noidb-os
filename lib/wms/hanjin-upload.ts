@@ -460,9 +460,9 @@ function resolveGroupDestination(
  * 발주서 원본을 최우선으로 쓰고(resolveGroupDestination 참고), 그래도 못 채우면 임의로 채우지
  * 않고 건너뛴 뒤 정확한 사유를 알려준다.
  */
-export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[] | string[], invoiceGroups?: unknown): Promise<BuildHanjinUploadResult> {
+export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[] | string[], invoiceGroups?: unknown, options: { rebalanceOversizedInvoiceGroups?: boolean } = {}): Promise<BuildHanjinUploadResult> {
   const purchaseOrderNumbers = requests.map(item => typeof item === "string" ? item : item.purchaseOrderNumber);
-  const [template, context] = await Promise.all([loadTemplate(), buildShipmentOutputContext(purchaseOrderNumbers, { invoiceGroups })]);
+  const [template, context] = await Promise.all([loadTemplate(), buildShipmentOutputContext(purchaseOrderNumbers, { invoiceGroups, rebalanceOversizedInvoiceGroups: options.rebalanceOversizedInvoiceGroups })]);
   if (!context.preview.canGenerate) throw new ShipmentOutputValidationError(context.preview);
 
   const addedPurchaseOrderNumbers: string[] = [];

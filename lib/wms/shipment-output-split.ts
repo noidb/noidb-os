@@ -1,7 +1,8 @@
 import { normalizeSkuId } from "./sku-normalize";
 import type { PurchaseOrderSourceDocument } from "./purchase-order-source/types";
-export const DEFAULT_MAX_INVOICE_QUANTITY = 250;
+export const DEFAULT_MAX_INVOICE_QUANTITY = 200;
 export interface ShipmentOutputDocumentBatch { documents: PurchaseOrderSourceDocument[]; totalQuantity: number; manualReviewRequired: boolean }
+export const sourceDocumentQuantity=(d:PurchaseOrderSourceDocument)=>quantity(d);
 const quantity=(d:PurchaseOrderSourceDocument)=>d.records.reduce((s,r)=>s+(Number.isFinite(r.orderedQuantity)?r.orderedQuantity:0),0);
 /** Balance whole POs within one verified destination. Oversized single POs remain blocked. */
 export function splitShipmentOutputDocuments(source:readonly PurchaseOrderSourceDocument[],maxTotalQuantity=DEFAULT_MAX_INVOICE_QUANTITY):ShipmentOutputDocumentBatch[]{
@@ -16,7 +17,8 @@ export function splitShipmentOutputDocuments(source:readonly PurchaseOrderSource
  }
  return [...result,...oversized.map(d=>({documents:[d],totalQuantity:quantity(d),manualReviewRequired:true}))];
 }
-export function validateInvoiceGroups(groups:unknown,documents:readonly PurchaseOrderSourceDocument[],destinationByPo:Map<string,string>):string[][]{
+/** rebalanceOversized: 발주묶음 단위로 짠 묶음(입고예정일 화면)이 최대수량를 넘으면 오류 대신 호출부에서 발주서 단위로 다시 나눈다. */
+export function validateInvoiceGroups(groups:unknown,documents:readonly PurchaseOrderSourceDocument[],destinationByPo:Map<string,string>,options:{rebalanceOversized?:boolean}={}):string[][]{
  if(!Array.isArray(groups)||!groups.length||groups.some(g=>!Array.isArray(g)||!g.length||g.some(po=>typeof po!=='string')))throw new Error('송장 묶음을 다시 확인해 주세요.');
  // 발주번호 표기 차이(공백·작은따옴표·.0 등)로 같은 발주가 다르게 보이지 않도록 정규화해서 비교한다.
  const docs=new Map(documents.map(d=>[normalizeSkuId(d.purchaseOrderNumber),d]));
@@ -32,6 +34,6 @@ export function validateInvoiceGroups(groups:unknown,documents:readonly Purchase
   if(omitted.length)parts.push(`송장 묶음에서 빠진 발주: ${omitted.join(', ')}`);
   throw new Error(`송장 묶음에 발주 누락·중복 또는 다른 발주가 있습니다. (${parts.join(' / ')})`);
  }
- for(const group of plan){if(new Set(group.map(po=>destinationByPo.get(po))).size!==1)throw new Error('센터·입고예정일·배송지가 다른 발주는 같은 송장으로 합칠 수 없습니다.');if(group.reduce((s,po)=>s+quantity(docs.get(po)!),0)>DEFAULT_MAX_INVOICE_QUANTITY)throw new Error('송장 묶음은 총수량 250개 이하로 조정해 주세요.');}
+ for(const group of plan){if(new Set(group.map(po=>destinationByPo.get(po))).size!==1)throw new Error('센터·입고예정일·배송지가 다른 발주는 같은 송장으로 합칠 수 없습니다.');if(!options.rebalanceOversized&&group.reduce((s,po)=>s+quantity(docs.get(po)!),0)>DEFAULT_MAX_INVOICE_QUANTITY)throw new Error(`송장 묶음은 총수량 ${DEFAULT_MAX_INVOICE_QUANTITY}개 이하로 조정해 주세요.`);}
  return plan.map(g=>[...g]);
 }

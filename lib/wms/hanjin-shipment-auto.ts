@@ -882,7 +882,7 @@ export async function buildAutoShipmentFile(
       for (const row of confirmedRows) resolvedRows.push({ ...row, trackingNumber });
     }
 
-    // 같은 센터·날짜라도 한진 송장파일은 총수량 250개 기준으로 발주서 단위 분할될 수 있다.
+    // 같은 센터·날짜라도 한진 송장파일은 총수량 200개 기준으로 발주서 단위 분할될 수 있다.
     // 각 발주번호가 정확히 한 운송장에만 연결되면 여러 운송장번호를 정상으로 인정한다.
   }
 
