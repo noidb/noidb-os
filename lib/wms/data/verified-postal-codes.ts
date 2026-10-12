@@ -68,6 +68,15 @@ export const VERIFIED_POSTAL_CODES: VerifiedPostalCode[] = [
     verifiedSource: "https://dorojuso.kr/2811011800100310004190034/ (지번: 인천 중구 항동7가 31-4)",
     verifiedAt: "2026-08-24",
   },
+  {
+    // 2026-10-12 추가: 자동 주소검색이 "후보 불일치"로 막혀 10/16 송장 생성이 멈췄던 센터.
+    fulfillmentCenter: "안성5",
+    matchAddress: "경기도 안성시 원곡면 원곡물류단지1로 61",
+    sourceAddress: "경기도 안성시 원곡면 원곡물류단지1로 61(택배수령담당자 :+827077329074)",
+    zip: "17555",
+    verifiedSource: "https://juso.app/b/ism1qym7o56anhtu (지번: 경기도 안성시 원곡면 칠곡리 915)",
+    verifiedAt: "2026-10-12",
+  },
 ];
 
 function stripWhitespace(value: string): string {
