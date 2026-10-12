@@ -517,6 +517,11 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
           {previewLoading ? "발주서·주소·우편번호 자동 확인 중…" : preview ? `센터 ${preview.fulfillmentCenterCount} · 예상 송장 ${preview.shippingGroupCount}건` : previewError || "확인 대기 중"}
           {preview && <span style={{ display: "block", color: preview.canGenerate ? wmsColors.greenDark : wmsColors.warnText }}>{preview.canGenerate ? "송장 생성 준비 완료" : "송장 생성 전 확인이 필요합니다"}</span>}
           {preview?.blockingReasons?.length ? <div style={{ color: "#b33f35", marginTop: "4px" }}>{preview.blockingReasons.join(" · ")}</div> : null}
+          {preview?.destinationResolutions?.filter(item => item.status !== "approved").map(item => (
+            <div key={`${item.fulfillmentCenterName}\0${item.sourceAddress}`} style={{ color: "#b33f35", marginTop: "4px", fontSize: "13px" }}>
+              우편번호 미등록: {item.fulfillmentCenterName} · {item.sourceAddress}{item.reason ? ` (${item.reason})` : ""}
+            </div>
+          ))}
         </div>
         {invoiceError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{invoiceError}</p>}
         {invoiceMessage && <p style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{invoiceMessage}</p>}
