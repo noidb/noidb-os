@@ -502,6 +502,8 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
   const readyForDispatchCount = groups.filter(group => missingInvoiceGroupDispatchRequirements(group).length === 0).length;
   const canDispatchAll = readyForDispatchCount === groups.length;
   const invoiceGeneratedForAll = groups.every(group => group.invoiceGeneratedAt);
+  const lastInvoiceGroup = groups.filter(group => group.invoiceGeneratedAt).sort((left, right) => String(right.invoiceGeneratedAt).localeCompare(String(left.invoiceGeneratedAt)))[0];
+  const lastInvoiceGeneratedLabel = lastInvoiceGroup?.invoiceGeneratedAt ? formatSeoulDateTime(lastInvoiceGroup.invoiceGeneratedAt) : "";
   const shipmentGeneratedForAll = groups.every(group => group.shipmentFileName);
   const barcodeGeneratedForAll = groups.every(group => group.barcodeFileName);
   const outputSetGeneratedForAll = groups.every(group => group.outputSetGeneratedAt);
@@ -560,6 +562,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
           {postalCodeError && <div style={{ color: "#b33f35", marginTop: "4px" }}>{postalCodeError}</div>}
         </div>
         {invoiceError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{invoiceError}</p>}
+        {lastInvoiceGeneratedLabel && <p style={{ margin: "0 0 6px", fontSize: "12px", fontWeight: 700 }}>마지막 송장생성 {lastInvoiceGeneratedLabel}{!invoiceMessage && lastInvoiceGroup?.invoiceFileName ? ` · ${lastInvoiceGroup.invoiceFileName}` : ""}</p>}
         {invoiceMessage && <p style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{invoiceMessage}</p>}
         <button type="button" disabled={generatingInvoice || previewLoading || !preview?.canGenerate || confirmedCount !== purchaseOrderNumbers.length} onClick={() => void handleGenerateInvoice()} style={{ ...wmsPrimaryButton, width: "100%", opacity: generatingInvoice || previewLoading || !preview?.canGenerate || confirmedCount !== purchaseOrderNumbers.length ? 0.5 : 1 }}>
           {generatingInvoice ? "생성 중..." : invoiceGeneratedForAll ? "송장파일 다시 생성" : "이 날짜 송장파일 한 번에 생성"}
@@ -655,4 +658,11 @@ function mergeGroupsByCenter(list: readonly InvoiceGroup[], max = DEFAULT_MAX_IN
     result.push(...bins.map(bin => bin.groups));
   }
   return result;
+}
+
+function formatSeoulDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(date).map(part => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}(${parts.weekday}) ${parts.hour}:${parts.minute}`;
 }
