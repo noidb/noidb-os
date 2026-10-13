@@ -272,12 +272,16 @@ export function matchShipmentPrintGroups(
     const consumedSourceRows = new Set<string>();
     for (const item of manifest.items) {
       const allSourceCandidates = rowsBySku.get(item.skuId) ?? [];
-      const trackingCandidates = allSourceCandidates.some(row => row.trackingNumber)
-        ? allSourceCandidates.filter(row => row.trackingNumber === manifest.trackingNumber)
-        : allSourceCandidates;
       // 동봉내역서는 같은 SKU를 여러 PO에서 합산할 수 있다. Label의 PO 범위 안에서만
       // 합산하고, 합계가 동봉내역서 수량과 정확히 같을 때만 개별 PO 수량을 유지한다.
-      const sourceCandidates = trackingCandidates.filter(row => label.purchaseOrderNumbers.includes(row.purchaseOrderNumber));
+      // 한 센터가 200개를 넘어 한진 송장이 여러 건으로 나뉘면 쉽먼트 1건에 송장번호가 여러 개다.
+      // Label/내역서에는 송장번호가 1개만 찍히므로 송장번호로만 거르면 나머지 송장의 PO가 빠진다.
+      // → 같은 송장번호 줄만으로 수량이 정확히 맞으면 그것을, 아니면 Label PO 범위 전체를 쓴다.
+      const poScopedCandidates = allSourceCandidates.filter(row => label.purchaseOrderNumbers.includes(row.purchaseOrderNumber));
+      const trackingMatched = poScopedCandidates.filter(row => row.trackingNumber && row.trackingNumber === manifest.trackingNumber);
+      const sourceCandidates = trackingMatched.length && trackingMatched.reduce((sum, row) => sum + row.quantity, 0) === item.quantity
+        ? trackingMatched
+        : poScopedCandidates;
       if (sourceCandidates.length === 0) {
         errors.push(`${shipmentNumber} SKU ${item.skuId}: Label 발주 범위의 바코드 출력 데이터가 없습니다.`);
         continue;
