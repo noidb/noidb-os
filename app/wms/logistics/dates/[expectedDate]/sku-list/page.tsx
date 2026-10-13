@@ -8,6 +8,7 @@ import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { loadShipmentPrintGroupsByDate } from "@/lib/wms/load-shipment-print-groups";
 import type { ShipmentPrintGroup } from "@/lib/wms/shipment-print-client";
 import ProductThumb from "../ProductThumb";
+import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 import { WMS_MOBILE_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
 
 /**
@@ -22,11 +23,16 @@ import { WMS_MOBILE_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
 
 type Row = ShipmentPrintGroup["barcodeRows"][number];
 
+/** 2026-10-13 사용자 요청: 원발주서 공급가(부가세 포함 단가)를 발주번호+SKU 기준으로 붙인다. */
+const priceKey = (purchaseOrderNumber: string, skuId: string) => `${normalizeSkuId(purchaseOrderNumber)}\u0000${normalizeSkuId(skuId)}`;
+const won = (value: number) => `${value.toLocaleString("ko-KR")}원`;
+
 export default function ShipmentSkuListPage({ params }: { params: { expectedDate: string } }) {
   const expectedDate = decodeURIComponent(params.expectedDate);
   const { repository, ready, fixture } = useInvoiceGroupRepositoryState();
   const [shipments, setShipments] = useState<ShipmentPrintGroup[] | null>(null);
   const [catalogBySku, setCatalogBySku] = useState<Map<string, ProductCatalogItem>>(new Map());
+  const [unitPriceByPoSku, setUnitPriceByPoSku] = useState<Map<string, number>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [openShipment, setOpenShipment] = useState<string | null>(null);
@@ -44,17 +50,24 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
         if (!groups.length) throw new Error("이 날짜의 발주묶음을 찾지 못했습니다.");
         const shipmentFileName = groups.find(group => group.shipmentFileName)?.shipmentFileName;
         if (!shipmentFileName) throw new Error("쉽먼트 업로드파일 기록이 없습니다. 먼저 쉽먼트를 생성해 주세요.");
-        const [{ groups: printGroups }, catalogItems] = await Promise.all([
-          loadShipmentPrintGroupsByDate(expectedDate, groups.flatMap(group => group.purchaseOrderNumbers), shipmentFileName, {
+        const purchaseOrderNumbers = groups.flatMap(group => group.purchaseOrderNumbers);
+        const [{ groups: printGroups }, catalogItems, priceDocuments] = await Promise.all([
+          loadShipmentPrintGroupsByDate(expectedDate, purchaseOrderNumbers, shipmentFileName, {
             expectedShipmentNumbers: groups.flatMap(group => group.shipmentNumbers),
           }),
           fetch("/api/wms/product-catalog", { cache: "no-store" })
             .then(response => response.json())
             .then(data => (Array.isArray(data.items) ? data.items : []) as ProductCatalogItem[])
             .catch(() => [] as ProductCatalogItem[]),
+          // 공급가는 못 읽어도 목록은 그대로 보여 준다(공급가 칸만 비움).
+          fetch("/api/wms/logistics/sku-summary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purchaseOrderNumbers }) })
+            .then(response => response.json())
+            .then(data => (Array.isArray(data.documents) ? data.documents : []) as { purchaseOrderNumber: string; lines: { skuId: string; unitPrice: number }[] }[])
+            .catch(() => []),
         ]);
         if (cancelled) return;
         setCatalogBySku(new Map(catalogItems.map(item => [item.skuId, item])));
+        setUnitPriceByPoSku(new Map(priceDocuments.flatMap(document => document.lines.filter(line => line.unitPrice > 0).map(line => [priceKey(document.purchaseOrderNumber, line.skuId), line.unitPrice] as const))));
         setShipments(printGroups);
       } catch (loadError) {
         if (!cancelled) setError(loadError instanceof Error ? loadError.message : "SKU리스트를 불러오지 못했습니다.");
@@ -114,6 +127,7 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
                   {rows.map(row => {
                     const order = group.barcodeRows.indexOf(row) + 1;
                     const catalog = catalogBySku.get(row.skuId);
+                    const unitPrice = unitPriceByPoSku.get(priceKey(row.purchaseOrderNumber, row.skuId)) || 0;
                     return (
                       <li key={`${row.purchaseOrderNumber}-${row.skuId}-${row.sourceRowNumber}`} style={{ display: "grid", gridTemplateColumns: "24px 72px 1fr auto", gap: "10px", alignItems: "center", padding: "10px", borderRadius: "14px", background: "#fff", border: `1px solid #e5dace` }}>
                         <span style={{ fontSize: "12px", color: wmsColors.muted, textAlign: "center" }}>{order}</span>
@@ -122,6 +136,7 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
                           <div style={{ fontSize: "13px", fontWeight: 700, lineHeight: 1.35 }}>{row.productName}{row.optionLabel ? ` · ${row.optionLabel}` : ""}</div>
                           <div style={{ fontSize: "12px", color: wmsColors.muted, marginTop: "3px" }}>SKU {row.skuId}{row.warehouseNumber ? ` · 번호 ${row.warehouseNumber}` : ""}</div>
                           <div style={{ fontSize: "12px", fontFamily: "monospace", marginTop: "2px" }}>{row.barcode}</div>
+                          {unitPrice > 0 && <div style={{ fontSize: "12px", fontWeight: 700, marginTop: "2px" }}>공급가 {won(unitPrice)}</div>}
                           {catalog?.productLink && (
                             <a href={catalog.productLink} target="_blank" rel="noreferrer" style={{ fontSize: "12px", color: wmsColors.slateDark, display: "inline-block", marginTop: "3px" }}>제품링크 ↗</a>
                           )}
