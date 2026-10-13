@@ -343,7 +343,14 @@ export function matchShipmentPrintGroups(
 
 export async function buildFourUpLabelPdf(groups: ShipmentPrintGroup[]): Promise<Uint8Array> {
   const output = await PDFDocument.create();
-  for (let index = 0; index < groups.length; index += 4) {
+  // 쉽먼트 1건에 박스가 여러 개면 쿠팡 Label PDF가 박스별로 여러 페이지다(3-1, 3-2, 3-3).
+  // 첫 페이지만 쓰면 나머지 박스 라벨이 빠지므로 모든 페이지를 한 칸씩 넣는다.
+  const labelPages: { file: File; pageIndex: number }[] = [];
+  for (const group of groups) {
+    const pageCount = (await PDFDocument.load(await group.label.file.arrayBuffer())).getPageCount();
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) labelPages.push({ file: group.label.file, pageIndex });
+  }
+  for (let index = 0; index < labelPages.length; index += 4) {
     const page = output.addPage(A4);
     const margin = 18;
     const gutter = 10;
@@ -351,10 +358,10 @@ export async function buildFourUpLabelPdf(groups: ShipmentPrintGroup[]): Promise
     const cellHeight = (A4[1] - margin * 2 - gutter) / 2;
     page.drawLine({ start: { x: A4[0] / 2, y: margin }, end: { x: A4[0] / 2, y: A4[1] - margin }, thickness: 0.35, color: rgb(0.65, 0.65, 0.65) });
     page.drawLine({ start: { x: margin, y: A4[1] / 2 }, end: { x: A4[0] - margin, y: A4[1] / 2 }, thickness: 0.35, color: rgb(0.65, 0.65, 0.65) });
-    for (let slot = 0; slot < Math.min(4, groups.length - index); slot += 1) {
-      const group = groups[index + slot];
-      const source = await PDFDocument.load(await group.label.file.arrayBuffer());
-      const [embedded] = await output.embedPdf(source, [0]);
+    for (let slot = 0; slot < Math.min(4, labelPages.length - index); slot += 1) {
+      const labelPage = labelPages[index + slot];
+      const source = await PDFDocument.load(await labelPage.file.arrayBuffer());
+      const [embedded] = await output.embedPdf(source, [labelPage.pageIndex]);
       const scale = Math.min((cellWidth - 10) / embedded.width, (cellHeight - 10) / embedded.height);
       const width = embedded.width * scale;
       const height = embedded.height * scale;
