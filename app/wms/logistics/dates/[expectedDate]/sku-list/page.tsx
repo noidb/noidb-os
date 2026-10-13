@@ -76,6 +76,8 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
     return () => { cancelled = true; };
   }, [ready, fixture, repository, expectedDate]);
 
+  // 2026-10-13 사용자 요청: 이 날짜 전체 총수량(모든 쉽먼트 합계)을 보여 준다.
+  const grandTotal = (shipments || []).reduce((sum, group) => sum + group.barcodeRows.reduce((rowSum, row) => rowSum + row.quantity, 0), 0);
   const normalizedQuery = query.trim().toLowerCase();
   const matches = (row: Row) => !normalizedQuery || [row.barcode, row.skuId, row.productName, row.optionLabel, row.warehouseNumber]
     .some(value => String(value || "").toLowerCase().includes(normalizedQuery));
@@ -89,7 +91,7 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
     <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "12px 12px 32px", fontFamily: "sans-serif", color: wmsColors.ink, background: wmsColors.background, minHeight: "100vh" }}>
       <a href="/wms/work-center" style={{ color: wmsColors.slateDark, fontSize: "13px" }}>← 입고센터</a>
       <h1 style={{ margin: "10px 0 2px", fontSize: "20px" }}>쉽먼트별 SKU리스트</h1>
-      <p style={{ margin: "0 0 12px", color: wmsColors.muted, fontSize: "12px" }}>입고예정일 {expectedDate} · 동봉내역서와 같은 순서{shipments ? ` · 쉽먼트 ${shipments.length}개` : ""} · 쉽먼트를 누르면 열립니다</p>
+      <p style={{ margin: "0 0 12px", color: wmsColors.muted, fontSize: "12px" }}>입고예정일 {expectedDate} · 동봉내역서와 같은 순서{shipments ? ` · 쉽먼트 ${shipments.length}개 · 총 ${grandTotal.toLocaleString("ko-KR")}개` : ""} · 쉽먼트를 누르면 열립니다</p>
 
       {error && <p style={{ padding: "12px", borderRadius: "12px", background: wmsColors.warnSoft, color: wmsColors.warn, fontSize: "13px", whiteSpace: "pre-wrap" }}>{error}</p>}
       {!error && !shipments && <p style={{ color: wmsColors.muted, fontSize: "13px" }}>동봉내역서 원본을 읽는 중…</p>}
@@ -150,6 +152,12 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
               </section>
             );
           })}
+          {!normalizedQuery && shipments.length > 0 && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", padding: "12px 14px", marginTop: "4px", borderRadius: "14px", border: "1px solid #e5dace", background: "#fff" }}>
+              <span style={{ fontSize: "14px", fontWeight: 800 }}>전체 쉽먼트 {shipments.length}개</span>
+              <span style={{ fontSize: "18px", fontWeight: 800 }}>총 {grandTotal.toLocaleString("ko-KR")}<span style={{ fontSize: "12px", fontWeight: 600 }}>개</span></span>
+            </div>
+          )}
         </>
       )}
     </main>
