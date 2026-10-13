@@ -334,7 +334,19 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     const values = groups.map(group => ({ group, value: binValues[binIndexByGroupId.get(group.id) ?? -1]?.[0] ?? "" }));
     const invalid = values.find(entry => !/^\d{8}$/.test(entry.value));
     if (invalid) { setShipmentNumberSaveMessage(null); setShipmentNumberSaveError(`${invalid.group.fulfillmentCenter} 쉽먼트번호를 8자리 숫자로 입력해 주세요. 저장하지 않았습니다.`); return; }
-    if (new Set(binValues.map(list => list[0])).size !== binValues.length) { setShipmentNumberSaveMessage(null); setShipmentNumberSaveError("같은 쉽먼트번호를 서로 다른 물류센터 묶음에 저장할 수 없습니다. 저장하지 않았습니다."); return; }
+    // 한 센터가 200개를 넘어 송장이 여러 건으로 나뉘어도 쿠팡 쉽먼트는 센터당 1건 → 같은 센터끼리는 같은 번호가 맞다.
+    // 서로 다른 물류센터에 같은 번호가 들어간 경우만 막는다.
+    const centerByNumber = new Map<string, string>();
+    const sharedNumber = shipmentBins.map((bin, index) => ({ center: bin[0].fulfillmentCenter, value: binValues[index][0] })).find(({ center, value }) => {
+      const existing = centerByNumber.get(value);
+      if (existing && existing !== center) return true;
+      centerByNumber.set(value, center);
+      return false;
+    });
+    if (sharedNumber) { setShipmentNumberSaveMessage(null); setShipmentNumberSaveError(`쉽먼트번호 ${sharedNumber.value}가 ${centerByNumber.get(sharedNumber.value)}·${sharedNumber.center} 두 물류센터에 들어가 있습니다. 저장하지 않았습니다.`); return; }
+    const sameCenterBins = shipmentBins.filter((bin, index) => shipmentBins.findIndex(other => other[0].fulfillmentCenter === bin[0].fulfillmentCenter) !== index);
+    const sameCenterMismatch = sameCenterBins.find(bin => { const index = shipmentBins.indexOf(bin); const firstIndex = shipmentBins.findIndex(other => other[0].fulfillmentCenter === bin[0].fulfillmentCenter); return binValues[index][0] !== binValues[firstIndex][0]; });
+    if (sameCenterMismatch) { setShipmentNumberSaveMessage(null); setShipmentNumberSaveError(`${sameCenterMismatch[0].fulfillmentCenter}는 송장이 나뉘어도 쉽먼트는 1건입니다. 같은 쉽먼트번호로 맞춰 주세요. 저장하지 않았습니다.`); return; }
     const pending = values.filter(({ group, value }) => group.shipmentNumbers[0] !== value || !group.shipmentRegisteredAt);
     if (!pending.length) { setShipmentNumberSaveError(null); setShipmentNumberSaveMessage("변경된 쉽먼트번호가 없습니다. 이미 저장된 기록을 유지합니다."); return; }
     setSavingShipmentNumbers(true);
