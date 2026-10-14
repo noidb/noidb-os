@@ -1,5 +1,6 @@
-import { fetchSheetRows, updateSheetCells } from "./google-sheets";
-import { FIELD_HEADER_CANDIDATES, PRODUCT_DB_SHEET_NAME, normalizeSkuId } from "./product-catalog";
+import { updateSheetCells } from "./google-sheets";
+import { FIELD_HEADER_CANDIDATES, normalizeSkuId } from "./product-catalog";
+import { findProductRowAnyTab, notFoundAnyTabMessage } from "./product-row-lookup";
 
 /**
  * 제품DB 구글시트를, SKU ID로 정확히 찾은 딱 한 행에만 쓰는 전용 함수 (2026-08-19 확장 —
@@ -37,6 +38,8 @@ export type ProductCatalogUpdatePatch = Partial<Record<ProductCatalogWritableFie
 export interface ProductCatalogUpdateResult {
   success: boolean;
   rowNumber?: number;
+  /** 실제로 쓴 탭 (제품DB 또는 다른 탭) */
+  sheetName?: string;
   updatedFields: ProductCatalogWritableField[];
   skippedFields: { field: ProductCatalogWritableField; reason: string }[];
   error?: string;
@@ -58,36 +61,17 @@ export async function updateProductCatalogFields(
     return { success: false, updatedFields: [], skippedFields: [], error: "SKU ID가 비어 있습니다." };
   }
 
-  const rows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME);
-  if (rows.length === 0) {
-    return { success: false, updatedFields: [], skippedFields: [], error: "제품DB 시트를 읽을 수 없습니다." };
+  // 제품DB에 없으면(단종됐다가 다시 입고된 상품 등) 보관·창고재확인 등 다른 탭에서 찾아 그 탭에 쓴다 (2026-10-14).
+  let match;
+  try {
+    match = await findProductRowAnyTab(targetSkuId);
+  } catch (error) {
+    return { success: false, updatedFields: [], skippedFields: [], error: error instanceof Error ? error.message : "제품DB를 읽을 수 없습니다." };
   }
-
-  const headers = rows[0].map(h => String(h ?? "").trim());
-  const skuIdColIndex = headers.findIndex(h => h === "SKU ID");
-  if (skuIdColIndex < 0) {
-    return { success: false, updatedFields: [], skippedFields: [], error: "제품DB 시트에 'SKU ID' 헤더를 찾을 수 없습니다." };
+  if (!match) {
+    return { success: false, updatedFields: [], skippedFields: [], error: notFoundAnyTabMessage(skuId) };
   }
-
-  const matchingSheetRows: number[] = [];
-  for (let i = 1; i < rows.length; i++) {
-    if (normalizeSkuId(rows[i][skuIdColIndex]) === targetSkuId) {
-      matchingSheetRows.push(i + 1); // 1-based 시트 행 번호 (헤더가 1행이므로 데이터는 +1)
-    }
-  }
-
-  if (matchingSheetRows.length === 0) {
-    return { success: false, updatedFields: [], skippedFields: [], error: `제품DB에서 SKU ID "${skuId}"를 찾을 수 없습니다.` };
-  }
-  if (matchingSheetRows.length > 1) {
-    return {
-      success: false,
-      updatedFields: [],
-      skippedFields: [],
-      error: `제품DB에 SKU ID "${skuId}"가 ${matchingSheetRows.length}개 행에 중복되어 있어 안전을 위해 수정을 취소했습니다. 시트에서 직접 정리해주세요.`,
-    };
-  }
-  const rowNumber = matchingSheetRows[0];
+  const { headers, rowNumber, sheetName } = match;
 
   const fieldEntries = (Object.entries(patch) as [ProductCatalogWritableField, string | undefined][]).filter(
     (entry): entry is [ProductCatalogWritableField, string] => entry[1] !== undefined
@@ -101,7 +85,7 @@ export async function updateProductCatalogFields(
     if (field === "imageUrl") {
       const imageColIndex = headers.findIndex(h => h === "이미지");
       if (imageColIndex < 0) {
-        skippedFields.push({ field, reason: "제품DB 시트에 '이미지' 헤더가 없어 건너뛰었습니다." });
+        skippedFields.push({ field, reason: `${sheetName} 탭에 '이미지' 헤더가 없어 건너뛰었습니다.` });
         continue;
       }
       updatedFields.push(field);
@@ -112,7 +96,7 @@ export async function updateProductCatalogFields(
     const candidates = FIELD_HEADER_CANDIDATES[field];
     const headerIndex = headers.findIndex(h => candidates.includes(h));
     if (headerIndex < 0) {
-      skippedFields.push({ field, reason: `제품DB 시트에 이 항목의 헤더(${candidates.join("/")})가 없어 건너뛰었습니다.` });
+      skippedFields.push({ field, reason: `${sheetName} 탭에 이 항목의 헤더(${candidates.join("/")})가 없어 건너뛰었습니다.` });
       continue;
     }
     updatedFields.push(field);
@@ -125,13 +109,13 @@ export async function updateProductCatalogFields(
       rowNumber,
       updatedFields: [],
       skippedFields,
-      error: "수정할 수 있는 항목이 없습니다 (대상 컬럼이 시트에 없음).",
+      error: `${sheetName} 탭에 수정할 열이 없습니다 (${skippedFields.map(item => item.reason).join(" ")})`,
     };
   }
 
   if (!options?.dryRun) {
-    await updateSheetCells(PRODUCT_DB_SHEET_NAME, cellUpdates);
+    await updateSheetCells(sheetName, cellUpdates);
   }
 
-  return { success: true, rowNumber, updatedFields, skippedFields };
+  return { success: true, rowNumber, sheetName, updatedFields, skippedFields };
 }

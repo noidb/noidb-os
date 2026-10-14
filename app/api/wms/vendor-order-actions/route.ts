@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
       const source = store?.vendorOrderLines.find(line => line.id === body.sourceLineId);
       if (source?.sentResolution?.kind === "discontinue") return NextResponse.json({ success: true, line: source, reused: true });
       if (body.sourceLineId && (!source || source.updatedAt !== body.expectedUpdatedAt || isVendorLineResolved(source) || store!.deletedVendorLineIds[source.id] || store!.deletedVendorDraftIds[source.draftId] || !store!.vendorOrderDrafts.some(d => d.id === source.draftId && d.status === "sent"))) throw new Error("단종으로 이동할 원본 발주서를 다시 확인해 주세요.");
-      const record = await queueDiscontinueCandidate(source ? { ...body, skuId: source.skuId, purchaseOrderNumber: source.relatedPurchaseOrderNumbers.join(",") } : body);
+      const record = await queueDiscontinueCandidate(source ? { ...body, skuId: source.skuId, purchaseOrderNumber: source.relatedPurchaseOrderNumbers.join(","), fallbackProductName: source.productName, fallbackOptionLabel: source.optionLabel } : body);
       const saved = source ? await mutatePickingWaveStore({ action: "resolveSentVendorLine", lineId: source.id, expectedUpdatedAt: source.updatedAt, kind: "discontinue", destinationId: record.id, now: new Date().toISOString() }) : null;
       return NextResponse.json({ success: true, record, line: saved?.vendorOrderLines.find(line => line.id === source!.id) });
     }

@@ -1,6 +1,7 @@
 import { appendSheetRow, ensureHiddenSheet, ensureHiddenSheetOptionalColumn, fetchExistingSheetRows, fetchSheetRows, updateSheetCells } from "./google-sheets";
 import { readWeeklyWorkspace, mutateWeeklyWorkspace } from "./weekly-work-store";
-import { normalizeSkuId, PRODUCT_DB_SHEET_NAME } from "./product-catalog";
+import { normalizeSkuId } from "./product-catalog";
+import { findProductRowAnyTab, notFoundAnyTabMessage } from "./product-row-lookup";
 import { calculateReceivingCost } from "./receiving-cost";
 import { resolveDisplayNameAndOption } from "./display-name";
 import { summarizeReceivingDelayRows, validateReceivingDelayChange, type ReceivingDelaySummary } from "./vendor-order/receiving-delay";
@@ -56,6 +57,8 @@ export interface StatusRequestRecord {
 }
 
 interface ProductSnapshot {
+  /** SKU를 찾은 탭 (제품DB에 없으면 보관·창고재확인 등 다른 탭) */
+  sheetName: string;
   rowNumber: number;
   headers: string[];
   values: string[];
@@ -76,21 +79,11 @@ function rowObject(headers: readonly string[], row: string[]): Record<string, st
 }
 
 async function readProductSnapshot(skuId: string): Promise<ProductSnapshot> {
-  const target = normalizeSkuId(skuId);
-  if (!target) throw new Error("SKU ID가 비어 있습니다.");
-  const rows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME);
-  if (!rows.length) throw new Error("제품DB를 읽을 수 없습니다.");
-  const headers = rows[0].map(value => String(value || "").trim());
-  const skuColumn = headers.indexOf("SKU ID");
-  if (skuColumn < 0) throw new Error("제품DB에 'SKU ID' 헤더가 없습니다.");
-  const matches = rows.slice(1).map((row, index) => ({ row, rowNumber: index + 2 }))
-    .filter(entry => normalizeSkuId(entry.row[skuColumn]) === target);
-  if (matches.length !== 1) {
-    throw new Error(matches.length === 0
-      ? `제품DB에서 SKU ID "${skuId}"를 찾을 수 없습니다.`
-      : `제품DB에 SKU ID "${skuId}"가 ${matches.length}건 중복되어 쓰기를 중단했습니다.`);
-  }
-  return { rowNumber: matches[0].rowNumber, headers, values: matches[0].row };
+  if (!normalizeSkuId(skuId)) throw new Error("SKU ID가 비어 있습니다.");
+  // 단종됐다가 다시 입고된 상품은 제품DB가 아닌 다른 탭에만 있을 수 있어 전 탭을 찾는다.
+  const match = await findProductRowAnyTab(skuId);
+  if (!match) throw new Error(notFoundAnyTabMessage(skuId));
+  return { sheetName: match.sheetName, rowNumber: match.rowNumber, headers: match.headers, values: match.values };
 }
 
 function normalizedNumber(value: string): string {
@@ -107,11 +100,11 @@ async function writeProductField(
 ): Promise<void> {
   const latest = await readProductSnapshot(skuId);
   const column = latest.headers.indexOf(header);
-  if (column < 0) throw new Error(`제품DB에 '${header}' 헤더가 없어 쓰기를 중단했습니다.`);
+  if (column < 0) throw new Error(`${latest.sheetName} 탭에 '${header}' 열이 없어 쓰기를 중단했습니다.`);
   const actual = String(latest.values[column] ?? "").trim();
   const same = numeric ? normalizedNumber(actual) === normalizedNumber(expected) : actual === expected;
-  if (!same) throw new Error(`제품DB '${header}' 값이 조회 후 변경되어 쓰기를 중단했습니다.`);
-  await updateSheetCells(PRODUCT_DB_SHEET_NAME, [{ row: latest.rowNumber, col: column + 1, value }]);
+  if (!same) throw new Error(`${latest.sheetName} 탭 '${header}' 값이 조회 후 변경되어 쓰기를 중단했습니다.`);
+  await updateSheetCells(latest.sheetName, [{ row: latest.rowNumber, col: column + 1, value }]);
 }
 
 export async function listStatusRequests(): Promise<StatusRequestRecord[]> {
@@ -158,6 +151,8 @@ export async function listStatusFileGenerations(): Promise<StatusFileGenerationR
 /** 단종/해제 후보를 제품DB 상태를 바꾸지 않고 처리대기 목록에 넣는다. */
 export async function queueStatusCandidate(input: {
   skuId: string; operator: string; purchaseOrderNumber?: string; requestType: "단종" | "단종해제"; verifyExistingDiscontinue?: boolean;
+  /** 다른 탭에 상품명·옵션 열이 없을 때 발주서 줄의 값으로 채운다 */
+  fallbackProductName?: string; fallbackOptionLabel?: string;
 }): Promise<StatusRequestRecord> {
   const skuId = requiredText(input.skuId, "SKU ID");
   const operator = requiredText(input.operator, "처리자");
@@ -175,16 +170,17 @@ export async function queueStatusCandidate(input: {
     await rememberStatusRecords([record]);
     return record;
   }
+  // 다른 탭에서 찾은 상품은 열 구성이 달라 없는 열은 빈칸으로 둔다(단종 대기목록에만 넣고 탭은 바꾸지 않음).
   const headerIndex = (header: string) => {
     const index = product.headers.indexOf(header);
-    if (index < 0) throw new Error(`제품DB에 '${header}' 헤더가 없습니다.`);
+    if (index < 0 && product.sheetName === "제품DB") throw new Error(`제품DB에 '${header}' 헤더가 없습니다.`);
     return index;
   };
   const currentStatus = String(product.values[headerIndex("현재상태")] ?? "").trim();
   if (input.requestType === "단종" && currentStatus === "단종" && !(input.verifyExistingDiscontinue && /^\d+$/.test(input.purchaseOrderNumber || ""))) throw new Error(`SKU ${skuId}는 이미 단종 상태입니다.`);
   if (input.requestType === "단종해제" && currentStatus !== "단종") throw new Error(`SKU ${skuId}는 현재 단종 상태가 아니어서 해제대기에 넣지 않았습니다.`);
-  const productName = String(product.values[headerIndex("상품명")] ?? "").trim();
-  const display = resolveDisplayNameAndOption(productName, String(product.values[product.headers.indexOf("색상")] ?? "").trim());
+  const productName = String(product.values[headerIndex("상품명")] ?? "").trim() || String(input.fallbackProductName || "").trim();
+  const display = resolveDisplayNameAndOption(productName, String(product.values[product.headers.indexOf("색상")] ?? "").trim() || String(input.fallbackOptionLabel || "").trim());
   const record: StatusRequestRecord = {
     id: makeId("status"), skuId: normalizeSkuId(skuId), modelSku: String(product.values[headerIndex("모델SKU")] ?? "").trim(),
     productName: display.name, optionLabel: display.option, currentStatus, requestType: input.requestType, requestedAt: new Date().toISOString(), supplyHubStatus: "처리대기",
@@ -290,6 +286,7 @@ export async function createStatusRequest(input: {
  * 제품DB 현재상태는 건드리지 않으며, 실제 단종 처리는 기존 단종/해제 화면에서 별도로 수행한다. */
 export async function queueDiscontinueCandidate(input: {
   skuId: string; operator: string; purchaseOrderNumber?: string; verifyExistingDiscontinue?: boolean;
+  fallbackProductName?: string; fallbackOptionLabel?: string;
 }): Promise<StatusRequestRecord> {
   return queueStatusCandidate({ ...input, requestType: "단종" });
 }
@@ -365,7 +362,7 @@ export async function applyReceivingCost(input: {
   if (history.slice(1).some(row => String(row[0] || "") === eventId)) return { applied: false, vat, costVatIncluded };
   const product = await readProductSnapshot(skuId);
   const costColumn = product.headers.indexOf("원가(부가세포함)");
-  if (costColumn < 0) throw new Error("제품DB에 '원가(부가세포함)' 헤더가 없어 원가 반영을 중단했습니다.");
+  if (costColumn < 0) throw new Error(`${product.sheetName} 탭에 '원가(부가세포함)' 열이 없어 원가 반영을 중단했습니다.`);
   const previousCost = String(product.values[costColumn] ?? "").trim();
   await writeProductField(skuId, "원가(부가세포함)", previousCost, String(costVatIncluded), true);
   try {

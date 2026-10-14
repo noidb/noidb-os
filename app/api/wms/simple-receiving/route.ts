@@ -19,9 +19,14 @@ export async function POST(request:NextRequest){
   if(body.action==='complete-preview'||body.action==='complete'){
    const before=await lineFor(body.lineId),preview=completeReceivingPlan(before,body.isStockReplenishment);
    if(body.action==='complete-preview')return json({success:true,preview});
-   if(body.token!==preview.token)throw new Error('확인 후 발주 품목이 변경되었습니다. 입고완료 내용을 다시 확인해 주세요.');
-   const lock=createInboundTransactionStore(),lockId=await lock.acquire();
-   try{const snapshot=await mutatePickingWaveStore({action:'completeVendorReceiving',before,isStockReplenishment:body.isStockReplenishment,now:new Date().toISOString()});return json({success:true,line:snapshot.vendorOrderLines.find(line=>line.id===before.id)});}finally{await lock.release(lockId);}
+   // Fast path: the dialog already shows the line it was opened with, so it sends that line's
+   // updatedAt/quantity instead of a separate preview round trip.
+   const sameAsShown=typeof body.expectedUpdatedAt==='string'&&body.expectedUpdatedAt===before.updatedAt&&body.expectedQuantity===before.shortageQuantity;
+   if(!preview.alreadyCompleted&&!sameAsShown&&body.token!==preview.token)throw new Error('확인 후 발주 품목이 변경되었습니다. 입고완료 내용을 다시 확인해 주세요.');
+   // No Google Sheets lock here: completion never touches the product DB, and the blob store write
+   // is already guarded by its ETag retry plus completeReceivingLine's change check.
+   const snapshot=await mutatePickingWaveStore({action:'completeVendorReceiving',before,isStockReplenishment:body.isStockReplenishment,now:new Date().toISOString()});
+   return json({success:true,line:snapshot.vendorOrderLines.find(line=>line.id===before.id)});
   }
   if(body.action==='cost-preview'){const p=await loadReceivingCostPlan(body.lineId);return json({success:true,preview:{token:p.token,skuId:p.skuId,before:p.before,after:p.after,vat:p.vat,quantity:p.quantity,unitPrice:p.unitPrice,alreadyApplied:p.alreadyApplied}});}
   if(body.action==='cost-apply')return json({success:true,...await applyReceivingCostPlan(body.lineId,String(body.token||''))});
