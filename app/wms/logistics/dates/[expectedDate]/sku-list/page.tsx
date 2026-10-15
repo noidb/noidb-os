@@ -48,13 +48,17 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
         if (!all.some(group => group.expectedDate === expectedDate)) all = await repository.list();
         const groups = all.filter(group => !group.supersededByGroupId && group.expectedDate === expectedDate);
         if (!groups.length) throw new Error("이 날짜의 발주묶음을 찾지 못했습니다.");
-        const shipmentFileName = groups.find(group => group.shipmentFileName)?.shipmentFileName;
-        if (!shipmentFileName) throw new Error("쉽먼트 업로드파일 기록이 없습니다. 먼저 쉽먼트를 생성해 주세요.");
+        // 2026-10-15: 같은 날짜에 추가 발주가 따로 쉽먼트로 나가면 쉽먼트 파일이 여러 개다.
+        // 파일마다 그 파일로 만든 발주만 읽어 합친다(예: 아침 33건 + 추가 3건).
+        const byShipmentFile = new Map<string, InvoiceGroup[]>();
+        for (const group of groups) if (group.shipmentFileName) byShipmentFile.set(group.shipmentFileName, [...(byShipmentFile.get(group.shipmentFileName) || []), group]);
+        if (!byShipmentFile.size) throw new Error("쉽먼트 업로드파일 기록이 없습니다. 먼저 쉽먼트를 생성해 주세요.");
         const purchaseOrderNumbers = groups.flatMap(group => group.purchaseOrderNumbers);
-        const [{ groups: printGroups }, catalogItems, priceDocuments] = await Promise.all([
-          loadShipmentPrintGroupsByDate(expectedDate, purchaseOrderNumbers, shipmentFileName, {
-            expectedShipmentNumbers: groups.flatMap(group => group.shipmentNumbers),
-          }),
+        const [printGroupLists, catalogItems, priceDocuments] = await Promise.all([
+          Promise.all([...byShipmentFile.entries()].map(([shipmentFileName, fileGroups]) =>
+            loadShipmentPrintGroupsByDate(expectedDate, fileGroups.flatMap(group => group.purchaseOrderNumbers), shipmentFileName, {
+              expectedShipmentNumbers: fileGroups.flatMap(group => group.shipmentNumbers),
+            }).then(result => result.groups))),
           fetch("/api/wms/product-catalog", { cache: "no-store" })
             .then(response => response.json())
             .then(data => (Array.isArray(data.items) ? data.items : []) as ProductCatalogItem[])
@@ -68,7 +72,8 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
         if (cancelled) return;
         setCatalogBySku(new Map(catalogItems.map(item => [item.skuId, item])));
         setUnitPriceByPoSku(new Map(priceDocuments.flatMap(document => document.lines.filter(line => line.unitPrice > 0).map(line => [priceKey(document.purchaseOrderNumber, line.skuId), line.unitPrice] as const))));
-        setShipments(printGroups);
+        // 동봉내역서와 같은 순서(센터 → 쉽먼트번호)로 합친다.
+        setShipments(printGroupLists.flat().sort((left, right) => left.fulfillmentCenter.localeCompare(right.fulfillmentCenter, "ko") || String(left.shipmentNumber).localeCompare(String(right.shipmentNumber))));
       } catch (loadError) {
         if (!cancelled) setError(loadError instanceof Error ? loadError.message : "SKU리스트를 불러오지 못했습니다.");
       }
