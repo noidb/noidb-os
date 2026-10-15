@@ -71,6 +71,17 @@ export default function DiscontinueByCode({ onDone }: { onDone: (text: string, i
           {busy === "make" ? "만드는 중…" : "단종신청 엑셀·공문 만들기"}
         </button>
       </div>
+      {(text || lookup) && (
+        <button
+          type="button"
+          className={`softPinkButton ${styles.fullButton}`}
+          disabled={Boolean(busy)}
+          onClick={() => { setText(""); setLookup(null); onDone("단종 신청 완료 · 입력한 바코드를 비웠습니다.", false); }}
+          style={{ width: "100%", marginTop: "8px" }}
+        >
+          단종 신청 완료 · 입력 비우기
+        </button>
+      )}
     </section>
   );
 }
