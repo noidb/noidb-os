@@ -34,6 +34,8 @@ export interface LogisticsReceiptImport {
   productDbStatusFillAt?: string;
   /** Receipt-target identity captured with the collection so closed history survives later group cleanup. */
   shipmentMetadata?: Record<string, Pick<LogisticsReceiptTarget, "expectedDate" | "centerName">>;
+  /** 쉽먼트를 처음 가져온 시각(2026-10-15) — 화면에서 새로 가져온 쉽먼트를 맨 위에 표시한다. 이 기능 전 수집분은 없다. */
+  shipmentFirstSeenAt?: Record<string, string>;
 }
 
 /** 쿠팡이 준 공급상태 그대로. "정상"만 분류 대상이고 그 외(불가·일시중단·조회안됨 등)는 검토로 둔다. */
@@ -439,6 +441,14 @@ export function mergeHubClosedSnapshot(current: LogisticsReceiptSnapshot | undef
   const shipmentMetadata: NonNullable<LogisticsReceiptSnapshot["shipmentMetadata"]> = {};
   for (const target of targets) shipmentMetadata[target.shipmentNumber] = { expectedDate: target.expectedDate, centerName: target.centerName };
   const merged: LogisticsReceiptSnapshot = { ...incoming, mode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, shipmentMetadata };
+  // 처음 가져온 시각: 예전에 있던 쉽먼트는 그 값을 유지하고, 이번에 처음 들어온 것만 이번 수집 시각을 적는다.
+  const previousShipmentIds = new Set(current?.mode === "hub-closed" ? current.shipments.map(shipment => shipment.shipmentNumber) : []);
+  const firstSeen: Record<string, string> = {};
+  for (const shipment of merged.shipments) {
+    const prior = current?.shipmentFirstSeenAt?.[shipment.shipmentNumber];
+    if (prior) firstSeen[shipment.shipmentNumber] = prior;
+    else if (!previousShipmentIds.has(shipment.shipmentNumber)) firstSeen[shipment.shipmentNumber] = incoming.collectedAt;
+  }
   // 마감 쉽먼트는 다시 바뀌지 않는다: 이전에 가져온 마감건이 이번 쿠팡 목록에서 빠졌으면 그대로 남긴다.
   if (current?.mode === "hub-closed") {
     const incomingIds = new Set(merged.shipments.map(shipment => shipment.shipmentNumber));
@@ -462,7 +472,12 @@ export function mergeHubClosedSnapshot(current: LogisticsReceiptSnapshot | undef
     }
     merged.skuStatuses!.sort((a, b) => a.skuId.localeCompare(b.skuId));
     if (carriedFromProductDb.length) merged.skuStatusesFromProductDb = carriedFromProductDb.sort();
+    for (const shipment of merged.shipments) {
+      const prior = current.shipmentFirstSeenAt?.[shipment.shipmentNumber];
+      if (prior && !firstSeen[shipment.shipmentNumber]) firstSeen[shipment.shipmentNumber] = prior;
+    }
   }
+  if (Object.keys(firstSeen).length) merged.shipmentFirstSeenAt = firstSeen;
   return merged;
 }
 

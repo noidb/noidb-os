@@ -56,3 +56,14 @@ const keptBoard = buildLogisticsReceiptBoard({ targets: logisticsTargetsFromSnap
 assert.deepEqual(keptBoard.lines.filter(l => l.kind === "shortage").map(l => l.skuId).sort(), ["1", "4"]);
 assert.equal(keptBoard.lines.filter(l => l.kind === "shortage" && l.skuId === "1").length, 1, "no duplicate line for the same shipment");
 console.log("PASS hub-closed collection: one-time reset, 9/13 cutoff, targets from Supplier Hub list, shortage + first-arrival board, stale/old-extension guards");
+
+// 2026-10-15: 처음 가져온 시각 — 다음 수집에서 새로 들어온 쉽먼트만 그 수집 시각을 갖는다.
+{
+  const first = mergeHubClosedSnapshot(undefined, payload(now));
+  assert.deepEqual(first.shipmentFirstSeenAt, { "50000001": now, "50000002": now });
+  const later = new Date(Date.now() - 30_000).toISOString();
+  const second = mergeHubClosedSnapshot(first, payload(later, { requestedShipmentNumbers: ["50000003"], shipments: [ship("50000003", [["A", "333", "4", 1, 0]])], skuStatuses: [{ skuId: "4", orderStatus: "정상" }],
+    shipmentMetadata: { "50000003": { expectedDate: "2026-10-16", centerName: "인천" } } }));
+  assert.equal(second.shipmentFirstSeenAt?.["50000003"], later, "새 쉽먼트는 이번 수집 시각");
+  assert.equal(second.shipmentFirstSeenAt?.["50000001"], now, "예전 쉽먼트는 처음 시각 유지");
+}

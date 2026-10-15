@@ -51,6 +51,8 @@ type ApiPayload = {
   skuNames?: Record<string, string>;
   /** 기존 발주로 처리한 미납 줄 */
   coveredByVendorOrder?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; vendors: string[]; sentOn: string; at: string }>;
+  /** 쉽먼트별 내역과 처음 가져온 시각(2026-10-15) */
+  shipmentDetails?: Record<string, { firstSeenAt: string; totalDelivered: number | null; totalReceived: number | null; lines: Array<{ purchaseOrderNumber: string; skuId: string; productName: string; deliveredQuantity: number; receivedQuantity: number }> }>;
   /** 공급상태가 정상이 아닌 SKU 확인 결과(단종확인·단종해제) */
   supplyStatusChecks?: Record<string, { decision: "discontinued" | "release"; productName: string; at: string; releasedListClearedAt?: string }>;
 };
@@ -147,6 +149,8 @@ const routeHref = (line: LogisticsReceiptBoardLine, fixture: boolean) => {
 export default function ShipmentReceiptsPage() {
   const [payload, setPayload] = useState<ApiPayload | null>(null);
   const [tab, setTab] = useState<Tab>("results");
+  const [optimisticDone, setOptimisticDone] = useState<Set<string>>(new Set());
+  const [openShipments, setOpenShipments] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [fixture, setFixture] = useState(false);
   const [modeReady, setModeReady] = useState(false);
@@ -251,12 +255,33 @@ export default function ShipmentReceiptsPage() {
     }
   }
 
+  /** 화면을 막지 않고 뒤에서 목록만 다시 받는다(2026-10-15 — 처리완료 뒤 기다리지 않게). */
+  async function quietReload() {
+    if (isFixtureMode()) return;
+    try {
+      const response = await fetch("/api/wms/logistics/receipts?view=board", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) return;
+      const next = asPayload(data);
+      setPayload(next);
+      if (next.followUp) setFollowUp(next.followUp);
+    } catch { /* 다음 새로고침 때 다시 받음 */ }
+  }
+
   async function followUpAction(
     input: Record<string, unknown>,
     success: string,
   ) {
     if (!payload || !followUp) return;
-    setBusy(true);
+    // 2026-10-15: 처리완료는 누르는 즉시 목록에서 빼고(화면을 막지 않음) 뒤에서 저장한다. 실패하면 되돌리고 알려 준다.
+    const optimisticKeys = input.action === "complete" && typeof input.outputKey === "string"
+      ? (followUp.proofs.find((proof) => proof.outputKey === input.outputKey)?.sourceKeys || [])
+      : [];
+    const background = optimisticKeys.length > 0;
+    if (background) {
+      setOptimisticDone((current) => new Set([...current, ...optimisticKeys]));
+      setMessage("처리완료로 표시했습니다. 저장은 뒤에서 하니 다른 작업을 계속하셔도 됩니다.");
+    } else setBusy(true);
     setError("");
     try {
       if (fixture) {
@@ -306,19 +331,22 @@ export default function ShipmentReceiptsPage() {
           },
         }));
       }
-      await load(true);
+      if (data.followUp) setFollowUp(data.followUp);
+      if (background) void quietReload();
+      else await load(true);
       const skipped = Array.isArray(data.skippedCoupons) ? (data.skippedCoupons as Array<{ skuId: string; reason: string }>) : [];
       setMessage(skipped.length
         ? `${success} 쿠폰이 아직 걸려 있거나 예전 쿠폰 종료일을 모르는 ${skipped.length}건은 이번 파일에서 빼고 대기목록에 남겼습니다(목록에 이유 표시).`
         : success);
     } catch (cause) {
+      if (background) setOptimisticDone((current) => new Set([...current].filter((key) => !optimisticKeys.includes(key))));
       setError(
         cause instanceof Error
-          ? cause.message
+          ? `${background ? "처리완료를 저장하지 못해 목록을 되돌렸습니다. " : ""}${cause.message}`
           : "후속 처리 저장에 실패했습니다.",
       );
     } finally {
-      setBusy(false);
+      if (!background) setBusy(false);
     }
   }
 
@@ -647,7 +675,7 @@ export default function ShipmentReceiptsPage() {
       .map(([skuId, check]) => ({ skuId, productName: check.productName, currentStatus: "", orderableStatus: "", reason: "입고결과", key: skuId })),
   ].sort((a, b) => a.skuId.localeCompare(b.skuId));
   const discontinueList: StatusListRow[] = payload?.statusLists?.discontinue || [];
-  const activeFollowUpQueue = followUpData?.queues[followUpKind] || [];
+  const activeFollowUpQueue = (followUpData?.queues[followUpKind] || []).filter((item) => !optimisticDone.has(item.lineKey));
   const completedSourceKeys = new Set(
     (followUpData?.proofs || [])
       .filter(
@@ -661,6 +689,7 @@ export default function ShipmentReceiptsPage() {
       (proof) =>
         String(proof.kind) === followUpKind &&
         !proof.completedAt &&
+        !proof.sourceKeys.every((sourceKey) => optimisticDone.has(sourceKey)) &&
         !proof.sourceKeys.every((sourceKey) =>
           completedSourceKeys.has(sourceKey),
         ),
@@ -790,6 +819,61 @@ export default function ShipmentReceiptsPage() {
       </td>
     </tr>
   );
+  // 2026-10-15: 가장 최근 수집에서 처음 들어온 쉽먼트를 '새로 가져옴'으로 맨 위에 보여 준다.
+  const shipmentDetails = payload?.shipmentDetails || {};
+  const latestFirstSeen = Object.values(shipmentDetails).map((detail) => detail.firstSeenAt).filter(Boolean).sort().slice(-1)[0] || "";
+  const newTargets = latestFirstSeen ? (payload?.targets || []).filter((target) => shipmentDetails[target.shipmentNumber]?.firstSeenAt === latestFirstSeen) : [];
+  const renderShipmentCard = (target: LogisticsReceiptTarget, isNew = false) => {
+    const detail = shipmentDetails[target.shipmentNumber];
+    const open = openShipments.has(target.shipmentNumber);
+    const delivered = detail ? detail.lines.reduce((sum, line) => sum + line.deliveredQuantity, 0) : null;
+    const received = detail ? detail.lines.reduce((sum, line) => sum + line.receivedQuantity, 0) : null;
+    const shortage = delivered !== null && received !== null ? Math.max(0, delivered - received) : null;
+    return (
+      <article className={styles.shipment} key={`${isNew ? "new-" : ""}${target.shipmentNumber}`} style={isNew ? { borderColor: "#dfbdb2", background: "#fff" } : undefined}>
+        <button
+          type="button"
+          onClick={() => setOpenShipments((current) => { const next = new Set(current); if (next.has(target.shipmentNumber)) next.delete(target.shipmentNumber); else next.add(target.shipmentNumber); return next; })}
+          style={{ all: "unset", cursor: "pointer", display: "block", width: "100%" }}
+          aria-expanded={open}
+        >
+          <strong>
+            {isNew && <span style={{ display: "inline-block", marginRight: "6px", padding: "1px 7px", borderRadius: "999px", background: "#f2dfd8", color: "#7f4032", fontSize: "11px" }}>새로 가져옴</span>}
+            쉽먼트 {target.shipmentNumber} {open ? "▲" : "▼"}
+          </strong>
+          <p className={styles.meta}>
+            {[isNew ? `${target.expectedDate} 입고 · ${target.centerName}` : "", detail ? `SKU ${new Set(detail.lines.map((line) => line.skuId)).size}종 · 납품 ${delivered} · 입고 ${received}` : "", shortage ? `미납 ${shortage}` : detail ? "미납 없음" : ""].filter(Boolean).join(" · ")}
+          </p>
+          <p className={styles.meta}>
+            발주{" "}
+            {target.purchaseOrderNumbers.length ? target.purchaseOrderNumbers.join(", ") : "복수 발주서 상세 확인 필요"}
+          </p>
+        </button>
+        {pendingShipmentNumbers.has(target.shipmentNumber) && <p className={styles.meta}>마감 수량 미확인</p>}
+        {open && (detail ? (
+          <div className={styles.tableWrap}>
+            <table className={styles.table} aria-label={`쉽먼트 ${target.shipmentNumber} 내역`}>
+              <thead><tr><th>SKU</th><th>상품명</th><th>납품</th><th>입고</th><th>미납</th></tr></thead>
+              <tbody>
+                {detail.lines.map((line, index) => {
+                  const miss = Math.max(0, line.deliveredQuantity - line.receivedQuantity);
+                  return (
+                    <tr key={`${line.purchaseOrderNumber}-${line.skuId}-${index}`}>
+                      <td>{line.skuId}</td>
+                      <td>{line.productName}</td>
+                      <td>{line.deliveredQuantity}</td>
+                      <td>{line.receivedQuantity}</td>
+                      <td style={{ color: miss ? "#b33f35" : undefined, fontWeight: miss ? 800 : undefined }}>{miss || "-"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : <p className={styles.meta}>내역이 없습니다. 새로고침 후 다시 열어 주세요.</p>)}
+      </article>
+    );
+  };
   return (
     <main className={styles.page}>
       <header className={styles.header}>
@@ -925,6 +1009,14 @@ export default function ShipmentReceiptsPage() {
             저장된 입고결과가 없습니다.
           </p>
         )}
+        {tab === "pending" && payload && newTargets.length > 0 && (
+          <section className={styles.dateBlock} style={{ border: "2px solid #dfbdb2", borderRadius: "12px", padding: "12px", background: "#fbf1ee" }}>
+            <h2 className={styles.dateTitle}>
+              새로 가져온 쉽먼트 {newTargets.length}건 · {new Date(latestFirstSeen).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+            </h2>
+            <div className={styles.shipmentGrid}>{newTargets.map((target) => renderShipmentCard(target, true))}</div>
+          </section>
+        )}
         {tab === "pending" &&
           payload &&
           (payload.targets.length ? (
@@ -937,23 +1029,7 @@ export default function ShipmentReceiptsPage() {
                     <div className={styles.center} key={center}>
                       <h3 className={styles.centerTitle}>{center}</h3>
                       <div className={styles.shipmentGrid}>
-                        {targets.map((target) => (
-                          <article
-                            className={styles.shipment}
-                            key={target.shipmentNumber}
-                          >
-                            <strong>쉽먼트 {target.shipmentNumber}</strong>
-                            <p className={styles.meta}>
-                              발주{" "}
-                              {target.purchaseOrderNumbers.length
-                                ? target.purchaseOrderNumbers.join(", ")
-                                : "복수 발주서 상세 확인 필요"}
-                            </p>
-                            {pendingShipmentNumbers.has(target.shipmentNumber) && (
-                              <p className={styles.meta}>마감 수량 미확인</p>
-                            )}
-                          </article>
-                        ))}
+                        {targets.map((target) => renderShipmentCard(target))}
                       </div>
                     </div>
                   ))}
