@@ -7,7 +7,7 @@ import {
   type InvoiceGroupStoreMutation,
   type InvoiceGroupStoreSnapshot,
 } from "./shared-store-types";
-import { missingInvoiceGroupDispatchRequirements, nextInvoiceGroupStage, type InvoiceGroup } from "./types";
+import { isOnlyHiddenChange, missingInvoiceGroupDispatchRequirements, nextInvoiceGroupStage, type InvoiceGroup } from "./types";
 import { isAsideCompletedDispatchPurchaseOrder } from "../logistics-aside-dispatch";
 
 /**
@@ -149,6 +149,13 @@ export function applyInvoiceGroupStoreMutation(current: InvoiceGroupStoreSnapsho
       }
       if (existing.stage === "dispatched" || existing.stage === "shipment_closed") {
         if (JSON.stringify(incoming) === JSON.stringify(existing)) return current;
+        if (isOnlyHiddenChange(existing, incoming)) {
+          const index = next.groups.findIndex(group => group.id === incoming.id);
+          next.groups[index] = incoming;
+          next.revision = current.revision + 1;
+          next.updatedAt = new Date().toISOString();
+          return next;
+        }
         throw new Error("출고완료 또는 쉽먼트마감 발주묶음은 수정할 수 없습니다.");
       }
     }

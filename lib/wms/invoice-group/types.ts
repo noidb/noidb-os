@@ -64,6 +64,18 @@ export function canMarkInvoiceGroupDispatched(group: InvoiceGroup): boolean {
   return group.stage === "shipment_completed" && missingInvoiceGroupDispatchRequirements(group).length === 0;
 }
 
+/** 출고완료 후에도 화면에 남겨 보여줄 묶음 — 이번 변경 뒤 출고완료한(dispatchedAt 있음) 것 중 아직 삭제 안 한 것.
+ *  예전 출고완료 기록(dispatchedAt 없음)은 원래대로 화면에 다시 나오지 않는다. */
+export function isVisibleDispatchedInvoiceGroup(group: InvoiceGroup): boolean {
+  return !group.supersededByGroupId && group.stage === "dispatched" && Boolean(group.dispatchedAt) && !group.hiddenAt;
+}
+
+/** 출고완료 묶음에서 바뀌어도 되는 것은 "화면에서 삭제" 표시뿐이다. */
+export function isOnlyHiddenChange(existing: InvoiceGroup, incoming: InvoiceGroup): boolean {
+  const strip = (group: InvoiceGroup) => JSON.stringify({ ...group, hiddenAt: undefined, updatedAt: undefined });
+  return !existing.hiddenAt && Boolean(incoming.hiddenAt) && strip(existing) === strip(incoming);
+}
+
 export function canMarkInvoiceGroupShipmentPrepared(group: InvoiceGroup): boolean {
   return group.stage === "new" && missingInvoiceGroupDispatchRequirements(group).length === 0;
 }
@@ -149,6 +161,12 @@ export interface InvoiceGroup {
 
   // --- 출력세트(⑤) ---
   outputSetFiles?: InvoiceGroupOutputSetFiles;
+
+  // --- 출고완료 기록 (2026-10-15 사용자 요청) ---
+  /** 출고완료를 누른 시각. 이 값이 있는 출고완료 묶음은 화면에서 지우기 전까지 계속 보여준다. */
+  dispatchedAt?: string;
+  /** 사용자가 출고완료 자료를 다 보고 "삭제"를 누른 시각 — 화면에서만 빠지고 기록(입고결과처리용)은 남는다. */
+  hiddenAt?: string;
 
   // --- 메타 ---
   notes?: string;

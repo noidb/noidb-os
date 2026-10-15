@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useInvoiceGroupRepositoryState } from "@/lib/wms/invoice-group/context";
-import { INVOICE_GROUP_STAGE_LABEL, missingInvoiceGroupDispatchRequirements, type InvoiceGroup } from "@/lib/wms/invoice-group/types";
+import { INVOICE_GROUP_STAGE_LABEL, isVisibleDispatchedInvoiceGroup, missingInvoiceGroupDispatchRequirements, type InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import type { ShipmentOutputPreview } from "@/lib/wms/shipment-output-context";
 import { DEFAULT_MAX_INVOICE_QUANTITY } from "@/lib/wms/shipment-output-split";
 import { closeReservedDownloadTarget, downloadBlobPreservingPage, reserveDownloadTarget } from "@/lib/wms/download-client";
@@ -26,6 +26,10 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
   const [groups, setGroups] = useState<InvoiceGroup[] | null>(null);
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [completedGroupCount, setCompletedGroupCount] = useState(0);
+  /** 출고완료했지만 아직 "삭제"를 누르지 않은 묶음 — 같은 화면 아래에 그대로 보여준다(2026-10-15). */
+  const [doneGroups, setDoneGroups] = useState<InvoiceGroup[]>([]);
+  const [hiding, setHiding] = useState(false);
+  const [hideError, setHideError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [confirming, setConfirming] = useState(false);
@@ -78,6 +82,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
       const allDateGroups = all.filter(group => !group.supersededByGroupId && group.expectedDate === expectedDate);
       const dateGroups = allDateGroups.filter(group => group.stage !== "dispatched" && group.stage !== "shipment_closed");
       setCompletedGroupCount(allDateGroups.length - dateGroups.length);
+      setDoneGroups(allDateGroups.filter(isVisibleDispatchedInvoiceGroup));
       setGroups(dateGroups);
       setLoadError(null);
       return dateGroups;
@@ -175,8 +180,8 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
   }, [pendingAction]);
 
   if (groups === null) return <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "24px 16px", fontFamily: "sans-serif" }}><p>이 날짜 작업을 불러오는 중...</p>{loadError && <><p style={{ color: "#c0392b", fontSize: "13px" }}>{loadError}</p><button type="button" disabled={loadingGroups} onClick={() => void handleRefresh()} style={{ ...wmsPrimaryButton, width: "100%", opacity: loadingGroups ? 0.5 : 1 }}>다시 시도</button></>}</main>;
-  if (!groups.length) return <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "24px 16px", fontFamily: "sans-serif" }}><h1 style={{ margin: "0 0 8px", fontSize: "20px" }}>{expectedDate}</h1>{fixtureMode && <p style={{ padding: "10px", background: "#fff4d8", color: "#7a4d00", fontSize: "12px" }}>개발용 예시자료의 출고완료 결과입니다. 실제 출고 기록은 변경하지 않았습니다.</p>}<p>{completedGroupCount ? `이 날짜의 발주묶음 ${completedGroupCount}건은 출고완료 기록으로 남아 있습니다. 새 생성이나 번호 변경 없이 완료 이력으로 유지됩니다.` : loadError || "이 날짜의 발주묶음을 찾지 못했습니다."}</p><a href={`/wms/logistics/new-orders${fixtureMode ? "?logisticsFixture=1" : ""}`}>신규발주서 검색으로</a></main>;
-  if (groups.every(group => group.stage === "dispatched" || group.stage === "shipment_closed")) return <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "24px 16px", fontFamily: "sans-serif" }}><h1 style={{ margin: "0 0 8px", fontSize: "20px" }}>{expectedDate}</h1>{fixtureMode && <p style={{ padding: "10px", background: "#fff4d8", color: "#7a4d00", fontSize: "12px" }}>개발용 예시자료의 출고완료 결과입니다. 실제 출고 기록은 변경하지 않았습니다.</p>}<p>발주묶음 {groups.length}건 · 발주 {groups.reduce((sum, group) => sum + group.purchaseOrderNumbers.length, 0)}건 출고완료 기록이 저장되었습니다. 이 화면에서는 생성·번호변경을 잠급니다.</p><a href={`/wms/logistics/new-orders${fixtureMode ? "?logisticsFixture=1" : ""}`}>신규발주서 검색으로</a></main>;
+  if (!groups.length && !doneGroups.length) return <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "24px 16px", fontFamily: "sans-serif" }}><h1 style={{ margin: "0 0 8px", fontSize: "20px" }}>{expectedDate}</h1>{fixtureMode && <p style={{ padding: "10px", background: "#fff4d8", color: "#7a4d00", fontSize: "12px" }}>개발용 예시자료의 출고완료 결과입니다. 실제 출고 기록은 변경하지 않았습니다.</p>}<p>{completedGroupCount ? `이 날짜의 발주묶음 ${completedGroupCount}건은 출고완료 기록으로 남아 있습니다. 새 생성이나 번호 변경 없이 완료 이력으로 유지됩니다.` : loadError || "이 날짜의 발주묶음을 찾지 못했습니다."}</p><a href={`/wms/logistics/new-orders${fixtureMode ? "?logisticsFixture=1" : ""}`}>신규발주서 검색으로</a></main>;
+  if (groups.length && groups.every(group => group.stage === "dispatched" || group.stage === "shipment_closed")) return <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "24px 16px", fontFamily: "sans-serif" }}><h1 style={{ margin: "0 0 8px", fontSize: "20px" }}>{expectedDate}</h1>{fixtureMode && <p style={{ padding: "10px", background: "#fff4d8", color: "#7a4d00", fontSize: "12px" }}>개발용 예시자료의 출고완료 결과입니다. 실제 출고 기록은 변경하지 않았습니다.</p>}<p>발주묶음 {groups.length}건 · 발주 {groups.reduce((sum, group) => sum + group.purchaseOrderNumbers.length, 0)}건 출고완료 기록이 저장되었습니다. 이 화면에서는 생성·번호변경을 잠급니다.</p><a href={`/wms/logistics/new-orders${fixtureMode ? "?logisticsFixture=1" : ""}`}>신규발주서 검색으로</a></main>;
 
   const isConfirmed = (group: InvoiceGroup, po: string) => group.poConfirmations.some(entry => entry.purchaseOrderNumber === po);
   const confirmedCount = groups.reduce((sum, group) => sum + group.purchaseOrderNumbers.filter(po => isConfirmed(group, po)).length, 0);
@@ -476,8 +481,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     if (advancing) return;
     if (!groups) return;
     if (hasUnsavedShipmentNumbers) { setAdvanceError("변경한 쉽먼트번호를 전체 저장한 뒤 단계 기록을 진행하세요."); return; }
-    const blocked = groups.filter(group => missingInvoiceGroupDispatchRequirements(group).length > 0);
-    if (blocked.length) { setAdvanceError(`단계 기록에 필요한 항목: ${[...new Set(blocked.flatMap(missingInvoiceGroupDispatchRequirements))].join(", ")}`); return; }
+    if (!groups.some(group => missingInvoiceGroupDispatchRequirements(group).length === 0)) { setAdvanceError(`출고완료할 수 있는 묶음이 없습니다. 필요한 항목: ${[...new Set(groups.flatMap(missingInvoiceGroupDispatchRequirements))].join(", ")}`); return; }
     setPendingAction("dispatched");
   }
 
@@ -488,9 +492,10 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     setAdvanceError(null);
     try {
       const now = new Date().toISOString();
-      const blocked = groups.filter(group => missingInvoiceGroupDispatchRequirements(group).length > 0);
-      if (blocked.length) throw new Error(`출고완료로 표시하려면 모든 묶음의 ${[...new Set(blocked.flatMap(missingInvoiceGroupDispatchRequirements))].join(", ")} 기록이 필요합니다.`);
-      for (const group of groups) {
+      // 2026-10-15: 같은 날짜에 추가 발주가 들어와도, 출력세트까지 끝난 묶음만 먼저 출고완료할 수 있게 한다.
+      const ready = groups.filter(group => missingInvoiceGroupDispatchRequirements(group).length === 0);
+      if (!ready.length) throw new Error("출고완료할 수 있는 묶음이 없습니다.");
+      for (const group of ready) {
         let current = group;
         if (current.stage === "new") {
           current = { ...current, stage: "shipment_completed", updatedAt: now };
@@ -498,9 +503,10 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
           setGroups(previous => (previous || []).map(item => item.id === current.id ? current : item));
         }
         if (current.stage === "shipment_completed") {
-          const dispatched = { ...current, stage: "dispatched" as const, updatedAt: now };
+          const dispatched = { ...current, stage: "dispatched" as const, dispatchedAt: now, updatedAt: now };
           await invoiceGroupRepository.save(dispatched);
-          setGroups(previous => (previous || []).map(item => item.id === dispatched.id ? dispatched : item));
+          setGroups(previous => (previous || []).filter(item => item.id !== dispatched.id));
+          setDoneGroups(previous => [...previous.filter(item => item.id !== dispatched.id), dispatched]);
         }
       }
     } catch (error) {
@@ -511,8 +517,25 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     }
   }
 
+  /** 출고완료 자료를 다 본 뒤 "삭제" — 화면에서만 빼고, 입고결과처리에 쓰는 기록은 그대로 둔다. */
+  async function handleHideDone() {
+    if (hiding || !doneGroups.length) return;
+    if (!window.confirm(`출고완료 ${doneGroups.length}묶음(발주 ${doneGroups.reduce((sum, group) => sum + group.purchaseOrderNumbers.length, 0)}건)을 화면에서 삭제할까요? 입고결과 처리에 쓰는 기록은 남습니다.`)) return;
+    setHiding(true);
+    setHideError(null);
+    try {
+      const now = new Date().toISOString();
+      for (const group of doneGroups) {
+        await invoiceGroupRepository.save({ ...group, hiddenAt: now, updatedAt: now });
+        setDoneGroups(previous => previous.filter(item => item.id !== group.id));
+      }
+    } catch (error) {
+      setHideError(error instanceof Error ? error.message : "삭제하지 못했습니다.");
+    } finally { setHiding(false); }
+  }
+
   const readyForDispatchCount = groups.filter(group => missingInvoiceGroupDispatchRequirements(group).length === 0).length;
-  const canDispatchAll = readyForDispatchCount === groups.length;
+  const canDispatchAll = readyForDispatchCount > 0;
   const invoiceGeneratedForAll = groups.every(group => group.invoiceGeneratedAt);
   const lastInvoiceGroup = groups.filter(group => group.invoiceGeneratedAt).sort((left, right) => String(right.invoiceGeneratedAt).localeCompare(String(left.invoiceGeneratedAt)))[0];
   const lastInvoiceGeneratedLabel = lastInvoiceGroup?.invoiceGeneratedAt ? formatSeoulDateTime(lastInvoiceGroup.invoiceGeneratedAt) : "";
@@ -525,17 +548,19 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
       <a href={`/wms/logistics/new-orders${fixtureMode ? "?logisticsFixture=1" : ""}`} style={{ color: wmsColors.slateDark, fontSize: "13px" }}>← 신규발주서 검색</a>
       <h1 style={{ margin: "10px 0 4px", fontSize: "20px" }}>{expectedDate}</h1>
       <p style={{ margin: "0 0 14px", color: wmsColors.muted, fontSize: "12px", lineHeight: 1.6 }}>
-        {fulfillmentCenters.join(", ")} · 발주 {purchaseOrderNumbers.length}건 · SKU {skuCount}종 · 총수량 {totalQuantity}개
+        {groups.length ? <>{fulfillmentCenters.join(", ")} · 진행 중 발주 {purchaseOrderNumbers.length}건 · SKU {skuCount}종 · 총수량 {totalQuantity}개</> : "진행 중인 발주 없음"}
+        {doneGroups.length ? ` · 출고완료 발주 ${doneGroups.reduce((sum, group) => sum + group.purchaseOrderNumbers.length, 0)}건` : ""}
       </p>
       {fixtureMode && <div style={{ margin: "0 0 16px", padding: "12px", borderRadius: "10px", background: "#fff4d8", color: "#7a4d00", fontSize: "12px", fontWeight: 800 }}>개발용 테스트 데이터입니다. 생성 버튼은 실제 파일 API를 호출하지 않습니다.<button type="button" onClick={() => void handleFillFixture()} style={{ ...wmsSecondaryButton, display: "block", width: "100%", marginTop: "8px" }}>테스트 단계 기록 채우기</button></div>}
       {pendingAction && <section ref={pendingActionPanelRef} tabIndex={-1} role="alert" style={{ margin: "0 0 16px", padding: "14px", border: `2px solid ${wmsColors.slateDark}`, borderRadius: "12px", background: wmsColors.surfaceBeige }}>
         <strong style={{ display: "block", fontSize: "14px" }}>{pendingAction === "confirm" ? "발주확정 기록을 저장할까요?" : "출고완료로 기록할까요?"}</strong>
-        <p style={{ margin: "7px 0 12px", fontSize: "12px", lineHeight: 1.6 }}>{expectedDate} · 발주 {purchaseOrderNumbers.length}건 · 묶음 {groups.length}건. {pendingAction === "confirm" ? "Supplier Hub에서 실제 발주확정을 마친 경우에만 확인하세요." : "실제 출고를 확인한 뒤에만 저장하세요."}</p>
+        <p style={{ margin: "7px 0 12px", fontSize: "12px", lineHeight: 1.6 }}>{expectedDate} · {pendingAction === "confirm" ? `발주 ${purchaseOrderNumbers.length}건 · 묶음 ${groups.length}건` : `출고준비 완료된 묶음 ${readyForDispatchCount}건 · 발주 ${groups.filter(group => missingInvoiceGroupDispatchRequirements(group).length === 0).reduce((sum, group) => sum + group.purchaseOrderNumbers.length, 0)}건`}. {pendingAction === "confirm" ? "Supplier Hub에서 실제 발주확정을 마친 경우에만 확인하세요." : "실제 출고를 확인한 뒤에만 저장하세요."}</p>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
           <button type="button" onClick={() => setPendingAction(null)} style={wmsGhostButton}>취소</button>
           <button type="button" disabled={confirming || advancing} onClick={() => void (pendingAction === "confirm" ? executeConfirmAll() : executeStageAction())} style={{ ...wmsPrimaryButton, opacity: confirming || advancing ? 0.5 : 1 }}>{confirming || advancing ? "저장 중..." : "확인하고 기록"}</button>
         </div>
       </section>}
+      {groups.length > 0 && <>
       <button type="button" disabled={previewLoading || loadingGroups} onClick={() => void handleRefresh()} style={{ ...wmsGhostButton, width: "100%", marginBottom: "16px", opacity: previewLoading || loadingGroups ? 0.5 : 1 }}>
         {previewLoading || loadingGroups ? "현재 기록 확인 중..." : "현재 기록 새로고침 · 송장 생성 조건 확인"}
       </button>
@@ -636,12 +661,31 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
       {advanceError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{advanceError}</p>}
       {hasUnsavedShipmentNumbers && <p style={{ color: "#c0392b", fontSize: "12px" }}>변경한 쉽먼트번호를 전체 저장해주세요.</p>}
       {readyForDispatchCount > 0 && <p style={{ color: wmsColors.greenDark, fontSize: "12px" }}>출고 준비 기록 {readyForDispatchCount}/{groups.length}건</p>}
-      {groups.some(group => group.stage !== "dispatched") && (
-        <button type="button" disabled={advancing || hasUnsavedShipmentNumbers || !canDispatchAll} onClick={() => void handleMarkDispatched()} style={{ ...wmsPrimaryButton, width: "100%", marginTop: "8px", opacity: advancing || hasUnsavedShipmentNumbers || !canDispatchAll ? 0.6 : 1 }}>
-          {advancing ? "기록 중..." : "실제 출고 확인 후 이 날짜 전체 출고완료로 기록"}
-        </button>
+      <button type="button" disabled={advancing || hasUnsavedShipmentNumbers || !canDispatchAll} onClick={() => void handleMarkDispatched()} style={{ ...wmsPrimaryButton, width: "100%", marginTop: "8px", opacity: advancing || hasUnsavedShipmentNumbers || !canDispatchAll ? 0.6 : 1 }}>
+        {advancing ? "기록 중..." : readyForDispatchCount === groups.length ? "실제 출고 확인 후 이 날짜 전체 출고완료로 기록" : `출력세트까지 끝난 ${readyForDispatchCount}묶음만 출고완료로 기록`}
+      </button>
+      </>}
+
+      {doneGroups.length > 0 && (
+        <section style={{ marginTop: "18px", padding: "12px", border: `1px solid ${wmsColors.border}`, borderRadius: "12px", background: "#fff" }}>
+          <strong style={{ fontSize: "14px" }}>출고완료 · {doneGroups.length}묶음 · 발주 {doneGroups.reduce((sum, group) => sum + group.purchaseOrderNumbers.length, 0)}건</strong>
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "8px" }}>
+            {[...doneGroups].sort((a, b) => a.fulfillmentCenter.localeCompare(b.fulfillmentCenter)).map(group => (
+              <div key={group.id} style={{ padding: "8px 10px", border: `1px solid ${wmsColors.border}`, borderRadius: "9px", fontSize: "11px", color: wmsColors.muted, lineHeight: 1.6 }}>
+                <strong style={{ color: wmsColors.ink }}>{group.fulfillmentCenter}</strong> · 쉽먼트 {group.shipmentNumbers[0] || "-"} · SKU {group.skuCount}종 · {group.totalQuantity}개
+                <div>발주 {group.purchaseOrderNumbers.join(", ")}</div>
+                <div>한진 송장 {[...new Set(group.shipmentInvoiceNumbers.map(entry => entry.invoiceNumber).filter(Boolean))].join(", ") || "-"}</div>
+                <div>출고완료 {group.dispatchedAt ? formatSeoulDateTime(group.dispatchedAt) : "-"}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "10px" }}>
+            <button type="button" disabled className="softSageButton" style={{ fontSize: "12px" }}>출고완료 {formatSeoulDateTime([...doneGroups].map(group => group.dispatchedAt || "").sort().slice(-1)[0]).slice(5)}</button>
+            <button type="button" disabled={hiding} onClick={() => void handleHideDone()} className="softPinkButton" style={{ opacity: hiding ? 0.5 : 1 }}>{hiding ? "삭제 중..." : "출고완료 자료 삭제"}</button>
+          </div>
+          {hideError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{hideError}</p>}
+        </section>
       )}
-      {groups.every(group => group.stage === "dispatched") && <p style={{ textAlign: "center", color: wmsColors.greenDark, fontSize: "13px", fontWeight: 800, marginTop: "10px" }}>이 날짜 전체 출고완료 기록</p>}
 
       <a href={`/wms/logistics/new-orders${fixtureMode ? "?logisticsFixture=1" : ""}`} style={{ display: "block", marginTop: "16px" }}>
         <button type="button" style={{ ...wmsGhostButton, width: "100%" }}>신규발주서 검색으로</button>

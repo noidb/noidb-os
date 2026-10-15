@@ -9,7 +9,7 @@ import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import { UNASSIGNED_VENDOR_NAME } from "@/lib/wms/vendor-order/types";
 import { useInvoiceGroupRepositoryState } from "@/lib/wms/invoice-group/context";
 import { readLocalInvoiceGroupSnapshot } from "@/lib/wms/invoice-group/local-repository";
-import { INVOICE_GROUP_STAGE_LABEL, INVOICE_GROUP_STAGE_ORDER, canMarkInvoiceGroupDispatched, missingInvoiceGroupDispatchRequirements, type InvoiceGroup } from "@/lib/wms/invoice-group/types";
+import { INVOICE_GROUP_STAGE_LABEL, INVOICE_GROUP_STAGE_ORDER, canMarkInvoiceGroupDispatched, isVisibleDispatchedInvoiceGroup, type InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import styles from "./work-center.module.css";
 
 /**
@@ -88,8 +88,17 @@ function formatInboundDateTitle(expectedDate: string): string {
   return `${Number(match[2])}월 ${Number(match[3])}일입고`;
 }
 
+/** "10-15(목) 16:40" — 출고완료 시각 표시용. */
+function formatSeoulShort(value: string): string {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return "";
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", month: "2-digit", day: "2-digit", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(date).map(part => [part.type, part.value]));
+  return `${parts.month}-${parts.day}(${parts.weekday}) ${parts.hour}:${parts.minute}`;
+}
+
 function groupInProgressByDate(all: InvoiceGroup[]): Array<[string, InvoiceGroup[]]> {
-  const inProgress = all.filter(group => !group.supersededByGroupId && group.stage !== "shipment_closed" && group.stage !== "dispatched");
+  // 2026-10-15: 출고완료한 묶음도 사용자가 "삭제"를 누를 때까지 카드에 남긴다.
+  const inProgress = all.filter(group => !group.supersededByGroupId && ((group.stage !== "shipment_closed" && group.stage !== "dispatched") || isVisibleDispatchedInvoiceGroup(group)));
   const map = new Map<string, InvoiceGroup[]>();
   for (const group of inProgress) map.set(group.expectedDate, [...(map.get(group.expectedDate) || []), group]);
   return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
@@ -135,7 +144,7 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
   const [dispatchingDate, setDispatchingDate] = useState<string | null>(null);
   const [dispatchError, setDispatchError] = useState<{ date: string; message: string } | null>(null);
 
-  /** 출고완료 — 날짜 처리 화면의 "이 날짜 전체 출고완료"와 같은 규칙(필수기록 검사 후 묶음별 저장). */
+  /** 출고완료 — 출력세트까지 끝난(출고준비완료) 묶음만 기록한다. 같은 날짜에 나중에 추가된 신규 묶음은 그대로 남는다. */
   async function markDispatched(expectedDate: string) {
     if (dispatchingDate) return;
     if (!window.confirm(`${formatInboundDateTitle(expectedDate)} 발주를 출고완료로 기록할까요?`)) return;
@@ -144,16 +153,35 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
     try {
       // 저장 직전에만 서버 최신본으로 확인한다(다른 PC에서 바뀐 내용을 덮어쓰지 않도록).
       const latest = (await invoiceGroupRepository.list()).filter(group => !group.supersededByGroupId && group.expectedDate === expectedDate && group.stage !== "dispatched" && group.stage !== "shipment_closed");
-      const missing = [...new Set(latest.flatMap(missingInvoiceGroupDispatchRequirements))];
-      if (missing.length) throw new Error(`출고완료에 필요한 기록이 없습니다: ${missing.join(", ")}`);
-      if (latest.some(group => !canMarkInvoiceGroupDispatched(group))) throw new Error("아직 출고준비완료가 아닌 발주묶음이 있습니다.");
+      const ready = latest.filter(canMarkInvoiceGroupDispatched);
+      if (!ready.length) throw new Error("출고준비완료(출력세트까지 끝남)인 발주묶음이 없습니다.");
       const now = new Date().toISOString();
-      for (const group of latest) await invoiceGroupRepository.save({ ...group, stage: "dispatched", updatedAt: now });
+      for (const group of ready) await invoiceGroupRepository.save({ ...group, stage: "dispatched", dispatchedAt: now, updatedAt: now });
       live.setGroups(fixture ? await invoiceGroupRepository.list() : readLocalInvoiceGroupSnapshot());
     } catch (error) {
       setDispatchError({ date: expectedDate, message: error instanceof Error ? error.message : "출고완료로 기록하지 못했습니다." });
     } finally {
       setDispatchingDate(null);
+    }
+  }
+
+  const [hidingDate, setHidingDate] = useState<string | null>(null);
+
+  /** 출고완료 자료를 다 본 뒤 "삭제" — 카드에서만 빼고, 입고결과처리에 쓰는 기록은 남긴다. */
+  async function hideDispatched(expectedDate: string) {
+    if (hidingDate) return;
+    if (!window.confirm(`${formatInboundDateTitle(expectedDate)} 출고완료 자료를 화면에서 삭제할까요? 입고결과 처리에 쓰는 기록은 남습니다.`)) return;
+    setHidingDate(expectedDate);
+    setDispatchError(null);
+    try {
+      const latest = (await invoiceGroupRepository.list()).filter(group => group.expectedDate === expectedDate && isVisibleDispatchedInvoiceGroup(group));
+      const now = new Date().toISOString();
+      for (const group of latest) await invoiceGroupRepository.save({ ...group, hiddenAt: now, updatedAt: now });
+      live.setGroups(fixture ? await invoiceGroupRepository.list() : readLocalInvoiceGroupSnapshot());
+    } catch (error) {
+      setDispatchError({ date: expectedDate, message: error instanceof Error ? error.message : "삭제하지 못했습니다." });
+    } finally {
+      setHidingDate(null);
     }
   }
 
@@ -176,7 +204,10 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
           const skuCount = groups.reduce((sum, group) => sum + group.skuCount, 0);
           const totalQuantity = groups.reduce((sum, group) => sum + group.totalQuantity, 0);
           const centers = [...new Set(groups.map(group => group.fulfillmentCenter))];
-          const currentStage = groups.map(group => group.stage).sort((a, b) => INVOICE_GROUP_STAGE_ORDER.indexOf(a) - INVOICE_GROUP_STAGE_ORDER.indexOf(b))[0];
+          const activeGroups = groups.filter(group => group.stage !== "dispatched");
+          const doneGroups = groups.filter(group => group.stage === "dispatched");
+          const lastDispatchedAt = doneGroups.map(group => group.dispatchedAt || "").sort().slice(-1)[0] || "";
+          const currentStage = activeGroups.length ? activeGroups.map(group => group.stage).sort((a, b) => INVOICE_GROUP_STAGE_ORDER.indexOf(a) - INVOICE_GROUP_STAGE_ORDER.indexOf(b))[0] : "dispatched";
           return (
             <div key={expectedDate} className={`${styles.work} ${styles.inProgressCard}`}>
               <div className={styles.row}>
@@ -184,8 +215,23 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
                 <span className={styles.badge}>● {INVOICE_GROUP_STAGE_LABEL[currentStage]}</span>
               </div>
               <p className={styles.metrics}>발주 {poCount}건 · SKU {skuCount}종 · 총수량 {totalQuantity}개 · 센터 {centers.length}곳</p>
-              <p className={styles.muted}>입고예정일 {expectedDate}</p>
-              {currentStage === "shipment_completed" ? (
+              <p className={styles.muted}>입고예정일 {expectedDate}{doneGroups.length ? ` · 출고완료 발주 ${doneGroups.reduce((sum, group) => sum + group.purchaseOrderNumbers.length, 0)}건 ${formatSeoulShort(lastDispatchedAt)}` : ""}</p>
+              {currentStage === "dispatched" ? (
+                // 2026-10-15: 출고완료해도 카드는 남기고 출고완료 버튼만 잠근다. 다 보고 나면 삭제로 뺀다.
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "12px" }}>
+                    <button type="button" className={styles.primaryPink} disabled style={{ opacity: 0.55 }}>
+                      출고완료 {formatSeoulShort(lastDispatchedAt)}
+                    </button>
+                    <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}/sku-list`} className={styles.taskButtonGrayWhite}>
+                      쉽먼트별 SKU리스트
+                    </Link>
+                  </div>
+                  <button type="button" className={styles.taskButtonGrayWhite} disabled={hidingDate === expectedDate} onClick={() => void hideDispatched(expectedDate)} style={{ width: "100%", marginTop: "8px" }}>
+                    {hidingDate === expectedDate ? "삭제 중…" : "출고완료 자료 삭제"}
+                  </button>
+                </>
+              ) : currentStage === "shipment_completed" ? (
                 // 2026-10-02: 출력세트까지 끝난(출고준비완료) 날짜는 처리 화면으로 갈 필요 없이
                 // 여기서 바로 출고완료 처리 + 피킹용 쉽먼트별 SKU리스트를 연다.
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "12px" }}>
