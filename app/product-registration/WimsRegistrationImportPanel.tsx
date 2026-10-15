@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { parseWimsClipboard, type WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 import type { WimsRegistrationAudit } from "@/lib/wms/wims-registration-audit";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
-import { wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
+import { wmsColors } from "@/lib/wms/ui-tokens";
 
 const statusText = { reviewing: "검수중", approved: "검수완료", rejected: "반려", unknown: "확인 필요" } as const;
 const STORAGE_KEY = "noidb_wims_registration_snapshot_v1";
@@ -249,12 +249,16 @@ export default function WimsRegistrationImportPanel() {
 
   return (
     <section id="wims-registration" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", background: "#fff" }}>
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "7px", marginBottom: "4px" }}>
-        <a href="/downloads/noidb-supplier-sync.zip" download style={{ ...wmsGhostButton, minHeight: "34px", padding: "0 11px", display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
+      {/* 2026-10-15: WIMS 화면으로 바로 가는 버튼. 그 화면에 확장 기능의 전송 버튼이 자동으로 뜬다. */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "6px" }}>
+        <a href="https://supplier.coupang.com/qvt/wims" target="_blank" rel="noopener noreferrer" className="softSageButton" style={{ textDecoration: "none" }}>
+          상품등록상태 확인하기
+        </a>
+        <a href="/downloads/noidb-supplier-sync.zip" download className="softBeigeButton" style={{ textDecoration: "none" }}>
           확장 기능 v1.3.6 받기
         </a>
-        <span style={{ color: wmsColors.muted, fontSize: "10px" }}>Supplier Hub에서 확장 기능의 `WIMS 전체를 NOID-B로 전송`을 누르면 자동으로 가져옵니다.</span>
       </div>
+      <span style={{ color: wmsColors.muted, fontSize: "10px" }}>열린 WIMS 화면에서 확장 기능의 `WIMS 전체를 NOID-B로 전송`을 누르면 자동으로 가져옵니다.</span>
       {error && <p style={{ color: "#c0392b", fontSize: "12px", margin: "8px 0 0" }}>{error}</p>}
       {message && <p style={{ color: wmsColors.greenDark, fontSize: "12px", margin: "8px 0 0", fontWeight: 700 }}>{message}</p>}
       {snapshot && (
