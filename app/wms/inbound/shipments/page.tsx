@@ -815,6 +815,10 @@ export default function ShipmentReceiptsPage() {
           >
             {busy ? "처리 중…" : "새로고침"}
           </button>
+          {/* 2026-10-15: 쿠팡 쉽먼트 화면에 '입고결과 일괄 가져오기' 칸을 띄우는 확장 기능. 같은 이름 zip을 같은 폴더에 덮어쓰고 새로고침. */}
+          <a className={`softApricotButton ${styles.headerButton}`} href="/downloads/noidb-supplier-hub.zip" download>
+            쉽먼트 확장 v0.9.9 받기
+          </a>
         </div>
       </header>
       {/* 결과 알림은 화면 아래에 떠서 어디까지 내려가 있어도 보인다 */}
