@@ -457,8 +457,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
         { name: "02_동봉내역서_통합.pdf", bytes: manifestsPdf },
         { name: `03_바코드출력_${outputDateToken}_최종.xlsx`, bytes: barcodeXlsx },
       ];
-      const fileList = new TextEncoder().encode(["Shipment 출력세트 생성 파일", ...outputFiles.map(file => file.name), "06_생성파일목록.txt"].join("\r\n"));
-      const zip = await buildShipmentPrintZip([...outputFiles, { name: "06_생성파일목록.txt", bytes: fileList }]);
+      const zip = await buildShipmentPrintZip(outputFiles);
       const fileName = `Shipment_출력세트_${outputDateToken}.zip`;
       downloadBlobPreservingPage(zip, fileName, downloadTarget);
       const now = new Date().toISOString();

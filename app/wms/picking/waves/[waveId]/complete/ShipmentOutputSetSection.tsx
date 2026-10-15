@@ -49,8 +49,7 @@ export default function ShipmentOutputSetSection({ waveId, items, generation, ge
       { name: "04_물류센터_라벨.xlsx", bytes: centerLabelXlsx },
       { name: "05_거래명세서.pdf", bytes: transactionPdf },
     ];
-    const fileList = new TextEncoder().encode(["Shipment 출력세트 생성 파일", ...outputFiles.map(file => file.name), "06_생성파일목록.txt"].join("\r\n"));
-    const zip = await buildShipmentPrintZip([...outputFiles, { name: "06_생성파일목록.txt", bytes: fileList }]);
+    const zip = await buildShipmentPrintZip(outputFiles);
     const fileName = `Shipment_출력세트_${outputDateToken}_${activeGeneration.generationId}.zip`;
     downloadBlobPreservingPage(zip, fileName, downloadTarget);
     await onGenerated?.(activeGeneration.generationId, fileName);
