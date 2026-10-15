@@ -36,6 +36,48 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [openShipment, setOpenShipment] = useState<string | null>(null);
+  // 2026-10-15: 재고 파악하면서 주문할 상품을 담아 두었다가 한 번에 거래처발주로 보낸다(담은 목록은 이 기기에 남는다).
+  const pickKey = `noidb_outbound_vendor_pick_${expectedDate}`;
+  const [picked, setPicked] = useState<Record<string, { skuId: string; quantity: number; purchaseOrderNumber: string }>>({});
+  const [sending, setSending] = useState(false);
+  const [sendMessage, setSendMessage] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  useEffect(() => {
+    try { const raw = localStorage.getItem(pickKey); if (raw) setPicked(JSON.parse(raw)); } catch { /* 없으면 빈 목록 */ }
+  }, [pickKey]);
+  function savePicked(next: typeof picked) {
+    setPicked(next);
+    try { localStorage.setItem(pickKey, JSON.stringify(next)); } catch { /* 저장 실패해도 화면 선택은 유지 */ }
+  }
+  function togglePick(key: string, row: Row) {
+    const next = { ...picked };
+    if (next[key]) delete next[key];
+    else next[key] = { skuId: row.skuId, quantity: row.quantity, purchaseOrderNumber: row.purchaseOrderNumber };
+    savePicked(next);
+    setSendMessage(null);
+  }
+  const pickedSkuCount = new Set(Object.values(picked).map(item => item.skuId)).size;
+  async function sendToVendorOrders() {
+    if (sending || !pickedSkuCount) return;
+    setSending(true);
+    setSendError(null);
+    setSendMessage(null);
+    try {
+      const response = await fetch("/api/wms/vendor-orders/add-from-outbound", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedDate, items: Object.values(picked) }) });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "거래처발주로 보내지 못했습니다.");
+      const notes = [
+        data.vendors?.length ? `거래처 ${data.vendors.join(", ")}` : "",
+        data.alreadyQueued ? `이미 발주대기에 있던 ${data.alreadyQueued}개는 수량 그대로 둠` : "",
+        data.unassigned?.length ? `거래처 미지정 ${data.unassigned.length}개(제품DB 거래처 확인)` : "",
+        data.skipped?.length ? `못 넣은 SKU ${data.skipped.join(", ")}` : "",
+      ].filter(Boolean).join(" · ");
+      setSendMessage(`SKU ${data.placed.length}개를 거래처발주에 넣었습니다.${notes ? ` ${notes}` : ""}`);
+      savePicked({});
+    } catch (cause) {
+      setSendError(cause instanceof Error ? cause.message : "거래처발주로 보내지 못했습니다.");
+    } finally { setSending(false); }
+  }
 
   useEffect(() => {
     if (!ready) return;
@@ -93,7 +135,7 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
   );
 
   return (
-    <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "12px 12px 32px", fontFamily: "sans-serif", color: wmsColors.ink, background: wmsColors.background, minHeight: "100vh" }}>
+    <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: `12px 12px ${pickedSkuCount ? "110px" : "32px"}`, fontFamily: "sans-serif", color: wmsColors.ink, background: wmsColors.background, minHeight: "100vh" }}>
       <a href="/wms/work-center" style={{ color: wmsColors.slateDark, fontSize: "13px" }}>← 입고센터</a>
       <h1 style={{ margin: "10px 0 2px", fontSize: "20px" }}>쉽먼트별 SKU리스트</h1>
       <p style={{ margin: "0 0 12px", color: wmsColors.muted, fontSize: "12px" }}>입고예정일 {expectedDate} · 동봉내역서와 같은 순서{shipments ? ` · 쉽먼트 ${shipments.length}개 · 총 ${grandTotal.toLocaleString("ko-KR")}개` : ""} · 쉽먼트를 누르면 열립니다</p>
@@ -135,8 +177,10 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
                     const order = group.barcodeRows.indexOf(row) + 1;
                     const catalog = catalogBySku.get(row.skuId);
                     const unitPrice = unitPriceByPoSku.get(priceKey(row.purchaseOrderNumber, row.skuId)) || 0;
+                    const rowKey = `${group.shipmentNumber}|${row.purchaseOrderNumber}|${row.skuId}|${row.sourceRowNumber}`;
+                    const isPicked = Boolean(picked[rowKey]);
                     return (
-                      <li key={`${row.purchaseOrderNumber}-${row.skuId}-${row.sourceRowNumber}`} style={{ display: "grid", gridTemplateColumns: "24px 72px 1fr auto", gap: "10px", alignItems: "center", padding: "10px", borderRadius: "14px", background: "#fff", border: `1px solid #e5dace` }}>
+                      <li key={`${row.purchaseOrderNumber}-${row.skuId}-${row.sourceRowNumber}`} style={{ display: "grid", gridTemplateColumns: "24px 72px 1fr auto", gap: "10px", alignItems: "center", padding: "10px", borderRadius: "14px", background: isPicked ? "#fbf1ee" : "#fff", border: `1px solid ${isPicked ? "#dfbdb2" : "#e5dace"}` }}>
                         <span style={{ fontSize: "12px", color: wmsColors.muted, textAlign: "center" }}>{order}</span>
                         <ProductThumb key={row.skuId} catalog={catalog} skuId={row.skuId} alt={row.productName} />
                         <div style={{ minWidth: 0 }}>
@@ -148,7 +192,12 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
                             <a href={catalog.productLink} target="_blank" rel="noreferrer" style={{ fontSize: "12px", color: wmsColors.slateDark, display: "inline-block", marginTop: "3px" }}>제품링크 ↗</a>
                           )}
                         </div>
-                        <div style={{ fontSize: "20px", fontWeight: 800, minWidth: "36px", textAlign: "right" }}>{row.quantity}<span style={{ fontSize: "11px", fontWeight: 600 }}>개</span></div>
+                        <div style={{ display: "grid", justifyItems: "end", gap: "6px" }}>
+                          <div style={{ fontSize: "20px", fontWeight: 800, minWidth: "36px", textAlign: "right" }}>{row.quantity}<span style={{ fontSize: "11px", fontWeight: 600 }}>개</span></div>
+                          <button type="button" onClick={() => togglePick(rowKey, row)} className={isPicked ? "softPinkButton" : "softBeigeButton"} style={{ minHeight: "32px", padding: "4px 10px", fontSize: "12px", whiteSpace: "nowrap" }}>
+                            {isPicked ? "담음 ✓" : "발주 담기"}
+                          </button>
+                        </div>
                       </li>
                     );
                   })}
@@ -164,6 +213,20 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
             </div>
           )}
         </>
+      )}
+      {(pickedSkuCount > 0 || sendMessage || sendError) && (
+        <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 5, background: "#fff", borderTop: "1px solid #e5dace", padding: "10px 12px calc(10px + env(safe-area-inset-bottom))" }}>
+          <div style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto" }}>
+            {sendError && <p style={{ margin: "0 0 6px", color: "#b33f35", fontSize: "12px" }}>{sendError}</p>}
+            {sendMessage && <p style={{ margin: "0 0 6px", color: wmsColors.greenDark, fontSize: "12px" }}>{sendMessage} <a href="/wms/vendor-orders/manage" style={{ color: wmsColors.slateDark, fontWeight: 700 }}>거래처 발주서 열기 →</a></p>}
+            {pickedSkuCount > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "8px" }}>
+                <button type="button" className="softApricotButton" disabled={sending} onClick={() => savePicked({})}>담은 것 비우기</button>
+                <button type="button" className="softInkButton" disabled={sending} onClick={() => void sendToVendorOrders()}>{sending ? "보내는 중…" : `담은 ${pickedSkuCount}개 SKU 거래처발주`}</button>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </main>
   );

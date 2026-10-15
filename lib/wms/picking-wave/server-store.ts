@@ -219,7 +219,8 @@ export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot,
   if (mutation.action === "consolidateVendorOrders") {
     if (next.vendorQueueReceipts?.[mutation.operationId]) return current;
     // 입고결과(미납 SKU)에서 사용자가 직접 '거래처발주'를 누른 줄은, 예전에 발주서에서 지워 생긴 제외 표시를 푼다(2026-10-08).
-    const explicit = mutation.lines.filter(line => line.isManuallyAdded && line.shipmentReceiptDetails?.length);
+    // 2026-10-15: 쉽먼트별 SKU리스트에서 직접 고른 재고부족 줄(picking-shortage + 수동)도 같은 취급이다.
+    const explicit = mutation.lines.filter(line => line.isManuallyAdded && (line.shipmentReceiptDetails?.length || line.sourceType === "picking-shortage"));
     if (explicit.length && next.suppressedVendorSkuIds) {
       next.suppressedVendorSkuIds = { ...next.suppressedVendorSkuIds };
       for (const line of explicit) delete next.suppressedVendorSkuIds[normalizeSkuId(line.skuId)];
