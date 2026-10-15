@@ -79,6 +79,11 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
     } finally { setSending(false); }
   }
 
+  // 2026-10-15: 원본(Drive의 Label·내역서 PDF + 쉽먼트 XLSX)을 매번 다시 읽으면 오래 걸려서,
+  // 마지막으로 읽은 결과를 이 기기에 남겨 두고 바로 보여준다. 쉽먼트 구성이 바뀌었거나 '원본 다시 읽기'를 누를 때만 다시 읽는다.
+  const cacheKey = `noidb_sku_list_cache_v1_${expectedDate}`;
+  const [reloadToken, setReloadToken] = useState(0);
+  const [reloading, setReloading] = useState(false);
   useEffect(() => {
     if (!ready) return;
     if (fixture) { setError("개발용 예시자료에서는 실제 동봉내역서 원본을 읽지 않습니다."); return; }
@@ -96,6 +101,19 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
         for (const group of groups) if (group.shipmentFileName) byShipmentFile.set(group.shipmentFileName, [...(byShipmentFile.get(group.shipmentFileName) || []), group]);
         if (!byShipmentFile.size) throw new Error("쉽먼트 업로드파일 기록이 없습니다. 먼저 쉽먼트를 생성해 주세요.");
         const purchaseOrderNumbers = groups.flatMap(group => group.purchaseOrderNumbers);
+        const fingerprint = JSON.stringify(groups.map(group => [group.id, group.shipmentFileName || "", group.shipmentNumbers, [...group.purchaseOrderNumbers].sort(), group.outputSetGeneratedAt || ""]).sort());
+        if (reloadToken === 0) {
+          try {
+            const cached = JSON.parse(localStorage.getItem(cacheKey) || "null") as { fingerprint: string; shipments: ShipmentPrintGroup[]; catalog: ProductCatalogItem[]; prices: [string, number][] } | null;
+            if (cached?.fingerprint === fingerprint && Array.isArray(cached.shipments)) {
+              setCatalogBySku(new Map(cached.catalog.map(item => [item.skuId, item])));
+              setUnitPriceByPoSku(new Map(cached.prices));
+              setShipments(cached.shipments);
+              return;
+            }
+          } catch { /* 저장본이 없거나 깨졌으면 원본을 읽는다 */ }
+        }
+        setReloading(true);
         const [printGroupLists, catalogItems, priceDocuments] = await Promise.all([
           Promise.all([...byShipmentFile.entries()].map(([shipmentFileName, fileGroups]) =>
             loadShipmentPrintGroupsByDate(expectedDate, fileGroups.flatMap(group => group.purchaseOrderNumbers), shipmentFileName, {
@@ -112,16 +130,24 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
             .catch(() => []),
         ]);
         if (cancelled) return;
-        setCatalogBySku(new Map(catalogItems.map(item => [item.skuId, item])));
-        setUnitPriceByPoSku(new Map(priceDocuments.flatMap(document => document.lines.filter(line => line.unitPrice > 0).map(line => [priceKey(document.purchaseOrderNumber, line.skuId), line.unitPrice] as const))));
+        const merged = printGroupLists.flat().sort((left, right) => left.fulfillmentCenter.localeCompare(right.fulfillmentCenter, "ko") || String(left.shipmentNumber).localeCompare(String(right.shipmentNumber)));
+        const skuSet = new Set(merged.flatMap(group => group.barcodeRows.map(row => row.skuId)));
+        const usedCatalog = catalogItems.filter(item => skuSet.has(item.skuId));
+        const prices = priceDocuments.flatMap(document => document.lines.filter(line => line.unitPrice > 0).map(line => [priceKey(document.purchaseOrderNumber, line.skuId), line.unitPrice] as [string, number]));
+        setCatalogBySku(new Map(usedCatalog.map(item => [item.skuId, item])));
+        setUnitPriceByPoSku(new Map(prices));
+        try { localStorage.setItem(cacheKey, JSON.stringify({ fingerprint, shipments: merged, catalog: usedCatalog, prices })); } catch { /* 저장 공간 부족 — 다음에 다시 읽음 */ }
         // 동봉내역서와 같은 순서(센터 → 쉽먼트번호)로 합친다.
-        setShipments(printGroupLists.flat().sort((left, right) => left.fulfillmentCenter.localeCompare(right.fulfillmentCenter, "ko") || String(left.shipmentNumber).localeCompare(String(right.shipmentNumber))));
+        setShipments(merged);
       } catch (loadError) {
         if (!cancelled) setError(loadError instanceof Error ? loadError.message : "SKU리스트를 불러오지 못했습니다.");
+      } finally {
+        if (!cancelled) setReloading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [ready, fixture, repository, expectedDate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, fixture, repository, expectedDate, reloadToken]);
 
   // 2026-10-13 사용자 요청: 이 날짜 전체 총수량(모든 쉽먼트 합계)을 보여 준다.
   const grandTotal = (shipments || []).reduce((sum, group) => sum + group.barcodeRows.reduce((rowSum, row) => rowSum + row.quantity, 0), 0);
@@ -141,7 +167,12 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
       <p style={{ margin: "0 0 12px", color: wmsColors.muted, fontSize: "12px" }}>입고예정일 {expectedDate} · 동봉내역서와 같은 순서{shipments ? ` · 쉽먼트 ${shipments.length}개 · 총 ${grandTotal.toLocaleString("ko-KR")}개` : ""} · 쉽먼트를 누르면 열립니다</p>
 
       {error && <p style={{ padding: "12px", borderRadius: "12px", background: wmsColors.warnSoft, color: wmsColors.warn, fontSize: "13px", whiteSpace: "pre-wrap" }}>{error}</p>}
-      {!error && !shipments && <p style={{ color: wmsColors.muted, fontSize: "13px" }}>동봉내역서 원본을 읽는 중…</p>}
+      {!error && !shipments && <p style={{ color: wmsColors.muted, fontSize: "13px" }}>동봉내역서 원본을 읽는 중… (처음 한 번만 오래 걸리고, 다음부터는 바로 열립니다)</p>}
+      {shipments && (
+        <button type="button" className="softApricotButton" disabled={reloading} onClick={() => { setError(null); setReloadToken(value => value + 1); }} style={{ width: "100%", marginBottom: "8px", minHeight: "36px", fontSize: "12px" }}>
+          {reloading ? "원본 다시 읽는 중…" : "동봉내역서 원본 다시 읽기"}
+        </button>
+      )}
 
       {shipments && (
         <>
