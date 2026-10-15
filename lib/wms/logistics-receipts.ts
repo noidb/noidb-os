@@ -110,6 +110,8 @@ export interface LogisticsReceiptBoard {
   targets: LogisticsReceiptTarget[];
   lines: LogisticsReceiptBoardLine[];
   warnings: string[];
+  /** 1개 입고 줄이 마케팅 후보가 아닌 이유(2026-10-15, 화면 확인용). 키: `${shipmentNumber}|${skuId}` */
+  marketingNotes?: Record<string, string>;
 }
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -380,6 +382,7 @@ export function buildLogisticsReceiptBoard(input: {
     const skuId = (JSON.parse(key) as [string, string])[1];
     maxPerShipmentBySku.set(skuId, Math.max(maxPerShipmentBySku.get(skuId) || 0, quantity));
   }
+  const marketingNotes: Record<string, string> = {};
   for (const target of targets) {
     const shipment = receiptByShipment.get(target.shipmentNumber);
     if (!shipment || shipment.status !== "마감") continue;
@@ -389,7 +392,18 @@ export function buildLogisticsReceiptBoard(input: {
       const isCandidate = !needsStatusRefresh && statusBySku.get(line.skuId) === "정상" && line.receivedQuantity > 0
         && receivedByShipmentSku.get(JSON.stringify([shipment.shipmentNumber, line.skuId])) === 1 && maxPerShipmentBySku.get(line.skuId) === 1
         && !completedMarketing.has(line.skuId) && !excludedMarketing.has(line.skuId);
-      if (!isCandidate || excludedMarketingLines.has(lineKey)) continue;
+      if (!isCandidate || excludedMarketingLines.has(lineKey)) {
+        if (line.receivedQuantity > 0 && receivedByShipmentSku.get(JSON.stringify([shipment.shipmentNumber, line.skuId])) === 1) {
+          const status = statusBySku.get(line.skuId);
+          marketingNotes[`${shipment.shipmentNumber}|${line.skuId}`] = needsStatusRefresh ? "공급상태 없는 이전 수집자료"
+            : status !== "정상" ? `발주가능상태 ${status || "미확인"}이라 제외`
+            : (maxPerShipmentBySku.get(line.skuId) || 0) > 1 ? "다른 쉽먼트에서 2개 이상 입고된 SKU라 제외"
+            : completedMarketing.has(line.skuId) ? "예전에 마케팅 완료한 SKU"
+            : excludedMarketing.has(line.skuId) ? "마케팅 제외 목록(같은 모델 포함)"
+            : "화면에서 마케팅 제외함";
+        }
+        continue;
+      }
       const route = input.routes?.[lineKey];
       const boardLine: LogisticsReceiptBoardLine = { lineKey, sourceLineKey, shipmentNumber: shipment.shipmentNumber, boxId: line.boxId, purchaseOrderNumber: line.purchaseOrderNumber,
         skuId: line.skuId, productName: line.productName, barcode: line.barcode, deliveredQuantity: line.deliveredQuantity, receivedQuantity: line.receivedQuantity,
@@ -407,7 +421,7 @@ export function buildLogisticsReceiptBoard(input: {
   }
   if (needsStatusRefresh) warnings.push("이전 수집자료에는 공급상태가 없습니다. 전체 쉽먼트를 다시 수집해 주세요.");
   if (unavailableSkuCount) warnings.push(`공급상태가 정상이 아닌 SKU ${unavailableSkuCount}건(불가·일시중단·조회안됨)은 미납·쿠폰광고 분류에서 뺐습니다.`);
-  return { collectedAt: snapshot?.collectedAt, targets, lines, warnings, unavailableSkus };
+  return { collectedAt: snapshot?.collectedAt, targets, lines, warnings, unavailableSkus, marketingNotes };
 }
 
 /** 저장된 쿠팡 목록 수집에서 다시 만든 대상. 사이트 출고기록·예전 Aside 대기목록은 더 이상 쓰지 않는다. */

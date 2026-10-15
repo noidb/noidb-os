@@ -7,6 +7,7 @@ import type { InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import ProductThumb from "../ProductThumb";
+import { initialQueryFromUrl, OrderedProductsSwitch, PickBar, PickButton, ProductInfo, useOutboundPicks } from "../OrderedProductsShared";
 import { WMS_MOBILE_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
 import type { SkuSummaryPurchaseOrder, SkuSummaryRow } from "@/app/api/wms/logistics/sku-summary/route";
 
@@ -31,7 +32,9 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
   const [summary, setSummary] = useState<{ poCount: number; centerCount: number; missing: string[] } | null>(null);
   const [catalogBySku, setCatalogBySku] = useState<Map<string, ProductCatalogItem>>(new Map());
   const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQueryFromUrl);
+  // 2026-10-15: 재고파악은 이 보기에서 한다 — 여기서 바로 '발주 담기'로 거래처발주를 모은다.
+  const picks = useOutboundPicks(expectedDate);
   // 2026-10-11 사용자 요청: "발주 N건"을 누르면 그 발주서를 본다(1건이면 바로 열고, 여러 건이면 목록을 펼침).
   const [documents, setDocuments] = useState<Map<string, SkuSummaryPurchaseOrder>>(new Map());
   const [expandedSku, setExpandedSku] = useState<string | null>(null);
@@ -82,9 +85,10 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
   const totalQuantity = (rows || []).reduce((sum, row) => sum + row.totalQuantity, 0);
 
   return (
-    <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "12px 12px 32px", fontFamily: "sans-serif", color: wmsColors.ink, background: wmsColors.background, minHeight: "100vh" }}>
+    <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: `12px 12px ${Object.keys(picks.picked).length ? "110px" : "32px"}`, fontFamily: "sans-serif", color: wmsColors.ink, background: wmsColors.background, minHeight: "100vh" }}>
       <a href="/wms/work-center" style={{ color: wmsColors.slateDark, fontSize: "13px" }}>← 입고센터</a>
-      <h1 style={{ margin: "10px 0 2px", fontSize: "20px" }}>발주 SKU별 총수량</h1>
+      <h1 style={{ margin: "10px 0 2px", fontSize: "20px" }}>발주제품보기</h1>
+      <OrderedProductsSwitch expectedDate={expectedDate} current="summary" query={query} />
       <p style={{ margin: "0 0 12px", color: wmsColors.muted, fontSize: "12px" }}>
         입고예정일 {expectedDate}{rows && summary ? ` · 발주 ${summary.poCount}건 · 센터 ${summary.centerCount}곳 · SKU ${rows.length}종 · 총 ${totalQuantity}개` : ""}
       </p>
@@ -113,12 +117,18 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
               const display = resolveDisplayNameAndOption(row.productName, row.optionName);
               const rowKey = row.skuId || row.barcode;
               return (
-                <li key={rowKey} style={{ display: "grid", gridTemplateColumns: "72px 1fr auto", gap: "10px", alignItems: "center", padding: "10px", borderRadius: "14px", background: "#fff", border: "1px solid #e5dace" }}>
+                <li key={rowKey} style={{ display: "grid", gridTemplateColumns: "72px 1fr auto", gap: "10px", alignItems: "center", padding: "10px", borderRadius: "14px", background: picks.picked[row.skuId] ? "#fbf1ee" : "#fff", border: `1px solid ${picks.picked[row.skuId] ? "#dfbdb2" : "#e5dace"}` }}>
                   <ProductThumb key={row.skuId} catalog={catalog} skuId={row.skuId} alt={display.name} />
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: "13px", fontWeight: 700, lineHeight: 1.35 }}>{display.name}{display.option ? ` · ${display.option}` : ""}</div>
-                    <div style={{ fontSize: "12px", color: wmsColors.muted, marginTop: "3px" }}>
-                      SKU {row.skuId || "-"} ·{" "}
+                  <ProductInfo
+                    name={display.name}
+                    option={display.option}
+                    skuId={row.skuId}
+                    warehouseNumber={catalog?.warehouseNumber}
+                    barcode={row.barcode}
+                    priceMin={row.minUnitPrice}
+                    priceMax={row.maxUnitPrice}
+                    productLink={catalog?.productLink}
+                    extra={<>
                       <button
                         type="button"
                         onClick={() => {
@@ -131,16 +141,12 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
                         발주 {row.purchaseOrderCount}건
                       </button>
                       {" "}· 센터 {row.fulfillmentCenters.length}곳
-                    </div>
-                    <div style={{ fontSize: "12px", fontFamily: "monospace", marginTop: "2px" }}>{row.barcode}</div>
-                    {row.maxUnitPrice > 0 && (
-                      <div style={{ fontSize: "12px", fontWeight: 700, marginTop: "2px" }}>매입가 {priceText(row.minUnitPrice, row.maxUnitPrice)}</div>
-                    )}
-                    {catalog?.productLink && (
-                      <a href={catalog.productLink} target="_blank" rel="noreferrer" style={{ fontSize: "12px", color: wmsColors.slateDark, display: "inline-block", marginTop: "3px" }}>제품링크 ↗</a>
-                    )}
+                    </>}
+                  />
+                  <div style={{ display: "grid", justifyItems: "end", gap: "6px" }}>
+                    <div style={{ fontSize: "20px", fontWeight: 800, minWidth: "36px", textAlign: "right" }}>{row.totalQuantity}<span style={{ fontSize: "11px", fontWeight: 600 }}>개</span></div>
+                    {row.skuId && <PickButton picked={Boolean(picks.picked[row.skuId])} onClick={() => picks.toggle(row.skuId, row.totalQuantity)} />}
                   </div>
-                  <div style={{ fontSize: "20px", fontWeight: 800, minWidth: "36px", textAlign: "right" }}>{row.totalQuantity}<span style={{ fontSize: "11px", fontWeight: 600 }}>개</span></div>
                   {expandedSku === rowKey && (
                     <div style={{ gridColumn: "1 / -1", display: "grid", gap: "6px" }}>
                       {(row.purchaseOrders || []).map(po => (
@@ -164,6 +170,7 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
         </>
       )}
 
+      <PickBar expectedDate={expectedDate} picks={picks} />
       {openPo && (() => {
         const document = documents.get(openPo.purchaseOrderNumber);
         const lineTotal = (document?.lines || []).reduce((sum, line) => sum + line.orderedQuantity, 0);

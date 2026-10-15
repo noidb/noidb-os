@@ -823,6 +823,17 @@ export default function ShipmentReceiptsPage() {
   const shipmentDetails = payload?.shipmentDetails || {};
   const latestFirstSeen = Object.values(shipmentDetails).map((detail) => detail.firstSeenAt).filter(Boolean).sort().slice(-1)[0] || "";
   const newTargets = latestFirstSeen ? (payload?.targets || []).filter((target) => shipmentDetails[target.shipmentNumber]?.firstSeenAt === latestFirstSeen) : [];
+  // 2026-10-15: 1개 입고 줄이 마케팅 SKU 리스트에 왜 있는지/없는지 내역에서 바로 보이게 한다.
+  const marketingState = (shipmentNumber: string, skuId: string) => {
+    const line = payload?.board.lines.find((item) => item.kind === "marketing" && item.shipmentNumber === shipmentNumber && item.skuId === skuId);
+    if (line) {
+      if (line.state === "routed" || followUpData?.proofs.some((proof) => proof.sourceKeys.includes(line.lineKey))) return "쿠폰·광고 처리됨";
+      if (followUpData?.queues.marketing.some((item) => item.lineKey === line.lineKey)) return "쿠폰·광고 대기";
+      if (skuExcludedNow[skuId] || followUpData?.exclusionHistory.some((item) => item.lineKey === line.lineKey && !item.restoredAt)) return "마케팅 제외함";
+      return "마케팅 후보";
+    }
+    return payload?.board.marketingNotes?.[`${shipmentNumber}|${skuId}`] || "";
+  };
   const renderShipmentCard = (target: LogisticsReceiptTarget, isNew = false) => {
     const detail = shipmentDetails[target.shipmentNumber];
     const open = openShipments.has(target.shipmentNumber);
@@ -853,7 +864,7 @@ export default function ShipmentReceiptsPage() {
         {open && (detail ? (
           <div className={styles.tableWrap}>
             <table className={styles.table} aria-label={`쉽먼트 ${target.shipmentNumber} 내역`}>
-              <thead><tr><th>SKU</th><th>상품명</th><th>납품</th><th>입고</th><th>미납</th></tr></thead>
+              <thead><tr><th>SKU</th><th>상품명</th><th>납품</th><th>입고</th><th>미납</th><th>마케팅</th></tr></thead>
               <tbody>
                 {detail.lines.map((line, index) => {
                   const miss = Math.max(0, line.deliveredQuantity - line.receivedQuantity);
@@ -864,6 +875,7 @@ export default function ShipmentReceiptsPage() {
                       <td>{line.deliveredQuantity}</td>
                       <td>{line.receivedQuantity}</td>
                       <td style={{ color: miss ? "#b33f35" : undefined, fontWeight: miss ? 800 : undefined }}>{miss || "-"}</td>
+                      <td style={{ fontSize: "12px" }}>{marketingState(target.shipmentNumber, line.skuId)}</td>
                     </tr>
                   );
                 })}

@@ -223,8 +223,8 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
                     <button type="button" className={styles.primaryPink} disabled style={{ opacity: 0.55 }}>
                       출고완료 {formatSeoulShort(lastDispatchedAt)}
                     </button>
-                    <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}/sku-list`} className={styles.taskButtonGrayWhite}>
-                      쉽먼트별 SKU리스트
+                    <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}/sku-summary`} className={styles.taskButtonGrayWhite}>
+                    발주제품보기
                     </Link>
                   </div>
                   <button type="button" className={styles.taskButtonGrayWhite} disabled={hidingDate === expectedDate} onClick={() => void hideDispatched(expectedDate)} style={{ width: "100%", marginTop: "8px" }}>
@@ -238,8 +238,8 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
                   <button type="button" className={styles.primaryPink} disabled={dispatchingDate === expectedDate} onClick={() => void markDispatched(expectedDate)}>
                     {dispatchingDate === expectedDate ? "기록 중…" : "출고완료"}
                   </button>
-                  <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}/sku-list`} className={styles.taskButtonGrayWhite}>
-                    쉽먼트별 SKU리스트
+                  <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}/sku-summary`} className={styles.taskButtonGrayWhite}>
+                    발주제품보기
                   </Link>
                 </div>
               ) : (
@@ -249,7 +249,7 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
                   </Link>
                   {/* 2026-10-02: 쉽먼트 생성 전이라 쉽먼트별 목록 대신 발주 SKU별 총수량을 본다. */}
                   <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}/sku-summary`} className={styles.taskButtonGrayWhite} style={{ marginTop: "8px" }}>
-                    SKU별 총수량 보기
+                    발주제품보기
                   </Link>
                 </>
               )}
