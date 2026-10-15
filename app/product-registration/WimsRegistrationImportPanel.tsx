@@ -55,25 +55,43 @@ export default function WimsRegistrationImportPanel() {
   const [decidingRow, setDecidingRow] = useState<number | null>(null);
   const [message, setMessage] = useState("");
 
+  // 2026-10-15: 새로 가져오기 전까지 마지막 결과를 계속 보여준다. 이 기기 저장본을 바로 보여주고,
+  // 서버 저장본(다른 PC·모바일에서 가져온 것)이 더 새로우면 그것으로 바꾼다. 수집 중에도 지난 결과는 남겨 둔다.
   useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get("source") === "wims-extension" && params.get("transferId")) {
-        setMessage("Supplier Hub에서 WIMS 전체 결과를 수집하고 있습니다. 완료될 때까지 이 화면을 그대로 두세요.");
-        return;
-      }
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const saved = JSON.parse(raw) as SavedSnapshot;
-      if (!saved?.capturedAt || !Array.isArray(saved.snapshot?.rows)) return;
+    let cancelled = false;
+    let shownAt = "";
+    const show = (saved: SavedSnapshot) => {
+      if (cancelled || !saved?.capturedAt || !Array.isArray(saved.snapshot?.rows) || saved.capturedAt <= shownAt) return;
+      shownAt = saved.capturedAt;
       setSnapshot(saved.snapshot);
       setCapturedAt(saved.capturedAt);
       setCapture(saved.capture || null);
+      setAudit(null);
       void auditRows(saved.snapshot.rows);
-    } catch {
-      localStorage.removeItem(STORAGE_KEY);
+    };
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("source") === "wims-extension" && params.get("transferId")) {
+      setMessage("Supplier Hub에서 WIMS 전체 결과를 수집하고 있습니다. 완료될 때까지 이 화면을 그대로 두세요.");
     }
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) show(JSON.parse(raw) as SavedSnapshot);
+    } catch { /* 이 기기 저장본이 깨졌으면 서버 저장본을 쓴다 */ }
+    fetch("/api/wms/wims-registration/last", { cache: "no-store" })
+      .then(response => response.json())
+      .then(data => {
+        if (!data?.saved) return;
+        show(data.saved as SavedSnapshot);
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data.saved)); } catch { /* 저장 공간 부족 등 — 화면 표시는 그대로 */ }
+      })
+      .catch(() => { /* 오프라인 등 — 이 기기 저장본으로 계속 */ });
+    return () => { cancelled = true; };
   }, []);
+
+  function persistSnapshot(saved: SavedSnapshot) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(saved)); } catch { /* 이 기기 저장 실패해도 서버에는 남긴다 */ }
+    void fetch("/api/wms/wims-registration/last", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(saved) }).catch(() => undefined);
+  }
 
   useEffect(() => {
     function receiveExtensionTransfer(event: MessageEvent) {
@@ -93,7 +111,7 @@ export default function WimsRegistrationImportPanel() {
         setMessage(nextCapture
           ? `WIMS 전체 ${nextCapture.totalRowCount}건 · ${nextCapture.pageCount}페이지를 빠짐없이 받았습니다. 제품DB와 자동 대조합니다.`
           : `확장 기능에서 현재 화면 ${nextSnapshot.rows.length}건을 받았습니다. 제품DB와 자동 대조합니다.`);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ capturedAt: nextCapturedAt, snapshot: nextSnapshot, capture: nextCapture } satisfies SavedSnapshot));
+        persistSnapshot({ capturedAt: nextCapturedAt, snapshot: nextSnapshot, capture: nextCapture });
         const completedUrl = new URL(window.location.href);
         completedUrl.searchParams.delete("source");
         completedUrl.searchParams.delete("transferId");
@@ -101,14 +119,10 @@ export default function WimsRegistrationImportPanel() {
         window.postMessage({ type: EXTENSION_ACK_TYPE, accepted: true }, window.location.origin);
         void auditRows(nextSnapshot.rows);
       } catch (caught) {
+        // 새 결과를 못 읽어도 지난 결과는 지우지 않고 그대로 보여준다.
         setText(incomingText);
-        setSnapshot(null);
-        setCapturedAt("");
-        setCapture(null);
-        setAudit(null);
         setMessage("");
-        localStorage.removeItem(STORAGE_KEY);
-        setError(caught instanceof Error ? caught.message : "확장 기능에서 받은 WIMS 표를 읽지 못했습니다.");
+        setError(`${caught instanceof Error ? caught.message : "확장 기능에서 받은 WIMS 표를 읽지 못했습니다."} 아래는 지난번 가져온 결과입니다.`);
         window.postMessage({ type: EXTENSION_ACK_TYPE, accepted: false }, window.location.origin);
       }
     }
@@ -123,10 +137,9 @@ export default function WimsRegistrationImportPanel() {
       setSnapshot(nextSnapshot);
       setCapturedAt(nextCapturedAt);
       setCapture(null);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ capturedAt: nextCapturedAt, snapshot: nextSnapshot, capture: null } satisfies SavedSnapshot));
+      persistSnapshot({ capturedAt: nextCapturedAt, snapshot: nextSnapshot, capture: null });
       setError("");
     } catch (caught) {
-      setSnapshot(null);
       setError(caught instanceof Error ? caught.message : "WIMS 표를 읽지 못했습니다.");
     }
   }
