@@ -18,6 +18,7 @@ import type {
 } from "@/lib/wms/logistics-receipts";
 import styles from "./shipments.module.css";
 import WarehouseRecheckCleanup from "./WarehouseRecheckCleanup";
+import DiscontinueByCode from "./DiscontinueByCode";
 
 type Tab = "pending" | "results" | "followup" | "history";
 type Decision = "vendor" | "discontinue" | "reorder" | "marketing";
@@ -1034,6 +1035,14 @@ export default function ShipmentReceiptsPage() {
                 </div>
               </section>
             ))}
+            {!fixture && (
+              <DiscontinueByCode
+                onDone={(text, isError) => {
+                  if (isError) setError(text);
+                  else { setError(""); setMessage(text); }
+                }}
+              />
+            )}
             {!fixture && (
               <WarehouseRecheckCleanup
                 onDone={(text, isError) => {

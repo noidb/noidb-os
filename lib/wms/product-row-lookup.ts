@@ -36,7 +36,7 @@ export function findSkuInRows(sheetName: string, rows: string[][], skuId: string
   return { sheetName, rowNumber: matches[0].index + 1, headerRowIndex, headers, values: (matches[0].row || []).map(v => String(v ?? "")), rows };
 }
 
-async function batchGet(sheetNames: string[], renderOption: SheetValueRenderOption): Promise<Map<string, string[][]>> {
+export async function batchGet(sheetNames: string[], renderOption: SheetValueRenderOption): Promise<Map<string, string[][]>> {
   const result = new Map<string, string[][]>();
   if (!sheetNames.length) return result;
   const ranges = sheetNames.map(name => `ranges=${encodeURIComponent(`'${name.replace(/'/g, "''")}'`)}`).join("&");
@@ -69,4 +69,46 @@ export async function findProductRowAnyTab(skuId: string, options: { valueRender
 
 export function notFoundAnyTabMessage(skuId: string) {
   return `제품DB와 다른 탭 어디에서도 SKU ID "${skuId}"를 찾을 수 없습니다.`;
+}
+
+export interface CodeLookupResult {
+  /** 입력한 바코드 또는 SKU ID */
+  code: string;
+  matches: { skuId: string; productName: string; barcode: string; sheetName: string }[];
+}
+
+/**
+ * 바코드나 SKU ID 목록으로 상품을 찾는다(2026-10-15 — 출력하고 남은 바코드 라벨로 단종서류 만들기).
+ * 제품DB를 먼저 보고, 없으면 다른 보이는 탭('_' 숨김 이력 탭 제외)을 본다. 같은 SKU는 한 번만 쓴다.
+ */
+export async function lookupCodesAnyTab(codes: string[]): Promise<CodeLookupResult[]> {
+  const tabs = (await fetchSpreadsheetTabs()).filter(tab => !tab.hidden && !tab.title.startsWith("_")).map(tab => tab.title);
+  const ordered = [PRODUCT_DB_SHEET_NAME, ...tabs.filter(name => name !== PRODUCT_DB_SHEET_NAME)];
+  const values = await batchGet(ordered, "FORMATTED_VALUE");
+  if (!(values.get(PRODUCT_DB_SHEET_NAME) || []).length) throw new Error("제품DB를 읽을 수 없습니다.");
+  const bySku = new Map<string, CodeLookupResult["matches"][number]>();
+  const byBarcode = new Map<string, CodeLookupResult["matches"]>();
+  for (const sheetName of ordered) {
+    const rows = values.get(sheetName) || [];
+    const headerRowIndex = rows.slice(0, HEADER_SCAN_ROWS).findIndex(row => (row || []).some(cell => String(cell ?? "").trim() === "SKU ID"));
+    if (headerRowIndex < 0) continue;
+    const headers = rows[headerRowIndex].map(value => String(value ?? "").trim());
+    const skuColumn = headers.indexOf("SKU ID");
+    const nameColumn = headers.indexOf("상품명");
+    const barcodeColumn = headers.indexOf("바코드");
+    for (const row of rows.slice(headerRowIndex + 1)) {
+      const skuId = normalizeSkuId(row?.[skuColumn]);
+      if (!skuId || bySku.has(skuId)) continue; // 제품DB에 있으면 제품DB 값을 쓴다.
+      const entry = { skuId, productName: String(nameColumn >= 0 ? row?.[nameColumn] ?? "" : "").trim(), barcode: String(barcodeColumn >= 0 ? row?.[barcodeColumn] ?? "" : "").trim().toUpperCase(), sheetName };
+      bySku.set(skuId, entry);
+      if (entry.barcode) byBarcode.set(entry.barcode, [...(byBarcode.get(entry.barcode) || []), entry]);
+    }
+  }
+  return codes.map(code => {
+    const trimmed = code.trim().toUpperCase();
+    const viaBarcode = byBarcode.get(trimmed);
+    if (viaBarcode?.length) return { code, matches: viaBarcode };
+    const viaSku = bySku.get(normalizeSkuId(trimmed));
+    return { code, matches: viaSku ? [viaSku] : [] };
+  });
 }
