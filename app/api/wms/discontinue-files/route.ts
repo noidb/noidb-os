@@ -12,6 +12,8 @@ import {
 } from "@/lib/wms/discontinue-files";
 import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
 import { buildDiscontinueLetterFromTemplate } from "@/lib/wms/discontinue-letter";
+import { markDiscontinuedInProductDb } from "@/lib/wms/discontinue-mark-product-db";
+import { discontinueMarkMessage } from "@/lib/wms/discontinue-mark-message";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,6 +65,8 @@ export async function POST(request: NextRequest) {
       bundle.file(fileName, result.buffer);
       bundle.file(pdfName, pdf);
       const zipName = `단종신청_엑셀_공문_${date.compact}.zip`;
+      // 단종서류를 만든 SKU는 제품DB 현재상태를 거래처단종으로 적는다(2026-10-19).
+      const productDb = await markDiscontinuedInProductDb(items.map(item => item.skuId));
       const warnings = [driveHeaders, pdfSaved].map(headers => decodeURIComponent(headers["X-NOIDB-Drive-Save-Warning"] || "")).filter(Boolean);
       return new NextResponse(await bundle.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }), { headers: {
         "Content-Type": "application/zip", "Cache-Control": "no-store",
@@ -71,6 +75,7 @@ export async function POST(request: NextRequest) {
         "X-NOIDB-PDF-File-Name": encodeURIComponent(pdfName), "X-NOIDB-Item-Count": String(items.length),
         "X-NOIDB-Preserved-Template": "true", "X-NOIDB-Document-Date": date.iso,
         "X-NOIDB-Drive-Saved": driveHeaders["X-NOIDB-Drive-Saved"] === "true" && pdfSaved["X-NOIDB-Drive-Saved"] === "true" ? "true" : "false",
+        "X-NOIDB-ProductDb-Message": encodeURIComponent(discontinueMarkMessage(productDb).trim()),
         ...(warnings.length ? { "X-NOIDB-Drive-Save-Warning": encodeURIComponent([...new Set(warnings)].join(" ")) } : {}),
       } });
     }

@@ -8,6 +8,7 @@ import { loadReregistrationLookup } from "@/lib/wms/reregistration-lookup";
 import { loadStatusSourceItems } from "@/lib/wms/status-list-sources";
 import { buildDiscontinueWorkbook, koreaDateParts, loadDiscontinueLetterTemplate, loadDiscontinueTemplate } from "@/lib/wms/discontinue-files";
 import { buildDiscontinueLetterFromTemplate } from "@/lib/wms/discontinue-letter";
+import { markDiscontinuedInProductDb } from "@/lib/wms/discontinue-mark-product-db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,7 +40,9 @@ export async function POST(request: NextRequest) {
     zip.file(`단종요청_공문_${date.compact}.pdf`, pdf);
     const fileName = `단종신청_${date.compact}_${items.length}건.zip`;
     const base64 = (await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" })).toString("base64");
-    return NextResponse.json({ ok: true, fileName, base64, count: items.length }, { headers });
+    // 단종서류를 만든 SKU는 제품DB 현재상태를 거래처단종으로 적는다(2026-10-19).
+    const productDb = await markDiscontinuedInProductDb(items.map(item => item.skuId));
+    return NextResponse.json({ ok: true, fileName, base64, count: items.length, productDb }, { headers });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "단종신청 파일을 만들지 못했습니다." }, { status: 400, headers });
   }

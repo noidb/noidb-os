@@ -1,5 +1,6 @@
 "use client";
 
+import { discontinueMarkMessage } from "@/lib/wms/discontinue-mark-message";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -539,7 +540,7 @@ export default function ShipmentReceiptsPage() {
       document.body.append(link);
       link.click();
       link.remove();
-      setMessage(`단종신청 엑셀과 공문을 만들었습니다(${data.count}건). 쿠팡에 신청한 뒤 '단종 신청 완료 · 목록 비우기'를 눌러 주세요.`);
+      setMessage(`단종신청 엑셀과 공문을 만들었습니다(${data.count}건).${discontinueMarkMessage(data.productDb)} 쿠팡에 신청한 뒤 '단종 신청 완료 · 목록 비우기'를 눌러 주세요.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "단종신청 파일을 만들지 못했습니다.");
     } finally {

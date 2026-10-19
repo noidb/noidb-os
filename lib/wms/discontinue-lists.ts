@@ -27,6 +27,21 @@ const itemKey = (item: Pick<ProductCatalogItem, "skuId" | "currentStatus" | "ord
   JSON.stringify([item.skuId, squash(item.currentStatus), squash(item.orderableStatus), extra]);
 const displayName = (item: Pick<ProductCatalogItem, "productName" | "optionLabel">) => [item.productName, item.optionLabel].filter(Boolean).join(", ");
 
+/**
+ * 단종 목록 '처리완료' 비교용 키. 단종서류를 만들면 현재상태를 거래처단종으로 적으므로(2026-10-19),
+ * 현재상태가 단종 계열끼리(또는 빈칸→거래처단종) 바뀐 것만으로 처리완료한 SKU가 다시 나오지 않게 한다.
+ * 발주가능상태가 바뀌면 다시 나온다.
+ */
+export function discontinueClearedKey(key: string): string {
+  try {
+    const parsed = JSON.parse(key) as unknown;
+    if (!Array.isArray(parsed) || parsed.length < 3) return key;
+    const [skuId, status, orderable] = parsed.map(value => String(value ?? ""));
+    const group = !status || matches(status, DISCONTINUE_CURRENT_STATUSES) ? "#단종" : squash(status);
+    return JSON.stringify([skuId, group, squash(orderable)]);
+  } catch { return key; }
+}
+
 export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier">[], options: {
   releaseFromScreen?: Record<string, { productName: string }>;
   cleared?: StatusListCleared;
@@ -60,8 +75,10 @@ export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId
   };
   for (const skuId of options.memoReleaseSkuIds ?? MEMO_RELEASE_SKU_IDS) addRelease(skuId, "", "메모");
   for (const [skuId, check] of Object.entries(options.releaseFromScreen || {})) addRelease(skuId, check.productName, "입고결과");
-  const visible = (list: Map<string, StatusListItem>, cleared: Record<string, string> = {}) =>
-    [...list.values()].filter(item => !cleared[item.key]).sort((a, b) => a.skuId.localeCompare(b.skuId));
+  const visible = (list: Map<string, StatusListItem>, cleared: Record<string, string> = {}, sameKey: (key: string) => string = key => key) => {
+    const done = new Set(Object.keys(cleared).map(sameKey));
+    return [...list.values()].filter(item => !cleared[item.key] && !done.has(sameKey(item.key))).sort((a, b) => a.skuId.localeCompare(b.skuId));
+  };
   // 재등록SKU 탭·교체이력의 옛 SKU, 제품DB 재등록구분이 판매량저조영구정지·영구제외·재등록완료인 SKU는
   // 단종해제 대상이 아니다(신규 재등록 대상, 사용자 확인 2026-10-08) → 단종해제에서 뺀다.
   // 그중 재등록이 끝난 옛 SKU는 발주가능상태가 '불가'여야 정상이므로, 아직 '정상'이면 단종 대상에 넣는다.
@@ -80,5 +97,5 @@ export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId
   };
   for (const skuId of reregistered) if (bySku.get(skuId)?.orderableStatus.trim() === "정상") addDiscontinue(skuId, "재등록완료 옛 SKU");
   for (const skuId of options.memoDiscontinueSkuIds ?? MEMO_DISCONTINUE_SKU_IDS) addDiscontinue(skuId, "메모");
-  return { discontinue: visible(discontinue, options.cleared?.discontinue), release: visible(release, options.cleared?.release), reregisteredExcluded: excluded };
+  return { discontinue: visible(discontinue, options.cleared?.discontinue, discontinueClearedKey), release: visible(release, options.cleared?.release), reregisteredExcluded: excluded };
 }

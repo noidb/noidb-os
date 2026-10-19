@@ -1,5 +1,6 @@
 "use client";
 
+import { discontinueMarkMessage } from "@/lib/wms/discontinue-mark-message";
 import { useEffect, useRef, useState } from "react";
 import styles from "./shipments.module.css";
 
@@ -13,7 +14,7 @@ type Lookup = { code: string; matches: Match[] };
  */
 export default function DiscontinueByCode({ onDone }: { onDone: (text: string, isError: boolean) => void }) {
   const [text, setText] = useState("");
-  const [busy, setBusy] = useState<"check" | "make" | null>(null);
+  const [busy, setBusy] = useState<"check" | "make" | "mark" | null>(null);
   const [lookup, setLookup] = useState<Lookup[] | null>(null);
   const codes = [...new Set(text.split(/[\s,]+/).map(value => value.trim()).filter(Boolean))];
   // 입력 내용은 서버에 자동 저장해, 단종할 코드가 생길 때마다 붙여넣어 모아 두고 나중에 한 번에 만든다(2026-10-19).
@@ -56,11 +57,11 @@ export default function DiscontinueByCode({ onDone }: { onDone: (text: string, i
     if (loaded.current) saveDraft(next, 400);
   }
 
-  async function run(check: boolean) {
+  async function run(check: boolean, markOnly = false) {
     if (busy || !codes.length) return;
-    setBusy(check ? "check" : "make");
+    setBusy(markOnly ? "mark" : check ? "check" : "make");
     try {
-      const response = await fetch("/api/wms/logistics/discontinue-file-by-code", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ codes, check }) });
+      const response = await fetch("/api/wms/logistics/discontinue-file-by-code", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ codes, check, markOnly }) });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "단종신청 파일을 만들지 못했습니다.");
       setLookup(data.lookup);
@@ -72,8 +73,9 @@ export default function DiscontinueByCode({ onDone }: { onDone: (text: string, i
         document.body.append(link);
         link.click();
         link.remove();
-        onDone(`단종신청 엑셀과 공문을 만들었습니다(SKU ${data.count}건).${missing}`, false);
-      } else onDone(`SKU ${data.count}건을 찾았습니다.${missing}`, false);
+        onDone(`단종신청 엑셀과 공문을 만들었습니다(SKU ${data.count}건).${missing}${discontinueMarkMessage(data.productDb)}`, false);
+      } else if (markOnly) onDone(`SKU ${data.count}건을 찾았습니다.${missing}${discontinueMarkMessage(data.productDb)}`, Boolean(data.productDb?.warning));
+      else onDone(`SKU ${data.count}건을 찾았습니다.${missing}`, false);
     } catch (cause) {
       onDone(cause instanceof Error ? cause.message : "단종신청 파일을 만들지 못했습니다.", true);
     } finally { setBusy(null); }
@@ -111,6 +113,9 @@ export default function DiscontinueByCode({ onDone }: { onDone: (text: string, i
           {busy === "make" ? "만드는 중…" : "단종신청 엑셀·공문 만들기"}
         </button>
       </div>
+      <button type="button" className={`softApricotButton ${styles.fullButton}`} disabled={!codes.length || Boolean(busy)} onClick={() => void run(false, true)} style={{ width: "100%", marginTop: "8px" }}>
+        {busy === "mark" ? "제품DB에 적는 중…" : "이미 신청한 단종 · 제품DB에 거래처단종만 입력"}
+      </button>
       {(text || lookup) && (
         <button
           type="button"

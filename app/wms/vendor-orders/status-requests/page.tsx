@@ -116,6 +116,7 @@ export default function StatusRequestsPage() {
       pdfFileName,
       driveSaved: response.headers.get("X-NOIDB-Drive-Saved") === "true",
       driveWarning: decodeURIComponent(response.headers.get("X-NOIDB-Drive-Save-Warning") || ""),
+      productDbMessage: decodeURIComponent(response.headers.get("X-NOIDB-ProductDb-Message") || ""),
       date: response.headers.get("X-NOIDB-Document-Date") || new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" }),
       unique,
     };
@@ -130,7 +131,7 @@ export default function StatusRequestsPage() {
         requestIds: workbook.unique.map(item => item.id), xlsxFileName: workbook.xlsxFileName, pdfFileName: workbook.pdfFileName,
       });
       downloadBlobPreservingPage(workbook.blob, workbook.fileName);
-      setMessage(`생성완료 · 단종 SKU ${workbook.unique.length}개 · XLSX와 PDF의 SKU가 동일합니다.${workbook.driveSaved ? " XLSX·PDF Drive 자동저장 완료." : workbook.driveWarning ? ` ${workbook.driveWarning}` : ""} 기존 처리상태와 제품DB는 변경하지 않았습니다.`);
+      setMessage(`생성완료 · 단종 SKU ${workbook.unique.length}개 · XLSX와 PDF의 SKU가 동일합니다.${workbook.driveSaved ? " XLSX·PDF Drive 자동저장 완료." : workbook.driveWarning ? ` ${workbook.driveWarning}` : ""}${workbook.productDbMessage ? ` ${workbook.productDbMessage}` : ""}`);
       await reload();
     } catch (error) { setMessage(error instanceof Error ? error.message : "단종 파일을 만들지 못했습니다."); }
     finally { setSaving(false); }
