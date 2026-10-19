@@ -142,6 +142,11 @@
 .batchModePanel{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:16px 0 10px}.batchModePanel button{display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-height:70px;padding:12px 14px;border:1px solid #d8d3cc!important;border-radius:11px;background:#f8f6f2;color:#292723;text-align:left}.batchModePanel button.selected{border-color:#60766a!important;background:#e3ece6;box-shadow:0 0 0 2px rgba(96,118,106,.12)}.batchModePanel strong{font-size:14px}.batchModePanel span{color:#716d67;font-size:11px;font-weight:600}
 @media(max-width:760px){.batchModePanel{grid-template-columns:1fr}.batchModePanel button{min-height:62px}}
 .labelQuickPanel{margin-top:14px;padding:14px;border:1px solid #ded4c8;border-radius:12px;background:#faf8f4}
+.thumbOnlyRow{display:grid;grid-template-columns:minmax(200px,260px) minmax(220px,1fr);gap:14px;align-items:start;margin-top:10px}
+.thumbOnlyActions{display:grid;gap:10px;align-content:start}
+.thumbOnlyActions>button{width:100%;min-height:40px;border-radius:8px}
+.thumbOnlyActions>p{margin:0}
+@media (max-width:720px){.thumbOnlyRow{grid-template-columns:1fr}}
 .labelQuickPanel>strong{font-size:15px}.labelQuickPanel>p,.labelQuickPanel>span{display:block;margin:5px 0 0;color:#6f655b;font-size:12px;line-height:1.5}
 .labelQuickFields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}
 .labelQuickFields .field{margin:0}.labelQuickFields input{width:100%;box-sizing:border-box}

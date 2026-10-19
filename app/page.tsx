@@ -311,7 +311,7 @@ export default function Home() {
   const [logoAppliedPreview, setLogoAppliedPreview] = useState("");
   const [squareImagesBusy, setSquareImagesBusy] = useState(false);
   /** 개별 다운로드 메시지를 버튼이 있는 칸에만 보여준다(5번 이미지 · 6번 상세 · 8번 기타). */
-  const [exportArea, setExportArea] = useState<"images" | "detail" | "etc">("etc");
+  const [exportArea, setExportArea] = useState<"images" | "detail" | "etc" | "thumb">("etc");
   const [squareImagesMessage, setSquareImagesMessage] = useState("");
   const [detailMessage, setDetailMessage] = useState("");
   const [detailShareUrl, setDetailShareUrl] = useState("");
@@ -337,6 +337,29 @@ export default function Home() {
 
   const [exportLoading, setExportLoading] = useState("");
   const [exportMessage, setExportMessage] = useState("");
+  // 8번 "썸네일만 다운로드": 캡처한 이미지를 붙여넣고 SKU ID로 저장한다(2026-10-19).
+  const [thumbOnlySku, setThumbOnlySku] = useState("");
+  const [thumbOnlySlot, setThumbOnlySlot] = useState<SlotImage | null>(null);
+  const thumbOnlyPanelRef = useRef<HTMLDivElement>(null);
+  const thumbOnlyArmed = useRef(false);
+  const thumbOnlyPasteRef = useRef<(file: File) => void>(() => {});
+  useEffect(() => {
+    // 이 패널을 마지막으로 눌렀거나 패널 안(SKU ID 칸 등)에 커서가 있을 때만 이미지 붙여넣기를 받는다. 다른 칸의 붙여넣기는 건드리지 않는다.
+    const onPointerDown = (event: PointerEvent) => { thumbOnlyArmed.current = Boolean(thumbOnlyPanelRef.current?.contains(event.target as Node)); };
+    const onPaste = (event: ClipboardEvent) => {
+      const image = Array.from(event.clipboardData?.files || []).find(file => file.type.startsWith("image/"));
+      if (!image) return;
+      if (!thumbOnlyPanelRef.current?.contains(event.target as Node) && !thumbOnlyArmed.current) return;
+      event.preventDefault();
+      thumbOnlyPasteRef.current(image);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("paste", onPaste);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("paste", onPaste);
+    };
+  }, []);
   const [labelManufactureYearMonth, setLabelManufactureYearMonth] = useState(DEFAULT_LABEL_YEAR_MONTH);
   const [labelManufacturerName, setLabelManufacturerName] = useState("프리스타일 협력사");
   const [labelImporterName, setLabelImporterName] = useState("프리스타일");
@@ -2241,6 +2264,50 @@ export default function Home() {
     }
   };
 
+  // 캡처 이미지를 붙여넣으면 5번 썸네일 칸과 같이 가운데 정사각형으로 맞춘 뒤 칸에서 확대·축소·밝기·선명도를 조절한다.
+  const pasteThumbOnlyImage = async (file: File) => {
+    setExportArea("thumb");
+    if (!isAccepted(file)) {
+      setExportMessage("오류: JPG·PNG 이미지만 붙여넣을 수 있습니다.");
+      return;
+    }
+    try {
+      const dataUrl = await coverSquareCanvas(await readFile(file));
+      // 붙여넣은 이미지는 파일 이름이 항상 같아서(image.png) 칸이 새 이미지로 바뀌도록 이름을 매번 다르게 한다.
+      setThumbOnlySlot({ dataUrl, fileName: `붙여넣기_${Date.now()}.png` });
+      setExportMessage("");
+    } catch (e) {
+      setExportMessage(`오류: ${e instanceof Error ? e.message : "이미지를 붙여넣지 못했습니다."}`);
+    }
+  };
+  thumbOnlyPasteRef.current = file => { void pasteThumbOnlyImage(file); };
+
+  const downloadThumbnailOnly = async () => {
+    setExportArea("thumb");
+    const skuId = thumbOnlySku.trim();
+    if (!/^\d{5,}$/.test(skuId)) {
+      setExportMessage("오류: SKU ID를 숫자로 입력해주세요.");
+      return;
+    }
+    if (!thumbOnlySlot) {
+      setExportMessage("오류: 썸네일 이미지를 먼저 붙여넣거나 넣어주세요.");
+      return;
+    }
+    setExportLoading("thumb");
+    try {
+      const jpeg = await normalizeCoupangImage(thumbOnlySlot.dataUrl);
+      downloadBlobFile(dataUrlToBlob(jpeg), `${skuId}.jpg`);
+      setExportMessage(`썸네일 다운로드 완료 · ${skuId}.jpg`);
+      // 다음 SKU를 바로 이어서 할 수 있게 비운다.
+      setThumbOnlySku("");
+      setThumbOnlySlot(null);
+    } catch (e) {
+      setExportMessage(`오류: ${e instanceof Error ? e.message : "썸네일 다운로드 실패"}`);
+    } finally {
+      setExportLoading("");
+    }
+  };
+
   const counterfeitAlert = ["확인필요", "높음"].includes(analysis.counterfeitRisk?.trim() || "");
 
   return (
@@ -2943,6 +3010,33 @@ export default function Home() {
           </button>
         </div>
         {exportArea === "etc" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
+        <div className="labelQuickPanel" ref={thumbOnlyPanelRef}>
+          <strong>썸네일만 다운로드</strong>
+          <p>캡처한 이미지를 이 영역에서 Ctrl+V로 붙여넣으세요. 5번 썸네일 칸처럼 끌어서 위치 이동 · 확대/축소 · 밝기 · 선명도를 조절하고, 입력한 SKU ID가 파일 이름이 됩니다.</p>
+          <div className="thumbOnlyRow">
+            <ImageSlot
+              slotKey="thumbOnly"
+              title="썸네일"
+              subtitle={thumbOnlySku.trim() ? `${thumbOnlySku.trim()}.jpg` : "SKU ID.jpg"}
+              filename=""
+              value={thumbOnlySlot}
+              onChange={setThumbOnlySlot}
+              onExpand={setLightbox}
+              coverSquare
+            />
+            <div className="thumbOnlyActions">
+              <Field label="SKU ID">
+                <input value={thumbOnlySku} inputMode="numeric" placeholder="예: 38921609"
+                  onChange={e => setThumbOnlySku(e.target.value.replace(/\D/g, ""))}
+                  onKeyDown={e => { if (e.key === "Enter") void downloadThumbnailOnly(); }} />
+              </Field>
+              <button className="softSageButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadThumbnailOnly()}>
+                {exportLoading === "thumb" ? "썸네일 만드는 중..." : "썸네일 다운로드"}
+              </button>
+              {exportArea === "thumb" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
+            </div>
+          </div>
+        </div>
         <div className="quoteQueuePanel">
           <div className="quoteQueueHeader">
             <div><h3>카테고리별 묶음 견적서</h3><p>등록할 때 자동 누적되며 같은 성별·카테고리끼리 최대 1,000 SKU행으로 나뉩니다.</p></div>
