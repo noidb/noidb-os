@@ -344,6 +344,39 @@ export default function Home() {
   const thumbOnlyPanelRef = useRef<HTMLDivElement>(null);
   const thumbOnlyArmed = useRef(false);
   const thumbOnlyPasteRef = useRef<(file: File) => void>(() => {});
+  // SKU ID를 입력하면 제품DB에서 모델명을 찾아 모델명 칸에 자동으로 넣는다(2026-10-19).
+  // 자동으로 넣은 모델명은 SKU ID를 고치면 바로 비워 다른 상품의 라벨이 나가지 않게 하고, 직접 입력한 모델명은 덮어쓰지 않는다.
+  const [thumbOnlyHint, setThumbOnlyHint] = useState("");
+  const thumbOnlyModelRef = useRef("");
+  const thumbOnlyModelAuto = useRef(false);
+  useEffect(() => {
+    const sku = thumbOnlySku.trim();
+    if (!/^\d{5,}$/.test(sku)) { setThumbOnlyHint(""); return; }
+    let cancelled = false;
+    setThumbOnlyHint("제품DB에서 모델명을 찾는 중...");
+    // 입력이 멈춘 뒤에 한 번만 찾는다(타이핑 중 매 글자마다 시트를 읽지 않게).
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/wms/product-catalog/model-by-sku?skuId=${encodeURIComponent(sku)}`, { cache: "no-store" });
+        const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!response.ok) { setThumbOnlyHint(`모델명 자동 검색 실패: ${data.error || "제품DB를 읽지 못했습니다."} 모델명을 직접 입력해주세요.`); return; }
+        if (!data.found) { setThumbOnlyHint("제품DB에서 이 SKU ID를 찾지 못했습니다. 모델명을 직접 입력해주세요."); return; }
+        if (!data.modelName) { setThumbOnlyHint("제품DB에 이 SKU ID의 모델명이 비어 있습니다. 모델명을 직접 입력해주세요."); return; }
+        if (!thumbOnlyModelRef.current.trim() || thumbOnlyModelAuto.current) {
+          thumbOnlyModelAuto.current = true;
+          setThumbOnlyModel(data.modelName);
+          setThumbOnlyHint("제품DB에서 모델명을 자동으로 넣었습니다.");
+        } else {
+          setThumbOnlyHint(`제품DB 모델명은 ${data.modelName}입니다. 직접 입력한 모델명은 그대로 뒀습니다.`);
+        }
+      } catch {
+        if (!cancelled) setThumbOnlyHint("모델명 자동 검색에 실패했습니다. 모델명을 직접 입력해주세요.");
+      }
+    }, 500);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [thumbOnlySku]);
+  thumbOnlyModelRef.current = thumbOnlyModel;
   useEffect(() => {
     // 이 패널을 마지막으로 눌렀거나 패널 안(SKU ID 칸 등)에 커서가 있을 때만 이미지 붙여넣기를 받는다. 다른 칸의 붙여넣기는 건드리지 않는다.
     const onPointerDown = (event: PointerEvent) => { thumbOnlyArmed.current = Boolean(thumbOnlyPanelRef.current?.contains(event.target as Node)); };
@@ -3103,7 +3136,11 @@ export default function Home() {
               <div className="thumbOnlyInputRow">
                 <Field label="SKU ID">
                   <input value={thumbOnlySku} inputMode="numeric" placeholder="예: 38921609"
-                    onChange={e => setThumbOnlySku(e.target.value.replace(/\D/g, ""))}
+                    onChange={e => {
+                      // 앞 SKU ID로 자동 입력된 모델명이 남아 다른 상품의 라벨이 나가지 않게, SKU ID를 고치면 자동 입력분은 바로 비운다.
+                      if (thumbOnlyModelAuto.current) { thumbOnlyModelAuto.current = false; setThumbOnlyModel(""); }
+                      setThumbOnlySku(e.target.value.replace(/\D/g, ""));
+                    }}
                     onKeyDown={e => { if (e.key === "Enter") void downloadThumbnailOnly(); }} />
                 </Field>
                 <button className="softSageButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadThumbnailOnly()}>
@@ -3113,13 +3150,14 @@ export default function Home() {
               <div className="thumbOnlyInputRow">
                 <Field label="모델명">
                   <input value={thumbOnlyModel} placeholder="예: we011623"
-                    onChange={e => setThumbOnlyModel(e.target.value)}
+                    onChange={e => { thumbOnlyModelAuto.current = false; setThumbOnlyModel(e.target.value); }}
                     onKeyDown={e => { if (e.key === "Enter") void downloadThumbnailLabel(); }} />
                 </Field>
                 <button className="softBeigeButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadThumbnailLabel()}>
                   {exportLoading === "thumbLabel" ? "라벨 만드는 중..." : "라벨 다운로드"}
                 </button>
               </div>
+              {thumbOnlyHint && <p className={thumbOnlyHint.includes("실패") || thumbOnlyHint.includes("찾지 못") || thumbOnlyHint.includes("비어") ? "error" : "note"}>{thumbOnlyHint}</p>}
               {exportArea === "thumb" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
               <button className="softInkButton thumbOnlyBoth" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadThumbnailAndLabel()}>
                 {exportLoading === "thumbBoth" ? "썸네일·라벨 만드는 중..." : "썸네일 + 라벨 동시 다운로드"}
