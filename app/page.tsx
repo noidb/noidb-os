@@ -351,6 +351,8 @@ export default function Home() {
   const [thumbOnlyHint, setThumbOnlyHint] = useState("");
   /** 8번 썸네일·라벨을 넣는 "상품수정" 폴더(상품이미지DB 폴더와 따로 기억). 그 안에 모델명 폴더를 만들어 넣는다. */
   const [editFolderHandle, setEditFolderHandle] = useState<FileSystemDirectoryHandle | null>(null);
+  /** 마지막으로 저장한 모델명 폴더 — 폴더 바로가기를 누르면 이 폴더부터 연다. */
+  const [editLastModelFolder, setEditLastModelFolder] = useState("");
   const thumbOnlyModelRef = useRef("");
   const thumbOnlyModelAuto = useRef(false);
   useEffect(() => {
@@ -2369,7 +2371,34 @@ export default function Home() {
       await writable.write(file.blob);
       await writable.close();
     }
+    setEditLastModelFolder(folderName);
     return `${root.name}\\${folderName}`;
+  };
+
+  // 다른 칸의 "폴더 바로가기"와 같이 파일 선택 창으로 폴더를 연다(브라우저는 탐색기를 직접 열 수 없다).
+  // 입력한 모델명 폴더 → 마지막에 저장한 모델명 폴더 → 상품수정 폴더 순으로 연다.
+  const openEditFolder = async () => {
+    setExportArea("thumb");
+    const picker = (window as any).showOpenFilePicker;
+    if (typeof picker !== "function") {
+      setExportMessage("이 브라우저에서는 폴더 바로가기를 지원하지 않습니다.");
+      return;
+    }
+    try {
+      let root = editFolderHandle;
+      if (root && !(await ensureReadWritePermission(root))) root = null;
+      if (!root) root = await pickEditFolder();
+      if (!root) return;
+      let startIn: FileSystemDirectoryHandle = root;
+      for (const name of [safeFolderName(thumbOnlyModel.trim()), editLastModelFolder]) {
+        if (!name) continue;
+        try { startIn = await root.getDirectoryHandle(name); break; } catch { /* 아직 없는 폴더면 다음 후보 */ }
+      }
+      await picker({ startIn, multiple: false });
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      setExportMessage(`오류: ${e instanceof Error ? e.message : "폴더 열기 실패"}`);
+    }
   };
 
   const downloadThumbnailOnly = async () => {
@@ -3183,7 +3212,7 @@ export default function Home() {
         <div className="labelQuickPanel" ref={thumbOnlyPanelRef}>
           <strong>썸네일·라벨 저장</strong>
           <p>캡처한 이미지를 이 영역에서 Ctrl+V로 붙여넣으세요. 5번 썸네일 칸처럼 끌어서 위치 이동 · 확대/축소 · 밝기 · 선명도를 조절하고, 입력한 SKU ID가 파일 이름이 됩니다. 라벨은 모델명을 입력해 필요할 때 함께 받으세요(제조연월·제조자명·수입자명은 위 라벨 정보 값). 파일은 상품수정 폴더 안 모델명 폴더에 저장됩니다.</p>
-          <div className="thumbOnlyFolderRow"><span>저장 위치: {editFolderHandle ? `${editFolderHandle.name} › 모델명` : "아직 고르지 않음"}</span><button className="softApricotButton" type="button" disabled={Boolean(exportLoading)} onClick={() => { setExportArea("thumb"); void pickEditFolder(); }}>{editFolderHandle ? "저장 폴더 바꾸기" : "저장 폴더 고르기"}</button></div>
+          <div className="thumbOnlyFolderRow"><span>저장 위치: {editFolderHandle ? `${editFolderHandle.name} › 모델명` : "아직 고르지 않음"}</span><button className="softBeigeButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void openEditFolder()}>폴더 바로가기</button><button className="softApricotButton" type="button" disabled={Boolean(exportLoading)} onClick={() => { setExportArea("thumb"); void pickEditFolder(); }}>{editFolderHandle ? "저장 폴더 바꾸기" : "저장 폴더 고르기"}</button></div>
           <div className="thumbOnlyRow">
             <ImageSlot
               slotKey="thumbOnly"
@@ -3223,6 +3252,21 @@ export default function Home() {
               </div>
               {thumbOnlyHint && <p className={thumbOnlyHint.includes("실패") || thumbOnlyHint.includes("찾지 못") || thumbOnlyHint.includes("비어") ? "error" : "note"}>{thumbOnlyHint}</p>}
               {exportArea === "thumb" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
+              {(() => {
+                // 쿠팡 등록 화면에 붙여넣을 "수입자명(제조자명)" — 위 라벨 정보 값으로 만든다(2026-10-19).
+                const makerText = `${labelImporterName.trim()}(${labelManufacturerName.trim()})`;
+                return (
+                  <div className="thumbOnlyInputRow thumbOnlyCopyRow">
+                    <input readOnly value={makerText} onFocus={e => e.currentTarget.select()} aria-label="수입자명(제조자명)" />
+                    <button className="softApricotButton" type="button" onClick={() => {
+                      setExportArea("thumb");
+                      void navigator.clipboard.writeText(makerText)
+                        .then(() => setExportMessage(`복사 완료 · ${makerText}`))
+                        .catch(() => setExportMessage("오류: 복사하지 못했습니다. 칸을 눌러 Ctrl+C로 복사해주세요."));
+                    }}>복사</button>
+                  </div>
+                );
+              })()}
               <button className="softInkButton thumbOnlyBoth" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadThumbnailAndLabel()}>
                 {exportLoading === "thumbBoth" ? "썸네일·라벨 저장 중..." : "썸네일 + 라벨 동시 저장"}
               </button>
