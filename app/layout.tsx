@@ -1,5 +1,6 @@
 import "./globals.css";
 import type { Metadata } from "next";
+import CopyTrim from "./CopyTrim";
 
 export const metadata: Metadata = {
   title: "NOID-B OS",
@@ -43,7 +44,7 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="ko">
-      <body>{children}</body>
+      <body>{children}<CopyTrim /></body>
     </html>
   );
 }
