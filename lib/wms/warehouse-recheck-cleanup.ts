@@ -9,14 +9,34 @@ import { createHash } from "node:crypto";
  *   발주가능상태가 정상이 아니면 단종해제 대상에 넣는다.
  * - 그 밖의 결과: 기준이 없어 그대로 두고 알려 준다
  * 옮긴 행은 창고재확인 탭에서 지운다. 열은 같은 이름끼리 맞춰 넣는다.
+ *
+ * 보관 탭 = '_보관_비관리SKU_20261008'(사용자 확인 2026-10-19). 거래처단종은 이 탭으로 옮긴다.
+ * 제품DB(사용자 확정 2026-10-19): 현재상태가 비관리(중복등록)·거래처단종·단종인 행은 보관 탭으로 옮기고 제품DB에서 지운다.
+ *   판매중지·가품중단은 옮기지 않는다. 보관 탭에 같은 SKU가 이미 있으면 새로 붙이지 않고 제품DB에서만 지운다.
  */
 export const RECHECK_TAB = "창고재확인";
-export const STORAGE_TAB = "보관";
+export const STORAGE_TAB = "_보관_비관리SKU_20261008";
+const STORAGE_LABEL = "보관" as const;
+
+/** 시트 탭 이름 중 보관 탭을 고른다: 정확한 이름 → '보관_비관리'가 들어간 탭(백업 탭 제외) → 예전 '보관'. */
+export function pickStorageTabTitle(titles: readonly string[]): string | null {
+  const live = titles.filter(title => !title.startsWith("_백업_"));
+  if (live.includes(STORAGE_TAB)) return STORAGE_TAB;
+  const loose = live.find(title => /보관_?비관리/.test(title.replace(/\s+/g, "")));
+  if (loose) return loose;
+  return live.includes("보관") ? "보관" : null;
+}
+
+/** 제품DB에서 보관 탭으로 옮길 현재상태 */
+export function isProductDbToStorageStatus(status: unknown): boolean {
+  const key = String(status ?? "").replace(/\s+/g, "");
+  return key === "거래처단종" || key === "단종" || key.startsWith("비관리");
+}
 
 const squash = (value: unknown) => String(value ?? "").replace(/\s+/g, "");
 const find = (headers: string[], ...names: string[]) => headers.findIndex(header => names.some(name => squash(header) === squash(name)));
 
-export interface CleanupMove { source: "창고재확인" | "보관"; rowNumber: number; skuId: string; productName: string; result: string; orderableStatus: string; target: "보관" | "제품DB"; mode: "append" | "clear-status"; productDbRow?: number; release: boolean }
+export interface CleanupMove { source: "창고재확인" | "보관" | "제품DB"; rowNumber: number; skuId: string; productName: string; result: string; orderableStatus: string; target: "보관" | "제품DB"; mode: "append" | "clear-status" | "delete-only"; productDbRow?: number; release: boolean }
 export interface CleanupPlan {
   token: string;
   pending: number;
@@ -34,8 +54,8 @@ function mapRow(sourceHeaders: string[], source: string[], targetHeaders: string
   });
 }
 
-export function planWarehouseRecheckCleanup(recheck: string[][], productDb: string[][], storage: string[][] | null): CleanupPlan & { appendStorage: string[][]; appendProductDb: string[][]; clearStatusRows: number[]; deleteRows: number[]; deleteStorageRows: number[] } {
-  const token = createHash("sha256").update(JSON.stringify([recheck, storage])).digest("hex").slice(0, 32);
+export function planWarehouseRecheckCleanup(recheck: string[][], productDb: string[][], storage: string[][] | null): CleanupPlan & { appendStorage: string[][]; appendProductDb: string[][]; clearStatusRows: number[]; deleteRows: number[]; deleteStorageRows: number[]; deleteProductDbRows: number[] } {
+  const token = createHash("sha256").update(JSON.stringify([recheck, storage, productDb])).digest("hex").slice(0, 32);
   const problems: string[] = [];
   const headers = (recheck[0] || []).map(value => String(value ?? ""));
   const col = { result: find(headers, "창고 확인결과", "창고확인결과"), sku: find(headers, "SKU ID", "SKUID", "SKU"), name: find(headers, "상품명"), orderable: find(headers, "발주가능상태") };
@@ -60,7 +80,7 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
     const key = squash(result);
     const orderableHere = col.orderable >= 0 ? String(row[col.orderable] ?? "").trim() : "";
     if (key === "거래처단종") {
-      if (!storage) { problems.push("'보관' 탭을 찾지 못했습니다."); return; }
+      if (!storage) { problems.push(`'${STORAGE_TAB}' 탭을 찾지 못했습니다.`); return; }
       appendStorage.push(mapRow(headers, row, stHeaders, { "현재상태": "거래처단종" }));
       moves.push({ source: "창고재확인", rowNumber, skuId, productName, result, orderableStatus: orderableHere, target: "보관", mode: "append", release: false });
       deleteRows.push(rowNumber);
@@ -95,5 +115,27 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       deleteStorageRows.push(rowNumber);
     });
   }
-  return { token, pending, moves, unknown, problems: [...new Set(problems)], appendStorage, appendProductDb, clearStatusRows: [...new Set(clearStatusRows)], deleteRows, deleteStorageRows };
+  // 제품DB: 현재상태 비관리(중복등록)·거래처단종·단종 → 보관 탭, 제품DB에서 지움
+  const deleteProductDbRows: number[] = [];
+  if (!problems.length && pd.status >= 0) {
+    const stSku = find(stHeaders, "SKU ID", "SKUID", "SKU");
+    const inStorage = new Set<string>();
+    const leavingStorage = new Set(deleteStorageRows);
+    if (storage && stSku >= 0) storage.slice(1).forEach((row, index) => { if (!leavingStorage.has(index + 2)) inStorage.add(String(row[stSku] ?? "").trim()); });
+    appendStorage.forEach(row => { if (stSku >= 0) inStorage.add(String(row[stSku] ?? "").trim()); });
+    const keep = new Set(clearStatusRows);
+    const pdName = find(pdHeaders, "상품명");
+    productDb.slice(1).forEach((row, index) => {
+      const rowNumber = index + 2;
+      const status = String(row[pd.status] ?? "").trim();
+      if (!isProductDbToStorageStatus(status) || keep.has(rowNumber)) return;
+      if (!storage) { problems.push(`'${STORAGE_TAB}' 탭을 찾지 못했습니다.`); return; }
+      const skuId = String(row[pd.sku] ?? "").trim();
+      const already = Boolean(skuId) && inStorage.has(skuId);
+      if (!already) { appendStorage.push(mapRow(pdHeaders, row, stHeaders, {})); if (skuId) inStorage.add(skuId); }
+      moves.push({ source: "제품DB", rowNumber, skuId, productName: pdName >= 0 ? String(row[pdName] ?? "").trim() : "", result: status, orderableStatus: pd.orderable >= 0 ? String(row[pd.orderable] ?? "").trim() : "", target: STORAGE_LABEL, mode: already ? "delete-only" : "append", release: false });
+      deleteProductDbRows.push(rowNumber);
+    });
+  }
+  return { token, pending, moves, unknown, problems: [...new Set(problems)], appendStorage, appendProductDb, clearStatusRows: [...new Set(clearStatusRows)], deleteRows, deleteStorageRows, deleteProductDbRows };
 }

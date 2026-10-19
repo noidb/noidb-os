@@ -1,4 +1,5 @@
-import { fetchSheetRows } from "./google-sheets";
+import { fetchSheetRows, fetchSpreadsheetTabs } from "./google-sheets";
+import { pickStorageTabTitle } from "./warehouse-recheck-cleanup";
 import type { ProductCatalogItem } from "./product-catalog";
 
 type StatusSourceItem = Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier">;
@@ -9,7 +10,9 @@ const squash = (value: unknown) => String(value ?? "").replace(/\s+/g, "");
  * 같은 SKU가 두 탭에 있으면 제품DB 값을 쓴다. 보관 탭을 못 읽으면 제품DB만 쓴다.
  */
 export async function loadStatusSourceItems(catalogItems: readonly ProductCatalogItem[]): Promise<{ items: StatusSourceItem[]; storageLoaded: boolean }> {
-  const rows = await fetchSheetRows("보관").catch(() => null);
+  // 보관 탭 = '_보관_비관리SKU_20261008'(2026-10-19): 제품DB에서 옮긴 거래처단종·단종도 단종 대상에 계속 잡히게 한다.
+  const title = await fetchSpreadsheetTabs().then(tabs => pickStorageTabTitle(tabs.map(tab => tab.title))).catch(() => "보관");
+  const rows = title ? await fetchSheetRows(title).catch(() => null) : null;
   if (!rows || !rows.length) return { items: [...catalogItems], storageLoaded: false };
   const headers = rows[0];
   const col = (...names: string[]) => headers.findIndex(header => names.some(name => squash(header) === squash(name)));

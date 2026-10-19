@@ -3,7 +3,7 @@
 import { useState } from "react";
 import styles from "./shipments.module.css";
 
-type Move = { source: "창고재확인" | "보관"; rowNumber: number; skuId: string; productName: string; result: string; orderableStatus: string; target: "보관" | "제품DB"; mode: "append" | "clear-status"; release: boolean };
+type Move = { source: "창고재확인" | "보관" | "제품DB"; rowNumber: number; skuId: string; productName: string; result: string; orderableStatus: string; target: "보관" | "제품DB"; mode: "append" | "clear-status" | "delete-only"; release: boolean };
 type Preview = { token: string; pending: number; moves: Move[]; unknown: Array<{ rowNumber: number; skuId: string; productName: string; result: string }>; problems: string[] };
 
 /** 창고재확인 탭 정리: 미리보기로 옮길 행을 확인한 뒤 실행해야 시트가 바뀐다. */
@@ -23,14 +23,14 @@ export default function WarehouseRecheckCleanup({ onDone }: { onDone: (message: 
   }
   async function run() {
     if (!preview) return;
-    if (!window.confirm(`${preview.moves.length}행을 옮기고 원래 탭(창고재확인·보관)에서 지울까요? (옮기기 전에 탭 백업을 남깁니다)`)) return;
+    if (!window.confirm(`${preview.moves.length}행을 옮기고 원래 탭(창고재확인·보관·제품DB)에서 지울까요? (옮기기 전에 탭 백업을 남깁니다)`)) return;
     setBusy("run");
     try {
       const response = await fetch("/api/wms/warehouse-recheck-cleanup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: preview.token }) });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "정리하지 못했습니다.");
       setPreview(null);
-      onDone(`정리 완료: 창고재확인→보관 ${data.toStorage}건 · 제품DB로 ${data.toProductDb}건(보관 탭에서 ${data.fromStorage}건)${data.release ? ` · 단종해제 대상 ${data.release}건 추가` : ""}. 새로고침하면 단종해제 목록에 반영돼요.`);
+      onDone(`정리 완료: 보관으로 ${data.toStorage}건(제품DB에서 ${data.fromProductDb}건) · 제품DB로 ${data.toProductDb}건(보관 탭에서 ${data.fromStorage}건)${data.release ? ` · 단종해제 대상 ${data.release}건 추가` : ""}. 새로고침하면 단종해제 목록에 반영돼요.`);
     } catch (cause) { onDone(cause instanceof Error ? cause.message : "정리하지 못했습니다.", true); }
     finally { setBusy(""); }
   }
@@ -38,7 +38,7 @@ export default function WarehouseRecheckCleanup({ onDone }: { onDone: (message: 
   return (
     <section>
       <h2 className={styles.listTitle}>창고재확인·보관 정리</h2>
-      <p className={styles.meta}>창고재확인: 확인결과가 적힌 행만 옮겨요(거래처단종 → 보관, 제품DB로 이동(재고있음) → 제품DB). 보관 탭: 제품DB로 이동(재고있음) → 제품DB. 제품DB로 갈 때 현재상태는 비우고, 발주가능상태가 정상이 아니면 단종해제 대상에 넣어요.</p>
+      <p className={styles.meta}>창고재확인: 거래처단종 → 보관, 제품DB로 이동(재고있음) → 제품DB. 제품DB: 비관리(중복등록)·거래처단종·단종 → 보관. 보관: 제품DB로 이동(재고있음) → 제품DB(현재상태 비움, 발주가능상태가 정상이 아니면 단종해제 대상).</p>
       {!preview ? (
         <button type="button" className={`softSageButton ${styles.fullButton}`} disabled={Boolean(busy)} onClick={() => void load()}>
           {busy === "preview" ? "읽는 중…" : "정리할 행 미리보기"}
@@ -62,7 +62,7 @@ export default function WarehouseRecheckCleanup({ onDone }: { onDone: (message: 
                       <td>{move.skuId}</td>
                       <td>{move.productName}</td>
                       <td>{move.result}</td>
-                      <td>{move.target}{move.mode === "clear-status" ? " (이미 있음 · 현재상태만 비움)" : ""}</td>
+                      <td>{move.target}{move.mode === "clear-status" ? " (이미 있음 · 현재상태만 비움)" : move.mode === "delete-only" ? " (보관에 이미 있음 · 제품DB에서만 지움)" : ""}</td>
                       <td className={move.release ? styles.statusCell : undefined}>{move.orderableStatus}{move.release ? " → 단종해제" : ""}</td>
                     </tr>
                   ))}

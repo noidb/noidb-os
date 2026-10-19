@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
 import { appendSheetRowsKeepingFormulas, backupSheetWithinSpreadsheet, deleteSheetRows, fetchSheetRows, fetchSpreadsheetTabs, updateSheetCells } from "@/lib/wms/google-sheets";
 import { PRODUCT_DB_SHEET_NAME } from "@/lib/wms/product-catalog";
-import { planWarehouseRecheckCleanup, RECHECK_TAB, STORAGE_TAB } from "@/lib/wms/warehouse-recheck-cleanup";
+import { pickStorageTabTitle, planWarehouseRecheckCleanup, RECHECK_TAB, STORAGE_TAB } from "@/lib/wms/warehouse-recheck-cleanup";
 import { mutateWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 
 export const runtime = "nodejs";
@@ -13,14 +13,16 @@ const headers = { "Cache-Control": "private, no-store" };
 async function load() {
   const tabs = await fetchSpreadsheetTabs();
   const recheckTab = tabs.find(tab => tab.title === RECHECK_TAB);
-  const storageTab = tabs.find(tab => tab.title === STORAGE_TAB);
+  const storageTitle = pickStorageTabTitle(tabs.map(tab => tab.title));
+  const storageTab = storageTitle ? tabs.find(tab => tab.title === storageTitle) : undefined;
   if (!recheckTab && !storageTab) throw new Error(`'${RECHECK_TAB}'·'${STORAGE_TAB}' 탭을 찾지 못했습니다.`);
   const [recheck, productDb, storage] = await Promise.all([
     recheckTab ? fetchSheetRows(RECHECK_TAB, { valueRenderOption: "FORMULA" }) : Promise.resolve([] as string[][]),
     fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" }),
-    storageTab ? fetchSheetRows(STORAGE_TAB, { valueRenderOption: "FORMULA" }) : Promise.resolve(null),
+    storageTab ? fetchSheetRows(storageTab.title, { valueRenderOption: "FORMULA" }) : Promise.resolve(null),
   ]);
-  return { recheckTab, storageTab, plan: planWarehouseRecheckCleanup(recheck, productDb, storage) };
+  const productDbTab = tabs.find(tab => tab.title === PRODUCT_DB_SHEET_NAME);
+  return { recheckTab, storageTab, productDbTab, plan: planWarehouseRecheckCleanup(recheck, productDb, storage) };
 }
 const summary = (plan: Awaited<ReturnType<typeof load>>["plan"]) => ({ token: plan.token, pending: plan.pending, moves: plan.moves, unknown: plan.unknown, problems: plan.problems });
 
@@ -35,23 +37,25 @@ export async function POST(request: NextRequest) {
   if (!isSameOriginActionRequest(request)) return NextResponse.json({ ok: false, error: "사이트 화면에서 다시 진행해 주세요." }, { status: 403, headers });
   try {
     const body = await request.json() as { token?: unknown };
-    const { recheckTab, storageTab, plan } = await load();
+    const { recheckTab, storageTab, productDbTab, plan } = await load();
     if (plan.problems.length) throw new Error(plan.problems.join(" "));
     if (body.token !== plan.token) throw new Error("미리보기 뒤에 창고재확인 탭이 바뀌었습니다. 다시 미리보기 후 실행해 주세요.");
     if (!plan.moves.length) throw new Error("옮길 행이 없습니다.");
     // 1) 백업
     const backups = plan.deleteRows.length && recheckTab ? [await backupSheetWithinSpreadsheet(RECHECK_TAB)] : [];
-    if (plan.appendStorage.length || plan.deleteStorageRows.length) backups.push(await backupSheetWithinSpreadsheet(STORAGE_TAB));
-    if (plan.appendProductDb.length || plan.clearStatusRows.length) backups.push(await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME));
-    // 2) 보관 탭에서 제품DB로 갈 행을 먼저 지움(행 번호가 밀리지 않게, 붙이기 전에) → 3) 옮기기 → 4) 제품DB 기존 행 현재상태 비우기 → 5) 창고재확인에서 지우기
-    if (plan.deleteStorageRows.length && storageTab) await deleteSheetRows(storageTab.sheetId, plan.deleteStorageRows);
-    await appendSheetRowsKeepingFormulas(STORAGE_TAB, plan.appendStorage);
-    await appendSheetRowsKeepingFormulas(PRODUCT_DB_SHEET_NAME, plan.appendProductDb);
+    if (plan.appendStorage.length || plan.deleteStorageRows.length) backups.push(await backupSheetWithinSpreadsheet(storageTab!.title));
+    if (plan.appendProductDb.length || plan.clearStatusRows.length || plan.deleteProductDbRows.length) backups.push(await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME));
+    if (plan.deleteProductDbRows.length && !productDbTab) throw new Error("제품DB 탭을 찾지 못했습니다.");
+    // 2) 제품DB 기존 행 현재상태 비우기(행 번호가 바뀌기 전에) → 3) 보관·제품DB에서 옮겨 갈 행 지우기 → 4) 붙이기 → 5) 창고재확인에서 지우기
     if (plan.clearStatusRows.length) {
       const pdHeaders = (await fetchSheetRows(PRODUCT_DB_SHEET_NAME)).at(0) || [];
       const statusCol = pdHeaders.findIndex(header => String(header).replace(/\s+/g, "") === "현재상태") + 1;
       await updateSheetCells(PRODUCT_DB_SHEET_NAME, plan.clearStatusRows.map(row => ({ row, col: statusCol, value: "" })));
     }
+    if (plan.deleteStorageRows.length && storageTab) await deleteSheetRows(storageTab.sheetId, plan.deleteStorageRows);
+    if (plan.deleteProductDbRows.length && productDbTab) await deleteSheetRows(productDbTab.sheetId, plan.deleteProductDbRows);
+    if (plan.appendStorage.length && storageTab) await appendSheetRowsKeepingFormulas(storageTab.title, plan.appendStorage);
+    await appendSheetRowsKeepingFormulas(PRODUCT_DB_SHEET_NAME, plan.appendProductDb);
     if (recheckTab) await deleteSheetRows(recheckTab.sheetId, plan.deleteRows);
     // 5) 발주가능상태가 정상이 아닌 제품DB 이동 SKU → 단종해제 대상
     const release = plan.moves.filter(move => move.release && /^\d{1,20}$/.test(move.skuId));
@@ -61,7 +65,7 @@ export async function POST(request: NextRequest) {
       for (const move of release) checks[move.skuId] = { decision: "release", productName: move.productName, at };
       workspace.supplyStatusChecks = checks;
     });
-    return NextResponse.json({ ok: true, moved: plan.moves.length, toStorage: plan.appendStorage.length, fromStorage: plan.deleteStorageRows.length, toProductDb: plan.appendProductDb.length + plan.clearStatusRows.length,
+    return NextResponse.json({ ok: true, moved: plan.moves.length, toStorage: plan.appendStorage.length, fromStorage: plan.deleteStorageRows.length, fromProductDb: plan.deleteProductDbRows.length, toProductDb: plan.appendProductDb.length + plan.clearStatusRows.length,
       release: release.length, unknown: plan.unknown.length, pending: plan.pending, backups: backups.map(item => item.sheetName) }, { headers });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "창고재확인 정리를 하지 못했습니다." }, { status: 400, headers });
