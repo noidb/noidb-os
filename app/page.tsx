@@ -339,6 +339,7 @@ export default function Home() {
   const [exportMessage, setExportMessage] = useState("");
   // 8번 "썸네일만 다운로드": 캡처한 이미지를 붙여넣고 SKU ID로 저장한다(2026-10-19).
   const [thumbOnlySku, setThumbOnlySku] = useState("");
+  const [thumbOnlyModel, setThumbOnlyModel] = useState("");
   const [thumbOnlySlot, setThumbOnlySlot] = useState<SlotImage | null>(null);
   const thumbOnlyPanelRef = useRef<HTMLDivElement>(null);
   const thumbOnlyArmed = useRef(false);
@@ -2308,6 +2309,36 @@ export default function Home() {
     }
   };
 
+  // 썸네일을 고칠 때 라벨도 함께 필요하므로, 같은 칸에서 모델명으로 라벨만 따로 받는다(2026-10-19).
+  // 저장 위치는 썸네일 다운로드와 같은 브라우저 다운로드 폴더다(연결된 상품이미지DB 폴더에는 저장하지 않는다).
+  // 제조연월·제조자명·수입자명은 위 "라벨 정보" 칸의 값을 쓴다.
+  const downloadThumbnailLabel = async () => {
+    setExportArea("thumb");
+    const labelModel = thumbOnlyModel.trim();
+    if (!labelModel) {
+      setExportMessage("오류: 라벨에 넣을 모델명을 입력해주세요.");
+      return;
+    }
+    setExportLoading("thumbLabel");
+    try {
+      const labelBlob = await createLabelBlob({
+        model: labelModel,
+        manufactureYearMonth: labelManufactureYearMonth,
+        manufacturerName: labelManufacturerName,
+        importerName: labelImporterName,
+      });
+      const fileName = `라벨_${labelModel}.jpg`;
+      downloadBlobFile(labelBlob, fileName);
+      setExportMessage(`라벨 다운로드 완료 · ${fileName}`);
+      // 다음 모델을 바로 이어서 할 수 있게 비운다.
+      setThumbOnlyModel("");
+    } catch (e) {
+      setExportMessage(`오류: ${e instanceof Error ? e.message : "라벨 다운로드 실패"}`);
+    } finally {
+      setExportLoading("");
+    }
+  };
+
   const counterfeitAlert = ["확인필요", "높음"].includes(analysis.counterfeitRisk?.trim() || "");
 
   return (
@@ -3011,8 +3042,8 @@ export default function Home() {
         </div>
         {exportArea === "etc" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
         <div className="labelQuickPanel" ref={thumbOnlyPanelRef}>
-          <strong>썸네일만 다운로드</strong>
-          <p>캡처한 이미지를 이 영역에서 Ctrl+V로 붙여넣으세요. 5번 썸네일 칸처럼 끌어서 위치 이동 · 확대/축소 · 밝기 · 선명도를 조절하고, 입력한 SKU ID가 파일 이름이 됩니다.</p>
+          <strong>썸네일·라벨 다운로드</strong>
+          <p>캡처한 이미지를 이 영역에서 Ctrl+V로 붙여넣으세요. 5번 썸네일 칸처럼 끌어서 위치 이동 · 확대/축소 · 밝기 · 선명도를 조절하고, 입력한 SKU ID가 파일 이름이 됩니다. 라벨은 모델명을 입력해 필요할 때 함께 받으세요(제조연월·제조자명·수입자명은 위 라벨 정보 값).</p>
           <div className="thumbOnlyRow">
             <ImageSlot
               slotKey="thumbOnly"
@@ -3025,14 +3056,26 @@ export default function Home() {
               coverSquare
             />
             <div className="thumbOnlyActions">
-              <Field label="SKU ID">
-                <input value={thumbOnlySku} inputMode="numeric" placeholder="예: 38921609"
-                  onChange={e => setThumbOnlySku(e.target.value.replace(/\D/g, ""))}
-                  onKeyDown={e => { if (e.key === "Enter") void downloadThumbnailOnly(); }} />
-              </Field>
-              <button className="softSageButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadThumbnailOnly()}>
-                {exportLoading === "thumb" ? "썸네일 만드는 중..." : "썸네일 다운로드"}
-              </button>
+              <div className="thumbOnlyInputRow">
+                <Field label="SKU ID">
+                  <input value={thumbOnlySku} inputMode="numeric" placeholder="예: 38921609"
+                    onChange={e => setThumbOnlySku(e.target.value.replace(/\D/g, ""))}
+                    onKeyDown={e => { if (e.key === "Enter") void downloadThumbnailOnly(); }} />
+                </Field>
+                <button className="softSageButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadThumbnailOnly()}>
+                  {exportLoading === "thumb" ? "썸네일 만드는 중..." : "썸네일 다운로드"}
+                </button>
+              </div>
+              <div className="thumbOnlyInputRow">
+                <Field label="모델명">
+                  <input value={thumbOnlyModel} placeholder="예: we011623"
+                    onChange={e => setThumbOnlyModel(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") void downloadThumbnailLabel(); }} />
+                </Field>
+                <button className="softBeigeButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadThumbnailLabel()}>
+                  {exportLoading === "thumbLabel" ? "라벨 만드는 중..." : "라벨 다운로드"}
+                </button>
+              </div>
               {exportArea === "thumb" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
             </div>
           </div>
