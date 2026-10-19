@@ -3054,6 +3054,7 @@ export default function Home() {
               onChange={setThumbOnlySlot}
               onExpand={setLightbox}
               coverSquare
+              pickOnClick={false}
             />
             <div className="thumbOnlyActions">
               <div className="thumbOnlyInputRow">
@@ -3333,6 +3334,7 @@ function ImageSlot({
   onSlotSwap,
   onRemoveSlot,
   coverSquare = false,
+  pickOnClick = true,
 }: {
   slotKey: string;
   title: string;
@@ -3348,6 +3350,8 @@ function ImageSlot({
   onSlotSwap?: (sourceKey: string, targetKey: string) => void;
   onRemoveSlot?: () => void;
   coverSquare?: boolean;
+  /** false면 빈 칸을 눌러도 파일 선택 창(탐색기)을 열지 않는다. 붙여넣기 전용 칸에서 칸을 눌러 붙여넣기를 준비할 때 창이 뜨지 않게 한다. */
+  pickOnClick?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -3382,7 +3386,7 @@ function ImageSlot({
       </div>
       <div
         className={"slotDrop" + (value && !value.locked ? " slotDropEdit" : "")}
-        onClick={() => { if (!value) inputRef.current?.click(); }}
+        onClick={() => { if (!value && pickOnClick) inputRef.current?.click(); }}
         draggable={Boolean(value?.locked)}
         onDragStart={e => {
           if (!value?.locked) return;
@@ -3413,7 +3417,7 @@ function ImageSlot({
         ) : (
           <div className="slotPlaceholder">
             <strong>{title}</strong>
-            <span>이미지를 끌어놓거나 클릭하세요.</span>
+            <span>{pickOnClick ? "이미지를 끌어놓거나 클릭하세요." : "Ctrl+V로 붙여넣거나 이미지를 끌어놓으세요."}</span>
           </div>
         )}
       </div>
