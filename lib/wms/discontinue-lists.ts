@@ -27,23 +27,16 @@ const itemKey = (item: Pick<ProductCatalogItem, "skuId" | "currentStatus" | "ord
   JSON.stringify([item.skuId, squash(item.currentStatus), squash(item.orderableStatus), extra]);
 const displayName = (item: Pick<ProductCatalogItem, "productName" | "optionLabel">) => [item.productName, item.optionLabel].filter(Boolean).join(", ");
 
-/**
- * 단종 목록 '처리완료' 비교용 키. 단종서류를 만들면 현재상태를 거래처단종으로 적으므로(2026-10-19),
- * 현재상태가 단종 계열끼리(또는 빈칸→거래처단종) 바뀐 것만으로 처리완료한 SKU가 다시 나오지 않게 한다.
- * 발주가능상태가 바뀌면 다시 나온다.
- */
-export function discontinueClearedKey(key: string): string {
+/** 처리완료 기록 키(JSON 배열)의 SKU ID */
+export function clearedSkuId(key: string): string {
   try {
     const parsed = JSON.parse(key) as unknown;
-    if (!Array.isArray(parsed) || parsed.length < 3) return key;
-    const [skuId, status, orderable] = parsed.map(value => String(value ?? ""));
-    const group = !status || matches(status, DISCONTINUE_CURRENT_STATUSES) ? "#단종" : squash(status);
-    return JSON.stringify([skuId, group, squash(orderable)]);
-  } catch { return key; }
+    return Array.isArray(parsed) ? String(parsed[0] ?? "").trim() : "";
+  } catch { return ""; }
 }
 
 export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier">[], options: {
-  releaseFromScreen?: Record<string, { productName: string }>;
+  releaseFromScreen?: Record<string, { productName: string; at?: string }>;
   cleared?: StatusListCleared;
   memoReleaseSkuIds?: readonly string[];
   memoDiscontinueSkuIds?: readonly string[];
@@ -75,9 +68,21 @@ export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId
   };
   for (const skuId of options.memoReleaseSkuIds ?? MEMO_RELEASE_SKU_IDS) addRelease(skuId, "", "메모");
   for (const [skuId, check] of Object.entries(options.releaseFromScreen || {})) addRelease(skuId, check.productName, "입고결과");
-  const visible = (list: Map<string, StatusListItem>, cleared: Record<string, string> = {}, sameKey: (key: string) => string = key => key) => {
-    const done = new Set(Object.keys(cleared).map(sameKey));
-    return [...list.values()].filter(item => !cleared[item.key] && !done.has(sameKey(item.key))).sort((a, b) => a.skuId.localeCompare(b.skuId));
+  // 한 번 '목록 비우기'로 처리한 SKU는 현재상태·발주가능상태·탭(제품DB↔보관)이 바뀌어도 다시 띄우지 않는다
+  // (사용자 요청 2026-10-19 — 처리한 79건이 다시 떠서 하나하나 다시 확인해야 했음). 기록 키의 첫 칸이 SKU ID다.
+  // 단, 비운 뒤에 입고결과 화면에서 새로 '단종해제'를 누른 SKU는 사용자가 직접 다시 고른 것이므로 보인다.
+  const visible = (list: Map<string, StatusListItem>, cleared: Record<string, string> = {}) => {
+    const doneAt = new Map<string, string>();
+    for (const [key, at] of Object.entries(cleared)) {
+      const skuId = clearedSkuId(key);
+      if (skuId && String(at || "") > (doneAt.get(skuId) || "")) doneAt.set(skuId, String(at || ""));
+      else if (skuId && !doneAt.has(skuId)) doneAt.set(skuId, "");
+    }
+    const pickedAgain = (item: StatusListItem) => {
+      const at = item.reason === "입고결과" ? options.releaseFromScreen?.[item.skuId]?.at : undefined;
+      return Boolean(at && at > (doneAt.get(item.skuId) || ""));
+    };
+    return [...list.values()].filter(item => !cleared[item.key] && (!doneAt.has(item.skuId) || pickedAgain(item))).sort((a, b) => a.skuId.localeCompare(b.skuId));
   };
   // 재등록SKU 탭·교체이력의 옛 SKU, 제품DB 재등록구분이 판매량저조영구정지·영구제외·재등록완료인 SKU는
   // 단종해제 대상이 아니다(신규 재등록 대상, 사용자 확인 2026-10-08) → 단종해제에서 뺀다.
@@ -97,5 +102,5 @@ export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId
   };
   for (const skuId of reregistered) if (bySku.get(skuId)?.orderableStatus.trim() === "정상") addDiscontinue(skuId, "재등록완료 옛 SKU");
   for (const skuId of options.memoDiscontinueSkuIds ?? MEMO_DISCONTINUE_SKU_IDS) addDiscontinue(skuId, "메모");
-  return { discontinue: visible(discontinue, options.cleared?.discontinue, discontinueClearedKey), release: visible(release, options.cleared?.release), reregisteredExcluded: excluded };
+  return { discontinue: visible(discontinue, options.cleared?.discontinue), release: visible(release, options.cleared?.release), reregisteredExcluded: excluded };
 }

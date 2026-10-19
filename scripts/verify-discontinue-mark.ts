@@ -19,3 +19,14 @@ assert.equal(buildStatusLists([item("1", "거래처단종", "불가")], { memoRe
 const memo = buildStatusLists([item("2", "", "정상")], { memoReleaseSkuIds: [], memoDiscontinueSkuIds: ["2"] });
 assert.equal(buildStatusLists([item("2", "거래처단종", "정상")], { memoReleaseSkuIds: [], memoDiscontinueSkuIds: ["2"], cleared: { discontinue: { [memo.discontinue[0].key]: "t" } } }).discontinue.length, 0, "메모 단종도 거래처단종으로 바뀐 뒤 다시 안 나옴");
 console.log("PASS discontinue mark plan + cleared key");
+
+// 처리한 SKU는 발주가능상태·이름·탭이 바뀌어도 다시 안 나옴(2026-10-19)
+const d1 = buildStatusLists([item("30", "거래처단종", "정상")], { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [] });
+const d1Cleared = { discontinue: { [d1.discontinue[0].key]: "2026-10-01T00:00:00Z" } };
+assert.equal(buildStatusLists([{ ...(item("30", "단종", "정상") as object), productName: "다른 이름" } as never], { memoReleaseSkuIds: [], memoDiscontinueSkuIds: ["30"], cleared: d1Cleared }).discontinue.length, 0, "단종 처리한 SKU 다시 안 나옴");
+const r1 = buildStatusLists([item("40", "과재고", "불가")], { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [] });
+const r1Cleared = { release: { [r1.release[0].key]: "2026-10-01T00:00:00Z" } };
+assert.equal(buildStatusLists([item("40", "제품DB로 이동(재고있음)", "일시중단")], { memoReleaseSkuIds: ["40"], memoDiscontinueSkuIds: [], cleared: r1Cleared }).release.length, 0, "단종해제 처리한 SKU 다시 안 나옴");
+assert.equal(buildStatusLists([item("40", "과재고", "불가")], { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [], cleared: r1Cleared, releaseFromScreen: { "40": { productName: "x", at: "2026-09-01T00:00:00Z" } } }).release.length, 0, "비우기 전 화면 선택은 숨김");
+assert.equal(buildStatusLists([item("41", "", "불가")], { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [], cleared: { release: { [JSON.stringify(["41", "입고결과"])]: "2026-10-01T00:00:00Z" } }, releaseFromScreen: { "41": { productName: "x", at: "2026-10-20T00:00:00Z" } } }).release.length, 1, "비운 뒤 화면에서 새로 단종해제 누르면 다시 보임");
+console.log("PASS cleared SKUs stay hidden");
