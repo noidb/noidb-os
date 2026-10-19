@@ -3120,10 +3120,10 @@ export default function Home() {
                   {exportLoading === "thumbLabel" ? "라벨 만드는 중..." : "라벨 다운로드"}
                 </button>
               </div>
+              {exportArea === "thumb" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
               <button className="softInkButton thumbOnlyBoth" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadThumbnailAndLabel()}>
                 {exportLoading === "thumbBoth" ? "썸네일·라벨 만드는 중..." : "썸네일 + 라벨 동시 다운로드"}
               </button>
-              {exportArea === "thumb" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
             </div>
           </div>
         </div>
