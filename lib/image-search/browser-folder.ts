@@ -281,9 +281,58 @@ export async function loadPhotoSearch(model: string) {
 const WORK_STAGE_FOLDER = /^(1000(x1000|px)?|보정|보정원본|원본|상세|상세페이지|evoto.*)$/i;
 const SAME_MODEL_PARENT_LABEL = "같은 모델번호 상위 폴더";
 
-export async function searchPhotoFolder(searchTerms: string[], existing: LocalPhoto[] = []): Promise<LocalPhoto[]> {
-  const root = await connectedRoot();
-  if (!searchTerms.some(term => term.trim())) return [];
+/**
+ * 사진 폴더 전체 검색용 경로 목록. MYBOX 폴더를 한 칸씩 열어 보며 찾으면 폴더가 수천 개라 매번 오래 걸린다.
+ * 폴더를 한 번 훑어(8개씩 동시에) 사진 경로만 이 브라우저에 저장해 두고, 검색은 저장된 목록에서 한다.
+ * 24시간이 지났거나 "다시 검색"을 누르면 새로 훑는다. 사진을 못 찾았는데 목록이 10분 넘게 묵었으면 한 번 새로 훑고 다시 찾는다.
+ */
+const INDEX_KEY = "tree-index-v1";
+const INDEX_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const INDEX_RETRY_AGE_MS = 10 * 60 * 1000;
+type TreeIndex = { rootName: string; builtAt: number; files: string[] };
+let memoryIndex: TreeIndex | null = null;
+let indexBuilding: Promise<TreeIndex> | null = null;
+
+async function buildTreeIndex(root: FileSystemDirectoryHandle): Promise<TreeIndex> {
+  const files: string[] = [];
+  const queue: { handle: FileSystemDirectoryHandle; id: string }[] = [{ handle: root, id: root.name }];
+  let active = 0;
+  await new Promise<void>((resolve, reject) => {
+    const pump = () => {
+      while (active < 8 && queue.length) {
+        const { handle, id } = queue.shift()!;
+        active += 1;
+        (async () => {
+          for await (const [name, entry] of (handle as any).entries()) {
+            if (name.startsWith(".")) continue;
+            const child = `${id}/${name}`;
+            if (entry.kind === "directory") { queue.push({ handle: entry, id: child }); pump(); }
+            else if (IMAGE_FILE.test(name)) files.push(child);
+          }
+        })().then(() => { active -= 1; pump(); }, reject);
+      }
+      if (!queue.length && active === 0) resolve();
+    };
+    pump();
+  });
+  return { rootName: root.name, builtAt: Date.now(), files };
+}
+
+async function treeIndex(root: FileSystemDirectoryHandle, refresh: boolean): Promise<TreeIndex> {
+  const fresh = (index: TreeIndex | null | undefined): index is TreeIndex => Boolean(index) && index!.rootName === root.name && Date.now() - index!.builtAt < INDEX_MAX_AGE_MS;
+  if (!refresh) {
+    if (fresh(memoryIndex)) return memoryIndex;
+    const saved = await read<TreeIndex>(INDEX_KEY).catch(() => undefined);
+    if (fresh(saved)) { memoryIndex = saved; return saved; }
+  }
+  indexBuilding ||= buildTreeIndex(root)
+    .then(async built => { memoryIndex = built; await write(INDEX_KEY, built).catch(() => {}); return built; })
+    .finally(() => { indexBuilding = null; });
+  return indexBuilding;
+}
+
+/** 저장된 경로 목록에서 찾는다. 폴더 이름 상속·작업 단계 폴더 규칙은 예전 폴더 직접 탐색과 같다. */
+async function searchTreeIndex(root: FileSystemDirectoryHandle, index: TreeIndex, searchTerms: string[], existing: LocalPhoto[]): Promise<LocalPhoto[]> {
   // Model name remains the primary term; SKU IDs are additional historical/current aliases.
   const matchingTerms = termMatcher(searchTerms);
   // 모델번호 숫자 부분(wd011917 → 011917). 접두어가 다른 모델이 같은 번호를 쓰는 경우가 많아(we011792/wr011792 등)
@@ -291,51 +340,88 @@ export async function searchPhotoFolder(searchTerms: string[], existing: LocalPh
   const modelNumbers = new Set(searchTerms.map(term => term.trim().match(/^[a-z]{2,3}(\d{4,})$/i)?.[1]).filter(Boolean));
   const sameModelNumber = (name: string) => (name.match(/[a-z]{2,3}\d{4,}/gi) || [])
     .some(code => modelNumbers.has(code.match(/\d+$/)![0]));
-  const found: LocalPhoto[] = [];
-  const seen = new Set(existing.map(photo => duplicateKey(photo.file)));
   const ids = new Set(existing.map(photo => photo.id));
-  const parentFolders = new Map<string, FileSystemDirectoryHandle>();
-  async function add(entry: any, id: string, name: string, matchedBy: string[]) {
-    const file = await entry.getFile() as File;
-    if (seen.has(duplicateKey(file))) return;
-    seen.add(duplicateKey(file));
-    ids.add(id);
-    found.push({ id, name, file, matchedBy });
+  const seen = new Set(existing.map(photo => duplicateKey(photo.file)));
+
+  const nameMatches = new Map<string, string[]>();
+  const ownMatches = (name: string) => {
+    let value = nameMatches.get(name);
+    if (!value) { value = matchingTerms(name); nameMatches.set(name, value); }
+    return value;
+  };
+  type Ancestor = { name: string; id: string };
+  type DirState = { matched: string[]; ancestors: Ancestor[] };
+  const dirStates = new Map<string, DirState>([[root.name, { matched: ownMatches(root.name), ancestors: [{ name: root.name, id: root.name }] }]]);
+  const stateFor = (dirId: string): DirState => {
+    const cached = dirStates.get(dirId);
+    if (cached) return cached;
+    const cut = dirId.lastIndexOf("/");
+    const parent = stateFor(dirId.slice(0, cut));
+    const name = dirId.slice(cut + 1);
+    const own = ownMatches(name);
+    // 여러 모델을 담은 묶음 폴더 안의 다른 모델 폴더(wr011231 반지, wa011143 체인 등)는 묶음 폴더 이름의 일치를 물려받지 않는다.
+    const otherModelFolder = OTHER_MODEL_FOLDER.test(name) && !own.length;
+    const state = { matched: [...new Set([...(otherModelFolder ? [] : parent.matched), ...own])], ancestors: [...parent.ancestors, { name, id: dirId }] };
+    dirStates.set(dirId, state);
+    return state;
+  };
+
+  const direct: { id: string; matchedBy: string[] }[] = [];
+  const parentIds = new Set<string>();
+  for (const id of index.files) {
+    if (ids.has(id)) continue;
+    const cut = id.lastIndexOf("/");
+    const state = stateFor(id.slice(0, cut));
+    const matchedBy = [...new Set([...state.matched, ...ownMatches(id.slice(cut + 1))])];
+    if (!matchedBy.length) continue;
+    direct.push({ id, matchedBy });
+    // 예: ws011917 실버별똑딱핀/1000/wd011917.0.jpg — 작업 단계 폴더를 거슬러 올라간 제품 폴더가
+    // 같은 모델번호를 달고 있으면, 그 폴더의 보정·원본·상세페이지 사진도 함께 연다.
+    const { ancestors } = state;
+    let at = ancestors.length - 1;
+    while (at > 0 && WORK_STAGE_FOLDER.test(ancestors[at].name)) at -= 1;
+    if (at > 0 && at < ancestors.length - 1 && sameModelNumber(ancestors[at].name)) parentIds.add(ancestors[at].id);
   }
-  type Ancestor = { name: string; id: string; handle: FileSystemDirectoryHandle };
-  async function walk(dir: FileSystemDirectoryHandle, prefix: string, inheritedMatches: string[], ancestors: Ancestor[]) {
-    for await (const [name, entry] of (dir as any).entries()) {
-      if (existing.length + found.length >= MAX_PHOTOS) return;
-      if (name.startsWith(".")) continue;
-      const id = `${prefix}/${name}`;
-      if (ids.has(id)) continue;
-      const ownMatches = matchingTerms(name);
-      // 여러 모델을 담은 묶음 폴더(예: "wn011229 ws011231 ws011232돼지코…") 안의 다른 모델 폴더
-      // (wr011231 반지, wa011143 체인 등)는 묶음 폴더 이름의 일치를 물려받지 않는다.
-      const otherModelFolder = entry.kind === "directory" && OTHER_MODEL_FOLDER.test(name) && !ownMatches.length;
-      const matchedBy = [...new Set([...(otherModelFolder ? [] : inheritedMatches), ...ownMatches])];
-      if (entry.kind === "directory") await walk(entry, id, matchedBy, [...ancestors, { name, id, handle: entry }]);
-      else if (matchedBy.length > 0 && IMAGE_FILE.test(name)) {
-        await add(entry, id, name, matchedBy);
-        // 예: ws011917 실버별똑딱핀/1000/wd011917.0.jpg — 작업 단계 폴더를 거슬러 올라간 제품 폴더가
-        // 같은 모델번호를 달고 있으면, 그 폴더의 보정·원본·상세페이지 사진도 함께 연다.
-        let at = ancestors.length - 1;
-        while (at > 0 && WORK_STAGE_FOLDER.test(ancestors[at].name)) at -= 1;
-        if (at > 0 && at < ancestors.length - 1 && sameModelNumber(ancestors[at].name)) parentFolders.set(ancestors[at].id, ancestors[at].handle);
-      }
+  const directIds = new Set(direct.map(item => item.id));
+  const candidates = [...direct];
+  for (const parentId of parentIds) {
+    const prefix = `${parentId}/`;
+    for (const id of index.files) if (id.startsWith(prefix) && !ids.has(id) && !directIds.has(id)) candidates.push({ id, matchedBy: [SAME_MODEL_PARENT_LABEL] });
+  }
+
+  // 후보 경로를 실제 파일로 연다(8개씩 동시에). 사라진 파일은 건너뛰고, 이름·크기가 같은 중복 저장본은 하나만 남긴다.
+  const found: LocalPhoto[] = [];
+  for (let at = 0; at < candidates.length && existing.length + found.length < MAX_PHOTOS; at += 8) {
+    const opened = await Promise.all(candidates.slice(at, at + 8).map(async candidate => {
+      try {
+        const segments = candidate.id.split("/");
+        const dir = await descend(root, segments.slice(1, -1));
+        const file = await (await dir.getFileHandle(segments[segments.length - 1])).getFile();
+        return { id: candidate.id, name: file.name, file, matchedBy: candidate.matchedBy } as LocalPhoto;
+      } catch { return null; }
+    }));
+    for (const photo of opened) {
+      if (!photo || existing.length + found.length >= MAX_PHOTOS) continue;
+      const key = duplicateKey(photo.file);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      found.push(photo);
     }
   }
-  async function collect(dir: FileSystemDirectoryHandle, prefix: string) {
-    for await (const [name, entry] of (dir as any).entries()) {
-      if (existing.length + found.length >= MAX_PHOTOS) return;
-      if (name.startsWith(".")) continue;
-      const id = `${prefix}/${name}`;
-      if (entry.kind === "directory") await collect(entry, id);
-      else if (!ids.has(id) && IMAGE_FILE.test(name)) await add(entry, id, name, [SAME_MODEL_PARENT_LABEL]);
-    }
+  return found;
+}
+
+/** refresh = true(다시 검색)이면 저장된 경로 목록을 쓰지 않고 폴더를 새로 훑는다. */
+export async function searchPhotoFolder(searchTerms: string[], existing: LocalPhoto[] = [], refresh = false): Promise<LocalPhoto[]> {
+  const root = await connectedRoot();
+  if (!searchTerms.some(term => term.trim())) return [];
+  let index = await treeIndex(root, refresh);
+  let found = await searchTreeIndex(root, index, searchTerms, existing);
+  if (!found.length && !refresh && Date.now() - index.builtAt > INDEX_RETRY_AGE_MS) {
+    // 그 사이 새로 동기화된 사진일 수 있다 → 목록을 새로 만들어 한 번 더 찾는다.
+    index = await treeIndex(root, true);
+    found = await searchTreeIndex(root, index, searchTerms, existing);
   }
-  await walk(root, root.name, matchingTerms(root.name), [{ name: root.name, id: root.name, handle: root }]);
-  for (const [id, handle] of parentFolders) await collect(handle, id);
   return found.sort((a, b) => a.id.localeCompare(b.id, "ko"));
 }
 

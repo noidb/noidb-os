@@ -736,11 +736,11 @@ export default function ProductCatalogPage() {
   }
 
   // 한 단계의 사진을 읽는다. 1~3차 = 연결표 폴더, 4차 = 사진 폴더 전체 검색(모델명·SKU ID).
-  async function loadPhotoLevel(level: number, modelName: string, relatedItems: ProductCatalogItem[], link: LinkTableResult, existing: LocalPhoto[]) {
+  async function loadPhotoLevel(level: number, modelName: string, relatedItems: ProductCatalogItem[], link: LinkTableResult, existing: LocalPhoto[], refresh = false) {
     if (level < FULL_SEARCH_LEVEL) return openPhotoFolders(link.folders, link.modelKeys, level as FolderTier, existing);
     const relatedModelSkus = new Set(relatedItems.map(related => clean(related.modelSku)).filter(Boolean));
     const historicalSkuIds = (snapshot?.rows || []).filter(row => relatedModelSkus.has(clean(row.modelSku))).map(row => row.skuId);
-    const photos = await searchPhotoFolder([modelName, ...relatedItems.map(related => related.skuId), ...historicalSkuIds], existing);
+    const photos = await searchPhotoFolder([modelName, ...relatedItems.map(related => related.skuId), ...historicalSkuIds], existing, refresh);
     return { photos, grouped: false };
   }
 
@@ -753,13 +753,13 @@ export default function ProductCatalogPage() {
    * 사진을 읽는다. 연결표 폴더가 있으면 1차(확정 폴더)만 읽고, 2·3·4차는 사용자가 버튼을 눌러야 연다.
    * target(다시 검색 때 이전 단계)이 2 이상이면 그 단계까지만 차례로 읽는다. 연결표 폴더가 없으면 전체 검색.
    */
-  async function loadPhotoLevels(target: number, modelName: string, relatedItems: ProductCatalogItem[], link: LinkTableResult) {
+  async function loadPhotoLevels(target: number, modelName: string, relatedItems: ProductCatalogItem[], link: LinkTableResult, refresh = false) {
     const hasFolders = link.folders.length > 0;
     let found: LocalPhoto[] = [];
     let grouped = false;
     let level = hasFolders ? 1 : FULL_SEARCH_LEVEL;
     while (true) {
-      const result = await loadPhotoLevel(level, modelName, relatedItems, link, found);
+      const result = await loadPhotoLevel(level, modelName, relatedItems, link, found, refresh);
       if (level === 1) grouped = result.grouped;
       found = [...found, ...result.photos];
       const next = level === 1 && !grouped ? FULL_SEARCH_LEVEL : level + 1;
@@ -787,7 +787,7 @@ export default function ProductCatalogPage() {
         if (restored) { setPhotoStates(current => ({ ...current, [key]: restored })); return; }
       }
       const link = fetchLinkTable(modelName, relatedItems);
-      const { found, grouped, level, hasFolders } = await loadPhotoLevels(1, modelName, relatedItems, link);
+      const { found, grouped, level, hasFolders } = await loadPhotoLevels(1, modelName, relatedItems, link, fresh);
       const keepSelected = new Set((previous?.hits || []).filter(hit => hit.selected).map(hit => hit.id));
       const foundIds = new Set(found.map(hit => hit.id));
       const keptSelected = (previous?.hits || []).filter(hit => hit.selected && !foundIds.has(hit.id));
