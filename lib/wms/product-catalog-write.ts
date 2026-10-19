@@ -1,6 +1,8 @@
+import { uploadImageToDriveOAuth } from "./google-drive-user";
 import { updateSheetCells } from "./google-sheets";
 import { FIELD_HEADER_CANDIDATES, normalizeSkuId } from "./product-catalog";
 import { findProductRowAnyTab, notFoundAnyTabMessage } from "./product-row-lookup";
+import { readWeeklyFile } from "./weekly-work-files";
 
 /**
  * 제품DB 구글시트를, SKU ID로 정확히 찾은 딱 한 행에만 쓰는 전용 함수 (2026-08-19 확장 —
@@ -51,6 +53,32 @@ function formatImageCellValue(url: string): string {
   return `=IMAGE("${url}",4,80,80)`;
 }
 
+/**
+ * 구글시트 =IMAGE()는 구글 서버가 주소를 직접 열기 때문에 "/api/..." 같은 사이트 안의 상대 주소는 그려지지 않는다(2026-10-19).
+ * 사진 붙여넣기·주간업무 사진 추가는 서버 내부 저장소 주소(/api/wms/weekly-work/image?id=...)를 만들므로,
+ * 시트에 쓰기 전에 그 사진을 구글 드라이브에 올려 "사진 변경하기"와 같은 드라이브 주소로 바꾼다.
+ * 그 밖의 상대 주소는 깨진 수식이 시트에 남지 않도록 쓰지 않고 오류로 돌려준다.
+ */
+const INTERNAL_WEEKLY_IMAGE_URL = /^\/api\/wms\/weekly-work\/image\?id=([a-f0-9]{64})$/;
+
+async function sheetImageUrl(url: string, skuId: string, dryRun: boolean): Promise<string> {
+  const trimmed = url.trim();
+  const internal = trimmed.match(INTERNAL_WEEKLY_IMAGE_URL);
+  if (!internal) {
+    if (trimmed.startsWith("/")) throw new Error("이미지 주소가 사이트 안의 주소라서 구글시트에 쓰면 사진이 보이지 않습니다. 사진을 다시 올려 주세요.");
+    return trimmed;
+  }
+  if (dryRun) return trimmed;
+  const file = await readWeeklyFile(`image-${internal[1]}.json`);
+  if (!file) throw new Error("저장해 둔 사진을 찾지 못했습니다. 사진을 다시 추가해 주세요.");
+  const data = JSON.parse(file.toString()) as { mimeType?: string; base64?: string };
+  if (!data.mimeType || !data.base64) throw new Error("저장해 둔 사진이 올바르지 않습니다. 사진을 다시 추가해 주세요.");
+  const extension = data.mimeType.includes("png") ? "png" : data.mimeType.includes("webp") ? "webp" : "jpg";
+  const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_");
+  const uploaded = await uploadImageToDriveOAuth(Buffer.from(data.base64, "base64"), `${skuId}_${timestamp}.${extension}`, data.mimeType);
+  return uploaded.url;
+}
+
 export async function updateProductCatalogFields(
   skuId: string,
   patch: ProductCatalogUpdatePatch,
@@ -88,8 +116,15 @@ export async function updateProductCatalogFields(
         skippedFields.push({ field, reason: `${sheetName} 탭에 '이미지' 헤더가 없어 건너뛰었습니다.` });
         continue;
       }
+      let imageUrl: string;
+      try {
+        imageUrl = await sheetImageUrl(value, targetSkuId, Boolean(options?.dryRun));
+      } catch (error) {
+        // 아직 시트에 아무것도 쓰지 않았으므로 그대로 실패로 돌려준다.
+        return { success: false, rowNumber, sheetName, updatedFields: [], skippedFields, error: error instanceof Error ? error.message : "사진을 구글 드라이브에 올리지 못했습니다." };
+      }
       updatedFields.push(field);
-      cellUpdates.push({ row: rowNumber, col: imageColIndex + 1, value: formatImageCellValue(value) });
+      cellUpdates.push({ row: rowNumber, col: imageColIndex + 1, value: formatImageCellValue(imageUrl) });
       continue;
     }
 
