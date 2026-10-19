@@ -146,6 +146,7 @@
 .thumbOnlyActions{display:grid;gap:10px;align-content:start}
 .thumbOnlyInputRow{display:grid;grid-template-columns:minmax(0,1fr) 150px;gap:10px;align-items:end}
 .thumbOnlyInputRow>button{width:100%;min-height:46px;border-radius:8px;white-space:nowrap}
+.thumbOnlyActions>.thumbOnlyBoth{width:100%;min-height:46px;border-radius:8px;white-space:nowrap}
 .thumbOnlyActions>p{margin:0}
 @media (max-width:720px){.thumbOnlyRow{grid-template-columns:1fr}}
 .labelQuickPanel>strong{font-size:15px}.labelQuickPanel>p,.labelQuickPanel>span{display:block;margin:5px 0 0;color:#6f655b;font-size:12px;line-height:1.5}

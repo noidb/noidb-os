@@ -2339,6 +2339,49 @@ export default function Home() {
     }
   };
 
+  // 썸네일과 라벨을 한 번에 받는다. 둘 중 하나라도 입력이 빠졌으면 아무것도 받지 않고 먼저 알려, 한쪽만 받아지는 일이 없게 한다.
+  const downloadThumbnailAndLabel = async () => {
+    setExportArea("thumb");
+    const skuId = thumbOnlySku.trim();
+    const labelModel = thumbOnlyModel.trim();
+    if (!/^\d{5,}$/.test(skuId)) {
+      setExportMessage("오류: SKU ID를 숫자로 입력해주세요.");
+      return;
+    }
+    if (!thumbOnlySlot) {
+      setExportMessage("오류: 썸네일 이미지를 먼저 붙여넣거나 넣어주세요.");
+      return;
+    }
+    if (!labelModel) {
+      setExportMessage("오류: 라벨에 넣을 모델명을 입력해주세요.");
+      return;
+    }
+    setExportLoading("thumbBoth");
+    try {
+      const jpeg = await normalizeCoupangImage(thumbOnlySlot.dataUrl);
+      const labelBlob = await createLabelBlob({
+        model: labelModel,
+        manufactureYearMonth: labelManufactureYearMonth,
+        manufacturerName: labelManufacturerName,
+        importerName: labelImporterName,
+      });
+      const labelFileName = `라벨_${labelModel}.jpg`;
+      downloadBlobFile(dataUrlToBlob(jpeg), `${skuId}.jpg`);
+      // 브라우저가 연속 다운로드를 한 번에 묶어 막지 않도록 잠깐 간격을 둔다.
+      await new Promise(resolve => setTimeout(resolve, 400));
+      downloadBlobFile(labelBlob, labelFileName);
+      setExportMessage(`다운로드 완료 · ${skuId}.jpg + ${labelFileName}`);
+      // 다음 SKU를 바로 이어서 할 수 있게 모두 비운다.
+      setThumbOnlySku("");
+      setThumbOnlyModel("");
+      setThumbOnlySlot(null);
+    } catch (e) {
+      setExportMessage(`오류: ${e instanceof Error ? e.message : "다운로드 실패"}`);
+    } finally {
+      setExportLoading("");
+    }
+  };
+
   const counterfeitAlert = ["확인필요", "높음"].includes(analysis.counterfeitRisk?.trim() || "");
 
   return (
@@ -3077,6 +3120,9 @@ export default function Home() {
                   {exportLoading === "thumbLabel" ? "라벨 만드는 중..." : "라벨 다운로드"}
                 </button>
               </div>
+              <button className="softInkButton thumbOnlyBoth" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadThumbnailAndLabel()}>
+                {exportLoading === "thumbBoth" ? "썸네일·라벨 만드는 중..." : "썸네일 + 라벨 동시 다운로드"}
+              </button>
               {exportArea === "thumb" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
             </div>
           </div>
