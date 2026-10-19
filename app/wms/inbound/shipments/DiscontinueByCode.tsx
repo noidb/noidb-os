@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import styles from "./shipments.module.css";
 
 type Match = { skuId: string; productName: string; barcode: string; sheetName: string };
@@ -16,6 +16,45 @@ export default function DiscontinueByCode({ onDone }: { onDone: (text: string, i
   const [busy, setBusy] = useState<"check" | "make" | null>(null);
   const [lookup, setLookup] = useState<Lookup[] | null>(null);
   const codes = [...new Set(text.split(/[\s,]+/).map(value => value.trim()).filter(Boolean))];
+  // 입력 내용은 서버에 자동 저장해, 단종할 코드가 생길 때마다 붙여넣어 모아 두고 나중에 한 번에 만든다(2026-10-19).
+  // 회사·집·모바일 어디서 열어도 같은 목록이 이어진다.
+  const [saveState, setSaveState] = useState<"loading" | "saved" | "saving" | "error">("loading");
+  const loaded = useRef(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/wms/logistics/discontinue-code-draft", { cache: "no-store" })
+      .then(response => response.json())
+      .then(data => {
+        if (cancelled) return;
+        if (!data.ok) throw new Error();
+        // 불러오기 전에 이미 입력을 시작했으면 그 입력을 지우지 않는다.
+        setText(current => current || data.text || "");
+        loaded.current = true;
+        setSaveState("saved");
+      })
+      // 불러오지 못했을 때 저장하면 모아 둔 목록을 덮어쓸 수 있어, 이때는 저장하지 않는다.
+      .catch(() => { if (!cancelled) setSaveState("error"); });
+    return () => { cancelled = true; };
+  }, []);
+
+  function saveDraft(next: string, delay = 700) {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    setSaveState("saving");
+    saveTimer.current = setTimeout(() => {
+      fetch("/api/wms/logistics/discontinue-code-draft", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: next }) })
+        .then(response => response.json())
+        .then(data => setSaveState(data.ok ? "saved" : "error"))
+        .catch(() => setSaveState("error"));
+    }, delay);
+  }
+
+  function changeText(next: string) {
+    setText(next);
+    setLookup(null);
+    if (loaded.current) saveDraft(next, 400);
+  }
 
   async function run(check: boolean) {
     if (busy || !codes.length) return;
@@ -43,10 +82,11 @@ export default function DiscontinueByCode({ onDone }: { onDone: (text: string, i
   return (
     <section>
       <h2 className={styles.listTitle}>바코드·SKU로 단종서류 만들기</h2>
-      <p className={styles.meta}>바코드(R0…)나 SKU ID를 한 줄에 하나씩 붙여넣으세요. 같은 코드는 한 번만 들어갑니다.</p>
+      <p className={styles.meta}>바코드(R0…)나 SKU ID를 한 줄에 하나씩 붙여넣으세요. 같은 코드는 한 번만 들어갑니다. 입력은 자동 저장되니 생길 때마다 모아 두고 한 번에 만드세요.
+        {" "}<span style={{ color: saveState === "error" ? "#b33f35" : undefined }}>{saveState === "loading" ? "· 저장해 둔 목록 불러오는 중…" : saveState === "saving" ? "· 저장 중…" : saveState === "error" ? (loaded.current ? "· 저장 실패(다시 입력하면 다시 저장합니다)" : "· 저장해 둔 목록을 불러오지 못했습니다. 새로고침해 주세요.") : codes.length ? `· ${codes.length}개 저장됨` : ""}</span></p>
       <textarea
         value={text}
-        onChange={event => { setText(event.target.value); setLookup(null); }}
+        onChange={event => changeText(event.target.value)}
         rows={6}
         placeholder={"R016057300019\nR015747600064"}
         style={{ width: "100%", boxSizing: "border-box", border: "1px solid #d8d3cc", borderRadius: "8px", padding: "8px", fontSize: "13px", fontFamily: "inherit" }}
@@ -76,7 +116,7 @@ export default function DiscontinueByCode({ onDone }: { onDone: (text: string, i
           type="button"
           className={`softPinkButton ${styles.fullButton}`}
           disabled={Boolean(busy)}
-          onClick={() => { setText(""); setLookup(null); onDone("단종 신청 완료 · 입력한 바코드를 비웠습니다.", false); }}
+          onClick={() => { setText(""); setLookup(null); saveDraft("", 0); onDone("단종 신청 완료 · 입력한 바코드를 비웠습니다.", false); }}
           style={{ width: "100%", marginTop: "8px" }}
         >
           단종 신청 완료 · 입력 비우기
