@@ -470,8 +470,9 @@ export default function ProductCatalogPage() {
     let saved: { status?: string; query?: string } = {};
     try { saved = JSON.parse(window.sessionStorage.getItem(VIEW_KEY) || "{}"); } catch {}
     const model = params.get("model")?.trim();
+    // 기본은 '전체 상태'. 예전에 고른 '재등록 필요'를 되살리면 검색해도 대부분 안 나와서 되살리지 않는다.
     const nextStatus = params.get("status") || saved.status;
-    if (nextStatus) setStatus(nextStatus);
+    if (nextStatus && nextStatus !== "reregister") setStatus(nextStatus);
     if (model) setQuery(model);
     else if (saved.query) setQuery(saved.query);
   }, []);
@@ -951,6 +952,39 @@ export default function ProductCatalogPage() {
     } finally { setPreparing(""); }
   }
 
+  const [downloading, setDownloading] = useState("");
+  // 선택한 사진을 바로 내려받는다. 1장이면 그대로, 여러 장이면 모델명 zip 하나로.
+  async function downloadSelectedPhotos(modelName: string) {
+    const state = photoStates[modelName];
+    const picked = (state?.hits || []).filter(hit => hit.selected && !brokenPhotoIds.has(hit.id) && !state?.hiddenIds?.includes(hit.id));
+    if (!picked.length || downloading) return;
+    const save = (blob: Blob, name: string) => {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url; link.download = name;
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    };
+    setDownloading(modelName);
+    try {
+      if (picked.length === 1) { save(picked[0].file, picked[0].fileName); return; }
+      const { default: JSZip } = await import("jszip");
+      const zip = new JSZip();
+      const used = new Set<string>();
+      for (const hit of picked) {
+        let name = hit.fileName;
+        for (let n = 2; used.has(name.toLowerCase()); n++) name = hit.fileName.replace(/(\.[^.]+)?$/, ext => `(${n})${ext}`);
+        used.add(name.toLowerCase());
+        zip.file(name, hit.file);
+      }
+      save(await zip.generateAsync({ type: "blob" }), `${modelName.replace(/[\\/:*?"<>|]/g, "_")}_선택사진.zip`);
+    } catch (error) {
+      setFolderMessage(error instanceof Error ? `사진 다운로드 실패: ${error.message}` : "사진 다운로드 실패");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } finally {
+      setDownloading("");
+    }
+  }
   const pillStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", minHeight: 30, padding: "0 12px", borderRadius: 8, border: "1px solid #b9cbbc", background: "#e3ede6", color: "#3f574b", fontWeight: 800, fontSize: 12, textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" };
   const primaryPillStyle: React.CSSProperties = { ...pillStyle, background: "#60766a", borderColor: "#60766a", color: "#fff" };
   const neutralPillStyle: React.CSSProperties = { ...pillStyle, background: "#f4f1ec", borderColor: "#d8d3cc", color: "#4b4744" };
@@ -1011,7 +1045,7 @@ export default function ProductCatalogPage() {
                       {group.items.some(isRocketPendingItem) && <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}><RocketModelEditor compact items={group.items.filter(isRocketPendingItem)} onSaved={reloadRocketItems} /><RocketDeleteButton items={group.items.filter(isRocketPendingItem)} onDone={reloadRocketItems} /></div>}
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}><Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={primaryPillStyle}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName || photos?.loading} style={{ ...pillStyle, cursor: photos?.loading ? "wait" : "pointer" }}>{photos?.loading ? "사진 검색 중…" : "사진검색"}</button>{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={neutralPillStyle}>사진 검색 초기화</button>}</div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>{photos && !photos.loading && (() => { const count = photos.hits.filter(hit => hit.selected && !brokenPhotoIds.has(hit.id) && !photos.hiddenIds?.includes(hit.id)).length; return <button type="button" onClick={() => void downloadSelectedPhotos(group.modelName)} disabled={!count || Boolean(downloading)} title={count ? "선택한 사진을 내려받습니다. 여러 장이면 zip 하나로 받습니다." : "다운로드할 사진을 먼저 선택하세요."} style={{ ...neutralPillStyle, cursor: !count ? "not-allowed" : downloading ? "wait" : "pointer", opacity: count ? 1 : 0.55 }}>{downloading === group.modelName ? "내려받는 중…" : `선택 사진 다운로드 (${count}장)`}</button>; })()}<Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={primaryPillStyle}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName || photos?.loading} style={{ ...pillStyle, cursor: photos?.loading ? "wait" : "pointer" }}>{photos?.loading ? "사진 검색 중…" : "사진검색"}</button>{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={neutralPillStyle}>사진 검색 초기화</button>}</div>
                       <div style={{ display: "inline-flex", alignItems: "stretch", border: "1px solid #dfbdb2", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
                         <select aria-label={`${group.modelName} 제외 사유`} value={exclusionReasons[group.key] || "상표·디자인 위험"} onChange={event => setExclusionReasons(current => ({ ...current, [group.key]: event.target.value }))} style={{ border: 0, outline: "none", background: "#f4f1ec", color: "#4b4744", fontWeight: 700, fontSize: 12, minHeight: 30, padding: "0 8px" }}><option>상표·디자인 위험</option><option>거래처 생산종료</option><option>직접입력</option></select>
                         {(exclusionReasons[group.key] || "") === "직접입력" && <input value={exclusionMemos[group.key] || ""} onChange={event => setExclusionMemos(current => ({ ...current, [group.key]: event.target.value }))} placeholder="메모" maxLength={60} aria-label={`${group.modelName} 제외 메모`} style={{ border: 0, borderLeft: "1px solid #dfbdb2", outline: "none", minHeight: 30, width: 150, padding: "0 8px", fontSize: 12 }} />}
@@ -1073,7 +1107,7 @@ export default function ProductCatalogPage() {
           ))}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="모델명·모델SKU·SKU ID·바코드·상품명 검색" style={{ flex: "1 1 340px", minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px" }} />
+          <input value={query} onChange={event => { setQuery(event.target.value); if (event.target.value.trim() && status === "reregister") setStatus("all"); }} placeholder="모델명·모델SKU·SKU ID·바코드·상품명 검색" style={{ flex: "1 1 340px", minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px" }} />
           {query && <button type="button" onClick={() => { setQuery(""); try { window.sessionStorage.setItem(VIEW_KEY, JSON.stringify({ status, query: "" })); } catch {} }} title="검색어를 지웁니다." style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>검색 초기화</button>}
           <button type="button" onClick={() => void loadCatalog()} disabled={loading} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "새로 읽는 중…" : "제품DB 새로고침"}</button>
           <select value={status} onChange={event => setStatus(event.target.value)} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 10px", background: "#fff" }}>
