@@ -29,6 +29,17 @@ export async function POST(request: NextRequest) {
         cleared[kind] = { ...(cleared[kind] || {}), ...Object.fromEntries(keys.map(key => [key, at])) };
         workspace.statusListCleared = cleared;
         if (kind === "release") for (const [skuId, check] of Object.entries(current)) if (check.decision === "release" && !check.releasedListClearedAt) current[skuId] = { ...check, releasedListClearedAt: at };
+      } else if (body.action === "clear-one") {
+        // 단종해제 승인(정상전환)을 확인한 SKU 하나만 목록에서 지운다(2026-10-19). 다른 화면 선택 SKU는 그대로 둔다.
+        const kind = body.kind === "discontinue" ? "discontinue" : body.kind === "release" ? "release" : "";
+        const key = Array.isArray(body.keys) && typeof body.keys[0] === "string" && body.keys[0].length <= 400 ? body.keys[0] : "";
+        const skuId = typeof body.skuId === "string" && /^\d{1,20}$/.test(body.skuId) ? body.skuId : "";
+        if (!kind || !key || !skuId) throw new Error("지울 SKU를 확인해 주세요.");
+        const cleared = { ...(workspace.statusListCleared || {}) };
+        cleared[kind] = { ...(cleared[kind] || {}), [key]: at };
+        workspace.statusListCleared = cleared;
+        const check = current[skuId];
+        if (kind === "release" && check?.decision === "release" && !check.releasedListClearedAt) current[skuId] = { ...check, releasedListClearedAt: at };
       } else if (body.action === "clear-release") {
         for (const [skuId, check] of Object.entries(current)) if (check.decision === "release" && !check.releasedListClearedAt) current[skuId] = { ...check, releasedListClearedAt: at };
       } else {

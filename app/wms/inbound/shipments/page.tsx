@@ -444,7 +444,7 @@ export default function ShipmentReceiptsPage() {
   }
 
   // 단종확인·단종해제·되돌리기·단종해제 목록 비우기. 저장된 결과로 화면만 바로 바꾼다.
-  async function supplyCheck(action: "discontinued" | "release" | "undo" | "clear-release" | "clear-list", skuId = "", productName = "", list?: { kind: "discontinue" | "release"; keys: string[] }) {
+  async function supplyCheck(action: "discontinued" | "release" | "undo" | "clear-release" | "clear-list" | "clear-one", skuId = "", productName = "", list?: { kind: "discontinue" | "release"; keys: string[] }) {
     if (fixture) return;
     setError("");
     const key = `supply:${skuId || (list ? `${action}:${list.kind}` : action)}`;
@@ -470,6 +470,7 @@ export default function ShipmentReceiptsPage() {
         action === "discontinued" ? `SKU ${skuId} 단종 확인했습니다.`
         : action === "release" ? `SKU ${skuId}를 단종해제 대상에 넣었습니다.`
         : action === "undo" ? `SKU ${skuId} 확인을 되돌렸습니다.`
+        : action === "clear-one" ? `SKU ${skuId}를 단종해제 대상에서 지웠습니다.`
         : list?.kind === "discontinue" ? "단종 대상 목록을 비웠습니다."
         : "단종해제 대상 목록을 비웠습니다.",
       );
@@ -1089,7 +1090,21 @@ export default function ShipmentReceiptsPage() {
                     <tbody>
                       {section.rows.map((item) => (
                         <tr key={item.skuId}>
-                          <td>{item.skuId}</td>
+                          <td>
+                            {item.skuId}
+                            {section.kind === "release" && (
+                              <button
+                                type="button"
+                                className="softPinkButton"
+                                title="쿠팡에서 정상전환된 것을 확인한 SKU를 목록에서 지웁니다."
+                                disabled={routingKeys[`supply:${item.skuId}`]}
+                                onClick={() => void supplyCheck("clear-one", item.skuId, item.productName, { kind: "release", keys: [item.key] })}
+                                style={{ marginLeft: "8px", minHeight: "24px", padding: "0 8px", fontSize: "11px", userSelect: "none", verticalAlign: "middle" }}
+                              >
+                                {routingKeys[`supply:${item.skuId}`] ? "…" : "삭제"}
+                              </button>
+                            )}
+                          </td>
                           <td>{item.productName}</td>
                         </tr>
                       ))}
