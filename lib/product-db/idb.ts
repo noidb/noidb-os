@@ -92,3 +92,28 @@ export async function ensureReadWritePermission(
 export function supportsDirectoryPicker() {
   return typeof window !== "undefined" && "showDirectoryPicker" in window;
 }
+
+// 상품이미지DB 폴더와 따로 기억하는 폴더(예: 8번 썸네일·라벨을 넣는 "상품수정" 폴더).
+const EDIT_FOLDER_KEY = "product-edit-folder";
+
+export async function saveEditFolderHandle(handle: FileSystemDirectoryHandle) {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).put(handle, EDIT_FOLDER_KEY);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error("핸들 저장 실패"));
+  });
+  db.close();
+}
+
+export async function loadEditFolderHandle(): Promise<FileSystemDirectoryHandle | null> {
+  const db = await openDb();
+  const handle = await new Promise<FileSystemDirectoryHandle | null>((resolve, reject) => {
+    const req = db.transaction(STORE, "readonly").objectStore(STORE).get(EDIT_FOLDER_KEY);
+    req.onsuccess = () => resolve((req.result as FileSystemDirectoryHandle) || null);
+    req.onerror = () => reject(req.error || new Error("핸들 불러오기 실패"));
+  });
+  db.close();
+  return handle;
+}

@@ -8,7 +8,9 @@ import AppNavigation from "./AppNavigation";
 import {
   ensureReadWritePermission,
   loadDirectoryHandle,
+  loadEditFolderHandle,
   saveDirectoryHandle,
+  saveEditFolderHandle,
   supportsDirectoryPicker,
 } from "@/lib/product-db/idb";
 import {
@@ -347,6 +349,8 @@ export default function Home() {
   // SKU ID를 입력하면 제품DB에서 모델명을 찾아 모델명 칸에 자동으로 넣는다(2026-10-19).
   // 자동으로 넣은 모델명은 SKU ID를 고치면 바로 비워 다른 상품의 라벨이 나가지 않게 하고, 직접 입력한 모델명은 덮어쓰지 않는다.
   const [thumbOnlyHint, setThumbOnlyHint] = useState("");
+  /** 8번 썸네일·라벨을 넣는 "상품수정" 폴더(상품이미지DB 폴더와 따로 기억). 그 안에 모델명 폴더를 만들어 넣는다. */
+  const [editFolderHandle, setEditFolderHandle] = useState<FileSystemDirectoryHandle | null>(null);
   const thumbOnlyModelRef = useRef("");
   const thumbOnlyModelAuto = useRef(false);
   useEffect(() => {
@@ -439,6 +443,10 @@ export default function Home() {
   const [dbSavedFiles, setDbSavedFiles] = useState<string[]>([]);
   const [registrationUploadReady, setRegistrationUploadReady] = useState<{ model: string; files: string[] } | null>(null);
   const uploadPoolInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    void loadEditFolderHandle().then(handle => { if (handle) setEditFolderHandle(handle); }).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     setDbSupported(supportsDirectoryPicker());
@@ -2316,9 +2324,58 @@ export default function Home() {
   };
   thumbOnlyPasteRef.current = file => { void pasteThumbOnlyImage(file); };
 
+  // 8번 썸네일·라벨은 "상품수정" 폴더 안 모델명 폴더에 바로 저장한다(2026-10-19).
+  // 폴더는 처음 한 번만 고르면 기억하고, 폴더 저장을 못 하는 브라우저(모바일 등)는 예전처럼 다운로드한다.
+  const safeFolderName = (name: string) => name.replace(/[\\/:*?"<>|]/g, "_").replace(/[. ]+$/, "").trim();
+
+  const pickEditFolder = async (): Promise<FileSystemDirectoryHandle | null> => {
+    try {
+      const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+      if (!(await ensureReadWritePermission(handle))) {
+        setExportMessage("오류: 폴더 쓰기 권한이 필요합니다.");
+        return null;
+      }
+      await saveEditFolderHandle(handle);
+      setEditFolderHandle(handle);
+      return handle;
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return null;
+      setExportMessage(`오류: ${e instanceof Error ? e.message : "폴더 선택 실패"}`);
+      return null;
+    }
+  };
+
+  /** 파일들을 상품수정\모델명\ 에 저장한다. 저장한 위치 문구를 돌려주고, 폴더를 고르지 않았으면 null. */
+  const saveThumbOnlyFiles = async (folderModel: string, files: { name: string; blob: Blob }[]): Promise<string | null> => {
+    if (!supportsDirectoryPicker()) {
+      for (const [index, file] of files.entries()) {
+        if (index) await new Promise(resolve => setTimeout(resolve, 400));
+        downloadBlobFile(file.blob, file.name);
+      }
+      return "다운로드 폴더";
+    }
+    let root = editFolderHandle;
+    if (root && !(await ensureReadWritePermission(root))) root = null;
+    if (!root) {
+      setExportMessage("상품수정 폴더를 골라주세요. 한 번 고르면 다음부터는 묻지 않습니다.");
+      root = await pickEditFolder();
+      if (!root) return null;
+    }
+    const folderName = safeFolderName(folderModel);
+    const modelDir = await root.getDirectoryHandle(folderName, { create: true });
+    for (const file of files) {
+      const fileHandle = await modelDir.getFileHandle(file.name, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(file.blob);
+      await writable.close();
+    }
+    return `${root.name}\\${folderName}`;
+  };
+
   const downloadThumbnailOnly = async () => {
     setExportArea("thumb");
     const skuId = thumbOnlySku.trim();
+    const folderModel = thumbOnlyModel.trim();
     if (!/^\d{5,}$/.test(skuId)) {
       setExportMessage("오류: SKU ID를 숫자로 입력해주세요.");
       return;
@@ -2327,23 +2384,27 @@ export default function Home() {
       setExportMessage("오류: 썸네일 이미지를 먼저 붙여넣거나 넣어주세요.");
       return;
     }
+    if (!folderModel) {
+      setExportMessage("오류: 저장할 폴더 이름이 될 모델명을 입력해주세요.");
+      return;
+    }
     setExportLoading("thumb");
     try {
       const jpeg = await normalizeCoupangImage(thumbOnlySlot.dataUrl);
-      downloadBlobFile(dataUrlToBlob(jpeg), `${skuId}.jpg`);
-      setExportMessage(`썸네일 다운로드 완료 · ${skuId}.jpg`);
-      // 다음 SKU를 바로 이어서 할 수 있게 비운다.
+      const savedAt = await saveThumbOnlyFiles(folderModel, [{ name: `${skuId}.jpg`, blob: dataUrlToBlob(jpeg) }]);
+      if (!savedAt) return;
+      setExportMessage(`썸네일 저장 완료 · ${savedAt}\\${skuId}.jpg`);
+      // 다음 SKU를 바로 이어서 할 수 있게 비운다. 모델명은 라벨도 받을 수 있게 남긴다.
       setThumbOnlySku("");
       setThumbOnlySlot(null);
     } catch (e) {
-      setExportMessage(`오류: ${e instanceof Error ? e.message : "썸네일 다운로드 실패"}`);
+      setExportMessage(`오류: ${e instanceof Error ? e.message : "썸네일 저장 실패"}`);
     } finally {
       setExportLoading("");
     }
   };
 
   // 썸네일을 고칠 때 라벨도 함께 필요하므로, 같은 칸에서 모델명으로 라벨만 따로 받는다(2026-10-19).
-  // 저장 위치는 썸네일 다운로드와 같은 브라우저 다운로드 폴더다(연결된 상품이미지DB 폴더에는 저장하지 않는다).
   // 제조연월·제조자명·수입자명은 위 "라벨 정보" 칸의 값을 쓴다.
   const downloadThumbnailLabel = async () => {
     setExportArea("thumb");
@@ -2361,12 +2422,13 @@ export default function Home() {
         importerName: labelImporterName,
       });
       const fileName = `라벨_${labelModel}.jpg`;
-      downloadBlobFile(labelBlob, fileName);
-      setExportMessage(`라벨 다운로드 완료 · ${fileName}`);
+      const savedAt = await saveThumbOnlyFiles(labelModel, [{ name: fileName, blob: labelBlob }]);
+      if (!savedAt) return;
+      setExportMessage(`라벨 저장 완료 · ${savedAt}\\${fileName}`);
       // 다음 모델을 바로 이어서 할 수 있게 비운다.
       setThumbOnlyModel("");
     } catch (e) {
-      setExportMessage(`오류: ${e instanceof Error ? e.message : "라벨 다운로드 실패"}`);
+      setExportMessage(`오류: ${e instanceof Error ? e.message : "라벨 저장 실패"}`);
     } finally {
       setExportLoading("");
     }
@@ -2399,17 +2461,18 @@ export default function Home() {
         importerName: labelImporterName,
       });
       const labelFileName = `라벨_${labelModel}.jpg`;
-      downloadBlobFile(dataUrlToBlob(jpeg), `${skuId}.jpg`);
-      // 브라우저가 연속 다운로드를 한 번에 묶어 막지 않도록 잠깐 간격을 둔다.
-      await new Promise(resolve => setTimeout(resolve, 400));
-      downloadBlobFile(labelBlob, labelFileName);
-      setExportMessage(`다운로드 완료 · ${skuId}.jpg + ${labelFileName}`);
+      const savedAt = await saveThumbOnlyFiles(labelModel, [
+        { name: `${skuId}.jpg`, blob: dataUrlToBlob(jpeg) },
+        { name: labelFileName, blob: labelBlob },
+      ]);
+      if (!savedAt) return;
+      setExportMessage(`저장 완료 · ${savedAt} 폴더에 ${skuId}.jpg + ${labelFileName}`);
       // 다음 SKU를 바로 이어서 할 수 있게 모두 비운다.
       setThumbOnlySku("");
       setThumbOnlyModel("");
       setThumbOnlySlot(null);
     } catch (e) {
-      setExportMessage(`오류: ${e instanceof Error ? e.message : "다운로드 실패"}`);
+      setExportMessage(`오류: ${e instanceof Error ? e.message : "저장 실패"}`);
     } finally {
       setExportLoading("");
     }
@@ -3118,8 +3181,9 @@ export default function Home() {
         </div>
         {exportArea === "etc" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
         <div className="labelQuickPanel" ref={thumbOnlyPanelRef}>
-          <strong>썸네일·라벨 다운로드</strong>
-          <p>캡처한 이미지를 이 영역에서 Ctrl+V로 붙여넣으세요. 5번 썸네일 칸처럼 끌어서 위치 이동 · 확대/축소 · 밝기 · 선명도를 조절하고, 입력한 SKU ID가 파일 이름이 됩니다. 라벨은 모델명을 입력해 필요할 때 함께 받으세요(제조연월·제조자명·수입자명은 위 라벨 정보 값).</p>
+          <strong>썸네일·라벨 저장</strong>
+          <p>캡처한 이미지를 이 영역에서 Ctrl+V로 붙여넣으세요. 5번 썸네일 칸처럼 끌어서 위치 이동 · 확대/축소 · 밝기 · 선명도를 조절하고, 입력한 SKU ID가 파일 이름이 됩니다. 라벨은 모델명을 입력해 필요할 때 함께 받으세요(제조연월·제조자명·수입자명은 위 라벨 정보 값). 파일은 상품수정 폴더 안 모델명 폴더에 저장됩니다.</p>
+          <div className="thumbOnlyFolderRow"><span>저장 위치: {editFolderHandle ? `${editFolderHandle.name} › 모델명` : "아직 고르지 않음"}</span><button className="softApricotButton" type="button" disabled={Boolean(exportLoading)} onClick={() => { setExportArea("thumb"); void pickEditFolder(); }}>{editFolderHandle ? "저장 폴더 바꾸기" : "저장 폴더 고르기"}</button></div>
           <div className="thumbOnlyRow">
             <ImageSlot
               slotKey="thumbOnly"
@@ -3144,7 +3208,7 @@ export default function Home() {
                     onKeyDown={e => { if (e.key === "Enter") void downloadThumbnailOnly(); }} />
                 </Field>
                 <button className="softSageButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadThumbnailOnly()}>
-                  {exportLoading === "thumb" ? "썸네일 만드는 중..." : "썸네일 다운로드"}
+                  {exportLoading === "thumb" ? "썸네일 저장 중..." : "썸네일 저장"}
                 </button>
               </div>
               <div className="thumbOnlyInputRow">
@@ -3154,13 +3218,13 @@ export default function Home() {
                     onKeyDown={e => { if (e.key === "Enter") void downloadThumbnailLabel(); }} />
                 </Field>
                 <button className="softBeigeButton" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadThumbnailLabel()}>
-                  {exportLoading === "thumbLabel" ? "라벨 만드는 중..." : "라벨 다운로드"}
+                  {exportLoading === "thumbLabel" ? "라벨 저장 중..." : "라벨 저장"}
                 </button>
               </div>
               {thumbOnlyHint && <p className={thumbOnlyHint.includes("실패") || thumbOnlyHint.includes("찾지 못") || thumbOnlyHint.includes("비어") ? "error" : "note"}>{thumbOnlyHint}</p>}
               {exportArea === "thumb" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
               <button className="softInkButton thumbOnlyBoth" type="button" disabled={Boolean(exportLoading)} onClick={() => void downloadThumbnailAndLabel()}>
-                {exportLoading === "thumbBoth" ? "썸네일·라벨 만드는 중..." : "썸네일 + 라벨 동시 다운로드"}
+                {exportLoading === "thumbBoth" ? "썸네일·라벨 저장 중..." : "썸네일 + 라벨 동시 저장"}
               </button>
             </div>
           </div>
