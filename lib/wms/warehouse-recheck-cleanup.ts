@@ -65,6 +65,9 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
   const pd = { sku: find(pdHeaders, "SKU ID", "SKUID"), status: find(pdHeaders, "현재상태"), orderable: find(pdHeaders, "발주가능상태") };
   if (pd.sku < 0 || pd.status < 0) problems.push("제품DB 탭에서 'SKU ID' 또는 '현재상태' 열을 찾지 못했습니다.");
   const stHeaders = (storage?.[0] || []).map(value => String(value ?? ""));
+  const stSkuCol = find(stHeaders, "SKU ID", "SKUID", "SKU");
+  const storageSkus = new Set<string>();
+  if (storage && stSkuCol >= 0) storage.slice(1).forEach(row => { const sku = String(row[stSkuCol] ?? "").trim(); if (sku) storageSkus.add(sku); });
   const productDbRowBySku = new Map<string, number>();
   productDb.slice(1).forEach((row, index) => { const sku = String(row[pd.sku] ?? "").trim(); if (sku && !productDbRowBySku.has(sku)) productDbRowBySku.set(sku, index + 2); });
   const moves: CleanupMove[] = [], unknown: CleanupPlan["unknown"] = [];
@@ -81,8 +84,10 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
     const orderableHere = col.orderable >= 0 ? String(row[col.orderable] ?? "").trim() : "";
     if (key === "거래처단종") {
       if (!storage) { problems.push(`'${STORAGE_TAB}' 탭을 찾지 못했습니다.`); return; }
-      appendStorage.push(mapRow(headers, row, stHeaders, { "현재상태": "거래처단종" }));
-      moves.push({ source: "창고재확인", rowNumber, skuId, productName, result, orderableStatus: orderableHere, target: "보관", mode: "append", release: false });
+      // 보관 탭에 이미 같은 SKU가 있으면 다시 붙이지 않고 창고재확인에서만 지운다(중간에 실패한 뒤 다시 실행해도 중복되지 않게).
+      const already = Boolean(skuId) && storageSkus.has(skuId);
+      if (!already) { appendStorage.push(mapRow(headers, row, stHeaders, { "현재상태": "거래처단종" })); if (skuId) storageSkus.add(skuId); }
+      moves.push({ source: "창고재확인", rowNumber, skuId, productName, result, orderableStatus: orderableHere, target: "보관", mode: already ? "delete-only" : "append", release: false });
       deleteRows.push(rowNumber);
     } else if (key === squash("제품DB로 이동(재고있음)")) {
       const existing = productDbRowBySku.get(skuId);

@@ -297,10 +297,23 @@ export async function deleteSheetRows(sheetId: number, rowNumbers: number[]): Pr
   if (!rows.length) return;
   const accessToken = await getWmsGoogleAccessToken();
   const spreadsheetId = getWmsSpreadsheetId();
+  // 구글 시트는 고정 행 아래를 전부 지우는 것을 막는다("not possible to delete all non-frozen rows").
+  // 탭을 통째로 비우게 되면 먼저 빈 행 1개를 끝에 붙여 두고 지운다(빈 행 1개만 남음).
+  const metaResponse = await fetch(`${SHEETS_API_BASE}/${spreadsheetId}?fields=sheets.properties(sheetId,gridProperties)`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
+  const meta = await metaResponse.json().catch(() => ({} as any));
+  const grid = (meta?.sheets || []).find((sheet: any) => Number(sheet?.properties?.sheetId || 0) === sheetId)?.properties?.gridProperties;
+  const rowCount = Number(grid?.rowCount || 0);
+  const frozen = Number(grid?.frozenRowCount || 0);
+  const needsSpare = rowCount > 0 && rows.filter(row => row > frozen && row <= rowCount).length >= rowCount - frozen;
+  const requests: object[] = rows.map(row => ({ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: row - 1, endIndex: row } } }));
+  if (needsSpare) requests.unshift({ appendDimension: { sheetId, dimension: "ROWS", length: 1 } });
   const response = await fetch(`${SHEETS_API_BASE}/${spreadsheetId}:batchUpdate`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ requests: rows.map(row => ({ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: row - 1, endIndex: row } } })) }),
+    body: JSON.stringify({ requests }),
   });
   const data = await response.json().catch(() => ({} as any));
   if (!response.ok) throw new Error(`행 삭제 실패: ${data?.error?.message || response.status}`);

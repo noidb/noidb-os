@@ -33,3 +33,12 @@ assert.equal(pickStorageTabTitle(["제품DB", "보관", "_백업__보관_비관�
 assert.equal(pickStorageTabTitle(["제품DB", "_백업__보관_비관리SKU_20261008_x"]), null);
 console.log("PASS 제품DB 비관리·거래처단종·단종 → 보관(_보관_비관리SKU_20261008)");
 console.log("PASS 창고재확인 정리: 확인중 유지, 거래처단종→보관, 제품DB 이동(현재상태 비움·기존행 갱신), 불가→단종해제, 기타 유지");
+
+// 중간 실패 뒤 다시 실행(2026-10-20): 보관 탭에 이미 들어간 거래처단종은 다시 붙이지 않고 창고재확인에서만 지움
+const recheck3 = [["SKU ID", "상품명", "창고 확인결과"], ["20", "가", "거래처단종"], ["21", "나", "거래처단종"]];
+const st3 = [["SKU ID", "상품명", "현재상태"], ["20", "가", "거래처단종"]];
+const plan3 = planWarehouseRecheckCleanup(recheck3, [["SKU ID", "현재상태"]], st3);
+assert.deepEqual(plan3.appendStorage, [["21", "나", "거래처단종"]]);
+assert.deepEqual(plan3.deleteRows, [2, 3]);
+assert.equal(plan3.moves.find(m => m.skuId === "20")?.mode, "delete-only");
+console.log("rerun ok");
