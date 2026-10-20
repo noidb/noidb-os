@@ -41,6 +41,8 @@ type ApiPayload = {
   marketingExclusion?: { listedSkuCount: number; models: string[]; skuCount: number; userSkus?: Array<{ skuId: string; productName: string; at: string }> };
   /** 제품DB 기준 단종 대상·단종해제 대상 목록 */
   statusLists?: { discontinue: StatusListRow[]; release: StatusListRow[]; reregisteredExcluded?: string[] } | null;
+  /** 가장 최근에 한꺼번에 비운 목록(되살리기용) */
+  statusListLastCleared?: Partial<Record<"discontinue" | "release", { at: string; count: number } | null>>;
   /** 이미 거래처에 보낸 발주(입고대기·입고지연) — SKU별 */
   openVendorOrders?: Record<string, { quantity: number; vendors: string[]; sentOn: string; delayed: boolean }>;
   /** 마케팅 후보 줄별: 그 입고예정일 뒤에 같은 SKU로 나온 쿠팡 추가 발주(초도가 이미 팔린 신호) */
@@ -445,6 +447,36 @@ export default function ShipmentReceiptsPage() {
   }
 
   // 단종확인·단종해제·되돌리기·단종해제 목록 비우기. 저장된 결과로 화면만 바로 바꾼다.
+  /** 실수로 비운 단종·단종해제 목록을 되살린다(2026-10-20). */
+  async function restoreLastClear(kind: "discontinue" | "release") {
+    const batch = payload?.statusListLastCleared?.[kind];
+    if (!batch || fixture) return;
+    const label = kind === "release" ? "단종해제 대상" : "단종 대상";
+    if (!window.confirm(`${new Date(batch.at).toLocaleString("ko-KR")}에 비운 ${label} ${batch.count}건을 목록에 되살립니다.\n\n그 전에 하나씩 '삭제'한 SKU는 그대로 지워진 상태로 둡니다.`)) return;
+    const key = `restore:${kind}`;
+    setRoutingKeys((current) => ({ ...current, [key]: true }));
+    setError("");
+    try {
+      const response = await fetch("/api/wms/logistics/supply-status-check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "restore-last-clear", kind }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "되살리지 못했습니다.");
+      await quietReload();
+      setMessage(`${label} 목록을 되살렸습니다. 이미 쿠팡에서 정상으로 바뀐 SKU는 목록에 나오지 않습니다.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "되살리지 못했습니다.");
+    } finally {
+      setRoutingKeys((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    }
+  }
+
   async function supplyCheck(action: "discontinued" | "release" | "undo" | "clear-release" | "clear-list" | "clear-one", skuId = "", productName = "", list?: { kind: "discontinue" | "release"; keys: string[] }) {
     if (fixture) return;
     setError("");
@@ -1139,13 +1171,34 @@ export default function ShipmentReceiptsPage() {
                     type="button"
                     className={`softPinkButton ${styles.fullButton}`}
                     disabled={routingKeys[`supply:clear-list:${section.kind}`]}
-                    onClick={() => void supplyCheck("clear-list", "", "", { kind: section.kind, keys: section.rows.map((row) => row.key) })}
+                    onClick={() => {
+                      // 단종해제는 승인된 SKU만 하나씩 지우기로 함 — 전부 비우기는 한 번 더 묻는다(2026-10-20 실수로 비움).
+                      if (section.kind === "release" && !window.confirm(`단종해제 대상 ${section.rows.length}건을 모두 비웁니다.\n\n승인(정상전환)된 SKU만 지우려면 취소하고 줄마다 '삭제'를 누르세요.`)) return;
+                      void supplyCheck("clear-list", "", "", { kind: section.kind, keys: section.rows.map((row) => row.key) });
+                    }}
                   >
                     {section.done}
                   </button>
                 </div>
               </section>
             ))}
+            {(["release", "discontinue"] as const).map((kind) => {
+              const batch = payload?.statusListLastCleared?.[kind];
+              if (!batch || fixture) return null;
+              const label = kind === "release" ? "단종해제 대상" : "단종 대상";
+              return (
+                <button
+                  key={`restore-${kind}`}
+                  type="button"
+                  className={`softApricotButton ${styles.fullButton}`}
+                  disabled={routingKeys[`restore:${kind}`]}
+                  onClick={() => void restoreLastClear(kind)}
+                  style={{ marginTop: "8px" }}
+                >
+                  {routingKeys[`restore:${kind}`] ? "되살리는 중…" : `마지막으로 비운 ${label} ${batch.count}건 되살리기 (${new Date(batch.at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })})`}
+                </button>
+              );
+            })}
             {!fixture && (
               <DiscontinueByCode
                 onDone={(text, isError) => {

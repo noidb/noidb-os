@@ -17,7 +17,7 @@ import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 import { readPickingWaveStore } from "@/lib/wms/picking-wave/server-store";
 import { openVendorOrdersBySku } from "@/lib/wms/open-vendor-orders";
 import { reconcileIncompleteVendorRoutes } from "@/lib/wms/logistics-receipt-routing";
-import { buildStatusLists } from "@/lib/wms/discontinue-lists";
+import { buildStatusLists, lastClearedBatch } from "@/lib/wms/discontinue-lists";
 import { loadReregistrationLookup } from "@/lib/wms/reregistration-lookup";
 import { loadStatusSourceItems } from "@/lib/wms/status-list-sources";
 import { expandMarketingExclusions, marketingExcludedListed, MARKETING_PERMANENT_EXCLUDED_SKU_IDS } from "@/lib/wms/marketing-permanent-exclusions";
@@ -201,6 +201,13 @@ async function responseBoard() {
   return { shipmentDetails, currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, skuNames, productDbStatuses: productDbStatusBySku(catalog, shownSkuIds), productDbLooks: productDbLooksBySku(catalog, shownSkuIds),
     supplyStatusChecks: stored.supplyStatusChecks || {},
     coveredByVendorOrder: stored.coveredByVendorOrder || {},
+    // 가장 최근에 한꺼번에 비운 묶음(되살리기 버튼용). 하나씩 지운 1건은 되살리기 대상으로 보지 않는다.
+    statusListLastCleared: Object.fromEntries((["discontinue", "release"] as const).map(kind => {
+      const batch = lastClearedBatch(stored.statusListCleared?.[kind]);
+      // 비운 지 3일이 지나면 버튼을 숨긴다(계속 남아 있으면 헷갈림).
+      const recent = batch && Date.now() - Date.parse(batch.at) < 3 * 24 * 60 * 60 * 1000;
+      return [kind, batch && recent && batch.keys.length > 1 ? { at: batch.at, count: batch.keys.length } : null];
+    })),
     statusLists: statusSource ? buildStatusLists(statusSource.items, {
       releaseFromScreen: Object.fromEntries(Object.entries(stored.supplyStatusChecks || {}).filter(([, check]) => check.decision === "release" && !check.releasedListClearedAt)),
       cleared: stored.statusListCleared,

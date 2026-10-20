@@ -35,6 +35,14 @@ export function clearedSkuId(key: string): string {
   } catch { return ""; }
 }
 
+/** 가장 최근에 '목록 비우기'로 한꺼번에 비운 묶음(같은 시각에 기록된 키들) — 되살리기용(2026-10-20) */
+export function lastClearedBatch(cleared: Record<string, string> = {}): { at: string; keys: string[] } | null {
+  let at = "";
+  for (const value of Object.values(cleared)) if (String(value || "") > at) at = String(value || "");
+  if (!at) return null;
+  return { at, keys: Object.entries(cleared).filter(([, value]) => value === at).map(([key]) => key) };
+}
+
 export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier">[], options: {
   releaseFromScreen?: Record<string, { productName: string; at?: string }>;
   cleared?: StatusListCleared;

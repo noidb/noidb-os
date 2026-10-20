@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { buildStatusLists } from "../lib/wms/discontinue-lists";
+import { buildStatusLists, lastClearedBatch } from "../lib/wms/discontinue-lists";
 const item = (skuId: string, currentStatus: string, orderableStatus: string) => ({ skuId, currentStatus, orderableStatus, productName: `상품${skuId}`, optionLabel: "" }) as never;
 const items = [item("1", "거래처단종", "정상"), item("2", "단종", "불가"), item("3", "판매중지", "정상"), item("4", "과재고", "일시중단"),
   item("5", "제품DB로 이동 (재고있음)", "불가"), item("6", "과재고", "정상"), item("7", "", "불가"), item("8", "가품중단", "정상")];
@@ -17,3 +17,11 @@ assert(rr.discontinue.some(x => x.skuId === "12" && x.productName === "제품DB�
 const already = buildStatusLists([item("20", "", "정상")], { memoReleaseSkuIds: ["20"], memoDiscontinueSkuIds: [] });
 assert.equal(already.release.length, 0, "메모 SKU라도 이미 정상이면 단종해제에서 뺌");
 console.log("PASS discontinue/release lists from 제품DB, memo merge, dedupe, cleared");
+
+// 2026-10-20 마지막으로 한꺼번에 비운 묶음 되살리기
+{
+  const batch = lastClearedBatch({ a: "2026-10-19T01:00:00Z", b: "2026-10-20T03:00:00Z", c: "2026-10-20T03:00:00Z" });
+  if (!batch || batch.at !== "2026-10-20T03:00:00Z" || batch.keys.sort().join() !== "b,c") throw new Error("lastClearedBatch 실패");
+  if (lastClearedBatch({}) !== null) throw new Error("빈 기록 실패");
+  console.log("lastClearedBatch OK");
+}

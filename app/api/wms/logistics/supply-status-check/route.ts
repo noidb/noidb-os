@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
 import { mutateWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
+import { lastClearedBatch } from "@/lib/wms/discontinue-lists";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,6 +41,22 @@ export async function POST(request: NextRequest) {
         workspace.statusListCleared = cleared;
         const check = current[skuId];
         if (kind === "release" && check?.decision === "release" && !check.releasedListClearedAt) current[skuId] = { ...check, releasedListClearedAt: at };
+      } else if (body.action === "restore-last-clear") {
+        // 실수로 비운 목록 되살리기(2026-10-20): 가장 최근에 같은 시각으로 비운 묶음만 기록에서 지운다.
+        // 그 전에 하나씩 '삭제'한 SKU(승인 확인한 것)는 시각이 달라 그대로 숨겨 둔다.
+        const kind = body.kind === "discontinue" ? "discontinue" : body.kind === "release" ? "release" : "";
+        if (!kind) throw new Error("되살릴 목록을 확인해 주세요.");
+        const cleared = { ...(workspace.statusListCleared || {}) };
+        const batch = lastClearedBatch(cleared[kind]);
+        if (!batch) throw new Error("되살릴 목록이 없습니다.");
+        const kept = { ...(cleared[kind] || {}) };
+        for (const key of batch.keys) delete kept[key];
+        cleared[kind] = kept;
+        workspace.statusListCleared = cleared;
+        if (kind === "release") for (const [skuId, check] of Object.entries(current)) if (check.releasedListClearedAt === batch.at) {
+          const { releasedListClearedAt: _ignored, ...rest } = check;
+          current[skuId] = rest;
+        }
       } else if (body.action === "clear-release") {
         for (const [skuId, check] of Object.entries(current)) if (check.decision === "release" && !check.releasedListClearedAt) current[skuId] = { ...check, releasedListClearedAt: at };
       } else {
