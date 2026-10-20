@@ -1,6 +1,5 @@
 "use client";
 
-import { discontinueMarkMessage } from "@/lib/wms/discontinue-mark-message";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -482,9 +481,10 @@ export default function ShipmentReceiptsPage() {
   }
 
   async function supplyCheck(action: "discontinued" | "release" | "undo" | "clear-release" | "clear-list" | "clear-one" | "mark-requested", skuId = "", productName = "", list?: { kind: "discontinue" | "release"; keys: string[]; skuIds?: string[] }) {
-    if (fixture) return;
+    if (fixture) return false;
     setError("");
     const key = `supply:${skuId || (list ? `${action}:${list.kind}` : action)}`;
+    let ok = false;
     setRoutingKeys((current) => ({ ...current, [key]: true }));
     try {
       const response = await fetch("/api/wms/logistics/supply-status-check", {
@@ -494,6 +494,7 @@ export default function ShipmentReceiptsPage() {
       });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "저장하지 못했습니다.");
+      ok = true;
       setPayload((current) => current && {
         ...current,
         supplyStatusChecks: data.supplyStatusChecks,
@@ -523,6 +524,7 @@ export default function ShipmentReceiptsPage() {
         return next;
       });
     }
+    return ok;
   }
   // 미납분을 새로 발주하지 않고 이미 보낸 거래처 발주로 처리(되돌리기 가능)
   async function coverByVendorOrder(line: LogisticsReceiptBoardLine, action: "cover" | "undo") {
@@ -563,35 +565,6 @@ export default function ShipmentReceiptsPage() {
       </span>
     );
   };
-  // 단종 대상 SKU로 단종신청 엑셀 + 공문 PDF(압축파일)를 만들어 바로 내려받는다.
-  async function downloadDiscontinueFiles(skuIds: string[]) {
-    setError("");
-    setRoutingKeys((current) => ({ ...current, "discontinue-file": true }));
-    try {
-      const response = await fetch("/api/wms/logistics/discontinue-file", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ skuIds }),
-      });
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || "단종신청 파일을 만들지 못했습니다.");
-      const link = document.createElement("a");
-      link.href = `data:application/zip;base64,${data.base64}`;
-      link.download = data.fileName;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setMessage(`단종신청 엑셀과 공문을 만들었습니다(${data.count}건).${discontinueMarkMessage(data.productDb)} 쿠팡에 신청한 뒤 '단종 신청 완료 · 목록 비우기'를 눌러 주세요.`);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "단종신청 파일을 만들지 못했습니다.");
-    } finally {
-      setRoutingKeys((current) => {
-        const next = { ...current };
-        delete next["discontinue-file"];
-        return next;
-      });
-    }
-  }
   // 단종해제 대상 SKU 엑셀 파일(SKU ID·상품명) — 누를 때만 만든다.
   async function downloadReleaseFile() {
     setError("");
@@ -1109,8 +1082,20 @@ export default function ShipmentReceiptsPage() {
             )}
             {/* 2026-10-20: AI상품등록 9번의 상품공급상태 최신파일 반영을 여기로 옮김 — 반영하면 아래 단종·단종해제 목록을 다시 계산한다. */}
             <SupplyStatusAuditPanel compact onApplied={() => void quietReload()} onAudited={(latest) => setLatestOrderable(latest)} />
+            {/* 2026-10-20 사용자 요청: 단종 대상 SKU와 바코드·SKU 직접 입력을 '단종 신청 목록' 하나로 합침(서류·완료 한 번). */}
+            {!fixture && (
+              <DiscontinueByCode
+                autoRows={discontinueList}
+                latestOrderable={latestOrderable}
+                clearing={Boolean(routingKeys["supply:clear-list:discontinue"])}
+                onClearAuto={(keys) => supplyCheck("clear-list", "", "", { kind: "discontinue", keys })}
+                onDone={(text, isError) => {
+                  if (isError) setError(text);
+                  else { setError(""); setMessage(text); }
+                }}
+              />
+            )}
             {[
-              { kind: "discontinue" as const, title: "단종 대상 SKU", rows: discontinueList, help: "제품DB·보관 탭의 현재상태가 판매중지·단종·거래처단종·가품중단인데 쿠팡 발주가능상태가 아직 정상인 SKU예요.", done: "단종 신청 완료 · 목록 비우기" },
               { kind: "release" as const, title: "단종해제 대상 SKU", rows: releaseList, help: "제품DB 현재상태가 과재고·정상전환대상·제품DB로 이동(재고있음)인데 발주가능상태가 정상이 아닌 SKU, 메모로 주신 SKU, 화면에서 단종해제를 누른 SKU예요.", done: "단종해제 신청 완료 · 목록 비우기" },
             ].filter((section) => section.rows.length > 0).map((section) => (
               <section key={section.kind}>
@@ -1202,16 +1187,6 @@ export default function ShipmentReceiptsPage() {
                       {routingKeys["release-file"] ? "만드는 중…" : "엑셀 파일 만들기"}
                     </button>
                   )}
-                  {section.kind === "discontinue" && (
-                    <button
-                      type="button"
-                      className={`softSageButton ${styles.fullButton}`}
-                      disabled={routingKeys["discontinue-file"]}
-                      onClick={() => void downloadDiscontinueFiles(section.rows.map((row) => row.skuId))}
-                    >
-                      {routingKeys["discontinue-file"] ? "만드는 중…" : "단종신청 엑셀·공문 만들기"}
-                    </button>
-                  )}
                   {section.kind === "release" && (() => {
                     const requested = payload?.statusListRequested?.release || {};
                     const freshIds = section.rows.filter((row) => !requested[row.skuId]).map((row) => row.skuId);
@@ -1259,14 +1234,6 @@ export default function ShipmentReceiptsPage() {
                 </button>
               );
             })}
-            {!fixture && (
-              <DiscontinueByCode
-                onDone={(text, isError) => {
-                  if (isError) setError(text);
-                  else { setError(""); setMessage(text); }
-                }}
-              />
-            )}
             {!fixture && (
               <WarehouseRecheckCleanup
                 onDone={(text, isError) => {
