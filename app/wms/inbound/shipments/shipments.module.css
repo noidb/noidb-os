@@ -659,3 +659,44 @@
   font-weight: 800;
   border-radius: 8px;
 }
+
+/* 단종해제: 엑셀 · 신청완료 · 목록 비우기 3개 균등(2026-10-20) */
+.tripleButtons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.tripleButtons button,
+.pairButtons button {
+  min-height: 40px;
+  font-size: 14px;
+  font-weight: 800;
+  border-radius: 8px;
+}
+@media (max-width: 640px) {
+  .tripleButtons { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}
+
+/* 신청 전 / 신청완료 묶음 제목 줄 — 드래그 복사에는 안 들어가게 */
+.copyTable .groupHead td {
+  padding: 6px 10px;
+  background: #f4f1ec;
+  color: #5c544b;
+  font-size: 13px;
+  font-weight: 800;
+  user-select: none;
+}
+.copyTable .groupHeadDone td {
+  background: #e9ddcf;
+  color: #5b4630;
+}
+/* 신청완료한 줄: 샌드 연한 바탕 */
+.copyTable .requestedRow td {
+  background: #f7f0e7;
+  color: #6b5d4f;
+}
+/* 신청완료 줄에서도 쿠팡 정상전환(✓)은 세이지로 보이게 */
+.copyTable .requestedRow td.orderableDone {
+  background: #e3ede6;
+  color: #3f5a4b;
+}

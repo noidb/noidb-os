@@ -43,6 +43,8 @@ type ApiPayload = {
   statusLists?: { discontinue: StatusListRow[]; release: StatusListRow[]; reregisteredExcluded?: string[] } | null;
   /** 가장 최근에 한꺼번에 비운 목록(되살리기용) */
   statusListLastCleared?: Partial<Record<"discontinue" | "release", { at: string; count: number } | null>>;
+  /** 단종해제 신청 완료를 누른 SKU(SKU → 신청 시각) */
+  statusListRequested?: Partial<Record<"discontinue" | "release", Record<string, string>>>;
   /** 이미 거래처에 보낸 발주(입고대기·입고지연) — SKU별 */
   openVendorOrders?: Record<string, { quantity: number; vendors: string[]; sentOn: string; delayed: boolean }>;
   /** 마케팅 후보 줄별: 그 입고예정일 뒤에 같은 SKU로 나온 쿠팡 추가 발주(초도가 이미 팔린 신호) */
@@ -479,7 +481,7 @@ export default function ShipmentReceiptsPage() {
     }
   }
 
-  async function supplyCheck(action: "discontinued" | "release" | "undo" | "clear-release" | "clear-list" | "clear-one", skuId = "", productName = "", list?: { kind: "discontinue" | "release"; keys: string[] }) {
+  async function supplyCheck(action: "discontinued" | "release" | "undo" | "clear-release" | "clear-list" | "clear-one" | "mark-requested", skuId = "", productName = "", list?: { kind: "discontinue" | "release"; keys: string[]; skuIds?: string[] }) {
     if (fixture) return;
     setError("");
     const key = `supply:${skuId || (list ? `${action}:${list.kind}` : action)}`;
@@ -495,7 +497,9 @@ export default function ShipmentReceiptsPage() {
       setPayload((current) => current && {
         ...current,
         supplyStatusChecks: data.supplyStatusChecks,
-        statusLists: current.statusLists && list ? {
+        statusListRequested: data.statusListRequested || current.statusListRequested,
+        // 신청완료 표시는 목록을 그대로 두고 색만 바꾼다.
+        statusLists: current.statusLists && list && action !== "mark-requested" ? {
           ...current.statusLists,
           [list.kind]: current.statusLists[list.kind].filter((row) => !list.keys.includes(row.key)),
         } : current.statusLists,
@@ -506,6 +510,7 @@ export default function ShipmentReceiptsPage() {
         : action === "release" ? `SKU ${skuId}를 단종해제 대상에 넣었습니다.`
         : action === "undo" ? `SKU ${skuId} 확인을 되돌렸습니다.`
         : action === "clear-one" ? `SKU ${skuId}를 단종해제 대상에서 지웠습니다.`
+        : action === "mark-requested" ? `단종해제 신청완료로 표시했습니다(${list?.skuIds?.length || 0}개). 쿠팡에서 정상으로 바뀐 것을 확인하면 줄마다 '삭제'를 누르세요.`
         : list?.kind === "discontinue" ? "단종 대상 목록을 비웠습니다."
         : "단종해제 대상 목록을 비웠습니다.",
       );
@@ -1129,8 +1134,29 @@ export default function ShipmentReceiptsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {section.rows.map((item) => (
-                        <tr key={item.skuId}>
+                      {(() => {
+                        // 단종해제: 신청 전 줄을 위에, 신청완료 줄은 신청 시각별로 묶어 색을 다르게(2026-10-20).
+                        const requested = section.kind === "release" ? payload?.statusListRequested?.release || {} : {};
+                        const fresh = section.rows.filter((row) => !requested[row.skuId]);
+                        const batches = new Map<string, typeof section.rows>();
+                        for (const row of section.rows) if (requested[row.skuId]) batches.set(requested[row.skuId], [...(batches.get(requested[row.skuId]) || []), row]);
+                        const groups: Array<{ at: string; rows: typeof section.rows }> = [
+                          ...(fresh.length ? [{ at: "", rows: fresh }] : []),
+                          ...[...batches.entries()].sort(([left], [right]) => right.localeCompare(left)).map(([at, rows]) => ({ at, rows })),
+                        ];
+                        const showHeads = section.kind === "release" && batches.size > 0;
+                        return groups.flatMap((group) => [
+                          ...(showHeads ? [
+                            <tr key={`head-${group.at || "fresh"}`} className={`${styles.groupHead} ${group.at ? styles.groupHeadDone : ""}`}>
+                              <td colSpan={4}>
+                                {group.at
+                                  ? `단종해제 신청완료 · ${new Date(group.at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })} · ${group.rows.length}개`
+                                  : `신청 전 · ${group.rows.length}개`}
+                              </td>
+                            </tr>,
+                          ] : []),
+                          ...group.rows.map((item) => (
+                        <tr key={item.skuId} className={group.at ? styles.requestedRow : undefined}>
                           <td>
                             {item.skuId}
                           </td>
@@ -1159,11 +1185,13 @@ export default function ShipmentReceiptsPage() {
                             </td>
                           )}
                         </tr>
-                      ))}
+                          )),
+                        ]);
+                      })()}
                     </tbody>
                   </table>
                 </div>
-                <div className={styles.pairButtons}>
+                <div className={section.kind === "release" ? styles.tripleButtons : styles.pairButtons}>
                   {section.kind === "release" && (
                     <button
                       type="button"
@@ -1184,6 +1212,21 @@ export default function ShipmentReceiptsPage() {
                       {routingKeys["discontinue-file"] ? "만드는 중…" : "단종신청 엑셀·공문 만들기"}
                     </button>
                   )}
+                  {section.kind === "release" && (() => {
+                    const requested = payload?.statusListRequested?.release || {};
+                    const freshIds = section.rows.filter((row) => !requested[row.skuId]).map((row) => row.skuId);
+                    return (
+                      <button
+                        type="button"
+                        className={`softBeigeButton ${styles.fullButton}`}
+                        title="신청한 SKU를 목록에 그대로 두고 색으로 표시합니다. 쿠팡에서 정상으로 바뀌면 줄마다 '삭제'를 누르세요."
+                        disabled={!freshIds.length || routingKeys["supply:mark-requested:release"]}
+                        onClick={() => void supplyCheck("mark-requested", "", "", { kind: "release", keys: [], skuIds: freshIds })}
+                      >
+                        {routingKeys["supply:mark-requested:release"] ? "저장 중…" : freshIds.length ? `단종해제 신청 완료 (${freshIds.length}개)` : "단종해제 신청 완료"}
+                      </button>
+                    );
+                  })()}
                   <button
                     type="button"
                     className={`softPinkButton ${styles.fullButton}`}
@@ -1194,7 +1237,7 @@ export default function ShipmentReceiptsPage() {
                       void supplyCheck("clear-list", "", "", { kind: section.kind, keys: section.rows.map((row) => row.key) });
                     }}
                   >
-                    {section.done}
+                    {section.kind === "release" ? "목록 비우기" : section.done}
                   </button>
                 </div>
               </section>

@@ -208,6 +208,7 @@ async function responseBoard() {
       const recent = batch && Date.now() - Date.parse(batch.at) < 3 * 24 * 60 * 60 * 1000;
       return [kind, batch && recent && batch.keys.length > 1 ? { at: batch.at, count: batch.keys.length } : null];
     })),
+    statusListRequested: stored.statusListRequested || {},
     statusLists: statusSource ? buildStatusLists(statusSource.items, {
       releaseFromScreen: Object.fromEntries(Object.entries(stored.supplyStatusChecks || {}).filter(([, check]) => check.decision === "release" && !check.releasedListClearedAt)),
       cleared: stored.statusListCleared,
@@ -231,9 +232,9 @@ export async function GET(request: Request) {
       collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: [], knownShipmentNumbers }, { headers: withCors(request) });
   }
   try {
-    const { shipmentDetails, currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, skuNames, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists, statusListLastCleared } = await responseBoard();
+    const { shipmentDetails, currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, skuNames, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists, statusListLastCleared, statusListRequested } = await responseBoard();
     return NextResponse.json({ ok: true, status: "ready", source: "supplier-hub-shipments", schemaVersion: 3, shipmentDetails,
-      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, skuNames, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists, statusListLastCleared }, { headers });
+      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, skuNames, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists, statusListLastCleared, statusListRequested }, { headers });
   } catch {
     return NextResponse.json({ ok: false, error: "쉽먼트 입고 수집 대상과 기록을 불러오지 못했습니다." }, { status: 500, headers });
   }

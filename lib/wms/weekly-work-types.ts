@@ -82,6 +82,10 @@ export interface WeeklyWorkspace {
   supplyStatusChecks?: Record<string, { decision: "discontinued" | "release"; productName: string; at: string; releasedListClearedAt?: string }>;
   /** 단종·단종해제 대상 목록에서 '신청 완료 · 목록 비우기'로 처리한 항목(키 → 시각). */
   statusListCleared?: import("./discontinue-lists").StatusListCleared;
+  /** 단종해제 대상 중 '단종해제 신청 완료'를 누른 SKU(SKU → 신청 시각, 2026-10-20). 쿠팡 승인 전까지 목록에 남기고 색만 다르게 보인다. */
+  statusListRequested?: Partial<Record<"discontinue" | "release", Record<string, string>>>;
+  /** 마지막 '목록 비우기' 때 함께 지운 신청완료 표시(되살리기용). */
+  statusListRequestedPruned?: Partial<Record<"discontinue" | "release", { at: string; marks: Record<string, string> }>>;
   /** 미납분을 이미 거래처에 보낸 발주(입고대기·입고지연)로 처리한 기록. 미납 줄 키별. */
   coveredByVendorOrder?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; vendors: string[]; sentOn: string; at: string }>;
   /** 사용자가 화면에서 '마케팅 제외'로 누적한 SKU(2026-10-11). 같은 모델 전체가 쿠폰·광고 후보에서 자동으로 빠진다. */

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
 import { mutateWeeklyWorkspace, readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
-import { lastClearedBatch } from "@/lib/wms/discontinue-lists";
+import { clearedSkuId, lastClearedBatch } from "@/lib/wms/discontinue-lists";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +31,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   if (!isSameOriginActionRequest(request)) return NextResponse.json({ ok: false, error: "입고결과 화면에서 다시 진행해 주세요." }, { status: 403, headers });
   try {
-    const body = await request.json() as { action?: unknown; skuId?: unknown; productName?: unknown; kind?: unknown; keys?: unknown };
+    const body = await request.json() as { action?: unknown; skuId?: unknown; productName?: unknown; kind?: unknown; keys?: unknown; skuIds?: unknown };
     const at = new Date().toISOString();
     const checks = await mutateWeeklyWorkspace(workspace => {
       const current = { ...(workspace.supplyStatusChecks || {}) };
@@ -43,6 +43,12 @@ export async function POST(request: NextRequest) {
         const cleared = { ...(workspace.statusListCleared || {}) };
         cleared[kind] = { ...(cleared[kind] || {}), ...Object.fromEntries(keys.map(key => [key, at])) };
         workspace.statusListCleared = cleared;
+        // 비운 SKU의 '신청완료' 표시도 지운다. 되살리기를 누르면 함께 돌아오도록 따로 보관한다.
+        const requested = { ...(workspace.statusListRequested?.[kind] || {}) };
+        const pruned: Record<string, string> = {};
+        for (const skuId of keys.map(clearedSkuId)) if (requested[skuId]) { pruned[skuId] = requested[skuId]; delete requested[skuId]; }
+        workspace.statusListRequested = { ...(workspace.statusListRequested || {}), [kind]: requested };
+        workspace.statusListRequestedPruned = { ...(workspace.statusListRequestedPruned || {}), [kind]: { at, marks: pruned } };
         if (kind === "release") for (const [skuId, check] of Object.entries(current)) if (check.decision === "release" && !check.releasedListClearedAt) current[skuId] = { ...check, releasedListClearedAt: at };
       } else if (body.action === "clear-one") {
         // 단종해제 승인(정상전환)을 확인한 SKU 하나만 목록에서 지운다(2026-10-19). 다른 화면 선택 SKU는 그대로 둔다.
@@ -53,6 +59,9 @@ export async function POST(request: NextRequest) {
         const cleared = { ...(workspace.statusListCleared || {}) };
         cleared[kind] = { ...(cleared[kind] || {}), [key]: at };
         workspace.statusListCleared = cleared;
+        const requested = { ...(workspace.statusListRequested?.[kind] || {}) };
+        delete requested[skuId];
+        workspace.statusListRequested = { ...(workspace.statusListRequested || {}), [kind]: requested };
         const check = current[skuId];
         if (kind === "release" && check?.decision === "release" && !check.releasedListClearedAt) current[skuId] = { ...check, releasedListClearedAt: at };
       } else if (body.action === "restore-last-clear") {
@@ -67,10 +76,24 @@ export async function POST(request: NextRequest) {
         for (const key of batch.keys) delete kept[key];
         cleared[kind] = kept;
         workspace.statusListCleared = cleared;
+        const pruned = workspace.statusListRequestedPruned?.[kind];
+        if (pruned?.at === batch.at) {
+          workspace.statusListRequested = { ...(workspace.statusListRequested || {}), [kind]: { ...(workspace.statusListRequested?.[kind] || {}), ...pruned.marks } };
+          workspace.statusListRequestedPruned = { ...(workspace.statusListRequestedPruned || {}), [kind]: undefined };
+        }
         if (kind === "release") for (const [skuId, check] of Object.entries(current)) if (check.releasedListClearedAt === batch.at) {
           const { releasedListClearedAt: _ignored, ...rest } = check;
           current[skuId] = rest;
         }
+      } else if (body.action === "mark-requested" || body.action === "unmark-requested") {
+        // 단종해제 신청 완료(2026-10-20): 목록은 그대로 두고 신청 시각만 남긴다 → 화면에서 색으로 구분.
+        const kind = body.kind === "discontinue" ? "discontinue" : body.kind === "release" ? "release" : "";
+        const skuIds = Array.isArray(body.skuIds) ? body.skuIds.filter((id): id is string => typeof id === "string" && /^\d{1,20}$/.test(id)).slice(0, 5000) : [];
+        if (!kind || !skuIds.length) throw new Error("신청완료로 표시할 SKU를 확인해 주세요.");
+        const requested = { ...(workspace.statusListRequested?.[kind] || {}) };
+        if (body.action === "mark-requested") { for (const skuId of skuIds) if (!requested[skuId]) requested[skuId] = at; }
+        else for (const skuId of skuIds) delete requested[skuId];
+        workspace.statusListRequested = { ...(workspace.statusListRequested || {}), [kind]: requested };
       } else if (body.action === "clear-release") {
         for (const [skuId, check] of Object.entries(current)) if (check.decision === "release" && !check.releasedListClearedAt) current[skuId] = { ...check, releasedListClearedAt: at };
       } else {
@@ -82,9 +105,9 @@ export async function POST(request: NextRequest) {
         } else throw new Error("처리 방법을 확인해 주세요.");
       }
       workspace.supplyStatusChecks = current;
-      return { current, cleared: workspace.statusListCleared || {} };
+      return { current, cleared: workspace.statusListCleared || {}, requested: workspace.statusListRequested || {} };
     });
-    return NextResponse.json({ ok: true, supplyStatusChecks: checks.current, statusListCleared: checks.cleared }, { headers });
+    return NextResponse.json({ ok: true, supplyStatusChecks: checks.current, statusListCleared: checks.cleared, statusListRequested: checks.requested }, { headers });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "저장하지 못했습니다." }, { status: 400, headers });
   }
