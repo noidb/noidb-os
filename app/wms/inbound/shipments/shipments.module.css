@@ -700,3 +700,19 @@
   background: #e3ede6;
   color: #3f5a4b;
 }
+
+/* 단종·단종해제 표: 아래로 내려도 제목 줄과 '신청완료' 묶음 줄이 위에 고정(2026-10-20) */
+.copyScroll .copyTable thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: 40px;
+  box-sizing: border-box;
+  box-shadow: inset 0 -1px 0 #e6edef;
+}
+.copyScroll .copyTable .groupHead td {
+  position: sticky;
+  top: 40px;
+  z-index: 2;
+  box-shadow: inset 0 -1px 0 #ddd0bf;
+}
