@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
-import { mutateWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
+import { mutateWeeklyWorkspace, readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { lastClearedBatch } from "@/lib/wms/discontinue-lists";
 
 export const runtime = "nodejs";
@@ -14,6 +14,20 @@ const headers = { "Cache-Control": "private, no-store" };
  * - undo: 확인을 되돌린다
  * - clear-release: 단종해제 대상 목록을 처리완료로 비운다(기록은 남김)
  */
+/** 읽기 전용: 마지막으로 한꺼번에 비운 단종·단종해제 묶음(시각·건수)만 알려 준다(되살리기 확인용). */
+export async function GET() {
+  try {
+    const workspace = await readWeeklyWorkspace();
+    const info = Object.fromEntries((["discontinue", "release"] as const).map(kind => {
+      const batch = lastClearedBatch(workspace.statusListCleared?.[kind]);
+      return [kind, batch ? { at: batch.at, count: batch.keys.length, total: Object.keys(workspace.statusListCleared?.[kind] || {}).length } : null];
+    }));
+    return NextResponse.json({ ok: true, lastCleared: info }, { headers });
+  } catch (error) {
+    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "읽지 못했습니다." }, { status: 500, headers });
+  }
+}
+
 export async function POST(request: NextRequest) {
   if (!isSameOriginActionRequest(request)) return NextResponse.json({ ok: false, error: "입고결과 화면에서 다시 진행해 주세요." }, { status: 403, headers });
   try {
