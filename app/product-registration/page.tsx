@@ -1,6 +1,5 @@
 import Link from "next/link";
 import AppNavigation from "../AppNavigation";
-import SupplyStatusAuditPanel from "./SupplyStatusAuditPanel";
 import WimsRegistrationImportPanel from "./WimsRegistrationImportPanel";
 
 export default function ProductRegistrationPage() {
@@ -10,7 +9,7 @@ export default function ProductRegistrationPage() {
       <header className="hero">
         <div className="heroBrandArea">
           <h1>상품 등록 상태 관리</h1>
-          <p className="note">Supplier Hub WIMS 승인 확인부터 제품DB 연결, 상품공급상태 점검까지 한 화면에서 처리합니다.</p>
+          <p className="note">Supplier Hub WIMS 승인 확인부터 제품DB 연결까지 처리합니다. 상품공급상태 최신파일 반영은 입고결과 확인 화면으로 옮겼습니다.</p>
           <div className="heroUtilityActions">
             <Link className="imageGeneratorLink" href="/wms/product-catalog">상품 연결 대장</Link>
             <Link className="imageGeneratorLink" href="/">AI 상품등록 홈</Link>
@@ -23,7 +22,6 @@ export default function ProductRegistrationPage() {
         </div>
         <div className="wms-automation-grid">
           <WimsRegistrationImportPanel />
-          <SupplyStatusAuditPanel />
         </div>
       </section>
     </main>

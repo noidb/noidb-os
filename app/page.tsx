@@ -35,7 +35,6 @@ import { coverSquareCanvas, defaultFitAdjust, extendToSquareCanvas, fitToWhiteCa
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
 import WimsRegistrationImportPanel from "@/app/product-registration/WimsRegistrationImportPanel";
-import SupplyStatusAuditPanel from "@/app/product-registration/SupplyStatusAuditPanel";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 
 type Product = {
@@ -3320,7 +3319,6 @@ export default function Home() {
         </div>
         <div className="wms-automation-grid">
           <WimsRegistrationImportPanel />
-          <SupplyStatusAuditPanel />
         </div>
       </section>
 

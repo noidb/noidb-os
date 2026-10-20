@@ -12,7 +12,12 @@ import { wmsColors } from "@/lib/wms/ui-tokens";
  * 화면을 열 때 자동으로 조회하지 않는다 — 버튼을 누를 때만 G드라이브 최신 엑셀로 확인한다.
  * (2026-10-08 확장 화면 수집은 Supplier Hub가 중간에 비워져 삭제 — 엑셀 다운로드만 쓴다.)
  */
-export default function SupplyStatusAuditPanel() {
+export default function SupplyStatusAuditPanel({ onApplied, compact = false }: {
+  /** 반영이 끝난 뒤 부르는 함수(입고결과 화면: 단종·단종해제 목록 다시 계산) */
+  onApplied?: () => void;
+  /** 입고결과 화면처럼 표 사이에 한 줄로 넣을 때 */
+  compact?: boolean;
+} = {}) {
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState("");
@@ -46,8 +51,8 @@ export default function SupplyStatusAuditPanel() {
     if (!audit || applying || audit.changeCount === 0) return;
     const confirmed = window.confirm(
       `제품DB ${audit.changeCount.toLocaleString()}건을 쿠팡 최신값으로 바꿉니다.\n\n` +
-      `SKU ID가 같은 행의 상품명·발주가능상태·바코드만 바뀝니다.\n` +
-      `반영 전에 제품DB 전체를 백업하며, 새 행은 만들지 않습니다.`
+      `SKU ID가 같은 행의 상품명·발주가능상태·바코드만 바뀝니다(보관 탭은 발주가능상태만).\n` +
+      `반영 전에 바뀌는 탭 전체를 백업하며, 새 행은 만들지 않습니다.`
     );
     if (!confirmed) return;
     setApplying(true);
@@ -64,6 +69,7 @@ export default function SupplyStatusAuditPanel() {
       if (!response.ok) throw new Error(data.error || "반영에 실패했습니다.");
       setMessage(data.applied ? `${Number(data.writtenRowCount || 0).toLocaleString()}건 반영 완료 · 백업 ${data.backupSheetName || "완료"}` : "바꿀 항목이 없습니다.");
       await runAudit(true);
+      onApplied?.();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "반영에 실패했습니다.");
     } finally {
@@ -80,14 +86,28 @@ export default function SupplyStatusAuditPanel() {
   const shownChanges = audit ? audit.changes.filter(change => !filter || change.fields.some(field => field.startsWith(filter))) : [];
 
   return (
-    <section id="supply-status-audit" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", background: wmsColors.surfaceBeige }}>
-      {/* 왼쪽 "확장 기능 받기" 버튼과 같은 높이에 맞춘 제목. 버튼처럼 보이면 안 되므로 테두리 없이 글자만 키운다. */}
-      <div style={{ display: "flex", alignItems: "center", marginBottom: "4px" }}>
-        <strong style={{ minHeight: "34px", display: "inline-flex", alignItems: "center", fontSize: "17px", fontWeight: 800, color: wmsColors.ink }}>상품공급상태</strong>
-      </div>
-      <button type="button" className="softBeigeButton" onClick={() => void runAudit()} disabled={loading} style={{ width: "100%", marginTop: "26px", fontSize: "15px" }}>
-        {loading ? "업데이트 확인 중..." : "최신파일 업데이트"}
-      </button>
+    <section id="supply-status-audit" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: compact ? "10px" : "14px", padding: compact ? "10px 12px" : "14px", background: wmsColors.surfaceBeige, margin: compact ? "16px 0 4px" : undefined }}>
+      {compact ? (
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+          <strong style={{ fontSize: "15px", fontWeight: 800, color: wmsColors.ink, flex: "1 1 220px" }}>
+            상품공급상태 최신파일 반영
+            <span style={{ display: "block", fontSize: "11px", fontWeight: 500, color: wmsColors.muted }}>G드라이브 상품공급상태관리 폴더의 가장 최신 파일 → 제품DB·보관 탭 발주가능상태</span>
+          </strong>
+          <button type="button" className="softBeigeButton" onClick={() => void runAudit()} disabled={loading} style={{ flex: "0 0 220px", minHeight: "38px", fontSize: "14px" }}>
+            {loading ? "최신파일 확인 중..." : "최신파일 확인하기"}
+          </button>
+        </div>
+      ) : (
+        <>
+          {/* 왼쪽 "확장 기능 받기" 버튼과 같은 높이에 맞춘 제목. 버튼처럼 보이면 안 되므로 테두리 없이 글자만 키운다. */}
+          <div style={{ display: "flex", alignItems: "center", marginBottom: "4px" }}>
+            <strong style={{ minHeight: "34px", display: "inline-flex", alignItems: "center", fontSize: "17px", fontWeight: 800, color: wmsColors.ink }}>상품공급상태</strong>
+          </div>
+          <button type="button" className="softBeigeButton" onClick={() => void runAudit()} disabled={loading} style={{ width: "100%", marginTop: "26px", fontSize: "15px" }}>
+            {loading ? "업데이트 확인 중..." : "최신파일 업데이트"}
+          </button>
+        </>
+      )}
       {error && <p style={{ color: "#c0392b", fontSize: "12px", margin: "10px 0 0" }}>{error}</p>}
       {message && <p style={{ color: wmsColors.greenDark, fontSize: "12px", margin: "10px 0 0", fontWeight: 700 }}>{message}</p>}
       {audit && (
@@ -97,7 +117,7 @@ export default function SupplyStatusAuditPanel() {
           </p>
           {audit.changeCount === 0 ? (
             <p style={{ margin: 0, padding: "10px", borderRadius: "9px", background: wmsColors.greenSoft, color: wmsColors.greenDark, fontSize: "12px", fontWeight: 700 }}>
-              제품DB가 쿠팡 최신 상태와 같습니다.
+              제품DB·보관 탭이 쿠팡 최신 상태와 같습니다.
             </p>
           ) : (
             <>

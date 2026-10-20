@@ -2,7 +2,8 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
-import { backupSheetWithinSpreadsheet, fetchSheetRows, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
+import { backupSheetWithinSpreadsheet, fetchSheetRows, fetchSpreadsheetTabs, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
+import { pickStorageTabTitle } from "./warehouse-recheck-cleanup";
 import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
 import { buildReregistrationDoneUpdates } from "./reregistration-tier";
 import { collectRetiredSkuIds, fetchSkuReplacementHistory, skuRetirementKey } from "./sku-retirement";
@@ -362,6 +363,10 @@ export interface SupplyStatusAudit {
   nameChangeCount: number;
   availabilityChangeCount: number;
   barcodeChangeCount: number;
+  /** 보관 탭 이름(못 찾으면 null) */
+  storageTabName: string | null;
+  /** 보관 탭에서 바뀔 발주가능상태 수 */
+  storageChangeCount: number;
   /** 쿠팡에는 있지만 제품DB에 SKU ID가 없는 R바코드 SKU 수 (참고용, 아무것도 하지 않음) */
   notInProductDbCount: number;
   /** 같은 SKU ID가 여러 번 나와 건너뛴 수 */
@@ -561,6 +566,8 @@ interface InternalSupplyStatusAudit {
   audit: SupplyStatusAudit;
   headerIndex: ProductDbHeaderIndex;
   updates: SupplyStatusProposedUpdate[];
+  storageTitle: string | null;
+  storageUpdates: StorageAvailabilityUpdate[];
 }
 
 function createAuditDryRunToken(fileName: string, fileMtime: string, updates: SupplyStatusProposedUpdate[], issues: SupplyStatusAuditIssue[]): string {
@@ -580,11 +587,12 @@ export function compareSupplyStatusWithProductDb(
     productRowsBySku.set(skuId, [...(productRowsBySku.get(skuId) || []), { row, sheetRowNumber: index + 2 }]);
   });
 
-  // S바코드(판매자배송)는 관리 대상이 아니다. 재등록으로 교체된 예전 SKU도 건드리지 않는다.
+  // S바코드(판매자배송)는 관리 대상이 아니다. 재등록으로 교체된 예전 SKU는 상품명·바코드는 건드리지 않고
+  // 발주가능상태만 맞춘다(2026-10-20 — 옛 SKU가 아직 '정상'인지 단종 대상 목록에서 바로 알 수 있게).
   const downloadRowsBySku = new Map<string, DownloadRow[]>();
   for (const row of downloadRows) {
     const skuId = norm(row.skuId);
-    if (!skuId || !/^R/i.test(row.barcode) || retiredSkuIds.has(skuRetirementKey(row.skuId))) continue;
+    if (!skuId || !/^R/i.test(row.barcode)) continue;
     downloadRowsBySku.set(skuId, [...(downloadRowsBySku.get(skuId) || []), row]);
   }
 
@@ -611,9 +619,10 @@ export function compareSupplyStatusWithProductDb(
     matchedCount += 1;
     const download = downloads[0];
     const product = products[0];
-    const updateProductName = Boolean(download.productName) && norm(product.row[idx.productName]) !== norm(download.productName);
+    const retired = retiredSkuIds.has(skuRetirementKey(download.skuId));
+    const updateProductName = !retired && Boolean(download.productName) && norm(product.row[idx.productName]) !== norm(download.productName);
     const updateOrderAvailability = Boolean(download.approvalRaw) && norm(product.row[idx.orderAvailability]) !== norm(download.approvalRaw);
-    const updateBarcode = Boolean(download.barcode) && norm(product.row[idx.barcode]) !== norm(download.barcode);
+    const updateBarcode = !retired && Boolean(download.barcode) && norm(product.row[idx.barcode]) !== norm(download.barcode);
     if (updateProductName || updateOrderAvailability || updateBarcode) {
       updates.push({
         sheetRowNumber: product.sheetRowNumber,
@@ -631,6 +640,55 @@ export function compareSupplyStatusWithProductDb(
   return { updates, issues, matchedCount, notInProductDbCount, duplicateCount };
 }
 
+/** 보관 탭에서 바꿀 발주가능상태 한 칸 */
+export interface StorageAvailabilityUpdate {
+  sheetRowNumber: number;
+  col: number;
+  skuId: string;
+  productName: string;
+  orderAvailability: string;
+}
+
+/**
+ * 보관 탭(_보관_비관리SKU_…)의 발주가능상태도 쿠팡 최신값으로 맞춘다(2026-10-20).
+ * 단종 대상·단종해제 대상 목록은 보관 탭 행도 쓰는데, 예전에는 제품DB만 바뀌어 보관 탭 값이 오래된 채 남았다.
+ * 발주가능상태 칸만 바꾸고, 그 밖의 칸·행은 건드리지 않는다. 같은 SKU가 쿠팡 자료에 여러 번 있으면 건너뛴다.
+ */
+export function compareSupplyStatusWithStorageTab(downloadRows: DownloadRow[], storageRows: unknown[][]): StorageAvailabilityUpdate[] {
+  if (!storageRows.length) return [];
+  const squash = (value: unknown) => String(value ?? "").replace(/\s+/g, "");
+  const headers = (storageRows[0] || []).map(squash);
+  const exact = (...names: string[]) => headers.findIndex(header => names.some(name => header === squash(name)));
+  const skuCol = exact("SKU ID", "SKUID") >= 0 ? exact("SKU ID", "SKUID") : headers.findIndex(header => /SKU/i.test(header) && !/모델|새|이전/.test(header));
+  const orderCol = exact("발주가능상태") >= 0 ? exact("발주가능상태") : headers.findIndex(header => header.includes("발주가능"));
+  const nameCol = exact("상품명") >= 0 ? exact("상품명") : headers.findIndex(header => header.includes("상품명") || header.includes("제품명"));
+  if (skuCol < 0 || orderCol < 0) return [];
+  const bySku = new Map<string, DownloadRow[]>();
+  for (const row of downloadRows) {
+    const skuId = norm(row.skuId);
+    if (!skuId || !row.approvalRaw) continue;
+    bySku.set(skuId, [...(bySku.get(skuId) || []), row]);
+  }
+  const updates: StorageAvailabilityUpdate[] = [];
+  storageRows.slice(1).forEach((row, index) => {
+    const skuId = String(row[skuCol] ?? "").trim();
+    if (!/^\d{1,20}$/.test(skuId)) return;
+    const downloads = bySku.get(norm(skuId)) || [];
+    if (downloads.length !== 1) return;
+    const value = downloads[0].approvalRaw;
+    if (norm(row[orderCol]) === norm(value)) return;
+    updates.push({ sheetRowNumber: index + 2, col: orderCol + 1, skuId, productName: String((nameCol >= 0 ? row[nameCol] : "") ?? "").trim() || downloads[0].productName, orderAvailability: value });
+  });
+  return updates;
+}
+
+async function loadStorageTab(): Promise<{ title: string; rows: string[][] } | null> {
+  const title = await fetchSpreadsheetTabs().then(tabs => pickStorageTabTitle(tabs.map(tab => tab.title))).catch(() => null);
+  if (!title) return null;
+  const rows = await fetchSheetRows(title).catch(() => null);
+  return rows && rows.length ? { title, rows } : null;
+}
+
 async function computeSupplyStatusAudit(): Promise<InternalSupplyStatusAudit | null> {
   const fileInfo = await findLatestSupplyStatusFile();
   if (!fileInfo) return null;
@@ -641,6 +699,8 @@ async function computeSupplyStatusAudit(): Promise<InternalSupplyStatusAudit | n
   const headers = sheetRows[0].map(value => String(value ?? "").trim());
   const idx = resolveProductDbHeaderIndex(headers);
   const result = compareSupplyStatusWithProductDb(parsed.rows, sheetRows, idx, retiredSkuIds);
+  const storage = await loadStorageTab();
+  const storageUpdates = storage ? compareSupplyStatusWithStorageTab(parsed.rows, storage.rows) : [];
 
   const auditWithoutToken: Omit<SupplyStatusAudit, "dryRunToken"> = {
     fileFound: true,
@@ -649,9 +709,11 @@ async function computeSupplyStatusAudit(): Promise<InternalSupplyStatusAudit | n
     fileMtime: fileInfo.mtime,
     downloadedCount: parsed.rows.length,
     matchedCount: result.matchedCount,
-    changeCount: result.updates.length,
+    changeCount: result.updates.length + storageUpdates.length,
     nameChangeCount: result.updates.filter(update => update.updateProductName).length,
-    availabilityChangeCount: result.updates.filter(update => update.updateOrderAvailability).length,
+    availabilityChangeCount: result.updates.filter(update => update.updateOrderAvailability).length + storageUpdates.length,
+    storageTabName: storage?.title ?? null,
+    storageChangeCount: storageUpdates.length,
     barcodeChangeCount: result.updates.filter(update => update.updateBarcode).length,
     notInProductDbCount: result.notInProductDbCount,
     duplicateCount: result.duplicateCount,
@@ -660,13 +722,13 @@ async function computeSupplyStatusAudit(): Promise<InternalSupplyStatusAudit | n
       skuId: update.skuId,
       productName: update.productName,
       fields: [update.updateProductName && "상품명", update.updateOrderAvailability && `발주가능상태 → ${update.orderAvailability}`, update.updateBarcode && `바코드 → ${update.barcode}`].filter((field): field is string => Boolean(field)),
-    })),
+    })).concat(storageUpdates.map(update => ({ skuId: update.skuId, productName: update.productName, fields: [`발주가능상태 → ${update.orderAvailability} (보관 탭)`] }))),
   };
   const audit: SupplyStatusAudit = {
     ...auditWithoutToken,
-    dryRunToken: createAuditDryRunToken(fileInfo.fileName, fileInfo.mtime, result.updates, result.issues),
+    dryRunToken: createHash("sha256").update(JSON.stringify([createAuditDryRunToken(fileInfo.fileName, fileInfo.mtime, result.updates, result.issues), storage?.title ?? null, storageUpdates])).digest("hex"),
   };
-  return { audit, headerIndex: idx, updates: result.updates };
+  return { audit, headerIndex: idx, updates: result.updates, storageTitle: storage?.title ?? null, storageUpdates };
 }
 
 export async function buildSupplyStatusAudit(): Promise<SupplyStatusAuditOrNotFound> {
@@ -719,22 +781,25 @@ export async function applySupplyStatusAudit(expectedDryRunToken: string): Promi
   const result = await computeSupplyStatusAudit();
   if (!result) return { fileFound: false };
   if (!expectedDryRunToken || expectedDryRunToken !== result.audit.dryRunToken) throw new SupplyStatusPreviewChangedError();
-  if (result.updates.length === 0) {
+  if (result.updates.length === 0 && result.storageUpdates.length === 0) {
     return { applied: false, audit: result.audit, writtenRowCount: 0, writtenCellCount: 0 };
   }
 
-  const backup = await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME);
+  const backup = result.updates.length ? await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME) : null;
+  const storageBackup = result.storageUpdates.length && result.storageTitle ? await backupSheetWithinSpreadsheet(result.storageTitle) : null;
   const rechecked = await computeSupplyStatusAudit();
   if (!rechecked || rechecked.audit.dryRunToken !== result.audit.dryRunToken) throw new SupplyStatusPreviewChangedError();
 
   const cellUpdates = buildSafeSupplyStatusCellUpdates(rechecked.headerIndex, rechecked.updates);
   await updateSheetCells(PRODUCT_DB_SHEET_NAME, cellUpdates);
+  const storageCells: SheetCellUpdate[] = rechecked.storageUpdates.map(update => ({ row: update.sheetRowNumber, col: update.col, value: update.orderAvailability }));
+  if (rechecked.storageTitle) await updateSheetCells(rechecked.storageTitle, storageCells);
   return {
     applied: true,
     audit: rechecked.audit,
-    backupSheetName: backup.sheetName,
-    writtenRowCount: rechecked.updates.length,
-    writtenCellCount: cellUpdates.length,
+    backupSheetName: [backup?.sheetName, storageBackup?.sheetName].filter(Boolean).join(", ") || undefined,
+    writtenRowCount: rechecked.updates.length + rechecked.storageUpdates.length,
+    writtenCellCount: cellUpdates.length + storageCells.length,
   };
 }
 
