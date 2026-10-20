@@ -3317,9 +3317,7 @@ export default function Home() {
         <div className="wms-section-heading" style={{ marginTop: 0 }}>
           <div><span>PRODUCT REGISTRATION</span><h2>9. 등록 진행상황 · 상품 운영정보</h2></div>
         </div>
-        <div className="wms-automation-grid">
-          <WimsRegistrationImportPanel />
-        </div>
+        <WimsRegistrationImportPanel />
       </section>
 
       {lightbox && (

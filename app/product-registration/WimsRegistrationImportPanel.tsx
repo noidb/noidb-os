@@ -232,7 +232,7 @@ export default function WimsRegistrationImportPanel() {
   function renderActionRow(row: WimsRegistrationAudit["rows"][number], index: number) {
     const action = actionLabel(row);
     return (
-      <div key={`${row.wims.estimateId}-${row.wims.modelSku}-${index}`} style={{ border: `1px solid ${action.color}55`, borderLeft: `4px solid ${action.color}`, borderRadius: "9px", padding: "9px 10px", fontSize: "11px" }}>
+      <div key={`${row.wims.estimateId}-${row.wims.modelSku}-${index}`} style={{ border: `1px solid ${action.color}55`, borderLeft: `4px solid ${action.color}`, borderRadius: "9px", padding: "10px 12px", fontSize: "12px", background: "#fff" }}>
         <strong style={{ color: action.color }}>{row.wims.modelSku || "모델SKU 확인 필요"} · {action.title}</strong>
         <div style={{ marginTop: "2px" }}>{row.wims.productName}</div>
         <div style={{ color: wmsColors.muted, marginTop: "2px" }}>{action.guide}</div>
@@ -248,17 +248,23 @@ export default function WimsRegistrationImportPanel() {
   }
 
   return (
-    <section id="wims-registration" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "14px", padding: "14px", background: "#fff" }}>
-      {/* 2026-10-15: WIMS 화면으로 바로 가는 버튼. 그 화면에 확장 기능의 전송 버튼이 자동으로 뜬다. */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "6px" }}>
-        <a href="https://supplier.coupang.com/qvt/wims" target="_blank" rel="noopener noreferrer" className="softSageButton" style={{ textDecoration: "none" }}>
-          상품등록상태 확인하기
-        </a>
-        <a href="/downloads/noidb-supplier-sync.zip" download className="softBeigeButton" style={{ textDecoration: "none" }}>
-          확장 기능 v1.3.6 받기
-        </a>
+    // 2026-10-20: 옆 칸(상품공급상태)이 입고결과 확인으로 옮겨져, 위 '카테고리별 묶음 견적서'와 같은 넓은 칸으로 바꿈.
+    <section id="wims-registration" className="quoteQueuePanel wimsWidePanel" style={{ marginTop: 0 }}>
+      <div className="quoteQueueHeader">
+        <div>
+          <h3>WIMS 상품등록상태</h3>
+          <p>열린 WIMS 화면에서 확장 기능의 `WIMS 전체를 NOID-B로 전송`을 누르면 자동으로 가져옵니다.</p>
+        </div>
+        {/* 2026-10-15: WIMS 화면으로 바로 가는 버튼. 그 화면에 확장 기능의 전송 버튼이 자동으로 뜬다. */}
+        <div className="wimsHeaderButtons">
+          <a href="https://supplier.coupang.com/qvt/wims" target="_blank" rel="noopener noreferrer" className="softSageButton" style={{ textDecoration: "none" }}>
+            상품등록상태 확인하기
+          </a>
+          <a href="/downloads/noidb-supplier-sync.zip" download className="softBeigeButton" style={{ textDecoration: "none" }}>
+            확장 기능 v1.3.6 받기
+          </a>
+        </div>
       </div>
-      <span style={{ color: wmsColors.muted, fontSize: "10px" }}>열린 WIMS 화면에서 확장 기능의 `WIMS 전체를 NOID-B로 전송`을 누르면 자동으로 가져옵니다.</span>
       {error && <p style={{ color: "#c0392b", fontSize: "12px", margin: "8px 0 0" }}>{error}</p>}
       {message && <p style={{ color: wmsColors.greenDark, fontSize: "12px", margin: "8px 0 0", fontWeight: 700 }}>{message}</p>}
       {snapshot && (
@@ -270,7 +276,7 @@ export default function WimsRegistrationImportPanel() {
                 : capturedAt ? `현재 페이지만 확인 · ${new Date(capturedAt).toLocaleString("ko-KR")}` : "현재 붙여넣은 결과"}
             </span>
           </div>
-          <div className="wms-supply-audit-grid">
+          <div className="wms-supply-audit-grid wimsSummaryGrid">
             <Summary label="검수중" value={snapshot.reviewingCount} />
             <Summary label="검수완료" value={snapshot.approvedCount} good />
             <Summary label="반려" value={snapshot.rejectedCount} warning />
@@ -283,7 +289,7 @@ export default function WimsRegistrationImportPanel() {
               {actionRows.length === 0 ? (
                 <p style={{ margin: "7px 0 0", padding: "10px", borderRadius: "9px", background: wmsColors.greenSoft, color: wmsColors.greenDark, fontSize: "11px", fontWeight: 700 }}>현재 WIMS에서 조치할 상품이 없습니다.</p>
               ) : (
-                <div style={{ display: "grid", gap: "7px", marginTop: "8px", maxHeight: "320px", overflowY: "auto" }}>
+                <div className="wimsActionGrid">
                   {actionRows.map((row, index) => renderActionRow(row, index))}
                 </div>
               )}
@@ -323,5 +329,5 @@ export default function WimsRegistrationImportPanel() {
 
 function Summary({ label, value, good = false, warning = false }: { label: string; value: number; good?: boolean; warning?: boolean }) {
   const color = warning && value > 0 ? "#c0392b" : good ? wmsColors.greenDark : wmsColors.ink;
-  return <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "9px 10px" }}><span style={{ display: "block", color: wmsColors.muted, fontSize: "10px" }}>{label}</span><strong style={{ color, fontSize: "17px" }}>{value.toLocaleString()}건</strong></div>;
+  return <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "10px 14px", background: "#fff" }}><span style={{ display: "block", color: wmsColors.muted, fontSize: "12px" }}>{label}</span><strong style={{ color, fontSize: "20px" }}>{value.toLocaleString()}건</strong></div>;
 }

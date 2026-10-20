@@ -735,3 +735,10 @@ html,body{overflow-x:clip}
 
 /* 칸 사진을 클릭해 휠 확대·축소가 켜진 상태 표시 */
 .slotCropFrame.slotCropActive{outline:2px solid #60766a;outline-offset:-2px}
+
+/* 2026-10-20 AI상품등록 9번 WIMS 칸을 한 줄 전체로 — 위 '카테고리별 묶음 견적서' 칸과 같은 모양 */
+.wimsWidePanel .wimsHeaderButtons{display:grid;grid-template-columns:repeat(2,200px);gap:8px;flex-shrink:0}
+.wimsWidePanel .wimsHeaderButtons a{display:flex;align-items:center;justify-content:center;min-height:48px;padding:0 14px;border-radius:8px;font-size:15px;font-weight:800;white-space:nowrap}
+.wimsWidePanel .wimsSummaryGrid{grid-template-columns:repeat(3,minmax(0,1fr))}
+.wimsWidePanel .wimsActionGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:8px;max-height:420px;overflow-y:auto}
+@media(max-width:760px){.wimsWidePanel .wimsHeaderButtons{grid-template-columns:1fr 1fr}.wimsWidePanel .wimsHeaderButtons a{font-size:13px;min-height:42px;padding:0 8px}.wimsWidePanel .wimsActionGrid{grid-template-columns:1fr}}
