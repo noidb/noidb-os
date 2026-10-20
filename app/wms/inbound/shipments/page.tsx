@@ -1125,6 +1125,7 @@ export default function ShipmentReceiptsPage() {
                         <th className={styles.orderableCol} title={latestOrderable ? `최신파일 ${new Date(latestOrderable.fileMtime).toLocaleString("ko-KR")}` : "제품DB 값 · 최신파일 확인하기를 누르면 쿠팡 최신값으로 바뀝니다"}>
                           발주상태{latestOrderable ? "" : " (DB)"}
                         </th>
+                        {section.kind === "release" && <th className={styles.deleteCol} aria-label="삭제" />}
                       </tr>
                     </thead>
                     <tbody>
@@ -1132,18 +1133,6 @@ export default function ShipmentReceiptsPage() {
                         <tr key={item.skuId}>
                           <td>
                             {item.skuId}
-                            {section.kind === "release" && (
-                              <button
-                                type="button"
-                                className="softPinkButton"
-                                title="쿠팡에서 정상전환된 것을 확인한 SKU를 목록에서 지웁니다."
-                                disabled={routingKeys[`supply:${item.skuId}`]}
-                                onClick={() => void supplyCheck("clear-one", item.skuId, item.productName, { kind: "release", keys: [item.key] })}
-                                style={{ marginLeft: "8px", minHeight: "24px", padding: "0 8px", fontSize: "11px", userSelect: "none", verticalAlign: "middle" }}
-                              >
-                                {routingKeys[`supply:${item.skuId}`] ? "…" : "삭제"}
-                              </button>
-                            )}
                           </td>
                           <td>{item.productName}</td>
                           {(() => {
@@ -1156,6 +1145,19 @@ export default function ShipmentReceiptsPage() {
                               </td>
                             );
                           })()}
+                          {section.kind === "release" && (
+                            <td className={styles.deleteCol}>
+                              <button
+                                type="button"
+                                className="softPinkButton"
+                                title="쿠팡에서 정상전환된 것을 확인한 SKU를 목록에서 지웁니다."
+                                disabled={routingKeys[`supply:${item.skuId}`]}
+                                onClick={() => void supplyCheck("clear-one", item.skuId, item.productName, { kind: "release", keys: [item.key] })}
+                              >
+                                {routingKeys[`supply:${item.skuId}`] ? "…" : "삭제"}
+                              </button>
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>

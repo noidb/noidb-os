@@ -634,7 +634,7 @@
 
 /* 단종·단종해제 표의 발주상태 칸(2026-10-20) — 드래그 복사에는 들어가지 않게 한다 */
 .copyTable .orderableCol {
-  width: 130px;
+  width: 120px;
   white-space: nowrap;
   text-align: center;
   user-select: none;
@@ -643,4 +643,19 @@
   background: #e3ede6;
   color: #3f5a4b;
   font-weight: 800;
+}
+
+/* 단종해제 표 맨 오른쪽 삭제 칸(2026-10-20) — 예전 SKU 옆 작은 버튼을 키워 옮김 */
+.copyTable .deleteCol {
+  width: 96px;
+  text-align: center;
+  user-select: none;
+}
+.copyTable .deleteCol button {
+  min-height: 32px;
+  min-width: 72px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 800;
+  border-radius: 8px;
 }
