@@ -420,6 +420,8 @@ function replaceDbRowsForModel_(db, model, newRows) {
   db.getRange(startRow, dbColumn_('원가(부가세포함)') + 1, rows.length, 4).setNumberFormat('#,##0');
   db.getRange(startRow, dbColumn_('마진') + 1, rows.length, 1).setNumberFormat('#,##0');
   for (let row = startRow; row < startRow + rows.length; row++) db.setRowHeight(row, 82);
+  // 새로 등록한 상품은 끝에 붙인 뒤 행 전체(서식·수식·행높이 포함)를 2행으로 옮겨 바로 맨 위에 보이게 합니다.
+  if (startRow > 2) db.moveRows(db.getRange(startRow, 1, rows.length, 1), 2);
   formatProductDb_(db);
 }
 
@@ -885,12 +887,15 @@ function ensureProductDbDefaultOrder_(db) {
   const modelColumn = dbColumn_('모델명/품번');
   const values = db.getRange(2, 1, rowCount, PRODUCT_DB_HEADERS.length).getValues();
   let changed = false;
-  values.forEach((row, index) => {
-    if (number_(row[orderColumn])) return;
-    const pending = !String(row[skuColumn] || '').trim();
-    const modelMatch = String(row[modelColumn] || '').match(/(\d+)/g);
-    const modelNumber = modelMatch ? Number(modelMatch.join('').slice(-10)) || 0 : 0;
-    row[orderColumn] = (pending ? 2000000000000000 : 1000000000000000) + modelNumber * 1000 + (rowCount - index);
+  // 기본순서가 빈 행(직접 추가한 행 등)은 지금 보이는 자리를 그대로 지키도록 바로 위 행보다 1 작은 값을 줍니다.
+  // 맨 위에 있는 빈 행은 가장 큰 값 + 1을 받아 계속 맨 위에 남습니다.
+  const maxOrder = values.reduce((max, row) => Math.max(max, number_(row[orderColumn])), 0);
+  let previousOrder = 0;
+  values.forEach(row => {
+    const current = number_(row[orderColumn]);
+    if (current) { previousOrder = current; return; }
+    row[orderColumn] = previousOrder ? previousOrder - 1 : maxOrder + 1;
+    previousOrder = row[orderColumn];
     changed = true;
   });
   const modelOrders = {};
