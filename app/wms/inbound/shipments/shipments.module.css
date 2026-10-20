@@ -631,3 +631,16 @@
 .choice .thumbEmpty {
   display: inline-flex;
 }
+
+/* 단종·단종해제 표의 발주상태 칸(2026-10-20) — 드래그 복사에는 들어가지 않게 한다 */
+.copyTable .orderableCol {
+  width: 130px;
+  white-space: nowrap;
+  text-align: center;
+  user-select: none;
+}
+.copyTable .orderableDone {
+  background: #e3ede6;
+  color: #3f5a4b;
+  font-weight: 800;
+}

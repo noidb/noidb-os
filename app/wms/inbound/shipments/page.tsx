@@ -152,6 +152,8 @@ const routeHref = (line: LogisticsReceiptBoardLine, fixture: boolean) => {
 
 export default function ShipmentReceiptsPage() {
   const [payload, setPayload] = useState<ApiPayload | null>(null);
+  // '최신파일 확인하기'로 읽은 쿠팡 최신 발주가능상태(SKU ID별) — 단종·단종해제 표의 '발주상태' 칸에 보인다.
+  const [latestOrderable, setLatestOrderable] = useState<{ orderable: Record<string, string>; fileMtime: string } | null>(null);
   const [tab, setTab] = useState<Tab>("results");
   const [optimisticDone, setOptimisticDone] = useState<Set<string>>(new Set());
   const [openShipments, setOpenShipments] = useState<Set<string>>(new Set());
@@ -1101,7 +1103,7 @@ export default function ShipmentReceiptsPage() {
               <p className={styles.empty}>검토할 미납 상품이 없습니다.</p>
             )}
             {/* 2026-10-20: AI상품등록 9번의 상품공급상태 최신파일 반영을 여기로 옮김 — 반영하면 아래 단종·단종해제 목록을 다시 계산한다. */}
-            <SupplyStatusAuditPanel compact onApplied={() => void quietReload()} />
+            <SupplyStatusAuditPanel compact onApplied={() => void quietReload()} onAudited={(latest) => setLatestOrderable(latest)} />
             {[
               { kind: "discontinue" as const, title: "단종 대상 SKU", rows: discontinueList, help: "제품DB·보관 탭의 현재상태가 판매중지·단종·거래처단종·가품중단인데 쿠팡 발주가능상태가 아직 정상인 SKU예요.", done: "단종 신청 완료 · 목록 비우기" },
               { kind: "release" as const, title: "단종해제 대상 SKU", rows: releaseList, help: "제품DB 현재상태가 과재고·정상전환대상·제품DB로 이동(재고있음)인데 발주가능상태가 정상이 아닌 SKU, 메모로 주신 SKU, 화면에서 단종해제를 누른 SKU예요.", done: "단종해제 신청 완료 · 목록 비우기" },
@@ -1120,6 +1122,9 @@ export default function ShipmentReceiptsPage() {
                       <tr>
                         <th>SKU ID</th>
                         <th>상품명</th>
+                        <th className={styles.orderableCol} title={latestOrderable ? `최신파일 ${new Date(latestOrderable.fileMtime).toLocaleString("ko-KR")}` : "제품DB 값 · 최신파일 확인하기를 누르면 쿠팡 최신값으로 바뀝니다"}>
+                          발주상태{latestOrderable ? "" : " (DB)"}
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1141,6 +1146,16 @@ export default function ShipmentReceiptsPage() {
                             )}
                           </td>
                           <td>{item.productName}</td>
+                          {(() => {
+                            // 단종 대상은 '정상이 아님', 단종해제 대상은 '정상'이 되면 쿠팡 처리가 끝난 것 → 세이지로 표시
+                            const value = latestOrderable ? latestOrderable.orderable[item.skuId] || "파일에 없음" : item.orderableStatus || "미확인";
+                            const done = Boolean(latestOrderable?.orderable[item.skuId]) && (section.kind === "release" ? value === "정상" : value !== "정상" && value !== "확인필요");
+                            return (
+                              <td className={`${styles.orderableCol} ${done ? styles.orderableDone : ""}`} title={done ? "쿠팡에서 처리 완료" : undefined}>
+                                {value}{done ? " ✓" : ""}
+                              </td>
+                            );
+                          })()}
                         </tr>
                       ))}
                     </tbody>

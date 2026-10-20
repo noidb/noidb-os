@@ -372,6 +372,8 @@ export interface SupplyStatusAudit {
   /** 같은 SKU ID가 여러 번 나와 건너뛴 수 */
   duplicateCount: number;
   issues: SupplyStatusAuditIssue[];
+  /** 최신 파일의 SKU ID별 발주가능상태(입고결과 단종·단종해제 표의 '발주상태' 칸용, 2026-10-20) */
+  latestOrderable?: Record<string, string>;
   /** 바뀔 행 목록(화면 확인용). */
   changes: { skuId: string; productName: string; fields: string[] }[];
   dryRunToken: string;
@@ -724,8 +726,16 @@ async function computeSupplyStatusAudit(): Promise<InternalSupplyStatusAudit | n
       fields: [update.updateProductName && "상품명", update.updateOrderAvailability && `발주가능상태 → ${update.orderAvailability}`, update.updateBarcode && `바코드 → ${update.barcode}`].filter((field): field is string => Boolean(field)),
     })).concat(storageUpdates.map(update => ({ skuId: update.skuId, productName: update.productName, fields: [`발주가능상태 → ${update.orderAvailability} (보관 탭)`] }))),
   };
+  // 같은 SKU가 파일에 여러 번 있고 값이 서로 다르면 '확인필요'로 둔다.
+  const latestOrderable: Record<string, string> = {};
+  for (const row of parsed.rows) {
+    const skuId = String(row.skuId || "").trim();
+    if (!skuId || !row.approvalRaw) continue;
+    latestOrderable[skuId] = skuId in latestOrderable && latestOrderable[skuId] !== row.approvalRaw ? "확인필요" : row.approvalRaw;
+  }
   const audit: SupplyStatusAudit = {
     ...auditWithoutToken,
+    latestOrderable,
     dryRunToken: createHash("sha256").update(JSON.stringify([createAuditDryRunToken(fileInfo.fileName, fileInfo.mtime, result.updates, result.issues), storage?.title ?? null, storageUpdates])).digest("hex"),
   };
   return { audit, headerIndex: idx, updates: result.updates, storageTitle: storage?.title ?? null, storageUpdates };

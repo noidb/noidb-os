@@ -12,9 +12,11 @@ import { wmsColors } from "@/lib/wms/ui-tokens";
  * 화면을 열 때 자동으로 조회하지 않는다 — 버튼을 누를 때만 G드라이브 최신 엑셀로 확인한다.
  * (2026-10-08 확장 화면 수집은 Supplier Hub가 중간에 비워져 삭제 — 엑셀 다운로드만 쓴다.)
  */
-export default function SupplyStatusAuditPanel({ onApplied, compact = false }: {
+export default function SupplyStatusAuditPanel({ onApplied, onAudited, compact = false }: {
   /** 반영이 끝난 뒤 부르는 함수(입고결과 화면: 단종·단종해제 목록 다시 계산) */
   onApplied?: () => void;
+  /** 최신파일을 확인하면 SKU ID별 최신 발주가능상태를 넘긴다(입고결과 표의 '발주상태' 칸) */
+  onAudited?: (latest: { orderable: Record<string, string>; fileName: string; fileMtime: string }) => void;
   /** 입고결과 화면처럼 표 사이에 한 줄로 넣을 때 */
   compact?: boolean;
 } = {}) {
@@ -37,6 +39,8 @@ export default function SupplyStatusAuditPanel({ onApplied, compact = false }: {
       if (!response.ok) throw new Error(data.error || "상품공급상태 확인에 실패했습니다.");
       if (data.fileFound === false) throw new Error("G드라이브에서 상품공급상태 파일을 찾지 못했습니다.");
       setAudit(data as SupplyStatusAudit);
+      const audited = data as SupplyStatusAudit;
+      if (audited.latestOrderable) onAudited?.({ orderable: audited.latestOrderable, fileName: audited.fileName, fileMtime: audited.fileMtime });
       setFilter("");
       return true;
     } catch (caught) {
