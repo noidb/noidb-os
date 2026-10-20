@@ -19,9 +19,10 @@ import type {
 import styles from "./shipments.module.css";
 import WarehouseRecheckCleanup from "./WarehouseRecheckCleanup";
 import DiscontinueByCode from "./DiscontinueByCode";
+import { saveReceiptTabCounts } from "@/lib/wms/receipt-tab-counts";
 import SupplyStatusAuditPanel from "@/app/product-registration/SupplyStatusAuditPanel";
 
-type Tab = "pending" | "results" | "followup" | "history";
+type Tab = "anytime" | "results" | "pending" | "history";
 type Decision = "vendor" | "discontinue" | "reorder" | "marketing";
 type ApiPayload = {
   ok: true;
@@ -155,7 +156,8 @@ export default function ShipmentReceiptsPage() {
   const [payload, setPayload] = useState<ApiPayload | null>(null);
   // '최신파일 확인하기'로 읽은 쿠팡 최신 발주가능상태(SKU ID별) — 단종·단종해제 표의 '발주상태' 칸에 보인다.
   const [latestOrderable, setLatestOrderable] = useState<{ orderable: Record<string, string>; fileMtime: string } | null>(null);
-  const [tab, setTab] = useState<Tab>("results");
+  // 2026-10-20 사용자 요청: 수시로 하는 일(수시 처리)과 입고결과를 가져온 뒤 하는 일(입고결과 처리)로 탭을 나눔.
+  const [tab, setTab] = useState<Tab>("anytime");
   const [optimisticDone, setOptimisticDone] = useState<Set<string>>(new Set());
   const [openShipments, setOpenShipments] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -171,9 +173,6 @@ export default function ShipmentReceiptsPage() {
   >({});
   const [couponStartsOn, setCouponStartsOn] = useState("");
   const [couponExpiresOn, setCouponExpiresOn] = useState("");
-  const [followUpKind, setFollowUpKind] = useState<
-    "marketing" | "discontinue" | "reorder"
-  >("discontinue");
   const [generatedDownloads, setGeneratedDownloads] = useState<
     Record<string, { fileName: string; href: string }>
   >({});
@@ -392,7 +391,10 @@ export default function ShipmentReceiptsPage() {
   }
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("tab") === "followup") setTab("followup");
+    const requestedTab = new URLSearchParams(window.location.search).get("tab");
+    // 예전 '후속처리' 링크(tab=followup)는 입고결과 처리 탭으로 연다.
+    if (requestedTab === "results" || requestedTab === "followup") setTab("results");
+    else if (requestedTab === "pending" || requestedTab === "history") setTab(requestedTab);
     void load();
   }, []);
 
@@ -614,7 +616,7 @@ export default function ShipmentReceiptsPage() {
   // 분류 후 후속처리·처리이력 탭을 열 때만 최신 목록을 한 번 불러온다.
   function openTab(value: Tab) {
     setTab(value);
-    if ((value === "followup" || value === "history") && followUpStale.current) {
+    if (value !== "pending" && followUpStale.current) {
       followUpStale.current = false;
       void load(true);
     }
@@ -690,26 +692,24 @@ export default function ShipmentReceiptsPage() {
       .map(([skuId, check]) => ({ skuId, productName: check.productName, currentStatus: "", orderableStatus: "", reason: "입고결과", key: skuId })),
   ].sort((a, b) => a.skuId.localeCompare(b.skuId));
   const discontinueList: StatusListRow[] = payload?.statusLists?.discontinue || [];
-  const activeFollowUpQueue = (followUpData?.queues[followUpKind] || []).filter((item) => !optimisticDone.has(item.lineKey));
-  const completedSourceKeys = new Set(
-    (followUpData?.proofs || [])
+  type FollowUpKind = "marketing" | "discontinue" | "reorder";
+  const followUpQueueOf = (kind: FollowUpKind) => (followUpData?.queues[kind] || []).filter((item) => !optimisticDone.has(item.lineKey));
+  const followUpProofOf = (kind: FollowUpKind) => {
+    const completedSourceKeys = new Set(
+      (followUpData?.proofs || [])
+        .filter((proof) => String(proof.kind) === kind && Boolean(proof.completedAt))
+        .flatMap((proof) => proof.sourceKeys),
+    );
+    return [...(followUpData?.proofs || [])]
       .filter(
         (proof) =>
-          String(proof.kind) === followUpKind && Boolean(proof.completedAt),
+          String(proof.kind) === kind &&
+          !proof.completedAt &&
+          !proof.sourceKeys.every((sourceKey) => optimisticDone.has(sourceKey)) &&
+          !proof.sourceKeys.every((sourceKey) => completedSourceKeys.has(sourceKey)),
       )
-      .flatMap((proof) => proof.sourceKeys),
-  );
-  const activeFollowUpProof = [...(followUpData?.proofs || [])]
-    .filter(
-      (proof) =>
-        String(proof.kind) === followUpKind &&
-        !proof.completedAt &&
-        !proof.sourceKeys.every((sourceKey) => optimisticDone.has(sourceKey)) &&
-        !proof.sourceKeys.every((sourceKey) =>
-          completedSourceKeys.has(sourceKey),
-        ),
-    )
-    .sort((left, right) => right.at.localeCompare(left.at))[0];
+      .sort((left, right) => right.at.localeCompare(left.at))[0];
+  };
   const productDbBadge = (skuId: string) => {
     const badges = payload?.productDbStatuses?.[skuId];
     return badges?.length ? <>{badges.map((badge) => <span key={badge} className={styles.productDbBadge}>{badge}</span>)}</> : null;
@@ -783,6 +783,15 @@ export default function ShipmentReceiptsPage() {
         line.state === "ready" &&
         (line.remainingQuantity ?? 0) > 0 ? (
           <div className={styles.decisionRow}>
+            {/* 2026-10-20: 입고결과 처리의 기본 동작은 미납분 재발주요청 — 맨 앞에 주요 색으로 둔다. */}
+            <button
+              className={`softSageButton ${styles.decisionButton}`}
+              style={{ gridColumn: "span 2" }}
+              disabled={busy || routingKeys[line.lineKey]}
+              onClick={() => void submitDecision(line, "reorder")}
+            >
+              미납분 재발주요청
+            </button>
             <button
               className={`softBeigeButton ${styles.decisionButton}`}
               disabled={busy || routingKeys[line.lineKey]}
@@ -809,20 +818,13 @@ export default function ShipmentReceiptsPage() {
               </>
             ) : (
               <button
-                className={`softSageButton ${styles.decisionButton}`}
+                className={`softApricotButton ${styles.decisionButton}`}
                 disabled={busy || routingKeys[line.lineKey]}
                 onClick={() => void submitDecision(line, "vendor")}
               >
                 거래처발주
               </button>
             )}
-            <button
-              className={`softApricotButton ${styles.decisionButton}`}
-              disabled={busy || routingKeys[line.lineKey]}
-              onClick={() => void submitDecision(line, "reorder")}
-            >
-              미납분 재발주요청
-            </button>
           </div>
         ) : isSupplyReview(line) ? (
           supplyButtons(line.skuId, line.productName)
@@ -901,586 +903,29 @@ export default function ShipmentReceiptsPage() {
       </article>
     );
   };
-  return (
-    <main className={styles.page}>
-      <header className={styles.header}>
-        <h1 className={styles.title}>쉽먼트 입고결과</h1>
-        <div className={styles.actions}>
-          {fixture ? (
-            <span className={`softBeigeButton ${styles.headerButton}`}>입고결과 가져오기</span>
-          ) : (
-            <a
-              className={`softBeigeButton ${styles.headerButton}`}
-              href="https://supplier.coupang.com/ibs/asn/active"
-              target="_blank"
-              rel="noreferrer"
-            >
-              입고결과 가져오기
-            </a>
-          )}
-          <button
-            className={`softSageButton ${styles.headerButton}`}
-            type="button"
-            disabled={busy}
-            onClick={() => void load(true)}
-          >
-            {busy ? "처리 중…" : "새로고침"}
-          </button>
-          {/* 2026-10-15: 쿠팡 쉽먼트 화면에 '입고결과 일괄 가져오기' 칸을 띄우는 확장 기능. 같은 이름 zip을 같은 폴더에 덮어쓰고 새로고침. */}
-          <a className={`softApricotButton ${styles.headerButton}`} href="/downloads/noidb-supplier-hub.zip" download>
-            쉽먼트 확장 v0.9.9 받기
-          </a>
-        </div>
-      </header>
-      {/* 결과 알림은 화면 아래에 떠서 어디까지 내려가 있어도 보인다 */}
-      {(error || message) && (
-        <div className={`${styles.toast} ${error ? styles.toastError : ""}`} role={error ? "alert" : "status"}>
-          <span>{error || message}</span>
-          <button type="button" onClick={() => { setError(""); setMessage(""); }} aria-label="알림 닫기">닫기</button>
-        </div>
-      )}
-      {fixture && (
-        <p className={styles.notice}>
-          개발용 예시자료입니다. 실제 업무 변경은 없습니다.
-        </p>
-      )}
-      <p className={styles.notice}>
-        {payload?.board.collectedAt
-          ? `입고예정일 9/13 이후 마감 쉽먼트 ${payload.targets.length}건 · 가져온 시각 ${new Date(payload.board.collectedAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
-          : "아직 가져온 입고결과가 없습니다. '입고결과 가져오기'로 쿠팡 쉽먼트 화면을 열고 '입고결과 일괄 가져오기'를 눌러 주세요."}
-      </p>
-      {payload?.board.warnings
-        .filter((warning) => !warning.startsWith("공급상태가 정상이 아닌"))
-        .map((warning, index) => (
-          <p className={`${styles.notice} ${styles.error}`} key={`${warning}:${index}`}>
-            확인이 필요한 기록: {warning}
-          </p>
-        ))}
-      {unavailableShown.length > 0 && (
-        <details className={`${styles.notice} ${styles.error} ${styles.unavailable}`}>
-          <summary>
-            확인이 필요한 기록: 공급상태가 정상이 아닌 SKU {unavailableShown.length}건(불가·일시중단·조회안됨)은 미납·쿠폰광고 분류에서 뺐습니다. <b>목록 보기</b>
-          </summary>
-          <div className={styles.tableWrap}>
-            <table className={`${styles.table} ${styles.fixedTable}`} aria-label="공급상태가 정상이 아닌 SKU">
-              <colgroup>
-                <col className={styles.colStatus} />
-                <col className={styles.colInfo} />
-                <col />
-                <col className={styles.colNum} />
-                <col className={styles.colNum} />
-                <col className={styles.colNum} />
-                <col className={styles.colDecision} />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th>공급상태</th>
-                  <th>쉽먼트 정보</th>
-                  <th>상품명</th>
-                  <th>납품</th>
-                  <th>입고</th>
-                  <th>미납</th>
-                  <th className={styles.decisionCell}>확인</th>
-                </tr>
-              </thead>
-              <tbody>
-                {unavailableShown.map((item) => (
-                  <tr key={`${item.shipmentNumber}:${item.purchaseOrderNumber}:${item.skuId}`}>
-                    <td className={styles.statusCell}>
-                      {item.orderStatus}
-                      {item.fromProductDb && <span className={styles.meta}> (제품DB)</span>}
-                    </td>
-                    <td className={styles.shipInfo}>{shipInfo(item.shipmentNumber, item.purchaseOrderNumber, item.expectedDate)}</td>
-                    <td className={styles.product}>
-                      <div className={styles.productRow}>
-                        {productThumb(item.skuId)}
-                        <div>
-                          <strong>{productDbBadge(item.skuId)}{productTitle(item.skuId, item.productName)}</strong>
-                          <span className={styles.meta}>SKU {item.skuId}</span>
-                        </div>
-                      </div>
-                    </td>
-                    <td>{item.deliveredQuantity}</td>
-                    <td>{item.receivedQuantity}</td>
-                    <td className={styles.shortageQty}>{Math.max(0, item.deliveredQuantity - item.receivedQuantity) || ""}</td>
-                    <td className={styles.decisionCell}>{supplyButtons(item.skuId, item.productName)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </details>
-      )}
-      <nav className={styles.tabs} aria-label="입고결과 보기">
-        {(
-          [
-            ["results", "입고결과"],
-            ["pending", "가져온 쉽먼트"],
-            ["followup", "후속처리"],
-            ["history", "처리이력"],
-          ] as const
-        ).map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            className={`${styles.tab} ${tab === value ? styles.tabActive : ""}`}
-            onClick={() => openTab(value)}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
-      <section className={styles.panel}>
-        {!payload && !busy && !error && (
-          <p className={styles.empty}>
-            저장된 입고결과가 없습니다.
-          </p>
-        )}
-        {tab === "pending" && payload && newTargets.length > 0 && (
-          <section className={styles.dateBlock} style={{ border: "2px solid #dfbdb2", borderRadius: "12px", padding: "12px", background: "#fbf1ee" }}>
-            <h2 className={styles.dateTitle}>
-              새로 가져온 쉽먼트 {newTargets.length}건 · {new Date(latestFirstSeen).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-            </h2>
-            <div className={styles.shipmentGrid}>{newTargets.map((target) => renderShipmentCard(target, true))}</div>
-          </section>
-        )}
-        {tab === "pending" &&
-          payload &&
-          (payload.targets.length ? (
-            groupedTargets(payload.targets).map(([date, centers]) => (
-              <section className={styles.dateBlock} key={date}>
-                <h2 className={styles.dateTitle}>{date}</h2>
-                {[...centers.entries()]
-                  .sort(([left], [right]) => left.localeCompare(right, "ko"))
-                  .map(([center, targets]) => (
-                    <div className={styles.center} key={center}>
-                      <h3 className={styles.centerTitle}>{center}</h3>
-                      <div className={styles.shipmentGrid}>
-                        {targets.map((target) => renderShipmentCard(target))}
-                      </div>
-                    </div>
-                  ))}
-              </section>
-            ))
-          ) : (
-            <p className={styles.empty}>가져온 마감 쉽먼트가 없습니다.</p>
-          ))}
-        {tab === "results" && payload && (
-          <>
-            <h2 className={styles.listTitle}>
-              미납 SKU 리스트 <span>{resultLines.length}건</span>
-            </h2>
-            <div className={styles.tableWrap}>
-              <table className={`${styles.table} ${styles.fixedTable}`} aria-label="미납 SKU 리스트">
-                {resultColumns}
-                {resultHead}
-                <tbody>{resultLines.map(renderResultRow)}</tbody>
-              </table>
-            </div>
-            {!resultLines.length && (
-              <p className={styles.empty}>검토할 미납 상품이 없습니다.</p>
-            )}
-            {/* 2026-10-20: AI상품등록 9번의 상품공급상태 최신파일 반영을 여기로 옮김 — 반영하면 아래 단종·단종해제 목록을 다시 계산한다. */}
-            <SupplyStatusAuditPanel compact onApplied={() => void quietReload()} onAudited={(latest) => setLatestOrderable(latest)} />
-            {/* 2026-10-20 사용자 요청: 단종 대상 SKU와 바코드·SKU 직접 입력을 '단종 신청 목록' 하나로 합침(서류·완료 한 번). */}
-            {!fixture && (
-              <DiscontinueByCode
-                autoRows={discontinueList}
-                latestOrderable={latestOrderable}
-                clearing={Boolean(routingKeys["supply:clear-list:discontinue"])}
-                onClearAuto={(keys) => supplyCheck("clear-list", "", "", { kind: "discontinue", keys })}
-                onDone={(text, isError) => {
-                  if (isError) setError(text);
-                  else { setError(""); setMessage(text); }
-                }}
-              />
-            )}
-            {[
-              { kind: "release" as const, title: "단종해제 대상 SKU", rows: releaseList, help: "제품DB 현재상태가 과재고·정상전환대상·제품DB로 이동(재고있음)인데 발주가능상태가 정상이 아닌 SKU, 메모로 주신 SKU, 화면에서 단종해제를 누른 SKU예요.", done: "단종해제 신청 완료 · 목록 비우기" },
-            ].filter((section) => section.rows.length > 0).map((section) => (
-              <section key={section.kind}>
-                <h2 className={styles.listTitle}>
-                  {section.title} <span>{section.rows.length}건</span>
-                </h2>
-                <p className={styles.meta}>
-                  {section.help} {section.kind === "release" ? "표를 드래그해서 복사하거나, 많으면 엑셀 파일로 받으세요." : "아래 버튼으로 단종신청 엑셀과 공문을 만드세요."}
-                  {section.kind === "release" && payload?.statusLists?.reregisteredExcluded?.length ? ` 재등록 대상 SKU(재등록SKU 탭·판매량저조영구정지 등) ${payload.statusLists.reregisteredExcluded.length}건은 해제가 아니라 신규 재등록 대상이라 뺐습니다.` : ""}
-                </p>
-                <div className={`${styles.tableWrap} ${styles.copyScroll}`}>
-                  <table className={`${styles.table} ${styles.copyTable}`} aria-label={section.title}>
-                    <thead>
-                      <tr>
-                        <th>SKU ID</th>
-                        <th>상품명</th>
-                        <th className={styles.orderableCol} title={latestOrderable ? `최신파일 ${new Date(latestOrderable.fileMtime).toLocaleString("ko-KR")}` : "제품DB 값 · 최신파일 확인하기를 누르면 쿠팡 최신값으로 바뀝니다"}>
-                          발주상태{latestOrderable ? "" : " (DB)"}
-                        </th>
-                        {section.kind === "release" && <th className={styles.deleteCol} aria-label="삭제" />}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(() => {
-                        // 단종해제: 신청 전 줄을 위에, 신청완료 줄은 신청 시각별로 묶어 색을 다르게(2026-10-20).
-                        const requested = section.kind === "release" ? payload?.statusListRequested?.release || {} : {};
-                        const fresh = section.rows.filter((row) => !requested[row.skuId]);
-                        const batches = new Map<string, typeof section.rows>();
-                        for (const row of section.rows) if (requested[row.skuId]) batches.set(requested[row.skuId], [...(batches.get(requested[row.skuId]) || []), row]);
-                        const groups: Array<{ at: string; rows: typeof section.rows }> = [
-                          ...(fresh.length ? [{ at: "", rows: fresh }] : []),
-                          ...[...batches.entries()].sort(([left], [right]) => right.localeCompare(left)).map(([at, rows]) => ({ at, rows })),
-                        ];
-                        const showHeads = section.kind === "release" && batches.size > 0;
-                        return groups.flatMap((group) => [
-                          ...(showHeads ? [
-                            <tr key={`head-${group.at || "fresh"}`} className={`${styles.groupHead} ${group.at ? styles.groupHeadDone : ""}`}>
-                              <td colSpan={4}>
-                                {group.at
-                                  ? `단종해제 신청완료 · ${new Date(group.at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })} · ${group.rows.length}개`
-                                  : `신청 전 · ${group.rows.length}개`}
-                              </td>
-                            </tr>,
-                          ] : []),
-                          ...group.rows.map((item) => (
-                        <tr key={item.skuId} className={group.at ? styles.requestedRow : undefined}>
-                          <td>
-                            {item.skuId}
-                          </td>
-                          <td>{item.productName}</td>
-                          {(() => {
-                            // 단종 대상은 '정상이 아님', 단종해제 대상은 '정상'이 되면 쿠팡 처리가 끝난 것 → 세이지로 표시
-                            const value = latestOrderable ? latestOrderable.orderable[item.skuId] || "파일에 없음" : item.orderableStatus || "미확인";
-                            const done = Boolean(latestOrderable?.orderable[item.skuId]) && (section.kind === "release" ? value === "정상" : value !== "정상" && value !== "확인필요");
-                            return (
-                              <td className={`${styles.orderableCol} ${done ? styles.orderableDone : ""}`} title={done ? "쿠팡에서 처리 완료" : undefined}>
-                                {value}{done ? " ✓" : ""}
-                              </td>
-                            );
-                          })()}
-                          {section.kind === "release" && (
-                            <td className={styles.deleteCol}>
-                              <button
-                                type="button"
-                                className="softPinkButton"
-                                title="쿠팡에서 정상전환된 것을 확인한 SKU를 목록에서 지웁니다."
-                                disabled={routingKeys[`supply:${item.skuId}`]}
-                                onClick={() => void supplyCheck("clear-one", item.skuId, item.productName, { kind: "release", keys: [item.key] })}
-                              >
-                                {routingKeys[`supply:${item.skuId}`] ? "…" : "삭제"}
-                              </button>
-                            </td>
-                          )}
-                        </tr>
-                          )),
-                        ]);
-                      })()}
-                    </tbody>
-                  </table>
-                </div>
-                <div className={section.kind === "release" ? styles.tripleButtons : styles.pairButtons}>
-                  {section.kind === "release" && (
-                    <button
-                      type="button"
-                      className={`softSageButton ${styles.fullButton}`}
-                      disabled={routingKeys["release-file"]}
-                      onClick={() => void downloadReleaseFile()}
-                    >
-                      {routingKeys["release-file"] ? "만드는 중…" : "엑셀 파일 만들기"}
-                    </button>
-                  )}
-                  {section.kind === "release" && (() => {
-                    const requested = payload?.statusListRequested?.release || {};
-                    const freshIds = section.rows.filter((row) => !requested[row.skuId]).map((row) => row.skuId);
-                    return (
-                      <button
-                        type="button"
-                        className={`softBeigeButton ${styles.fullButton}`}
-                        title="신청한 SKU를 목록에 그대로 두고 색으로 표시합니다. 쿠팡에서 정상으로 바뀌면 줄마다 '삭제'를 누르세요."
-                        disabled={!freshIds.length || routingKeys["supply:mark-requested:release"]}
-                        onClick={() => void supplyCheck("mark-requested", "", "", { kind: "release", keys: [], skuIds: freshIds })}
-                      >
-                        {routingKeys["supply:mark-requested:release"] ? "저장 중…" : freshIds.length ? `단종해제 신청 완료 (${freshIds.length}개)` : "단종해제 신청 완료"}
-                      </button>
-                    );
-                  })()}
-                  <button
-                    type="button"
-                    className={`softPinkButton ${styles.fullButton}`}
-                    disabled={routingKeys[`supply:clear-list:${section.kind}`]}
-                    onClick={() => {
-                      // 단종해제는 승인된 SKU만 하나씩 지우기로 함 — 전부 비우기는 한 번 더 묻는다(2026-10-20 실수로 비움).
-                      if (section.kind === "release" && !window.confirm(`단종해제 대상 ${section.rows.length}건을 모두 비웁니다.\n\n승인(정상전환)된 SKU만 지우려면 취소하고 줄마다 '삭제'를 누르세요.`)) return;
-                      void supplyCheck("clear-list", "", "", { kind: section.kind, keys: section.rows.map((row) => row.key) });
-                    }}
-                  >
-                    {section.kind === "release" ? "목록 비우기" : section.done}
-                  </button>
-                </div>
-              </section>
-            ))}
-            {(["release", "discontinue"] as const).map((kind) => {
-              const batch = payload?.statusListLastCleared?.[kind];
-              if (!batch || fixture) return null;
-              const label = kind === "release" ? "단종해제 대상" : "단종 대상";
-              return (
-                <button
-                  key={`restore-${kind}`}
-                  type="button"
-                  className={`softApricotButton ${styles.fullButton}`}
-                  disabled={routingKeys[`restore:${kind}`]}
-                  onClick={() => void restoreLastClear(kind)}
-                  style={{ marginTop: "8px" }}
-                >
-                  {routingKeys[`restore:${kind}`] ? "되살리는 중…" : `마지막으로 비운 ${label} ${batch.count}건 되살리기 (${new Date(batch.at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })})`}
-                </button>
-              );
-            })}
-            {!fixture && (
-              <WarehouseRecheckCleanup
-                onDone={(text, isError) => {
-                  if (isError) setError(text);
-                  else { setError(""); setMessage(text); }
-                }}
-              />
-            )}
-            {marketingLines.length > 0 && (
-              <section>
-                <h2 className={styles.listTitle}>
-                  마케팅 SKU 리스트 <span>{marketingLines.length}건</span>
-                </h2>
-                <div className={styles.listTools}>
-                  <p className={styles.meta}>
-                    처음 1개 입고된 SKU입니다. 쿠폰 할인율은 기본 20%, 과재고·누적입고 100개 이상은 30%로 만들어집니다.
-                    {payload?.marketingExclusion?.models.length ? ` 무조건 제외 모델 ${payload.marketingExclusion.models.join(", ")}는 목록에서 뺐습니다.` : ""}
-                  </p>
-                  {(payload?.marketingExclusion?.userSkus?.length || 0) > 0 && (
-                    <details style={{ fontSize: "13px" }}>
-                      <summary style={{ cursor: "pointer" }}>마케팅 제외 SKU {payload!.marketingExclusion!.userSkus!.length}개 (같은 모델 전체 자동 제외)</summary>
-                      <div style={{ display: "grid", gap: "4px", marginTop: "6px" }}>
-                        {payload!.marketingExclusion!.userSkus!.map((item) => (
-                          <div key={item.skuId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
-                            <span>{item.productName || "상품명 없음"} <small>SKU {item.skuId}</small></span>
-                            <button type="button" className="softBeigeButton" disabled={busy || fixture} style={{ minHeight: "28px", padding: "2px 10px", fontSize: "12px" }}
-                              onClick={() => void followUpAction({ action: "includeMarketingSku", skuId: item.skuId }, `SKU ${item.skuId}를 마케팅 제외 목록에서 뺐습니다.`)}>
-                              제외 해제
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </details>
-                  )}
-                  <div className={styles.selectButtons} style={marketingLines.some((line) => laterOrders[line.lineKey]) ? { gridTemplateColumns: "repeat(3, minmax(88px, 1fr))" } : undefined}>
-                    <button
-                      type="button"
-                      className={`softSageButton ${styles.decisionButton}`}
-                      onClick={() => setMarketingSelected(Object.fromEntries(marketingLines.map((line) => [line.lineKey, true])))}
-                    >
-                      전체선택
-                    </button>
-                    <button
-                      type="button"
-                      className={`softApricotButton ${styles.decisionButton}`}
-                      onClick={() => setMarketingSelected(Object.fromEntries(marketingLines.map((line) => [line.lineKey, false])))}
-                    >
-                      전체해제
-                    </button>
-                    {marketingLines.some((line) => laterOrders[line.lineKey]) && (
-                      <button
-                        type="button"
-                        className={`softBeigeButton ${styles.decisionButton}`}
-                        onClick={() => setMarketingSelected((current) => ({ ...current, ...Object.fromEntries(marketingLines.filter((line) => laterOrders[line.lineKey]).map((line) => [line.lineKey, false])) }))}
-                      >
-                        추가발주 나온 SKU 해제 ({marketingLines.filter((line) => laterOrders[line.lineKey]).length})
-                      </button>
-                    )}
-                  </div>
-                </div>
-                {(
-                  <div className={styles.marketingReview}>
-                    {/* 2026-10-11 사용자 요청: 입고예정일별로 묶어 최근 날짜부터 보이고, 날짜마다 선택/해제 */}
-                    {[...new Set(marketingLines.map((line) => line.target.expectedDate || ""))]
-                      .sort((a, b) => b.localeCompare(a))
-                      .map((date) => {
-                        const dateLines = marketingLines.filter((line) => (line.target.expectedDate || "") === date);
-                        const checkedCount = dateLines.filter((line) => isMarketingChecked(line.lineKey)).length;
-                        return (
-                          <div key={date || "none"} style={{ display: "contents" }}>
-                            <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 4px 2px", borderTop: "1px solid #e5dace", fontSize: "14px" }}>
-                              <strong>입고예정일 {date || "미정"} · {dateLines.length}건 (선택 {checkedCount})</strong>
-                              <span style={{ display: "flex", gap: "6px" }}>
-                                <button type="button" className={`softSageButton ${styles.decisionButton}`} style={{ minHeight: "32px", padding: "4px 10px", fontSize: "12px" }}
-                                  onClick={() => setMarketingSelected((current) => ({ ...current, ...Object.fromEntries(dateLines.map((line) => [line.lineKey, true])) }))}>이 날짜 선택</button>
-                                <button type="button" className={`softApricotButton ${styles.decisionButton}`} style={{ minHeight: "32px", padding: "4px 10px", fontSize: "12px" }}
-                                  onClick={() => setMarketingSelected((current) => ({ ...current, ...Object.fromEntries(dateLines.map((line) => [line.lineKey, false])) }))}>이 날짜 해제</button>
-                              </span>
-                            </div>
-                    {dateLines.map((line) => (
-                      <label className={styles.choice} key={line.lineKey}>
-                        <input
-                          type="checkbox"
-                          checked={isMarketingChecked(line.lineKey)}
-                          onChange={(event) =>
-                            setMarketingSelected((current) => ({
-                              ...current,
-                              [line.lineKey]: event.target.checked,
-                            }))
-                          }
-                        />
-                        {productThumb(line.skuId)}
-                        <span>
-                          <strong>{productDbBadge(line.skuId)}{productTitle(line.skuId, line.productName)}</strong>
-                          <small>
-                            SKU {line.skuId} · 발주 {line.purchaseOrderNumber}
-                          </small>
-                          <small>
-                            입고예정일 {line.target.expectedDate || "-"}
-                            {(() => {
-                              // 예전 응답(숫자)과 새 응답({ price }) 모두 받는다.
-                              const raw = payload?.marketingPrices?.[line.lineKey] as unknown;
-                              const price = typeof raw === "number" ? raw : (raw as { price?: number } | undefined)?.price;
-                              const other = typeof raw === "object" && raw !== null && Boolean((raw as { fromOtherOrder?: boolean }).fromOtherOrder);
-                              return price ? ` · 매입가 ${price.toLocaleString("ko-KR")}원${other ? " (다른 발주 기준)" : ""}` : "";
-                            })()}
-                          </small>
-                          {/* 2026-10-11 사용자 요청: 정상은 표시하지 않고, 정상이 아닌 것만 빨간색으로 눈에 띄게 */}
-                          {payload?.orderStatuses?.[line.skuId] && payload.orderStatuses[line.skuId] !== "정상" && (
-                            <small style={{ color: "#fff", background: "#b5524a", borderRadius: "6px", padding: "2px 8px", fontWeight: 800, alignSelf: "flex-start" }}>
-                              발주상태 {payload.orderStatuses[line.skuId]}
-                            </small>
-                          )}
-                          {laterOrders[line.lineKey] && (
-                            <small style={{ color: "#a6614e", fontWeight: 700 }}>
-                              추가발주 있음 · 발주 {laterOrders[line.lineKey].orderCount}건 {laterOrders[line.lineKey].quantity}개 · 최근 입고예정 {laterOrders[line.lineKey].latestExpectedDate || "-"}
-                            </small>
-                          )}
-                        </span>
-                        {/* 2026-10-11 사용자 요청: 버튼을 상품명 길이와 상관없이 오른쪽 같은 폭으로 */}
-                        {!fixture && (
-                          <span style={{ marginLeft: "auto", width: "132px", flexShrink: 0, display: "grid", gap: "6px", alignContent: "start" }}>
-                          {!fixture && (
-                            <button
-                              type="button"
-                              className="softApricotButton"
-                              disabled={Boolean(skuExcludePending[line.skuId])}
-                              style={{ width: "100%", minHeight: "32px", padding: "4px 8px", fontSize: "12px" }}
-                              onClick={(event) => {
-                                event.preventDefault();
-                                if (!window.confirm(`${line.productName}\n이 SKU(같은 모델 전체)를 마케팅 제외 목록에 넣을까요? 앞으로 이 목록에 나오지 않습니다.`)) return;
-                                void excludeMarketingSkuQuick(line.skuId, line.productName);
-                              }}
-                            >
-                              {skuExcludePending[line.skuId] ? "넣는 중…" : "마케팅 제외"}
-                            </button>
-                          )}
-                          {payload?.orderStatuses?.[line.skuId] && payload.orderStatuses[line.skuId] !== "정상" && !fixture && (
-                            supplyChecks[line.skuId]?.decision === "release" ? (
-                              <small style={{ color: "#4d6358", fontWeight: 700 }}>단종해제 대상에 넣음</small>
-                            ) : (
-                              <button
-                                type="button"
-                                className="softBeigeButton"
-                                disabled={busy}
-                                style={{ width: "100%", minHeight: "32px", padding: "4px 8px", fontSize: "12px" }}
-                                onClick={(event) => { event.preventDefault(); void supplyCheck("release", line.skuId, line.productName); }}
-                              >
-                                단종해제 대상에 넣기
-                              </button>
-                            )
-                          )}
-                          </span>
-                        )}
-                      </label>
-                    ))}
-                          </div>
-                        );
-                      })}
-                    <button
-                      className={`softPinkButton ${styles.fullButton}`}
-                      disabled={busy}
-                      onClick={() => {
-                        const selected = marketingLines
-                          .filter(
-                            (line) => isMarketingChecked(line.lineKey),
-                          )
-                          .map((line) => line.lineKey);
-                        const excluded = marketingLines
-                          .filter(
-                            (line) => !isMarketingChecked(line.lineKey),
-                          )
-                          .map((line) => line.lineKey);
-                        // 2026-10-11 사용자 요청: 한 번 처리하면 목록을 비운다 — 체크한 건 쿠폰·광고로, 체크 안 한 건 제외 이력으로.
-                        if (!window.confirm(`체크한 ${selected.length}건은 쿠폰·광고 대기목록으로 보내고, 체크 안 한 ${excluded.length}건은 이번 입고분만 목록에서 뺍니다(다음에 입고되면 다시 나옵니다). 진행할까요?`)) return;
-                        void followUpAction(
-                          {
-                            action: "queueMarketing",
-                            lineKeys: selected,
-                            excludedLineKeys: excluded,
-                            confirmMarketing: true,
-                          },
-                          `쿠폰·광고 ${selected.length}건 모으고, 나머지 ${excluded.length}건은 이번 목록에서 뺐습니다.`,
-                        );
-                      }}
-                    >
-                      체크한 상품은 쿠폰·광고로 보내고 이번 목록 비우기
-                    </button>
-                  </div>
-                )}
-              </section>
-            )}
-            {shortageReviewLines.length > 0 && (
-              <details className={styles.reviewDetails}>
-                <summary>확인 필요 {shortageReviewLines.length}건</summary>
-                <div className={styles.tableWrap}>
-                  <table className={`${styles.table} ${styles.fixedTable}`} aria-label="수량 재확인">
-                    {resultColumns}
-                    {resultHead}
-                    <tbody>{shortageReviewLines.map(renderResultRow)}</tbody>
-                  </table>
-                </div>
-              </details>
-            )}
-            <p className={styles.meta}>
-              미납 검토 {shortageLines.length}건
-              {shortageReviewLines.length > 0
-                ? ` · 확인 필요 ${shortageReviewLines.length}건`
-                : ""}{" "}
-              · 초도입고 후보 {marketingLines.length}건 · 마지막 수집{" "}
-              {payload.collectedAt || payload.board.collectedAt || "기록 없음"}
-            </p>
-          </>
-        )}
-        {tab === "followup" && followUpData && (
-          <section className={styles.followUp} aria-label="후속처리">
-            <div
-              className={styles.workTabs}
-              role="tablist"
-              aria-label="서류 업무 선택"
-            >
-              {(
-                [
-                  ["discontinue", "단종서류"],
-                  ["reorder", "미납분 재발주요청"],
-                  ["marketing", "쿠폰·광고"],
-                ] as const
-              ).map(([kind, label]) => (
-                <button
-                  key={kind}
-                  type="button"
-                  role="tab"
-                  aria-selected={followUpKind === kind}
-                  className={`${styles.workTab} ${followUpKind === kind ? styles.workTabActive : ""}`}
-                  onClick={() => setFollowUpKind(kind)}
-                >
-                  {label} <span>{followUpData.queues[kind].length}</span>
-                </button>
-              ))}
-            </div>
+  // 탭 옆 할 일 숫자(2026-10-20): 수시 처리 = 거래처 발주 대기·단종·단종해제(신청 전), 입고결과 처리 = 미납·마케팅·마무리 대기.
+  const releaseFreshCount = releaseList.filter((row) => !payload?.statusListRequested?.release?.[row.skuId]).length;
+  const anytimeCount = (followUpData?.queues.vendor.length || 0) + discontinueList.length + releaseFreshCount + followUpQueueOf("discontinue").length;
+  const resultsCount = resultLines.length + marketingLines.length + followUpQueueOf("reorder").length + followUpQueueOf("marketing").length;
+  // 메인 작업 메뉴에 같은 숫자를 보여 주도록 이 브라우저에 기억해 둔다(개발용 예시자료는 저장하지 않음).
+  useEffect(() => {
+    if (fixture || !payload || !followUpData) return;
+    saveReceiptTabCounts({ anytime: anytimeCount, results: resultsCount });
+  }, [fixture, payload, followUpData, anytimeCount, resultsCount]);
+  // 후속처리(파일 만들기·처리완료)를 각 목록 바로 아래에서 끝내도록, 예전 '후속처리' 탭의 작업칸을 종류별로 그린다(2026-10-20).
+  const renderFollowUpWork = (followUpKind: FollowUpKind) => {
+    if (!followUpData) return null;
+    const activeFollowUpQueue = followUpQueueOf(followUpKind);
+    const activeFollowUpProof = followUpProofOf(followUpKind);
+    return (
+      <section className={styles.followUp} aria-label="후속처리">
             <article className={styles.workArea}>
               <h2>
                 {followUpKind === "discontinue"
-                  ? "단종서류"
+                  ? "미납 SKU에서 보낸 단종서류"
                   : followUpKind === "reorder"
-                    ? "미납분 재발주요청"
-                    : "쿠폰·광고"}
+                    ? "미납분 재발주요청 마무리"
+                    : "쿠폰·광고 마무리"}
               </h2>
               <p className={styles.meta}>
                 현재 대기 {activeFollowUpQueue.length}건
@@ -1770,17 +1215,182 @@ export default function ShipmentReceiptsPage() {
                   ))}
                 </section>
               )}
+      </section>
+    );
+  };
+  return (
+    <main className={styles.page}>
+      <header className={styles.header}>
+        <h1 className={styles.title}>쉽먼트 입고결과</h1>
+        <div className={styles.actions}>
+          {fixture ? (
+            <span className={`softBeigeButton ${styles.headerButton}`}>입고결과 가져오기</span>
+          ) : (
+            <a
+              className={`softBeigeButton ${styles.headerButton}`}
+              href="https://supplier.coupang.com/ibs/asn/active"
+              target="_blank"
+              rel="noreferrer"
+            >
+              입고결과 가져오기
+            </a>
+          )}
+          <button
+            className={`softSageButton ${styles.headerButton}`}
+            type="button"
+            disabled={busy}
+            onClick={() => void load(true)}
+          >
+            {busy ? "처리 중…" : "새로고침"}
+          </button>
+          {/* 2026-10-15: 쿠팡 쉽먼트 화면에 '입고결과 일괄 가져오기' 칸을 띄우는 확장 기능. 같은 이름 zip을 같은 폴더에 덮어쓰고 새로고침. */}
+          <a className={`softApricotButton ${styles.headerButton}`} href="/downloads/noidb-supplier-hub.zip" download>
+            쉽먼트 확장 v0.9.9 받기
+          </a>
+        </div>
+      </header>
+      {/* 결과 알림은 화면 아래에 떠서 어디까지 내려가 있어도 보인다 */}
+      {(error || message) && (
+        <div className={`${styles.toast} ${error ? styles.toastError : ""}`} role={error ? "alert" : "status"}>
+          <span>{error || message}</span>
+          <button type="button" onClick={() => { setError(""); setMessage(""); }} aria-label="알림 닫기">닫기</button>
+        </div>
+      )}
+      {fixture && (
+        <p className={styles.notice}>
+          개발용 예시자료입니다. 실제 업무 변경은 없습니다.
+        </p>
+      )}
+      <p className={styles.notice}>
+        {payload?.board.collectedAt
+          ? `입고예정일 9/13 이후 마감 쉽먼트 ${payload.targets.length}건 · 가져온 시각 ${new Date(payload.board.collectedAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
+          : "아직 가져온 입고결과가 없습니다. '입고결과 가져오기'로 쿠팡 쉽먼트 화면을 열고 '입고결과 일괄 가져오기'를 눌러 주세요."}
+      </p>
+      {payload?.board.warnings
+        .filter((warning) => !warning.startsWith("공급상태가 정상이 아닌"))
+        .map((warning, index) => (
+          <p className={`${styles.notice} ${styles.error}`} key={`${warning}:${index}`}>
+            확인이 필요한 기록: {warning}
+          </p>
+        ))}
+      {unavailableShown.length > 0 && (
+        <details className={`${styles.notice} ${styles.error} ${styles.unavailable}`}>
+          <summary>
+            확인이 필요한 기록: 공급상태가 정상이 아닌 SKU {unavailableShown.length}건(불가·일시중단·조회안됨)은 미납·쿠폰광고 분류에서 뺐습니다. <b>목록 보기</b>
+          </summary>
+          <div className={styles.tableWrap}>
+            <table className={`${styles.table} ${styles.fixedTable}`} aria-label="공급상태가 정상이 아닌 SKU">
+              <colgroup>
+                <col className={styles.colStatus} />
+                <col className={styles.colInfo} />
+                <col />
+                <col className={styles.colNum} />
+                <col className={styles.colNum} />
+                <col className={styles.colNum} />
+                <col className={styles.colDecision} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>공급상태</th>
+                  <th>쉽먼트 정보</th>
+                  <th>상품명</th>
+                  <th>납품</th>
+                  <th>입고</th>
+                  <th>미납</th>
+                  <th className={styles.decisionCell}>확인</th>
+                </tr>
+              </thead>
+              <tbody>
+                {unavailableShown.map((item) => (
+                  <tr key={`${item.shipmentNumber}:${item.purchaseOrderNumber}:${item.skuId}`}>
+                    <td className={styles.statusCell}>
+                      {item.orderStatus}
+                      {item.fromProductDb && <span className={styles.meta}> (제품DB)</span>}
+                    </td>
+                    <td className={styles.shipInfo}>{shipInfo(item.shipmentNumber, item.purchaseOrderNumber, item.expectedDate)}</td>
+                    <td className={styles.product}>
+                      <div className={styles.productRow}>
+                        {productThumb(item.skuId)}
+                        <div>
+                          <strong>{productDbBadge(item.skuId)}{productTitle(item.skuId, item.productName)}</strong>
+                          <span className={styles.meta}>SKU {item.skuId}</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td>{item.deliveredQuantity}</td>
+                    <td>{item.receivedQuantity}</td>
+                    <td className={styles.shortageQty}>{Math.max(0, item.deliveredQuantity - item.receivedQuantity) || ""}</td>
+                    <td className={styles.decisionCell}>{supplyButtons(item.skuId, item.productName)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+      <nav className={styles.tabs} aria-label="입고결과 보기">
+        {(
+          [
+            ["anytime", "수시 처리", anytimeCount],
+            ["results", "입고결과 처리", resultsCount],
+            ["pending", "가져온 쉽먼트", 0],
+            ["history", "처리이력", 0],
+          ] as const
+        ).map(([value, label, count]) => (
+          <button
+            key={value}
+            type="button"
+            className={`${styles.tab} ${tab === value ? styles.tabActive : ""}`}
+            onClick={() => openTab(value)}
+          >
+            {label}{count > 0 ? ` ${count}` : ""}
+          </button>
+        ))}
+      </nav>
+      <section className={styles.panel}>
+        {!payload && !busy && !error && (
+          <p className={styles.empty}>
+            저장된 입고결과가 없습니다.
+          </p>
+        )}
+        {tab === "pending" && payload && newTargets.length > 0 && (
+          <section className={styles.dateBlock} style={{ border: "2px solid #dfbdb2", borderRadius: "12px", padding: "12px", background: "#fbf1ee" }}>
+            <h2 className={styles.dateTitle}>
+              새로 가져온 쉽먼트 {newTargets.length}건 · {new Date(latestFirstSeen).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+            </h2>
+            <div className={styles.shipmentGrid}>{newTargets.map((target) => renderShipmentCard(target, true))}</div>
+          </section>
+        )}
+        {tab === "pending" &&
+          payload &&
+          (payload.targets.length ? (
+            groupedTargets(payload.targets).map(([date, centers]) => (
+              <section className={styles.dateBlock} key={date}>
+                <h2 className={styles.dateTitle}>{date}</h2>
+                {[...centers.entries()]
+                  .sort(([left], [right]) => left.localeCompare(right, "ko"))
+                  .map(([center, targets]) => (
+                    <div className={styles.center} key={center}>
+                      <h3 className={styles.centerTitle}>{center}</h3>
+                      <div className={styles.shipmentGrid}>
+                        {targets.map((target) => renderShipmentCard(target))}
+                      </div>
+                    </div>
+                  ))}
+              </section>
+            ))
+          ) : (
+            <p className={styles.empty}>가져온 마감 쉽먼트가 없습니다.</p>
+          ))}
+        {tab === "anytime" && payload && (
+          <>
             <article className={styles.vendorArea}>
               <div>
-                <h2>거래처발주</h2>
+                <h2>거래처 발주</h2>
                 <p>
-                  초안 검토 후 카톡으로 전송하고, 답변에 따라 단종·지연·거래처
-                  수정·재발주를 처리합니다.
+                  거래처별로 발주한 제품을 확인하고, 카드를 복사해 카톡으로 보내고, 답변에 따라 단종·지연·거래처 수정·재발주를 처리합니다.
                 </p>
-                <p className={styles.meta}>
-                  대기 {followUpData.queues.vendor.length}건 · 거래처 업무가
-                  남아 있어도 서류 업무 완료는 막지 않습니다.
-                </p>
+                {followUpData && <p className={styles.meta}>대기 {followUpData.queues.vendor.length}건</p>}
               </div>
               {fixture ? (
                 <span className={styles.linkButton}>
@@ -1791,11 +1401,397 @@ export default function ShipmentReceiptsPage() {
                   className={styles.linkButton}
                   href="/wms/vendor-orders/manage"
                 >
-                  거래처발주 관리 열기
+                  거래처 발주 이어하기
                 </Link>
               )}
             </article>
-          </section>
+            {/* 2026-10-20: AI상품등록 9번의 상품공급상태 최신파일 반영을 여기로 옮김 — 반영하면 아래 단종·단종해제 목록을 다시 계산한다. */}
+            <SupplyStatusAuditPanel compact onApplied={() => void quietReload()} onAudited={(latest) => setLatestOrderable(latest)} />
+            {/* 2026-10-20 사용자 요청: 단종 대상 SKU와 바코드·SKU 직접 입력을 '단종 신청 목록' 하나로 합침(서류·완료 한 번). */}
+            {!fixture && (
+              <DiscontinueByCode
+                autoRows={discontinueList}
+                latestOrderable={latestOrderable}
+                clearing={Boolean(routingKeys["supply:clear-list:discontinue"])}
+                onClearAuto={(keys) => supplyCheck("clear-list", "", "", { kind: "discontinue", keys })}
+                onDone={(text, isError) => {
+                  if (isError) setError(text);
+                  else { setError(""); setMessage(text); }
+                }}
+              />
+            )}
+            {[
+              { kind: "release" as const, title: "단종해제 대상 SKU", rows: releaseList, help: "제품DB 현재상태가 과재고·정상전환대상·제품DB로 이동(재고있음)인데 발주가능상태가 정상이 아닌 SKU, 메모로 주신 SKU, 화면에서 단종해제를 누른 SKU예요.", done: "단종해제 신청 완료 · 목록 비우기" },
+            ].filter((section) => section.rows.length > 0).map((section) => (
+              <section key={section.kind}>
+                <h2 className={styles.listTitle}>
+                  {section.title} <span>{section.rows.length}건</span>
+                </h2>
+                <p className={styles.meta}>
+                  {section.help} {section.kind === "release" ? "표를 드래그해서 복사하거나, 많으면 엑셀 파일로 받으세요." : "아래 버튼으로 단종신청 엑셀과 공문을 만드세요."}
+                  {section.kind === "release" && payload?.statusLists?.reregisteredExcluded?.length ? ` 재등록 대상 SKU(재등록SKU 탭·판매량저조영구정지 등) ${payload.statusLists.reregisteredExcluded.length}건은 해제가 아니라 신규 재등록 대상이라 뺐습니다.` : ""}
+                </p>
+                <div className={`${styles.tableWrap} ${styles.copyScroll}`}>
+                  <table className={`${styles.table} ${styles.copyTable}`} aria-label={section.title}>
+                    <thead>
+                      <tr>
+                        <th>SKU ID</th>
+                        <th>상품명</th>
+                        <th className={styles.orderableCol} title={latestOrderable ? `최신파일 ${new Date(latestOrderable.fileMtime).toLocaleString("ko-KR")}` : "제품DB 값 · 최신파일 확인하기를 누르면 쿠팡 최신값으로 바뀝니다"}>
+                          발주상태{latestOrderable ? "" : " (DB)"}
+                        </th>
+                        {section.kind === "release" && <th className={styles.deleteCol} aria-label="삭제" />}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        // 단종해제: 신청 전 줄을 위에, 신청완료 줄은 신청 시각별로 묶어 색을 다르게(2026-10-20).
+                        const requested = section.kind === "release" ? payload?.statusListRequested?.release || {} : {};
+                        const fresh = section.rows.filter((row) => !requested[row.skuId]);
+                        const batches = new Map<string, typeof section.rows>();
+                        for (const row of section.rows) if (requested[row.skuId]) batches.set(requested[row.skuId], [...(batches.get(requested[row.skuId]) || []), row]);
+                        const groups: Array<{ at: string; rows: typeof section.rows }> = [
+                          ...(fresh.length ? [{ at: "", rows: fresh }] : []),
+                          ...[...batches.entries()].sort(([left], [right]) => right.localeCompare(left)).map(([at, rows]) => ({ at, rows })),
+                        ];
+                        const showHeads = section.kind === "release" && batches.size > 0;
+                        return groups.flatMap((group) => [
+                          ...(showHeads ? [
+                            <tr key={`head-${group.at || "fresh"}`} className={`${styles.groupHead} ${group.at ? styles.groupHeadDone : ""}`}>
+                              <td colSpan={4}>
+                                {group.at
+                                  ? `단종해제 신청완료 · ${new Date(group.at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })} · ${group.rows.length}개`
+                                  : `신청 전 · ${group.rows.length}개`}
+                              </td>
+                            </tr>,
+                          ] : []),
+                          ...group.rows.map((item) => (
+                        <tr key={item.skuId} className={group.at ? styles.requestedRow : undefined}>
+                          <td>
+                            {item.skuId}
+                          </td>
+                          <td>{item.productName}</td>
+                          {(() => {
+                            // 단종 대상은 '정상이 아님', 단종해제 대상은 '정상'이 되면 쿠팡 처리가 끝난 것 → 세이지로 표시
+                            const value = latestOrderable ? latestOrderable.orderable[item.skuId] || "파일에 없음" : item.orderableStatus || "미확인";
+                            const done = Boolean(latestOrderable?.orderable[item.skuId]) && (section.kind === "release" ? value === "정상" : value !== "정상" && value !== "확인필요");
+                            return (
+                              <td className={`${styles.orderableCol} ${done ? styles.orderableDone : ""}`} title={done ? "쿠팡에서 처리 완료" : undefined}>
+                                {value}{done ? " ✓" : ""}
+                              </td>
+                            );
+                          })()}
+                          {section.kind === "release" && (
+                            <td className={styles.deleteCol}>
+                              <button
+                                type="button"
+                                className="softPinkButton"
+                                title="쿠팡에서 정상전환된 것을 확인한 SKU를 목록에서 지웁니다."
+                                disabled={routingKeys[`supply:${item.skuId}`]}
+                                onClick={() => void supplyCheck("clear-one", item.skuId, item.productName, { kind: "release", keys: [item.key] })}
+                              >
+                                {routingKeys[`supply:${item.skuId}`] ? "…" : "삭제"}
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                          )),
+                        ]);
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+                <div className={section.kind === "release" ? styles.tripleButtons : styles.pairButtons}>
+                  {section.kind === "release" && (
+                    <button
+                      type="button"
+                      className={`softSageButton ${styles.fullButton}`}
+                      disabled={routingKeys["release-file"]}
+                      onClick={() => void downloadReleaseFile()}
+                    >
+                      {routingKeys["release-file"] ? "만드는 중…" : "엑셀 파일 만들기"}
+                    </button>
+                  )}
+                  {section.kind === "release" && (() => {
+                    const requested = payload?.statusListRequested?.release || {};
+                    const freshIds = section.rows.filter((row) => !requested[row.skuId]).map((row) => row.skuId);
+                    return (
+                      <button
+                        type="button"
+                        className={`softBeigeButton ${styles.fullButton}`}
+                        title="신청한 SKU를 목록에 그대로 두고 색으로 표시합니다. 쿠팡에서 정상으로 바뀌면 줄마다 '삭제'를 누르세요."
+                        disabled={!freshIds.length || routingKeys["supply:mark-requested:release"]}
+                        onClick={() => void supplyCheck("mark-requested", "", "", { kind: "release", keys: [], skuIds: freshIds })}
+                      >
+                        {routingKeys["supply:mark-requested:release"] ? "저장 중…" : freshIds.length ? `단종해제 신청 완료 (${freshIds.length}개)` : "단종해제 신청 완료"}
+                      </button>
+                    );
+                  })()}
+                  <button
+                    type="button"
+                    className={`softPinkButton ${styles.fullButton}`}
+                    disabled={routingKeys[`supply:clear-list:${section.kind}`]}
+                    onClick={() => {
+                      // 단종해제는 승인된 SKU만 하나씩 지우기로 함 — 전부 비우기는 한 번 더 묻는다(2026-10-20 실수로 비움).
+                      if (section.kind === "release" && !window.confirm(`단종해제 대상 ${section.rows.length}건을 모두 비웁니다.\n\n승인(정상전환)된 SKU만 지우려면 취소하고 줄마다 '삭제'를 누르세요.`)) return;
+                      void supplyCheck("clear-list", "", "", { kind: section.kind, keys: section.rows.map((row) => row.key) });
+                    }}
+                  >
+                    {section.kind === "release" ? "목록 비우기" : section.done}
+                  </button>
+                </div>
+              </section>
+            ))}
+            {(["release", "discontinue"] as const).map((kind) => {
+              const batch = payload?.statusListLastCleared?.[kind];
+              if (!batch || fixture) return null;
+              const label = kind === "release" ? "단종해제 대상" : "단종 대상";
+              return (
+                <button
+                  key={`restore-${kind}`}
+                  type="button"
+                  className={`softApricotButton ${styles.fullButton}`}
+                  disabled={routingKeys[`restore:${kind}`]}
+                  onClick={() => void restoreLastClear(kind)}
+                  style={{ marginTop: "8px" }}
+                >
+                  {routingKeys[`restore:${kind}`] ? "되살리는 중…" : `마지막으로 비운 ${label} ${batch.count}건 되살리기 (${new Date(batch.at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })})`}
+                </button>
+              );
+            })}
+            {followUpQueueOf("discontinue").length > 0 && renderFollowUpWork("discontinue")}
+            {!fixture && (
+              <WarehouseRecheckCleanup
+                onDone={(text, isError) => {
+                  if (isError) setError(text);
+                  else { setError(""); setMessage(text); }
+                }}
+              />
+            )}
+          </>
+        )}
+        {tab === "results" && payload && (
+          <>
+            <h2 className={styles.listTitle}>
+              미납 SKU 리스트 <span>{resultLines.length}건</span>
+            </h2>
+            <div className={styles.tableWrap}>
+              <table className={`${styles.table} ${styles.fixedTable}`} aria-label="미납 SKU 리스트">
+                {resultColumns}
+                {resultHead}
+                <tbody>{resultLines.map(renderResultRow)}</tbody>
+              </table>
+            </div>
+            {!resultLines.length && (
+              <p className={styles.empty}>검토할 미납 상품이 없습니다.</p>
+            )}
+            {shortageReviewLines.length > 0 && (
+              <details className={styles.reviewDetails}>
+                <summary>확인 필요 {shortageReviewLines.length}건</summary>
+                <div className={styles.tableWrap}>
+                  <table className={`${styles.table} ${styles.fixedTable}`} aria-label="수량 재확인">
+                    {resultColumns}
+                    {resultHead}
+                    <tbody>{shortageReviewLines.map(renderResultRow)}</tbody>
+                  </table>
+                </div>
+              </details>
+            )}
+            {renderFollowUpWork("reorder")}
+            {marketingLines.length > 0 && (
+              <section>
+                <h2 className={styles.listTitle}>
+                  마케팅 SKU 리스트 <span>{marketingLines.length}건</span>
+                </h2>
+                <div className={styles.listTools}>
+                  <p className={styles.meta}>
+                    처음 1개 입고된 SKU입니다. 쿠폰 할인율은 기본 20%, 과재고·누적입고 100개 이상은 30%로 만들어집니다.
+                    {payload?.marketingExclusion?.models.length ? ` 무조건 제외 모델 ${payload.marketingExclusion.models.join(", ")}는 목록에서 뺐습니다.` : ""}
+                  </p>
+                  {(payload?.marketingExclusion?.userSkus?.length || 0) > 0 && (
+                    <details style={{ fontSize: "13px" }}>
+                      <summary style={{ cursor: "pointer" }}>마케팅 제외 SKU {payload!.marketingExclusion!.userSkus!.length}개 (같은 모델 전체 자동 제외)</summary>
+                      <div style={{ display: "grid", gap: "4px", marginTop: "6px" }}>
+                        {payload!.marketingExclusion!.userSkus!.map((item) => (
+                          <div key={item.skuId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
+                            <span>{item.productName || "상품명 없음"} <small>SKU {item.skuId}</small></span>
+                            <button type="button" className="softBeigeButton" disabled={busy || fixture} style={{ minHeight: "28px", padding: "2px 10px", fontSize: "12px" }}
+                              onClick={() => void followUpAction({ action: "includeMarketingSku", skuId: item.skuId }, `SKU ${item.skuId}를 마케팅 제외 목록에서 뺐습니다.`)}>
+                              제외 해제
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                  <div className={styles.selectButtons} style={marketingLines.some((line) => laterOrders[line.lineKey]) ? { gridTemplateColumns: "repeat(3, minmax(88px, 1fr))" } : undefined}>
+                    <button
+                      type="button"
+                      className={`softSageButton ${styles.decisionButton}`}
+                      onClick={() => setMarketingSelected(Object.fromEntries(marketingLines.map((line) => [line.lineKey, true])))}
+                    >
+                      전체선택
+                    </button>
+                    <button
+                      type="button"
+                      className={`softApricotButton ${styles.decisionButton}`}
+                      onClick={() => setMarketingSelected(Object.fromEntries(marketingLines.map((line) => [line.lineKey, false])))}
+                    >
+                      전체해제
+                    </button>
+                    {marketingLines.some((line) => laterOrders[line.lineKey]) && (
+                      <button
+                        type="button"
+                        className={`softBeigeButton ${styles.decisionButton}`}
+                        onClick={() => setMarketingSelected((current) => ({ ...current, ...Object.fromEntries(marketingLines.filter((line) => laterOrders[line.lineKey]).map((line) => [line.lineKey, false])) }))}
+                      >
+                        추가발주 나온 SKU 해제 ({marketingLines.filter((line) => laterOrders[line.lineKey]).length})
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {(
+                  <div className={styles.marketingReview}>
+                    {/* 2026-10-11 사용자 요청: 입고예정일별로 묶어 최근 날짜부터 보이고, 날짜마다 선택/해제 */}
+                    {[...new Set(marketingLines.map((line) => line.target.expectedDate || ""))]
+                      .sort((a, b) => b.localeCompare(a))
+                      .map((date) => {
+                        const dateLines = marketingLines.filter((line) => (line.target.expectedDate || "") === date);
+                        const checkedCount = dateLines.filter((line) => isMarketingChecked(line.lineKey)).length;
+                        return (
+                          <div key={date || "none"} style={{ display: "contents" }}>
+                            <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", padding: "8px 4px 2px", borderTop: "1px solid #e5dace", fontSize: "14px" }}>
+                              <strong>입고예정일 {date || "미정"} · {dateLines.length}건 (선택 {checkedCount})</strong>
+                              <span style={{ display: "flex", gap: "6px" }}>
+                                <button type="button" className={`softSageButton ${styles.decisionButton}`} style={{ minHeight: "32px", padding: "4px 10px", fontSize: "12px" }}
+                                  onClick={() => setMarketingSelected((current) => ({ ...current, ...Object.fromEntries(dateLines.map((line) => [line.lineKey, true])) }))}>이 날짜 선택</button>
+                                <button type="button" className={`softApricotButton ${styles.decisionButton}`} style={{ minHeight: "32px", padding: "4px 10px", fontSize: "12px" }}
+                                  onClick={() => setMarketingSelected((current) => ({ ...current, ...Object.fromEntries(dateLines.map((line) => [line.lineKey, false])) }))}>이 날짜 해제</button>
+                              </span>
+                            </div>
+                    {dateLines.map((line) => (
+                      <label className={styles.choice} key={line.lineKey}>
+                        <input
+                          type="checkbox"
+                          checked={isMarketingChecked(line.lineKey)}
+                          onChange={(event) =>
+                            setMarketingSelected((current) => ({
+                              ...current,
+                              [line.lineKey]: event.target.checked,
+                            }))
+                          }
+                        />
+                        {productThumb(line.skuId)}
+                        <span>
+                          <strong>{productDbBadge(line.skuId)}{productTitle(line.skuId, line.productName)}</strong>
+                          <small>
+                            SKU {line.skuId} · 발주 {line.purchaseOrderNumber}
+                          </small>
+                          <small>
+                            입고예정일 {line.target.expectedDate || "-"}
+                            {(() => {
+                              // 예전 응답(숫자)과 새 응답({ price }) 모두 받는다.
+                              const raw = payload?.marketingPrices?.[line.lineKey] as unknown;
+                              const price = typeof raw === "number" ? raw : (raw as { price?: number } | undefined)?.price;
+                              const other = typeof raw === "object" && raw !== null && Boolean((raw as { fromOtherOrder?: boolean }).fromOtherOrder);
+                              return price ? ` · 매입가 ${price.toLocaleString("ko-KR")}원${other ? " (다른 발주 기준)" : ""}` : "";
+                            })()}
+                          </small>
+                          {/* 2026-10-11 사용자 요청: 정상은 표시하지 않고, 정상이 아닌 것만 빨간색으로 눈에 띄게 */}
+                          {payload?.orderStatuses?.[line.skuId] && payload.orderStatuses[line.skuId] !== "정상" && (
+                            <small style={{ color: "#fff", background: "#b5524a", borderRadius: "6px", padding: "2px 8px", fontWeight: 800, alignSelf: "flex-start" }}>
+                              발주상태 {payload.orderStatuses[line.skuId]}
+                            </small>
+                          )}
+                          {laterOrders[line.lineKey] && (
+                            <small style={{ color: "#a6614e", fontWeight: 700 }}>
+                              추가발주 있음 · 발주 {laterOrders[line.lineKey].orderCount}건 {laterOrders[line.lineKey].quantity}개 · 최근 입고예정 {laterOrders[line.lineKey].latestExpectedDate || "-"}
+                            </small>
+                          )}
+                        </span>
+                        {/* 2026-10-11 사용자 요청: 버튼을 상품명 길이와 상관없이 오른쪽 같은 폭으로 */}
+                        {!fixture && (
+                          <span style={{ marginLeft: "auto", width: "132px", flexShrink: 0, display: "grid", gap: "6px", alignContent: "start" }}>
+                          {!fixture && (
+                            <button
+                              type="button"
+                              className="softApricotButton"
+                              disabled={Boolean(skuExcludePending[line.skuId])}
+                              style={{ width: "100%", minHeight: "32px", padding: "4px 8px", fontSize: "12px" }}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                if (!window.confirm(`${line.productName}\n이 SKU(같은 모델 전체)를 마케팅 제외 목록에 넣을까요? 앞으로 이 목록에 나오지 않습니다.`)) return;
+                                void excludeMarketingSkuQuick(line.skuId, line.productName);
+                              }}
+                            >
+                              {skuExcludePending[line.skuId] ? "넣는 중…" : "마케팅 제외"}
+                            </button>
+                          )}
+                          {payload?.orderStatuses?.[line.skuId] && payload.orderStatuses[line.skuId] !== "정상" && !fixture && (
+                            supplyChecks[line.skuId]?.decision === "release" ? (
+                              <small style={{ color: "#4d6358", fontWeight: 700 }}>단종해제 대상에 넣음</small>
+                            ) : (
+                              <button
+                                type="button"
+                                className="softBeigeButton"
+                                disabled={busy}
+                                style={{ width: "100%", minHeight: "32px", padding: "4px 8px", fontSize: "12px" }}
+                                onClick={(event) => { event.preventDefault(); void supplyCheck("release", line.skuId, line.productName); }}
+                              >
+                                단종해제 대상에 넣기
+                              </button>
+                            )
+                          )}
+                          </span>
+                        )}
+                      </label>
+                    ))}
+                          </div>
+                        );
+                      })}
+                    <button
+                      className={`softPinkButton ${styles.fullButton}`}
+                      disabled={busy}
+                      onClick={() => {
+                        const selected = marketingLines
+                          .filter(
+                            (line) => isMarketingChecked(line.lineKey),
+                          )
+                          .map((line) => line.lineKey);
+                        const excluded = marketingLines
+                          .filter(
+                            (line) => !isMarketingChecked(line.lineKey),
+                          )
+                          .map((line) => line.lineKey);
+                        // 2026-10-11 사용자 요청: 한 번 처리하면 목록을 비운다 — 체크한 건 쿠폰·광고로, 체크 안 한 건 제외 이력으로.
+                        if (!window.confirm(`체크한 ${selected.length}건은 쿠폰·광고 대기목록으로 보내고, 체크 안 한 ${excluded.length}건은 이번 입고분만 목록에서 뺍니다(다음에 입고되면 다시 나옵니다). 진행할까요?`)) return;
+                        void followUpAction(
+                          {
+                            action: "queueMarketing",
+                            lineKeys: selected,
+                            excludedLineKeys: excluded,
+                            confirmMarketing: true,
+                          },
+                          `쿠폰·광고 ${selected.length}건 모으고, 나머지 ${excluded.length}건은 이번 목록에서 뺐습니다.`,
+                        );
+                      }}
+                    >
+                      체크한 상품은 쿠폰·광고로 보내고 이번 목록 비우기
+                    </button>
+                  </div>
+                )}
+              </section>
+            )}
+            {renderFollowUpWork("marketing")}
+            <p className={styles.meta}>
+              미납 검토 {shortageLines.length}건
+              {shortageReviewLines.length > 0
+                ? ` · 확인 필요 ${shortageReviewLines.length}건`
+                : ""}{" "}
+              · 초도입고 후보 {marketingLines.length}건 · 마지막 수집{" "}
+              {payload.collectedAt || payload.board.collectedAt || "기록 없음"}
+            </p>
+          </>
         )}
         {tab === "history" && (
           <div className={styles.history}>
@@ -1842,9 +1838,9 @@ export default function ShipmentReceiptsPage() {
                   line.route?.decision === "discontinue") && (
                   <button
                     className={styles.button}
-                    onClick={() => openTab("followup")}
+                    onClick={() => openTab(line.route?.decision === "discontinue" ? "anytime" : "results")}
                   >
-                    이 페이지 후속처리 열기
+                    이 페이지에서 처리하기
                   </button>
                 )}
               </article>

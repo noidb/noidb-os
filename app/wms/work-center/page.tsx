@@ -11,6 +11,7 @@ import { useInvoiceGroupRepositoryState } from "@/lib/wms/invoice-group/context"
 import { readLocalInvoiceGroupSnapshot } from "@/lib/wms/invoice-group/local-repository";
 import { INVOICE_GROUP_STAGE_LABEL, INVOICE_GROUP_STAGE_ORDER, canMarkInvoiceGroupDispatched, isVisibleDispatchedInvoiceGroup, type InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import styles from "./work-center.module.css";
+import { readReceiptTabCounts, type ReceiptTabCounts } from "@/lib/wms/receipt-tab-counts";
 
 /**
  * 작업센터 첫 화면의 "부족분 거래처별 발주서" 진입 배너 (2026-08-19 신규).
@@ -289,6 +290,9 @@ function ShipmentClosedGroupsBanner({ groups }: { groups: InvoiceGroup[] | null 
 
 export default function WmsWorkCenterPage() {
   const live = useInvoiceGroupsLive();
+  // 입고결과 화면을 마지막으로 열었을 때의 할 일 숫자(이 브라우저 기준). 서버를 다시 조회하지 않는다.
+  const [counts, setCounts] = useState<ReceiptTabCounts | null>(null);
+  useEffect(() => { setCounts(readReceiptTabCounts()); }, []);
   return (
     <main className={`shell wms-work-center-shell ${styles.shell}`} style={{ fontFamily: "sans-serif" }}>
       <AppNavigation active="work-center" />
@@ -305,15 +309,16 @@ export default function WmsWorkCenterPage() {
           <p>입고예정일이 가까운 발주서부터 확인하고 발주묶음을 만듭니다.</p>
           <Link className={styles.primaryPink} href="/wms/logistics/new-orders">발주서 검색·처리 시작</Link>
         </section>
+        {/* 2026-10-20 사용자 요청: 하는 시점에 맞춰 수시 처리(거래처 발주·단종·단종해제)와 입고결과 처리(미납분 재발주·쿠폰광고)로 나눔. */}
         <section className={styles.task}>
-          <h2>거래처 발주</h2>
-          <p>주문수량을 확인하고 전송하거나, 거래처 답변을 처리합니다.</p>
-          <Link className={styles.taskButtonGrayWhite} href="/wms/vendor-orders/manage">거래처 발주 이어하기</Link>
+          <h2>수시 처리</h2>
+          <p>거래처 발주, 단종 신청, 단종해제를 언제든 진행합니다.</p>
+          <Link className={styles.taskButtonGrayWhite} href="/wms/vendor-orders?tab=anytime">수시 처리{counts?.anytime ? ` ${counts.anytime}건` : ""}</Link>
         </section>
         <section className={styles.task}>
           <h2>입고결과 처리</h2>
-          <p>거래처 발주·단종 처리·미납분 재발주를 한곳에서 진행합니다.</p>
-          <Link className={styles.taskButtonBeige} href="/wms/vendor-orders">입고결과 확인</Link>
+          <p>입고결과를 가져온 뒤 미납분 재발주요청과 쿠폰·광고를 처리합니다.</p>
+          <Link className={styles.taskButtonBeige} href="/wms/vendor-orders?tab=results">입고결과 처리{counts?.results ? ` ${counts.results}건` : ""}</Link>
         </section>
         <section className={styles.task}>
           <h2>입고결과 누적</h2>

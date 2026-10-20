@@ -109,6 +109,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
   const [sentOrderProcessing, setSentOrderProcessing] = useState<Set<string>>(new Set());
   const [draftOrderExpanded, setDraftOrderExpanded] = useState<Set<string>>(new Set());
   const [completedDiscontinueSkus, setCompletedDiscontinueSkus] = useState<Set<string>>(new Set());
+  const [vendorSearch, setVendorSearch] = useState("");
   const linesRef = useRef(lines);
   linesRef.current = lines;
   const draftsRef = useRef(draftsByVendor);
@@ -1014,79 +1015,40 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
       updatedAt: new Date().toISOString(),
     };
 
-  return (
-    <main style={{ ...pageStyle, paddingBottom: selectedLines.length || dirty ? "170px" : undefined }}>
-      {!sharedSnapshot && <h1 style={{ fontSize: "20px", margin: "0 0 16px" }}>{isManualWorkspace ? "수동 거래처 발주서" : "거래처 발주서"}</h1>}
+  // 2026-10-20 사용자 요청: 그때그때 발주해 한 거래처의 발주가 여러 건 쌓여도, 거래처별 한 묶음으로 보고 검색으로 바로 찾는다.
+  const normalizedSearch = vendorSearch.trim().toLocaleLowerCase("ko");
+  const lineMatchesSearch = (line: VendorOrderDraftLine) => !normalizedSearch || [line.skuId, line.barcode, line.productName, line.optionLabel, line.modelName, line.vendorName]
+    .some(value => String(value || "").toLocaleLowerCase("ko").includes(normalizedSearch));
+  const todayKey = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
+  const isAddedToday = (line: VendorOrderDraftLine) => Boolean(line.createdAt) && new Date(line.createdAt).toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" }) === todayKey;
+  const vendorSections = (() => {
+    const map = new Map<string, typeof orderEntries>();
+    for (const entry of orderEntries) {
+      const lines = entry.group?.lines || entry.historyLines || [];
+      if (normalizedSearch && !lines.some(lineMatchesSearch)) continue;
+      map.set(entry.vendorName, [...(map.get(entry.vendorName) || []), entry]);
+    }
+    const time = (entry: typeof orderEntries[number]) => entry.draft?.sentAt || entry.draft?.createdAt || "";
+    // 거래처 안에서는 아직 보내지 않은 발주(초안)를 맨 위에, 그다음 최근에 보낸 발주 순서로 둔다.
+    return [...map.entries()].map(([vendorName, entries]) => ({ vendorName, entries: [...entries].sort((a, b) =>
+      Number((a.draft?.status || "draft") === "sent") - Number((b.draft?.status || "draft") === "sent") || time(b).localeCompare(time(a))) }));
+  })();
 
-      {receivingDelays.error && <p role="alert" style={{ color: "#b42318", fontSize: "12px" }}>{receivingDelays.error} <button type="button" onClick={() => void receivingDelays.refresh()} style={{ ...wmsGhostButton, minHeight: "36px" }}>지연 이력 다시 확인</button></p>}
-      {delayMessage && <p role="status" style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{delayMessage}</p>}
-      {delayError && <p role="alert" style={{ color: "#b42318", fontSize: "12px" }}>{delayError}</p>}
-      {workspaceMoved && <p role="alert" style={{ color: "#b42318" }}>이 창은 이전 발주대기입니다. 입력한 내용은 유지했습니다. <a href="/wms/vendor-orders/manage" target="_blank" rel="noreferrer">최신 발주대기 열기</a></p>}
-      {completionMessage && <p role="status" style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{completionMessage}</p>}
-      {completionError && <p role="alert" style={{ color: "#b42318", fontSize: "12px" }}>{completionError} <button type="button" onClick={() => void checkCompletion().catch(() => {})} style={wmsGhostButton}>처리 상태 다시 확인</button></p>}
-
-      {isPreview && (
-        <p style={{ fontSize: "12px", color: wmsColors.warn, background: wmsColors.warnSoft, borderRadius: "8px", padding: "8px 10px", marginBottom: "14px" }}>
-          {historyView ? "전송한 발주 이력입니다. 당시 발주 내용을 확인하고 이미지를 받을 수 있습니다." : "이 웨이브는 아직 피킹 진행중입니다 — 지금까지 처리한 SKU 기준 미리보기이며, 저장되지 않습니다."}
-          피킹을 완료하면 정식으로 저장·수정할 수 있습니다.
-        </p>
-      )}
-
-      {!isPreview && (!addingManualVendor ? (
-        <button onClick={() => setAddingManualVendor(true)} style={{ ...wmsGhostButton, width: "100%", marginBottom: "14px" }}>
-          + 발주서 수동 추가
-        </button>
-      ) : (
-        <form onSubmit={event => { event.preventDefault(); createManualVendorOrder(); }} style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "14px", width: "100%" }}>
-          <input
-            autoFocus
-            className="wms-input"
-            value={newVendorNameInput}
-            onChange={e => setNewVendorNameInput(e.target.value)}
-            placeholder="거래처명 입력 (기존 거래처명도 가능)"
-            style={{ ...inputStyle, flex: "1 1 140px", minWidth: 0, boxSizing: "border-box", fontSize: "16px", padding: "8px 10px" }}
-          />
-          <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
-            <button type="submit" style={{ ...wmsPrimaryButton, minHeight: "36px", fontSize: "12px", flexShrink: 0 }}>
-              만들기
-            </button>
-            <button type="button" onClick={() => setAddingManualVendor(false)} style={{ ...wmsGhostButton, minHeight: "36px", fontSize: "12px", flexShrink: 0 }}>
-              취소
-            </button>
-          </div>
-        </form>
-      ))}
-
-      {orderEntries.length === 0 ? (
-        <p style={{ fontSize: "13px", color: wmsColors.muted, whiteSpace: "pre-line" }}>
-          {"현재 자동 생성된 부족분이 없습니다.\n위 [발주서 수동 추가]로 새 거래처 발주서를 만들 수 있습니다."}
-        </p>
-      ) : (
-        <>
-        <details style={{ marginBottom: "10px" }}>
-          <summary style={{ cursor: "pointer", fontSize: "13px", fontWeight: 700 }}>여러 상품 선택</summary>
-          <div style={{ display: "flex", gap: "6px", paddingTop: "8px" }}>
-          <button type="button" disabled={saving || isPreview} onClick={() => setSelectedLineIds(new Set(selectableLines.map(line => line.id)))} style={{ ...wmsGhostButton, flex: 1, minHeight: "40px" }}>전체체크</button>
-          <button type="button" onClick={() => setSelectedLineIds(new Set())} style={{ ...wmsSecondaryButton, flex: 1, minHeight: "40px" }}>전체해제</button>
-          <button type="button" disabled={saving || !selectedLines.length} onClick={removeSelectedLines} style={{ ...wmsWarnButton, flex: 1, minHeight: "40px", opacity: selectedLines.length ? 1 : .5 }}>선택삭제 {selectedLines.length}</button>
-          </div>
-        </details>
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px", marginBottom: "20px" }}>
-          {orderEntries.map(entry => {
+  // 발주 1건(초안 또는 전송한 발주)을 그린다. 같은 거래처의 발주들은 아래 vendorSections에서 한 묶음으로 보인다.
+  const renderOrderEntry = (entry: typeof orderEntries[number]) => {
             const historical = !entry.group;
             const group = entry.group || { vendorName: entry.vendorName, lines: entry.historyLines || [] };
             const status = entry.draft?.status || statusOf(group.vendorName);
             // Keep an opened order mounted while a line deletion is saving. `saving` still
             // locks every control below, but must not be allowed to turn this display state
             // into a collapsed card before the request succeeds or fails.
-            const processingSent = status === "sent" && sentOrderProcessing.has(entry.id) && !workspaceMoved;
+            // 2026-10-20 사용자 요청: 발주서를 하나씩 열어보지 않도록 전송한 발주도 처음부터 펼쳐 결과처리 버튼까지 보인다.
+            const processingSent = status === "sent" && !workspaceMoved;
             const editable = !historical && !isPreview && !workspaceMoved && statusSavingVendor !== group.vendorName && status !== "sent";
             const totalOrderQuantity = group.lines.reduce((sum, l) => sum + l.shortageQuantity, 0);
             const totalActualShortage = group.lines.reduce((sum, l) => sum + (l.actualShortageQuantity ?? l.shortageQuantity), 0);
             const pendingReorders = pendingReorderLines.filter(line => (line.vendorName || UNASSIGNED_VENDOR_NAME) === group.vendorName);
-            const sentCollapsed = status === "sent" && !processingSent;
-            const draftCollapsed = status !== "sent" && !draftOrderExpanded.has(entry.id);
-            const orderCollapsed = sentCollapsed || draftCollapsed;
+            const orderCollapsed = false;
             const pendingClassificationCount = group.lines.filter(line => vendorLineClassification(line) === "pending").length;
             const delayedClassificationCount = group.lines.filter(line => vendorLineClassification(line) === "delayed").length;
             const onlyDelayed = status === "sent" && delayedClassificationCount > 0 && pendingClassificationCount === 0;
@@ -1094,12 +1056,12 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
             return (
               <div key={entry.id} data-vendor-group={group.vendorName} data-vendor-order-id={entry.id} style={cardStyle}>
                 <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
-                  <h2 style={{ margin: 0, fontSize: "17px", minWidth: 0, overflowWrap: "anywhere" }}>
-                    {entry.label}
+                  <h3 style={{ margin: 0, fontSize: "15px", minWidth: 0, overflowWrap: "anywhere" }}>
+                    발주일 {new Date(entry.draft?.createdAt || group.lines[0]?.createdAt || Date.now()).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric" })}
                     <span style={{ marginLeft: "8px", fontSize: "12px", color: wmsColors.muted, fontWeight: 400 }}>
                       실제부족 {totalActualShortage}개 · 발주 {totalOrderQuantity}개 · {group.lines.length}종
                     </span>
-                  </h2>
+                  </h3>
                   {entry.draft?.sentAt && <span style={{ color: wmsColors.muted, fontSize: "12px" }}>전송 {new Date(entry.draft.sentAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}</span>}
                   <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", maxWidth: "100%" }}>
                     <StatusBadge status={status === "approved" ? "draft" : status} delayed={onlyDelayed} />
@@ -1107,30 +1069,6 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                     {!entry.draft && editable && <button type="button" disabled={saving} onClick={() => void deleteVendorOrder(group.vendorName, group.lines)} style={{ ...wmsWarnButton, minHeight: "36px", fontSize: "12px" }}>발주서 삭제</button>}
                   </div>
                 </div>
-                {status === "sent" && <div style={{ marginBottom: "12px" }}>
-                  <button
-                    type="button"
-                    disabled={saving || workspaceMoved}
-                    aria-pressed={processingSent}
-                    aria-controls={`vendor-order-${entry.id}`}
-                    style={{ ...wmsPrimaryButton, minHeight: "44px", width: "100%" }}
-                    onClick={() => {
-                      setSentOrderProcessing(previous => { const next = new Set(previous); if (next.has(entry.id)) next.delete(entry.id); else next.add(entry.id); return next; });
-                    }}
-                  >발주결과처리</button>
-                </div>}
-                {status !== "sent" && <div style={{ marginBottom: "12px" }}>
-                  <button
-                    type="button"
-                    disabled={saving || workspaceMoved}
-                    aria-expanded={!draftCollapsed}
-                    aria-controls={`vendor-order-${entry.id}`}
-                    style={{ ...wmsSecondaryButton, minHeight: "44px", width: "100%" }}
-                    onClick={() => {
-                      setDraftOrderExpanded(previous => { const next = new Set(previous); if (next.has(entry.id)) next.delete(entry.id); else next.add(entry.id); return next; });
-                    }}
-                  >발주서 작성</button>
-                </div>}
                 {!orderCollapsed && <fieldset id={`vendor-order-${entry.id}`} disabled={saving} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
                 {status === "sent" && <p role="status" style={{ fontSize: "12px" }}>미처리 {pendingClassificationCount} · 입고지연 {delayedClassificationCount}</p>}
                 {!historical && editConflicts.filter(conflict => conflict.vendorName === group.vendorName).map(conflict => <div key={conflict.key} role="alert" style={{ padding: 12, background: wmsColors.warnSoft, marginBottom: 10 }}>
@@ -1143,8 +1081,9 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                 </div>
 
                 <div style={params.waveId.startsWith(VENDOR_QUEUE_PREFIX) ? { marginBottom: "10px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: 10 } : { marginBottom: "10px" }}>
-                  {group.lines.map(line => (
-                    <div key={line.id} style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "6px", alignItems: "start" }}>
+                  {group.lines.filter(lineMatchesSearch).map(line => (
+                    <div key={line.id} style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "6px", alignItems: "start", position: "relative" }}>
+                    {isAddedToday(line) && <span style={{ position: "absolute", top: 6, right: 6, zIndex: 2, background: "#60766a", color: "#fff", borderRadius: "8px", padding: "2px 8px", fontSize: "11px", fontWeight: 800 }}>새로 추가</span>}
                     {status !== "sent" || processingSent ? <input type="checkbox" aria-label={`${line.productName} 선택`} checked={selectedLineIds.has(line.id)} disabled={saving || isPreview || workspaceMoved || Boolean(getVendorLineDeletionBlockReason(line, entry.draft, true))} title={getVendorLineDeletionBlockReason(line, entry.draft, true) || "삭제할 상품 선택"} onChange={() => setSelectedLineIds(prev => { const next = new Set(prev); if (next.has(line.id)) next.delete(line.id); else next.add(line.id); return next; })} style={{ width: "24px", height: "24px", marginTop: "12px" }} /> : <div />}
                     <VendorOrderLineCard
                       line={line}
@@ -1231,6 +1170,89 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                 )}
                 </fieldset>}
               </div>
+            );
+  };
+
+  return (
+    <main style={{ ...pageStyle, paddingBottom: selectedLines.length || dirty ? "170px" : undefined }}>
+      {!sharedSnapshot && <h1 style={{ fontSize: "20px", margin: "0 0 16px" }}>{isManualWorkspace ? "수동 거래처 발주서" : "거래처 발주서"}</h1>}
+
+      {receivingDelays.error && <p role="alert" style={{ color: "#b42318", fontSize: "12px" }}>{receivingDelays.error} <button type="button" onClick={() => void receivingDelays.refresh()} style={{ ...wmsGhostButton, minHeight: "36px" }}>지연 이력 다시 확인</button></p>}
+      {delayMessage && <p role="status" style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{delayMessage}</p>}
+      {delayError && <p role="alert" style={{ color: "#b42318", fontSize: "12px" }}>{delayError}</p>}
+      {workspaceMoved && <p role="alert" style={{ color: "#b42318" }}>이 창은 이전 발주대기입니다. 입력한 내용은 유지했습니다. <a href="/wms/vendor-orders/manage" target="_blank" rel="noreferrer">최신 발주대기 열기</a></p>}
+      {completionMessage && <p role="status" style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{completionMessage}</p>}
+      {completionError && <p role="alert" style={{ color: "#b42318", fontSize: "12px" }}>{completionError} <button type="button" onClick={() => void checkCompletion().catch(() => {})} style={wmsGhostButton}>처리 상태 다시 확인</button></p>}
+
+      {isPreview && (
+        <p style={{ fontSize: "12px", color: wmsColors.warn, background: wmsColors.warnSoft, borderRadius: "8px", padding: "8px 10px", marginBottom: "14px" }}>
+          {historyView ? "전송한 발주 이력입니다. 당시 발주 내용을 확인하고 이미지를 받을 수 있습니다." : "이 웨이브는 아직 피킹 진행중입니다 — 지금까지 처리한 SKU 기준 미리보기이며, 저장되지 않습니다."}
+          피킹을 완료하면 정식으로 저장·수정할 수 있습니다.
+        </p>
+      )}
+
+      {!isPreview && (!addingManualVendor ? (
+        <button onClick={() => setAddingManualVendor(true)} style={{ ...wmsGhostButton, width: "100%", marginBottom: "14px" }}>
+          + 발주서 수동 추가
+        </button>
+      ) : (
+        <form onSubmit={event => { event.preventDefault(); createManualVendorOrder(); }} style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "14px", width: "100%" }}>
+          <input
+            autoFocus
+            className="wms-input"
+            value={newVendorNameInput}
+            onChange={e => setNewVendorNameInput(e.target.value)}
+            placeholder="거래처명 입력 (기존 거래처명도 가능)"
+            style={{ ...inputStyle, flex: "1 1 140px", minWidth: 0, boxSizing: "border-box", fontSize: "16px", padding: "8px 10px" }}
+          />
+          <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
+            <button type="submit" style={{ ...wmsPrimaryButton, minHeight: "36px", fontSize: "12px", flexShrink: 0 }}>
+              만들기
+            </button>
+            <button type="button" onClick={() => setAddingManualVendor(false)} style={{ ...wmsGhostButton, minHeight: "36px", fontSize: "12px", flexShrink: 0 }}>
+              취소
+            </button>
+          </div>
+        </form>
+      ))}
+
+      {orderEntries.length === 0 ? (
+        <p style={{ fontSize: "13px", color: wmsColors.muted, whiteSpace: "pre-line" }}>
+          {"현재 자동 생성된 부족분이 없습니다.\n위 [발주서 수동 추가]로 새 거래처 발주서를 만들 수 있습니다."}
+        </p>
+      ) : (
+        <>
+        <input
+          type="search"
+          className="wms-input"
+          value={vendorSearch}
+          onChange={event => setVendorSearch(event.target.value)}
+          placeholder="SKU·바코드·모델명·상품명으로 찾기"
+          aria-label="발주 상품 검색"
+          style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: "16px", padding: "10px 12px", marginBottom: "10px", borderRadius: "8px" }}
+        />
+        {normalizedSearch && !vendorSections.length && <p style={{ fontSize: "13px", color: wmsColors.muted }}>찾는 상품이 발주 목록에 없습니다.</p>}
+        <details style={{ marginBottom: "10px" }}>
+          <summary style={{ cursor: "pointer", fontSize: "13px", fontWeight: 700 }}>여러 상품 선택</summary>
+          <div style={{ display: "flex", gap: "6px", paddingTop: "8px" }}>
+          <button type="button" disabled={saving || isPreview} onClick={() => setSelectedLineIds(new Set(selectableLines.map(line => line.id)))} style={{ ...wmsGhostButton, flex: 1, minHeight: "40px" }}>전체체크</button>
+          <button type="button" onClick={() => setSelectedLineIds(new Set())} style={{ ...wmsSecondaryButton, flex: 1, minHeight: "40px" }}>전체해제</button>
+          <button type="button" disabled={saving || !selectedLines.length} onClick={removeSelectedLines} style={{ ...wmsWarnButton, flex: 1, minHeight: "40px", opacity: selectedLines.length ? 1 : .5 }}>선택삭제 {selectedLines.length}</button>
+          </div>
+        </details>
+        <div style={{ display: "flex", flexDirection: "column", gap: "16px", marginBottom: "20px" }}>
+          {vendorSections.map(section => {
+            const sectionLines = section.entries.flatMap(entry => entry.group?.lines || entry.historyLines || []);
+            const pendingCount = sectionLines.filter(line => vendorLineClassification(line) === "pending").length;
+            const delayedCount = sectionLines.filter(line => vendorLineClassification(line) === "delayed").length;
+            return (
+              <section key={section.vendorName} aria-label={`${section.vendorName} 발주`} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                <h2 style={{ margin: "4px 0 0", fontSize: "18px", display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "8px", borderLeft: "4px solid #60766a", paddingLeft: "8px" }}>
+                  {section.vendorName}
+                  <span style={{ fontSize: "12px", color: wmsColors.muted, fontWeight: 400 }}>미처리 {pendingCount} · 입고지연 {delayedCount} · 발주 {section.entries.length}건</span>
+                </h2>
+                {section.entries.map(renderOrderEntry)}
+              </section>
             );
           })}
         </div>
