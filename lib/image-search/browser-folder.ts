@@ -318,17 +318,68 @@ async function buildTreeIndex(root: FileSystemDirectoryHandle): Promise<TreeInde
   return { rootName: root.name, builtAt: Date.now(), files };
 }
 
-async function treeIndex(root: FileSystemDirectoryHandle, refresh: boolean): Promise<TreeIndex> {
-  const fresh = (index: TreeIndex | null | undefined): index is TreeIndex => Boolean(index) && index!.rootName === root.name && Date.now() - index!.builtAt < INDEX_MAX_AGE_MS;
-  if (!refresh) {
-    if (fresh(memoryIndex)) return memoryIndex;
-    const saved = await read<TreeIndex>(INDEX_KEY).catch(() => undefined);
-    if (fresh(saved)) { memoryIndex = saved; return saved; }
-  }
+function rebuildTreeIndex(root: FileSystemDirectoryHandle): Promise<TreeIndex> {
   indexBuilding ||= buildTreeIndex(root)
     .then(async built => { memoryIndex = built; await write(INDEX_KEY, built).catch(() => {}); return built; })
     .finally(() => { indexBuilding = null; });
   return indexBuilding;
+}
+
+/**
+ * 2026-10-20 속도 개선: 저장된 목록이 있으면 오래됐어도 바로 쓰고, 24시간이 지났으면 뒤에서 새로 훑는다
+ * (예전에는 하루에 한 번·사진을 못 찾을 때마다 MYBOX 전체를 다 훑을 때까지 기다려 몇 분씩 걸렸다).
+ * 목록이 아예 없을 때(처음 한 번)와 "다시 검색"만 끝까지 기다린다.
+ */
+async function treeIndex(root: FileSystemDirectoryHandle, refresh: boolean): Promise<TreeIndex> {
+  if (refresh) return rebuildTreeIndex(root);
+  const usable = (index: TreeIndex | null | undefined): index is TreeIndex => Boolean(index) && index!.rootName === root.name;
+  let index: TreeIndex | undefined = usable(memoryIndex) ? memoryIndex : undefined;
+  if (!index) {
+    const saved = await read<TreeIndex>(INDEX_KEY).catch(() => undefined);
+    if (usable(saved)) { memoryIndex = saved; index = saved; }
+  }
+  if (!index) return rebuildTreeIndex(root);
+  if (Date.now() - index.builtAt > INDEX_MAX_AGE_MS) void rebuildTreeIndex(root).catch(() => {});
+  return index;
+}
+
+/**
+ * 저장된 목록에서 못 찾았을 때: 전체를 다시 훑지 않고 위 3단계(예: ★전체제품사진/01/_제품별/모델폴더)까지만
+ * 이름을 보고, 모델명·SKU가 붙은 새 폴더가 있으면 그 폴더 사진만 경로 목록에 더한다.
+ */
+async function quickScanNewFolders(root: FileSystemDirectoryHandle, index: TreeIndex, searchTerms: string[]): Promise<boolean> {
+  const matches = termMatcher(searchTerms);
+  const known = new Set(index.files);
+  const added: string[] = [];
+  async function collect(dir: FileSystemDirectoryHandle, id: string) {
+    for await (const [name, entry] of (dir as any).entries()) {
+      if (name.startsWith(".")) continue;
+      const child = `${id}/${name}`;
+      if (entry.kind === "directory") await collect(entry, child);
+      else if (IMAGE_FILE.test(name) && !known.has(child)) { known.add(child); added.push(child); }
+    }
+  }
+  let level: { handle: FileSystemDirectoryHandle; id: string }[] = [{ handle: root, id: root.name }];
+  for (let depth = 0; depth < 3 && level.length; depth++) {
+    const next: { handle: FileSystemDirectoryHandle; id: string }[] = [];
+    for (let at = 0; at < level.length; at += 8) {
+      await Promise.all(level.slice(at, at + 8).map(async ({ handle, id }) => {
+        for await (const [name, entry] of (handle as any).entries()) {
+          if (name.startsWith(".")) continue;
+          const child = `${id}/${name}`;
+          if (entry.kind !== "directory") { if (IMAGE_FILE.test(name) && matches(name).length && !known.has(child)) { known.add(child); added.push(child); } continue; }
+          if (matches(name).length) await collect(entry, child);
+          else if (depth < 2) next.push({ handle: entry, id: child });
+        }
+      }).map(task => task.catch(() => {})));
+    }
+    level = next;
+  }
+  if (!added.length) return false;
+  index.files = [...index.files, ...added];
+  memoryIndex = index;
+  await write(INDEX_KEY, index).catch(() => {});
+  return true;
 }
 
 /** 저장된 경로 목록에서 찾는다. 폴더 이름 상속·작업 단계 폴더 규칙은 예전 폴더 직접 탐색과 같다. */
@@ -391,11 +442,23 @@ async function searchTreeIndex(root: FileSystemDirectoryHandle, index: TreeIndex
 
   // 후보 경로를 실제 파일로 연다(8개씩 동시에). 사라진 파일은 건너뛰고, 이름·크기가 같은 중복 저장본은 하나만 남긴다.
   const found: LocalPhoto[] = [];
-  for (let at = 0; at < candidates.length && existing.length + found.length < MAX_PHOTOS; at += 8) {
-    const opened = await Promise.all(candidates.slice(at, at + 8).map(async candidate => {
+  // 같은 폴더를 매번 맨 위에서부터 다시 찾아 들어가지 않게 폴더 핸들을 기억한다.
+  const dirCache = new Map<string, Promise<FileSystemDirectoryHandle>>();
+  const dirFor = (segments: string[]): Promise<FileSystemDirectoryHandle> => {
+    if (!segments.length) return Promise.resolve(root);
+    const key = segments.join("/");
+    let cached = dirCache.get(key);
+    if (!cached) {
+      cached = dirFor(segments.slice(0, -1)).then(parent => parent.getDirectoryHandle(segments[segments.length - 1]));
+      dirCache.set(key, cached);
+    }
+    return cached;
+  };
+  for (let at = 0; at < candidates.length && existing.length + found.length < MAX_PHOTOS; at += 16) {
+    const opened = await Promise.all(candidates.slice(at, at + 16).map(async candidate => {
       try {
         const segments = candidate.id.split("/");
-        const dir = await descend(root, segments.slice(1, -1));
+        const dir = await dirFor(segments.slice(1, -1));
         const file = await (await dir.getFileHandle(segments[segments.length - 1])).getFile();
         return { id: candidate.id, name: file.name, file, matchedBy: candidate.matchedBy } as LocalPhoto;
       } catch { return null; }
@@ -415,12 +478,11 @@ async function searchTreeIndex(root: FileSystemDirectoryHandle, index: TreeIndex
 export async function searchPhotoFolder(searchTerms: string[], existing: LocalPhoto[] = [], refresh = false): Promise<LocalPhoto[]> {
   const root = await connectedRoot();
   if (!searchTerms.some(term => term.trim())) return [];
-  let index = await treeIndex(root, refresh);
+  const index = await treeIndex(root, refresh);
   let found = await searchTreeIndex(root, index, searchTerms, existing);
   if (!found.length && !refresh && Date.now() - index.builtAt > INDEX_RETRY_AGE_MS) {
-    // 그 사이 새로 동기화된 사진일 수 있다 → 목록을 새로 만들어 한 번 더 찾는다.
-    index = await treeIndex(root, true);
-    found = await searchTreeIndex(root, index, searchTerms, existing);
+    // 그 사이 새로 동기화된 사진일 수 있다 → 전체를 다시 훑지 않고 위쪽 폴더 이름만 빠르게 확인한다.
+    if (await quickScanNewFolders(root, index, searchTerms).catch(() => false)) found = await searchTreeIndex(root, index, searchTerms, existing);
   }
   return found.sort((a, b) => a.id.localeCompare(b.id, "ko"));
 }
