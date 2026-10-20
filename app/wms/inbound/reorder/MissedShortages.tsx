@@ -15,6 +15,7 @@ export default function MissedShortages({ onAdded }: { onAdded: () => void }) {
   const [lines, setLines] = useState<Line[]>([]), [covered, setCovered] = useState<Record<string, unknown>>({}), [collectedAt, setCollectedAt] = useState("");
   const [busyKey, setBusyKey] = useState(""), [state, setState] = useState<"loading" | "ready" | "error">("loading"), [note, setNote] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const [hiddenCount, setHiddenCount] = useState(0), [lastBatch, setLastBatch] = useState<{ at: string; count: number } | null>(null);
   async function load() {
     setState("loading");
     try {
@@ -22,7 +23,12 @@ export default function MissedShortages({ onAdded }: { onAdded: () => void }) {
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "입고결과를 불러오지 못했습니다.");
       setCovered(data.coveredByVendorOrder || {});
-      setLines((data.board.lines as Line[]).filter(line => line.kind === "shortage" && ((line.remainingQuantity ?? 0) > 0 || line.route))
+      // 2026-10-20: '검토 완료로 정리'로 숨긴 줄은 빼고 보여 준다(처리기록은 그대로).
+      const hidden = new Set<string>(data.missedListReviewed?.keys || []);
+      const all = (data.board.lines as Line[]).filter(line => line.kind === "shortage" && ((line.remainingQuantity ?? 0) > 0 || line.route));
+      setHiddenCount(all.filter(line => hidden.has(line.lineKey)).length);
+      setLastBatch(data.missedListReviewed?.lastBatch || null);
+      setLines(all.filter(line => !hidden.has(line.lineKey))
         .sort((a, b) => a.shipmentNumber.localeCompare(b.shipmentNumber) || a.skuId.localeCompare(b.skuId)));
       setCollectedAt(data.board.collectedAt || "");
       setState("ready");
@@ -46,13 +52,38 @@ export default function MissedShortages({ onAdded }: { onAdded: () => void }) {
     } catch (error) { setNote(error instanceof Error ? error.message : "재발주요청에 넣지 못했습니다."); }
     finally { setBusyKey(""); }
   }
+  // 이미 보낸 줄만 정리한다. 미분류·확인 필요는 아직 처리할 일이 남아 있어 그대로 둔다.
+  const reviewable = lines.filter(line => !["미분류", "확인 필요"].includes(statusOf(line)));
+  async function review(action: "hide" | "undo") {
+    if (action === "hide" && !window.confirm(`이미 보낸 ${reviewable.length}건을 검토 완료로 정리할까요?\n목록에서만 빠지고 재발주요청·거래처발주 기록은 그대로 남아요.`)) return;
+    setBusyKey(`review:${action}`); setNote("");
+    try {
+      const response = await fetch("/api/wms/logistics/receipts/missed-review", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action === "hide" ? { action, lineKeys: reviewable.map(line => line.lineKey) } : { action }) });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "목록을 정리하지 못했습니다.");
+      setNote(action === "hide" ? `${data.hidden}건을 검토 완료로 정리했습니다.` : `${data.restored}건을 목록에 되돌렸습니다.`);
+      setFilter("all");
+      await load();
+    } catch (error) { setNote(error instanceof Error ? error.message : "목록을 정리하지 못했습니다."); }
+    finally { setBusyKey(""); }
+  }
   const shown = lines.filter(line => filter === "all" || (filter === "open" ? statusOf(line) === "미분류" : statusOf(line) !== "미분류"));
   const count = (f: Filter) => lines.filter(line => f === "all" || (f === "open" ? statusOf(line) === "미분류" : statusOf(line) !== "미분류")).length;
   const cell = { padding: "9px 10px", fontSize: 15, verticalAlign: "middle" as const };
   return <section aria-label="전체 미납 목록" style={{ marginTop: 28 }}>
-    <h2 style={{ margin: "0 0 6px", paddingLeft: 10, borderLeft: "4px solid #60766a", fontSize: 18 }}>
-      전체 미납 목록 <span style={{ color: "#b42318", fontSize: 15 }}>{state === "ready" ? `${lines.length}건` : ""}</span>
-    </h2>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap", margin: "0 0 6px" }}>
+      <h2 style={{ margin: 0, paddingLeft: 10, borderLeft: "4px solid #60766a", fontSize: 18 }}>
+        전체 미납 목록 <span style={{ color: "#b42318", fontSize: 15 }}>{state === "ready" ? `${lines.length}건` : ""}</span>
+        {state === "ready" && hiddenCount > 0 && <span style={{ marginLeft: 8, color: "#64757d", fontSize: 13, fontWeight: 400 }}>검토 완료 {hiddenCount}건 숨김</span>}
+      </h2>
+      {state === "ready" && <div style={{ display: "flex", gap: 8 }}>
+        {lastBatch && <button type="button" className="softApricotButton" style={{ minHeight: 38, width: 200, fontSize: 14 }} disabled={Boolean(busyKey)} onClick={() => void review("undo")}>
+          {busyKey === "review:undo" ? "되돌리는 중…" : `방금 정리한 ${lastBatch.count}건 되돌리기`}</button>}
+        <button type="button" className="softSageButton" style={{ minHeight: 38, width: 200, fontSize: 14 }} disabled={Boolean(busyKey) || !reviewable.length} onClick={() => void review("hide")}>
+          {busyKey === "review:hide" ? "정리하는 중…" : `검토 완료로 정리 ${reviewable.length}건`}</button>
+      </div>}
+    </div>
     <p style={{ margin: "0 0 8px", color: "#52646d", fontSize: 14 }}>입고결과(9/13 이후 마감 쉽먼트)의 미납 전체예요. 줄마다 지금 어디로 보냈는지 보여요. 잘못 보낸 줄은 재발주요청으로 바꿀 수 있어요.</p>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, margin: "0 0 10px" }}>
       {([["all", "전체"], ["open", "미분류"], ["sent", "이미 보낸 것"]] as const).map(([value, label]) =>

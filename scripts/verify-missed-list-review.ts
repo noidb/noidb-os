@@ -1,0 +1,14 @@
+import assert from "node:assert/strict";
+import { hideReviewedMissedLines, undoLastMissedReview, missedListReviewedView } from "../lib/wms/missed-list-review";
+const ws: any = { schemaVersion: 1, revision: 0, runs: [], productOverrides: {}, logisticsReceiptRoutes: { a: { decision: "reorder" } } };
+assert.equal(hideReviewedMissedLines(ws, ["a", "b", "a"]).hidden, 2);
+assert.deepEqual(missedListReviewedView(ws).keys.sort(), ["a", "b"]);
+assert.equal(missedListReviewedView(ws).lastBatch?.count, 2);
+assert.deepEqual(ws.logisticsReceiptRoutes, { a: { decision: "reorder" } }, "처리기록은 그대로");
+assert.equal(hideReviewedMissedLines(ws, ["b", "c"]).hidden, 1, "이미 숨긴 줄은 다시 세지 않음");
+assert.equal(undoLastMissedReview(ws).restored, 1);
+assert.deepEqual(missedListReviewedView(ws).keys.sort(), ["a", "b"]);
+assert.equal(missedListReviewedView(ws).lastBatch, null);
+assert.throws(() => undoLastMissedReview(ws));
+assert.equal(missedListReviewedView(ws, Date.now() + 4 * 864e5).lastBatch, null);
+console.log("verify-missed-list-review: ok");

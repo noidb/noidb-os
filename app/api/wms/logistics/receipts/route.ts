@@ -25,6 +25,7 @@ import { mutateWeeklyWorkspace, readWeeklyWorkspace } from "@/lib/wms/weekly-wor
 import { activeMarketingExclusionKeys, logisticsFollowUpResponse } from "@/lib/wms/logistics-follow-up";
 import { readWeeklyDiscontinueQueue } from "@/lib/wms/weekly-discontinue-queue";
 import { previewFollowUpDiscontinue } from "@/lib/wms/logistics-discontinue-adapter";
+import { missedListReviewedView } from "@/lib/wms/missed-list-review";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -201,6 +202,7 @@ async function responseBoard() {
   return { shipmentDetails, currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, skuNames, productDbStatuses: productDbStatusBySku(catalog, shownSkuIds), productDbLooks: productDbLooksBySku(catalog, shownSkuIds),
     supplyStatusChecks: stored.supplyStatusChecks || {},
     coveredByVendorOrder: stored.coveredByVendorOrder || {},
+    missedListReviewed: missedListReviewedView(stored),
     // 가장 최근에 한꺼번에 비운 묶음(되살리기 버튼용). 하나씩 지운 1건은 되살리기 대상으로 보지 않는다.
     statusListLastCleared: Object.fromEntries((["discontinue", "release"] as const).map(kind => {
       const batch = lastClearedBatch(stored.statusListCleared?.[kind]);
@@ -232,9 +234,9 @@ export async function GET(request: Request) {
       collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: [], knownShipmentNumbers }, { headers: withCors(request) });
   }
   try {
-    const { shipmentDetails, currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, skuNames, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists, statusListLastCleared, statusListRequested } = await responseBoard();
+    const { shipmentDetails, currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, skuNames, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, missedListReviewed, openVendorOrders, statusLists, statusListLastCleared, statusListRequested } = await responseBoard();
     return NextResponse.json({ ok: true, status: "ready", source: "supplier-hub-shipments", schemaVersion: 3, shipmentDetails,
-      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, skuNames, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, openVendorOrders, statusLists, statusListLastCleared, statusListRequested }, { headers });
+      collectionMode: "hub-closed", since: LOGISTICS_RECEIPT_SINCE, targets: currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, skuNames, productDbStatuses, productDbLooks, marketingExclusion, supplyStatusChecks, coveredByVendorOrder, missedListReviewed, openVendorOrders, statusLists, statusListLastCleared, statusListRequested }, { headers });
   } catch {
     return NextResponse.json({ ok: false, error: "쉽먼트 입고 수집 대상과 기록을 불러오지 못했습니다." }, { status: 500, headers });
   }
