@@ -248,13 +248,6 @@ function onEdit(e) {
   }
 }
 
-function refreshPurchasePrintProductLinks() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const db = ss.getSheetByName('제품DB');
-  if (!db) throw new Error('제품DB 시트를 찾을 수 없습니다.');
-  const updated = refreshPurchasePrintProductLinks_(ss, db);
-  SpreadsheetApp.getUi().alert('발주서 출력 제품정보 갱신 완료: ' + updated + '행');
-}
 
 function upsertProduct_(db, productInputRow, productDbRows) {
   if (!Array.isArray(productInputRow) || !productInputRow.length) return;
@@ -984,22 +977,7 @@ function applyProductDbCalculatedFormulas_(db) {
   db.getRange(2, dbColumn_('마진') + 1, rowCount, 1).setFormulasR1C1(marginFormulas).setNumberFormat('#,##0');
 }
 
-function restoreProductDbDefaultOrder() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const db = getOrCreateSheet_(ss, '제품DB');
-  syncProductDbHeaders_(db);
-  const promoted = promoteReplacementPendingRows_(ss, db);
-  sortProductDbDefault_(db);
-  formatProductDb_(db);
-  Logger.log('제품DB 기본순서 복원 완료: 신상승인대기/기존상품승인대기 ' + promoted + '행을 위로 이동');
-}
 
-function onOpen() {
-  SpreadsheetApp.getUi().createMenu('LAURA')
-    .addItem('제품DB 기본순서 복원', 'restoreProductDbDefaultOrder')
-    .addItem('발주서 출력 제품정보 새로고침', 'refreshPurchasePrintProductLinks')
-    .addToUi();
-}
 
 function normalizePickingCheckboxes_(sheet) {
   if (sheet.getLastRow() < 3) return;
