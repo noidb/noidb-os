@@ -297,7 +297,7 @@ export default function WmsWorkCenterPage() {
   return (
     <main className={`shell wms-work-center-shell ${styles.shell}`} style={{ fontFamily: "sans-serif" }}>
       <AppNavigation active="work-center" />
-      {/* 2026-10-21 사용자 요청: 매일 수시로 하는 일을 한곳에 모아 잊지 않게 */}
+      {/* 2026-10-21 사용자 요청: 매일·수시로 하는 일을 한곳에 모아 잊지 않게 */}
       <DailyRoutine />
       <InProgressOrdersSection live={live} />
       <ShipmentClosedGroupsBanner groups={live.groups} />
