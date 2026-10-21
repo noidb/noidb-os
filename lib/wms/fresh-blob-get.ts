@@ -18,11 +18,18 @@ function isForbidden(error: unknown): boolean {
  * 저장 충돌 반복). 그래서 캐시를 못 쓸 때는 메타정보(head, 항상 최신)의 ETag와 맞는 본문을
  * 주소 끝에 매번 다른 값을 붙여 캐시를 피해 읽는다. 어떤 이유로든 실패하면 예전 방식(캐시된 읽기)으로 돌아간다.
  */
+// 2026-10-21: 캐시 없는 읽기가 403으로 막힌 걸 한 번 확인하면, 같은 서버에서는 30분 동안 다시 시도하지 않는다
+// (매번 실패 요청을 한 번 더 보내느라 입고완료 같은 저장이 느려졌음).
+let noCacheForbiddenUntil = 0;
+
 export async function getFreshPrivateBlob(pathname: string): Promise<GetResult> {
-  try {
-    return await get(pathname, { access: "private", useCache: false });
-  } catch (error) {
-    if (!isForbidden(error)) throw error;
+  if (Date.now() >= noCacheForbiddenUntil) {
+    try {
+      return await get(pathname, { access: "private", useCache: false });
+    } catch (error) {
+      if (!isForbidden(error)) throw error;
+      noCacheForbiddenUntil = Date.now() + 30 * 60_000;
+    }
   }
   let meta: Awaited<ReturnType<typeof head>>;
   try {

@@ -275,11 +275,19 @@ export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot,
     if ((source.resultMemo || "") === mutation.memo) return current;
     if (source.updatedAt !== mutation.expectedUpdatedAt) throw new Error("상품 처리 상태가 변경됐습니다. 최신 목록에서 다시 확인해 주세요.");
     next.vendorOrderLines = next.vendorOrderLines.map(line => line.id === source.id ? { ...line, resultMemo: mutation.memo, updatedAt: mutation.now } : line);
-  } else if (mutation.action === "completeVendorReceiving") {
-    const lineBefore = next.vendorOrderLines.find(line => line.id === mutation.before.id);
+  } else if (mutation.action === "completeVendorReceiving" || mutation.action === "completeVendorReceivingById") {
+    const lineId = mutation.action === "completeVendorReceiving" ? mutation.before.id : mutation.lineId;
+    const lineBefore = next.vendorOrderLines.find(line => line.id === lineId);
     const owner = lineBefore && next.vendorOrderDrafts.find(draft => draft.id === lineBefore.draftId);
     if (!lineBefore || !owner || !["sent", "approved"].includes(owner.status) || lineBefore.orderExclusion || lineBefore.vendorTransfer || lineBefore.sentResolution || next.deletedVendorLineIds[lineBefore.id] || next.deletedVendorDraftIds[lineBefore.draftId]) throw new Error("입고완료할 전송·승인 발주 품목을 다시 확인해 주세요.");
-    const saved = completeReceivingLine(lineBefore, mutation.before, mutation.isStockReplenishment, mutation.now);
+    let before = lineBefore;
+    if (mutation.action === "completeVendorReceiving") before = mutation.before;
+    else {
+      const done = Boolean(lineBefore.receivingCompletedAt && lineBefore.receivedQuantity === lineBefore.shortageQuantity && Boolean(lineBefore.isStockReplenishment) === mutation.isStockReplenishment);
+      if (done) return current;
+      if (lineBefore.updatedAt !== mutation.expectedUpdatedAt || lineBefore.shortageQuantity !== mutation.expectedQuantity) throw new Error("확인 후 발주 품목이 변경되었습니다. 입고완료 내용을 다시 확인해 주세요.");
+    }
+    const saved = completeReceivingLine(lineBefore, before, mutation.isStockReplenishment, mutation.now);
     if (saved === lineBefore) return current;
     next.vendorOrderLines = next.vendorOrderLines.map(line => line.id === saved.id ? saved : line);
   } else if (mutation.action === "saveSimpleReceiving") {

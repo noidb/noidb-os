@@ -6,10 +6,11 @@ import { wmsColors } from "@/lib/wms/ui-tokens";
 
 /**
  * 발주결과처리 카드: 제품DB 원가(부가세 포함)를 보여주고, 입고 영수증 단가가 다를 때만 고친다.
- * 영수증 단가(부가세 별도)를 넣으면 부가세 10%를 더한 원가를 미리 보여주고, 확인을 누를 때만 제품DB 원가 1칸을 바꾼다.
+ * 영수증 단가(부가세 별도)를 넣으면 부가세 10%를 더한 원가를 미리 보여주고, 확인을 누를 때만 제품DB 원가를 바꾼다.
+ * 같은 모델(모델명/품번)의 SKU는 모두 같은 최신 원가로 한 번에 바뀐다(2026-10-21).
  * 입고수량은 다루지 않는다(2026-10-07 사용자 요청). 거래처에 보내는 발주서 카드에는 나오지 않는다.
  */
-export default function CostPriceEditor({ skuId, currentCost, onSaved }: { skuId: string; currentCost: string; onSaved: (cost: string) => void }) {
+export default function CostPriceEditor({ skuId, currentCost, onSaved }: { skuId: string; currentCost: string; onSaved: (cost: string, skuIds: string[]) => void }) {
   const [open, setOpen] = useState(false);
   const [price, setPrice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -27,12 +28,14 @@ export default function CostPriceEditor({ skuId, currentCost, onSaved }: { skuId
       const response = await fetch("/api/wms/product-catalog/update", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ skuId, costVatIncluded: String(next.costVatIncluded) }),
+        body: JSON.stringify({ skuId, costVatIncluded: String(next.costVatIncluded), sameModel: true }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success) throw new Error(data.error || "제품DB 원가를 저장하지 못했습니다.");
-      onSaved(String(next.costVatIncluded));
-      setMessage(`원가를 ${next.costVatIncluded.toLocaleString()}원으로 바꿨습니다.`);
+      const skuIds: string[] = Array.isArray(data.skuIds) && data.skuIds.length ? data.skuIds : [skuId];
+      const skipped: string[] = Array.isArray(data.skippedFormulaSkuIds) ? data.skippedFormulaSkuIds : [];
+      onSaved(String(next.costVatIncluded), skuIds);
+      setMessage(`원가를 ${next.costVatIncluded.toLocaleString()}원으로 바꿨습니다.${skuIds.length > 1 ? ` (같은 모델 ${skuIds.length}개 SKU)` : ""}${skipped.length ? ` 수식 칸이라 못 바꾼 SKU: ${skipped.join(", ")}` : ""}`);
       setPrice("");
       setOpen(false);
     } catch (error) {
@@ -63,7 +66,7 @@ export default function CostPriceEditor({ skuId, currentCost, onSaved }: { skuId
           {same ? "지금 원가와 같습니다. 바꿀 필요가 없어요." : `원가 ${current ? current.toLocaleString() : "미입력"} → ${next.costVatIncluded.toLocaleString()}원 (단가 ${next.unitPriceExVat.toLocaleString()} + 부가세 ${next.vat.toLocaleString()})`}
         </span>}
         <div style={{ display: "flex", gap: 6 }}>
-          <button type="button" disabled={!next || same || busy} onClick={() => void save()} style={{ ...button("sage"), opacity: !next || same ? .55 : 1 }}>{busy ? "저장 중…" : "확인 · 원가 저장"}</button>
+          <button type="button" disabled={!next || same || busy} onClick={() => void save()} style={{ ...button("sage"), opacity: !next || same ? .55 : 1 }}>{busy ? "저장 중…" : "같은 모델 원가 모두 저장"}</button>
           <button type="button" disabled={busy} onClick={() => { setOpen(false); setPrice(""); }} style={button("sand")}>취소</button>
         </div>
       </>}

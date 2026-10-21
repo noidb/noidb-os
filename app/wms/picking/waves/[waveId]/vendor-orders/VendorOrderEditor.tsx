@@ -1104,7 +1104,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                       knownVendorNames={knownVendorNames}
                       productLink={liveCatalogByProductCode.get(normalizeSkuId(line.skuId))?.productLink || ""}
                       currentCost={liveCatalogByProductCode.get(normalizeSkuId(line.skuId))?.costVatIncluded || ""}
-                      onCostSaved={cost => setLiveCatalogByProductCode(previous => { const next = new Map(previous); for (const [key, value] of next) if (normalizeSkuId(value.skuId) === normalizeSkuId(line.skuId)) next.set(key, { ...value, costVatIncluded: cost }); return next; })}
+                      onCostSaved={(cost, skuIds) => setLiveCatalogByProductCode(previous => { const ids = new Set([line.skuId, ...(skuIds || [])].map(normalizeSkuId)); const next = new Map(previous); for (const [key, value] of next) if (ids.has(normalizeSkuId(value.skuId))) next.set(key, { ...value, costVatIncluded: cost }); return next; })}
                       delaySummary={status === "sent" ? sentDelay(line) : receivingDelays.summaries.get(normalizeSkuId(line.skuId))}
                       delayDisabled={((historical || historyView) && !processingSent) || (status === "sent" ? sentDelaySaving : receivingDelays.loading || receivingDelays.saving || Boolean(receivingDelays.error)) || saving}
                       onDelay={() => void saveReceivingDelay({ line, sent: status === "sent", previous: status === "sent" ? sentDelay(line) : receivingDelays.summaries.get(normalizeSkuId(line.skuId)) })}
@@ -1361,7 +1361,7 @@ function VendorOrderLineCard({
   onCatalogStatusSaved: () => void;
   /** 제품DB 원가(부가세 포함) 실시간 값 — 발주결과처리에서 원가 확인·수정에 쓴다. */
   currentCost?: string;
-  onCostSaved?: (cost: string) => void;
+  onCostSaved?: (cost: string, skuIds?: string[]) => void;
 }) {
   const pasteUploading = useRef(false);
   const [imageEditOpen, setImageEditOpen] = useState(false);

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { updateProductCatalogFields, type ProductCatalogUpdatePatch, type ProductCatalogWritableField } from "@/lib/wms/product-catalog-write";
+import { updateCostForSameModel, updateProductCatalogFields, type ProductCatalogUpdatePatch, type ProductCatalogWritableField } from "@/lib/wms/product-catalog-write";
 
 /**
  * 제품DB 구글시트를 SKU ID 기준으로 직접 수정하는 API.
@@ -32,6 +32,12 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const skuId: string = body.skuId || "";
     const dryRun: boolean = Boolean(body.dryRun);
+
+    // 영수증 단가 원가 수정: 같은 모델(모델명/품번) SKU 전부를 한 번에 바꾼다 (2026-10-21).
+    if (body.sameModel === true && typeof body.costVatIncluded === "string" && !dryRun) {
+      const result = await updateCostForSameModel(skuId, body.costVatIncluded);
+      return NextResponse.json(result, { status: result.success ? 200 : 400 });
+    }
 
     const patch: ProductCatalogUpdatePatch = {};
     for (const field of WRITABLE_FIELDS) {

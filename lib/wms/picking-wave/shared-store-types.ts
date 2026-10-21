@@ -92,6 +92,8 @@ export type PickingWaveStoreMutation =
   | { action: "saveVendorLineImage"; lineId: string; imageUrl: string; expectedImageUrl: string; now: string }
   | { action: "saveSimpleReceiving"; before: VendorOrderDraftLine; input: { quantity: number; unitPrice: number; usedImmediately: boolean }; now: string }
   | { action: "completeVendorReceiving"; before: VendorOrderDraftLine; isStockReplenishment: boolean; now: string }
+  // 빠른 입고완료(2026-10-21): 화면에 보이던 줄의 updatedAt·수량만 보내고, 저장소를 한 번만 읽어 그 안에서 확인한다.
+  | { action: "completeVendorReceivingById"; lineId: string; expectedUpdatedAt: string; expectedQuantity: number; isStockReplenishment: boolean; now: string }
   | { action: "transferSentVendorLine"; lineId: string; vendorName: string; operationId: string; expectedUpdatedAt: string; expectedQueueId: string; expectedTargetVersion: string; now: string }
   | { action: "resolveSentVendorLine"; lineId: string; expectedUpdatedAt: string; kind: "reorder" | "discontinue"; destinationId: string; now: string }
   | { action: "setSentVendorDelay"; lineId: string; expectedUpdatedAt: string; delayed: boolean; memo: string; now: string }
@@ -208,6 +210,7 @@ export function isPickingWaveStoreMutation(value: unknown): value is PickingWave
         && Array.isArray(lineIds) && lineIds.length <= 5000 && lineIds.every(lineId => typeof lineId === "string" && lineId.trim()) && new Set(lineIds).size === lineIds.length;
     });
   }
+  if (value.action === "completeVendorReceivingById") return ["lineId", "expectedUpdatedAt", "now"].every(key => hasText(value, key)) && Number.isSafeInteger(value.expectedQuantity) && typeof value.isStockReplenishment === "boolean" && Number.isFinite(Date.parse(String(value.now)));
   if (value.action === "completeVendorReceiving") return hasText(value.before, "id") && hasText(value.before, "updatedAt") && typeof value.isStockReplenishment === "boolean" && hasText(value, "now") && Number.isFinite(Date.parse(String(value.now)));
   if (value.action === "transferSentVendorLine") return ["lineId", "vendorName", "operationId", "expectedUpdatedAt", "expectedQueueId", "expectedTargetVersion", "now"].every(key => hasText(value, key)) && Number.isFinite(Date.parse(String(value.now)));
   if (value.action === "resolveSentVendorLine") return ["lineId", "expectedUpdatedAt", "destinationId", "now"].every(key => hasText(value, key)) && ["reorder", "discontinue"].includes(String(value.kind)) && Number.isFinite(Date.parse(String(value.now)));

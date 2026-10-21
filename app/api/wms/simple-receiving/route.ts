@@ -16,6 +16,13 @@ export async function POST(request:NextRequest){
  // Completion only records this order's receipt; it never writes to the product DB.
  if(body.action==='complete'&&body.confirmed!==true)return json({success:false,error:'입고완료 내용을 확인해 주세요.'},400);
  try{
+  // Fastest path (2026-10-21): the dialog sends the updatedAt/quantity it showed, so the store is read
+  // only once (inside the save) instead of a separate read before it.
+  if(body.action==='complete'&&typeof body.expectedUpdatedAt==='string'&&Number.isSafeInteger(body.expectedQuantity)&&typeof body.isStockReplenishment==='boolean'){
+   const snapshot=await mutatePickingWaveStore({action:'completeVendorReceivingById',lineId:body.lineId,expectedUpdatedAt:body.expectedUpdatedAt,expectedQuantity:body.expectedQuantity,isStockReplenishment:body.isStockReplenishment,now:new Date().toISOString()});
+   const line=snapshot.vendorOrderLines.find(item=>item.id===body.lineId);if(!line)throw new Error('입고할 발주 품목을 다시 선택해 주세요.');
+   return json({success:true,line});
+  }
   if(body.action==='complete-preview'||body.action==='complete'){
    const before=await lineFor(body.lineId),preview=completeReceivingPlan(before,body.isStockReplenishment);
    if(body.action==='complete-preview')return json({success:true,preview});
