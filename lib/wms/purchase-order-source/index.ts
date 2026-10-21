@@ -34,30 +34,42 @@ async function parseInputs(inputs: PurchaseOrderBinaryInput[]): Promise<ParsedCo
   }
   return { documents, errors, entries: inputs.length };
 }
-async function loadInputs(fresh: boolean): Promise<{ containers: number; parsed: ParsedContainer[] }> {
-  const parsed: ParsedContainer[] = [];
+/**
+ * 2026-10-21: 송장·쉽먼트·바코드·출력세트를 만들 때마다 '최신 원본 검증'(fresh)으로 발주서 폴더의 모든 파일을
+ * 하나씩 다시 내려받아 읽어서 '생성 중'이 매우 길었다. 파일 목록은 매번 새로 확인하고(fresh의 뜻은 그대로),
+ * 파일 아이디·이름·수정시각·크기가 같은 파일은 저장해 둔 분석 결과를 쓴다(내용이 바뀌면 수정시각이 달라져 다시 읽음).
+ * 읽기는 순서를 지키면서 여러 개를 동시에 한다.
+ */
+async function loadInputs(_fresh: boolean): Promise<{ containers: number; parsed: ParsedContainer[] }> {
+  async function inOrder<T>(items: T[], work: (item: T) => Promise<ParsedContainer>): Promise<ParsedContainer[]> {
+    const results: ParsedContainer[] = new Array(items.length);
+    let next = 0;
+    const worker = async () => { while (next < items.length) { const index = next++; results[index] = await work(items[index]); } };
+    await Promise.all(Array.from({ length: Math.min(6, items.length) }, worker));
+    return results;
+  }
   async function load(name: string, descriptor: unknown, download: () => Promise<Buffer>) {
     return cachedParsedFile("purchase-order-parser-2", descriptor, async () => {
       const buffer = await download();
       const value = await parseInputs(await expand(name, buffer));
       return { value, contentHash: createHash("sha256").update(buffer).digest("hex"), purchaseOrders: value.documents.map(item => item.purchaseOrderNumber) };
-    }, (value): value is ParsedContainer => Boolean(value && typeof value === "object" && Array.isArray((value as ParsedContainer).documents) && Array.isArray((value as ParsedContainer).errors)), fresh);
+    }, (value): value is ParsedContainer => Boolean(value && typeof value === "object" && Array.isArray((value as ParsedContainer).documents) && Array.isArray((value as ParsedContainer).errors)), false);
   }
   if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
     const files = (await listDriveFilesFromEnv("GOOGLE_DRIVE_COUPANG_PURCHASE_ORDER_FOLDER_ID"))
       .filter(file => /\.(zip|xlsx)$/i.test(file.name))
       // 오래된 파일 → 최신 파일 순으로 읽어, 같은 발주가 다시 내려받아진 경우 최신 파일이 마지막에 오게 한다.
       .sort((a, b) => String(a.modifiedTime || "").localeCompare(String(b.modifiedTime || "")));
-    for (const file of files) parsed.push(await load(file.name, [file.id, file.name, file.modifiedTime, file.size], () => downloadDriveFile(file.id)));
+    const parsed = await inOrder(files, file => load(file.name, [file.id, file.name, file.modifiedTime, file.size], () => downloadDriveFile(file.id)));
     return { containers: files.length, parsed };
   }
   const names = (await readdir(LOCAL_SOURCE_DIR)).filter(name => /\.(zip|xlsx)$/i.test(name));
   const infos = await Promise.all(names.map(async name => ({ name, info: await stat(path.join(LOCAL_SOURCE_DIR, name)) })));
   infos.sort((a, b) => a.info.mtimeMs - b.info.mtimeMs);
-  for (const { name, info } of infos) {
+  const parsed = await inOrder(infos, ({ name, info }) => {
     const filePath = path.join(LOCAL_SOURCE_DIR, name);
-    parsed.push(await load(name, [filePath, info.mtimeMs, info.size], () => readFile(filePath)));
-  }
+    return load(name, [filePath, info.mtimeMs, info.size], () => readFile(filePath));
+  });
   return { containers: names.length, parsed };
 }
 

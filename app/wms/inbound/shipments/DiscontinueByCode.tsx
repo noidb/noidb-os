@@ -182,7 +182,7 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
               <tr>
                 <th>SKU ID</th>
                 <th>상품명</th>
-                <th className={styles.orderableCol} title={latestOrderable ? `최신파일 ${new Date(latestOrderable.fileMtime).toLocaleString("ko-KR")}` : "제품DB 값 · 최신파일 확인하기를 누르면 쿠팡 최신값으로 바뀝니다"}>
+                <th className={styles.orderableCol} title={latestOrderable ? `최신파일 ${new Date(latestOrderable.fileMtime).toLocaleString("ko-KR")}` : "제품DB 값 · 작업센터 '자주 하는 일'에서 상품공급상태 최신파일을 반영하면 쿠팡 최신값이 됩니다"}>
                   발주상태{latestOrderable ? "" : " (DB)"}
                 </th>
                 <th className={styles.deleteCol} aria-label="빼기" />

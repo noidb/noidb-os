@@ -34,7 +34,6 @@ import { loadPreparedDetail, loadPreparedPhotos, type PreparedDetail } from "@/l
 import { coverSquareCanvas, defaultFitAdjust, extendToSquareCanvas, fitToWhiteCanvas, drawSquareCrop, renderSquareCrop, sharpenAmount, type FitAdjust, type SquareCrop } from "@/lib/thumbnail/fit";
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
-import WimsRegistrationImportPanel from "@/app/product-registration/WimsRegistrationImportPanel";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 
 type Product = {
@@ -3313,12 +3312,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section id="product-registration-status" className="card full">
-        <div className="wms-section-heading" style={{ marginTop: 0 }}>
-          <div><span>PRODUCT REGISTRATION</span><h2>9. 등록 진행상황 · 상품 운영정보</h2></div>
-        </div>
-        <WimsRegistrationImportPanel />
-      </section>
+      {/* 2026-10-21: '9. 등록 진행상황(WIMS 상품등록상태)'은 입고센터 '자주 하는 일' 5번으로 옮겨 여기서는 뺐다. */}
 
       {lightbox && (
         <div className="lightbox" onClick={() => setLightbox("")}>

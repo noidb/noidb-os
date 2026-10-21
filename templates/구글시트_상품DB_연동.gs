@@ -415,7 +415,36 @@ function replaceDbRowsForModel_(db, model, newRows) {
   for (let row = startRow; row < startRow + rows.length; row++) db.setRowHeight(row, 82);
   // 새로 등록한 상품은 끝에 붙인 뒤 행 전체(서식·수식·행높이 포함)를 2행으로 옮겨 바로 맨 위에 보이게 합니다.
   if (startRow > 2) db.moveRows(db.getRange(startRow, 1, rows.length, 1), 2);
+  // 2026-10-21: 같은 모델명/품번의 기존 행(재등록 전 옛 SKU 등)도 새 행 바로 아래로 옮겨 모델끼리 붙입니다.
+  moveSameModelRowsBelow_(db, model, 2 + rows.length, newOrder);
   formatProductDb_(db);
+}
+
+/**
+ * 같은 모델명/품번 행을 지정한 행 바로 아래로 모은다(2026-10-21 사용자 요청: 상품명이 달라도 같은 모델끼리 붙게).
+ * 행 전체(서식·수식·행높이)를 옮기고, 이후 기본순서 정렬에서도 함께 있도록 기본순서를 새 행과 같게 맞춘다.
+ */
+function moveSameModelRowsBelow_(db, model, destinationRow, order) {
+  const key = String(model || '').trim().toLowerCase();
+  if (!key) return 0;
+  const modelColumn = dbColumn_('모델명/품번');
+  const orderColumn = dbColumn_('기본순서');
+  let destination = destinationRow;
+  let moved = 0;
+  // 아래에서 위로 옮기면 그 사이 행만 한 칸씩 밀리므로, 위에서부터 찾은 순서대로 옮기면 원래 순서가 유지됩니다.
+  for (;;) {
+    const lastRow = db.getLastRow();
+    if (destination > lastRow) break;
+    const models = db.getRange(destination, modelColumn + 1, lastRow - destination + 1, 1).getDisplayValues().flat();
+    const offset = models.findIndex(value => String(value || '').trim().toLowerCase() === key);
+    if (offset < 0) break;
+    const sourceRow = destination + offset;
+    if (sourceRow !== destination) db.moveRows(db.getRange(sourceRow, 1, 1, 1), destination);
+    if (order) db.getRange(destination, orderColumn + 1).setValue(order);
+    destination++;
+    moved++;
+  }
+  return moved;
 }
 
 function replacementOptionKey_(row) {

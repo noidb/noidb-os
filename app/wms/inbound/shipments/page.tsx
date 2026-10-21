@@ -17,10 +17,8 @@ import type {
   LogisticsReceiptTarget,
 } from "@/lib/wms/logistics-receipts";
 import styles from "./shipments.module.css";
-import WarehouseRecheckCleanup from "./WarehouseRecheckCleanup";
 import DiscontinueByCode from "./DiscontinueByCode";
 import { saveReceiptTabCounts } from "@/lib/wms/receipt-tab-counts";
-import SupplyStatusAuditPanel from "@/app/product-registration/SupplyStatusAuditPanel";
 
 type Tab = "anytime" | "results" | "pending" | "history";
 type Decision = "vendor" | "discontinue" | "reorder" | "marketing";
@@ -1643,7 +1641,7 @@ export default function ShipmentReceiptsPage() {
               )}
             </article>
             {/* 2026-10-20: AI상품등록 9번의 상품공급상태 최신파일 반영을 여기로 옮김 — 반영하면 아래 단종·단종해제 목록을 다시 계산한다. */}
-            <SupplyStatusAuditPanel compact onApplied={() => void quietReload()} onAudited={(latest) => setLatestOrderable(latest)} />
+            {/* 2026-10-21: 상품공급상태 최신파일 반영은 작업센터 '자주 하는 일' 1번으로 옮겨 여기서는 뺐다(반영하면 제품DB가 바뀌어 이 화면을 열 때 목록에 그대로 반영됨). */}
             {/* 2026-10-20 사용자 요청: 단종 대상 SKU와 바코드·SKU 직접 입력을 '단종 신청 목록' 하나로 합침(서류·완료 한 번). */}
             {!fixture && (
               <DiscontinueByCode
@@ -1674,7 +1672,7 @@ export default function ShipmentReceiptsPage() {
                       <tr>
                         <th>SKU ID</th>
                         <th>상품명</th>
-                        <th className={styles.orderableCol} title={latestOrderable ? `최신파일 ${new Date(latestOrderable.fileMtime).toLocaleString("ko-KR")}` : "제품DB 값 · 최신파일 확인하기를 누르면 쿠팡 최신값으로 바뀝니다"}>
+                        <th className={styles.orderableCol} title={latestOrderable ? `최신파일 ${new Date(latestOrderable.fileMtime).toLocaleString("ko-KR")}` : "제품DB 값 · 작업센터 '자주 하는 일'에서 상품공급상태 최신파일을 반영하면 쿠팡 최신값이 됩니다"}>
                           발주상태{latestOrderable ? "" : " (DB)"}
                         </th>
                         {section.kind === "release" && <th className={styles.deleteCol} aria-label="삭제" />}
@@ -1711,7 +1709,8 @@ export default function ShipmentReceiptsPage() {
                           {(() => {
                             // 단종 대상은 '정상이 아님', 단종해제 대상은 '정상'이 되면 쿠팡 처리가 끝난 것 → 세이지로 표시
                             const value = latestOrderable ? latestOrderable.orderable[item.skuId] || "파일에 없음" : item.orderableStatus || "미확인";
-                            const done = Boolean(latestOrderable?.orderable[item.skuId]) && (section.kind === "release" ? value === "정상" : value !== "정상" && value !== "확인필요");
+                            // 2026-10-21: 최신파일 확인이 작업센터로 옮겨져, 확인 전에는 제품DB 발주가능상태(반영된 최신값)로 판단한다.
+                            const done = (latestOrderable ? Boolean(latestOrderable.orderable[item.skuId]) : Boolean(item.orderableStatus)) && (section.kind === "release" ? value === "정상" : value !== "정상" && value !== "확인필요");
                             return (
                               <td className={`${styles.orderableCol} ${done ? styles.orderableDone : ""}`} title={done ? "쿠팡에서 처리 완료" : undefined}>
                                 {value}{done ? " ✓" : ""}
@@ -1797,14 +1796,7 @@ export default function ShipmentReceiptsPage() {
               );
             })}
             {followUpQueueOf("discontinue").length > 0 && renderFollowUpWork("discontinue")}
-            {!fixture && (
-              <WarehouseRecheckCleanup
-                onDone={(text, isError) => {
-                  if (isError) setError(text);
-                  else { setError(""); setMessage(text); }
-                }}
-              />
-            )}
+            {/* 2026-10-21: 구글시트 정리는 작업센터 '자주 하는 일' 4번으로 옮겨 여기서는 뺐다. */}
           </>
         )}
         {tab === "results" && payload && (
