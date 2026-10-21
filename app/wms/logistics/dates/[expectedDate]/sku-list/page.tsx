@@ -173,7 +173,7 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
                     const unitPrice = unitPriceByPoSku.get(priceKey(row.purchaseOrderNumber, row.skuId)) || 0;
                     const isPicked = Boolean(picks.picked[row.skuId]);
                     return (
-                      <li key={`${row.purchaseOrderNumber}-${row.skuId}-${row.sourceRowNumber}`} style={{ display: "grid", gridTemplateColumns: "24px 72px 1fr auto", gap: "10px", alignItems: "center", padding: "10px", borderRadius: "14px", background: isPicked ? "#fbf1ee" : "#fff", border: `1px solid ${isPicked ? "#dfbdb2" : "#e5dace"}` }}>
+                      <li key={`${row.purchaseOrderNumber}-${row.skuId}-${row.sourceRowNumber}`} style={{ display: "grid", gridTemplateColumns: "24px 64px minmax(0, 1fr) auto", gap: "10px", alignItems: "start", padding: "10px", borderRadius: "14px", background: isPicked ? "#fbf1ee" : "#fff", border: `1px solid ${isPicked ? "#dfbdb2" : "#e5dace"}` }}>
                         <span style={{ fontSize: "12px", color: wmsColors.muted, textAlign: "center" }}>{order}</span>
                         <ProductThumb key={row.skuId} catalog={catalog} skuId={row.skuId} alt={row.productName} />
                         <ProductInfo name={row.productName} option={row.optionLabel} skuId={row.skuId} warehouseNumber={row.warehouseNumber} barcode={row.barcode} priceMax={unitPrice} productLink={catalog?.productLink} />

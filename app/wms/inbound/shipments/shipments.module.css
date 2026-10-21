@@ -716,3 +716,78 @@
   z-index: 2;
   box-shadow: inset 0 -1px 0 #ddd0bf;
 }
+
+/* 탭 옆 할 일 숫자(2026-10-20) */
+.tabCount {
+  display: inline-block;
+  margin-left: 6px;
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #e3ede6;
+  color: #3f5a4b;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* 2026-10-20 사용자 요청: 모바일에서 설명 글씨는 작게, 버튼은 줄바꿈 없이 읽기 좋게 */
+@media (max-width: 720px) {
+  .actions {
+    width: 100%;
+    gap: 6px;
+  }
+  .headerButton {
+    min-width: 0;
+    min-height: 44px !important;
+    padding: 6px 4px !important;
+    font-size: 13px !important;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .notice {
+    font-size: 13px;
+    padding: 10px 12px;
+    margin: 10px 0;
+  }
+  .meta {
+    font-size: 12px;
+  }
+  .tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0;
+    margin-top: 14px;
+  }
+  .tab {
+    min-height: 44px !important;
+    padding: 8px 4px !important;
+    font-size: 15px !important;
+    white-space: nowrap;
+  }
+  .vendorArea {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 14px;
+  }
+  .vendorArea h2 {
+    margin-bottom: 6px;
+  }
+  .vendorArea p {
+    margin: 3px 0;
+    font-size: 13px;
+  }
+  .vendorArea .linkButton {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 46px;
+    font-size: 15px;
+  }
+  .listTitle {
+    font-size: 17px;
+  }
+}

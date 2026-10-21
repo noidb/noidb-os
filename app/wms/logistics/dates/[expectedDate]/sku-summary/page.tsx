@@ -117,7 +117,7 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
               const display = resolveDisplayNameAndOption(row.productName, row.optionName);
               const rowKey = row.skuId || row.barcode;
               return (
-                <li key={rowKey} style={{ display: "grid", gridTemplateColumns: "72px 1fr auto", gap: "10px", alignItems: "center", padding: "10px", borderRadius: "14px", background: picks.picked[row.skuId] ? "#fbf1ee" : "#fff", border: `1px solid ${picks.picked[row.skuId] ? "#dfbdb2" : "#e5dace"}` }}>
+                <li key={rowKey} style={{ display: "grid", gridTemplateColumns: "64px minmax(0, 1fr) auto", gap: "10px", alignItems: "start", padding: "10px", borderRadius: "14px", background: picks.picked[row.skuId] ? "#fbf1ee" : "#fff", border: `1px solid ${picks.picked[row.skuId] ? "#dfbdb2" : "#e5dace"}` }}>
                   <ProductThumb key={row.skuId} catalog={catalog} skuId={row.skuId} alt={display.name} />
                   <ProductInfo
                     name={display.name}
@@ -136,7 +136,7 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
                           if (pos.length === 1) setOpenPo({ purchaseOrderNumber: pos[0].purchaseOrderNumber, highlightSku: row.skuId });
                           else setExpandedSku(previous => (previous === rowKey ? null : rowKey));
                         }}
-                        style={{ border: 0, background: "none", padding: 0, font: "inherit", color: wmsColors.slateDark, textDecoration: "underline", cursor: "pointer" }}
+                        style={{ border: 0, background: "none", padding: 0, margin: 0, font: "inherit", fontSize: "inherit", lineHeight: "inherit", minHeight: 0, height: "auto", width: "auto", display: "inline", color: wmsColors.slateDark, textDecoration: "underline", cursor: "pointer", boxShadow: "none", transform: "none" }}
                       >
                         발주 {row.purchaseOrderCount}건
                       </button>
@@ -191,7 +191,7 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
                     const lineDisplay = resolveDisplayNameAndOption(line.productName, line.optionName);
                     const highlighted = Boolean(openPo.highlightSku) && line.skuId === openPo.highlightSku;
                     return (
-                      <li key={`${line.skuId}-${index}`} style={{ display: "grid", gridTemplateColumns: "72px 1fr auto", gap: "8px", alignItems: "center", padding: "8px", borderRadius: "10px", background: highlighted ? "#e3ede6" : "#fff", border: `1px solid ${highlighted ? "#60766a" : "#e5dace"}` }}>
+                      <li key={`${line.skuId}-${index}`} style={{ display: "grid", gridTemplateColumns: "64px minmax(0, 1fr) auto", gap: "8px", alignItems: "start", padding: "8px", borderRadius: "10px", background: highlighted ? "#e3ede6" : "#fff", border: `1px solid ${highlighted ? "#60766a" : "#e5dace"}` }}>
                         <ProductThumb catalog={catalogBySku.get(line.skuId)} skuId={line.skuId} alt={lineDisplay.name} />
                         <div style={{ minWidth: 0 }}>
                           <div style={{ fontSize: "12px", fontWeight: 700, lineHeight: 1.35 }}>{lineDisplay.name}{lineDisplay.option ? ` · ${lineDisplay.option}` : ""}</div>

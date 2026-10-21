@@ -1245,7 +1245,7 @@ export default function ShipmentReceiptsPage() {
           </button>
           {/* 2026-10-15: 쿠팡 쉽먼트 화면에 '입고결과 일괄 가져오기' 칸을 띄우는 확장 기능. 같은 이름 zip을 같은 폴더에 덮어쓰고 새로고침. */}
           <a className={`softApricotButton ${styles.headerButton}`} href="/downloads/noidb-supplier-hub.zip" download>
-            쉽먼트 확장 v0.9.9 받기
+            확장 v0.9.9 받기
           </a>
         </div>
       </header>
@@ -1343,7 +1343,7 @@ export default function ShipmentReceiptsPage() {
             className={`${styles.tab} ${tab === value ? styles.tabActive : ""}`}
             onClick={() => openTab(value)}
           >
-            {label}{count > 0 ? ` ${count}` : ""}
+            {label}{count > 0 && <span className={styles.tabCount}>{count}</span>}
           </button>
         ))}
       </nav>

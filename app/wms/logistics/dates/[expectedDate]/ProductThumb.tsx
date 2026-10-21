@@ -18,7 +18,7 @@ export default function ProductThumb({ catalog, skuId, alt }: { catalog?: Produc
   const [failed, setFailed] = useState(false);
 
   if (failed) {
-    return <div style={{ width: "72px", height: "72px", borderRadius: "10px", background: "#f2f2f2", fontSize: "11px", color: wmsColors.muted, display: "grid", placeItems: "center" }}>이미지 없음</div>;
+    return <div style={{ width: "64px", height: "64px", borderRadius: "10px", background: "#f2f2f2", fontSize: "11px", color: wmsColors.muted, display: "grid", placeItems: "center" }}>이미지 없음</div>;
   }
   return (
     <a href={src} target="_blank" rel="noreferrer" style={{ lineHeight: 0 }}>
@@ -28,7 +28,7 @@ export default function ProductThumb({ catalog, skuId, alt }: { catalog?: Produc
         alt={alt}
         loading="lazy"
         onError={() => { if (src !== driveFallbackUrl) setSrc(driveFallbackUrl); else setFailed(true); }}
-        style={{ width: "72px", height: "72px", objectFit: "cover", borderRadius: "10px", display: "block", background: "#f2f2f2" }}
+        style={{ width: "64px", height: "64px", objectFit: "cover", borderRadius: "10px", display: "block", background: "#f2f2f2" }}
       />
     </a>
   );

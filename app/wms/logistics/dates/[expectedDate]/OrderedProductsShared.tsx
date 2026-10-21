@@ -109,8 +109,9 @@ export function ProductInfo({ name, option, skuId, warehouseNumber, barcode, pri
   return (
     <div style={{ minWidth: 0 }}>
       <div style={{ fontSize: "13px", fontWeight: 700, lineHeight: 1.35 }}>{name}{option ? ` · ${option}` : ""}</div>
-      <div style={{ fontSize: "12px", color: wmsColors.muted, marginTop: "3px" }}>SKU {skuId || "-"}{warehouseNumber ? ` · 번호 ${warehouseNumber}` : ""}{extra ? <> · {extra}</> : null}</div>
-      <div style={{ fontSize: "12px", fontFamily: "monospace", marginTop: "2px" }}>{barcode}</div>
+      <div style={{ fontSize: "12px", color: wmsColors.muted, marginTop: "3px", lineHeight: 1.45 }}>SKU {skuId || "-"}{warehouseNumber ? ` · 번호 ${warehouseNumber}` : ""}</div>
+      {extra ? <div style={{ fontSize: "12px", color: wmsColors.muted, lineHeight: 1.45, whiteSpace: "nowrap" }}>{extra}</div> : null}
+      <div style={{ fontSize: "12px", fontFamily: "monospace", marginTop: "2px", lineHeight: 1.45, overflowWrap: "anywhere" }}>{barcode}</div>
       {price && <div style={{ fontSize: "12px", fontWeight: 700, marginTop: "2px" }}>매입가 {price}</div>}
       {productLink && <a href={productLink} target="_blank" rel="noreferrer" style={{ fontSize: "12px", color: wmsColors.slateDark, display: "inline-block", marginTop: "3px" }}>제품링크 ↗</a>}
     </div>
