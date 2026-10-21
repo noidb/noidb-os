@@ -36,8 +36,11 @@
 }
 .actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* 2026-10-21: '입고결과 가져오기'를 빼서 버튼이 2개 — 빈 칸 없이 오른쪽 끝에 붙인다. */
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(148px, 1fr);
   gap: 8px;
+  margin-left: auto;
 }
 .button,
 .linkButton {
