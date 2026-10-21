@@ -1220,6 +1220,12 @@ export default function ShipmentReceiptsPage() {
   };
   return (
     <main className={styles.page}>
+      {/* 2026-10-21 사용자 요청: 수시 처리는 쉽먼트 입고결과와 상관없어서, 위쪽 쉽먼트 버튼·가져온 시각·쉽먼트 경고를 숨긴다. */}
+      {tab === "anytime" ? (
+        <header className={styles.header}>
+          <h1 className={styles.title}>수시 처리</h1>
+        </header>
+      ) : (<>
       <header className={styles.header}>
         <h1 className={styles.title}>쉽먼트 입고결과</h1>
         <div className={styles.actions}>
@@ -1249,6 +1255,7 @@ export default function ShipmentReceiptsPage() {
           </a>
         </div>
       </header>
+      </>)}
       {/* 결과 알림은 화면 아래에 떠서 어디까지 내려가 있어도 보인다 */}
       {(error || message) && (
         <div className={`${styles.toast} ${error ? styles.toastError : ""}`} role={error ? "alert" : "status"}>
@@ -1261,6 +1268,7 @@ export default function ShipmentReceiptsPage() {
           개발용 예시자료입니다. 실제 업무 변경은 없습니다.
         </p>
       )}
+      {tab !== "anytime" && <>
       <p className={styles.notice}>
         {payload?.board.collectedAt
           ? `입고예정일 9/13 이후 마감 쉽먼트 ${payload.targets.length}건 · 가져온 시각 ${new Date(payload.board.collectedAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
@@ -1328,6 +1336,7 @@ export default function ShipmentReceiptsPage() {
           </div>
         </details>
       )}
+      </>}
       <nav className={styles.tabs} aria-label="입고결과 보기">
         {(
           [
