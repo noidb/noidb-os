@@ -38,7 +38,7 @@ export default function WarehouseRecheckCleanup({ onDone }: { onDone: (message: 
   return (
     <section>
       <h2 className={styles.listTitle}>구글시트 정리</h2>
-      <p className={styles.meta}>제품DB: 현재상태에 '단종'이 들어간 행(거래처단종·단종(중복등록) 등)·비관리(중복등록) → 보관(적어 둔 이유도 함께). 보관: 제품DB로 이동(재고있음) → 제품DB(현재상태 비움, 발주가능상태가 정상이 아니면 단종해제 대상).</p>
+      <p className={styles.meta}>제품DB: 현재상태에 '단종'이 들어간 행(거래처단종·단종(중복등록) 등)·비관리(중복등록) → 보관(적어 둔 이유도 함께). 보관: 현재상태에 '재고있음'이 들어간 행 → 제품DB(현재상태 비움, 발주가능상태가 정상이 아니면 단종해제 대상).</p>
       {!preview ? (
         <button type="button" className={`softSageButton ${styles.fullButton}`} disabled={Boolean(busy)} onClick={() => void load()}>
           {busy === "preview" ? "읽는 중…" : "정리할 행 미리보기"}

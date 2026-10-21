@@ -1288,13 +1288,19 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
             const canAdd = !isPreview && !workspaceMoved && !historyView;
             return (
               <section key={section.key} aria-label={`${section.vendorName} 발주`} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                {/* 2026-10-21 사용자 요청: 거래처 줄이 눈에 잘 띄도록 연세이지 바탕·굵은 세이지 선·큰 글씨, 숫자는 배지로. */}
                 <button type="button" aria-expanded={open} onClick={() => setOpenVendorKeys(previous => { const next = new Set(previous); if (next.has(section.key)) next.delete(section.key); else next.add(section.key); return next; })}
-                  style={{ textAlign: "left", minHeight: "48px", padding: "8px 10px", borderRadius: "8px", border: `1px solid ${wmsColors.border}`, borderLeft: "4px solid #60766a", background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                  <span style={{ fontSize: "13px", color: "#60766a", width: "12px" }}>{open ? "▾" : "▸"}</span>
-                  <strong style={{ fontSize: "16px", overflowWrap: "anywhere" }}>{section.vendorName}</strong>
-                  <span style={{ fontSize: "12px", color: wmsColors.muted }}>{draftEntries.length ? "작성중 · " : ""}미처리 {pendingCount} · 입고지연 {delayedCount} · {sectionLines.length}종</span>
+                  style={{ textAlign: "left", minHeight: "56px", padding: "10px 14px", borderRadius: open ? "10px 10px 0 0" : "10px", border: "1px solid #b9cbbc", borderLeft: "6px solid #60766a", background: "#e3ede6", cursor: "pointer", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", boxShadow: "inset 6px 0 0 #60766a, 0 1px 3px #0001", paddingLeft: "18px" }}>
+                  <span style={{ fontSize: "16px", color: "#60766a", width: "16px", fontWeight: 900 }}>{open ? "▼" : "▶"}</span>
+                  <strong style={{ fontSize: "20px", fontWeight: 900, color: "#252525", overflowWrap: "anywhere" }}>{section.vendorName}</strong>
+                  <span style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginLeft: "auto" }}>
+                    {draftEntries.length > 0 && <span style={{ background: "#60766a", color: "#fff", borderRadius: "8px", padding: "3px 9px", fontSize: "12px", fontWeight: 800 }}>작성중</span>}
+                    <span style={{ background: pendingCount ? "#f2dfd8" : "#fff", color: "#4b4744", border: "1px solid #ddd5ca", borderRadius: "8px", padding: "3px 9px", fontSize: "12px", fontWeight: 800 }}>미처리 {pendingCount}</span>
+                    {delayedCount > 0 && <span style={{ background: "#e9ddcf", color: "#4b4744", border: "1px solid #c7b9a8", borderRadius: "8px", padding: "3px 9px", fontSize: "12px", fontWeight: 800 }}>입고지연 {delayedCount}</span>}
+                    <span style={{ background: "#fff", color: "#4b4744", border: "1px solid #ddd5ca", borderRadius: "8px", padding: "3px 9px", fontSize: "12px", fontWeight: 800 }}>{sectionLines.length}종</span>
+                  </span>
                 </button>
-                {open && <div style={cardStyle}>
+                {open && <div style={{ ...cardStyle, marginTop: "-10px", borderRadius: "0 0 10px 10px", border: "1px solid #b9cbbc", borderTop: "none", borderLeft: "6px solid #60766a" }}>
                   {/* 보낸 상품 → 작성 중 상품 순서로 한 목록에 이어서 보여 주고, 새로 넣은 상품은 맨 아래에 붙는다. */}
                   <fieldset disabled={saving} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
                     <div style={lineGridStyle}>

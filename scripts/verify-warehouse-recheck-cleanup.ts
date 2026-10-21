@@ -42,3 +42,12 @@ assert.deepEqual(plan3.appendStorage, [["21", "나", "거래처단종"]]);
 assert.deepEqual(plan3.deleteRows, [2, 3]);
 assert.equal(plan3.moves.find(m => m.skuId === "20")?.mode, "delete-only");
 console.log("rerun ok");
+
+// 2026-10-21: 보관 탭 현재상태 '재고있음'만 적어도 제품DB로
+{
+  const pd = [["현재상태", "SKU ID", "상품명", "발주가능상태"]];
+  const st = [["현재상태", "SKU ID", "상품명", "발주가능상태"], ["재고있음", "9001", "a", "불가"], ["거래처단종", "9002", "b", "불가"]];
+  const plan = planWarehouseRecheckCleanup([], pd, st);
+  assert.deepEqual(plan.moves.map(m => [m.skuId, m.target, m.result]), [["9001", "제품DB", "재고있음"]]);
+  console.log("PASS 보관 '재고있음' → 제품DB");
+}
