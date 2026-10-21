@@ -7,7 +7,7 @@
   const panel = document.createElement("section");
   panel.id = "noidb-shipment-reader";
   panel.style.cssText = "padding:16px;margin:16px;border:2px solid #55735c;border-radius:10px;background:#f3f7f1;color:#29352f";
-  panel.innerHTML = '<h3>NOID-B 쉽먼트 입고결과</h3><p>입고예정일 9/13 이후 마감된 쉽먼트 중 새로 마감된 것만 읽습니다. 쿠팡 자료는 변경하지 않습니다.</p><div><button type="button" data-action="collect">입고결과 일괄 가져오기</button> <button type="button" data-action="cancel" hidden>중단</button> <button type="button" data-action="retry" disabled>NOID-B 전송 재시도</button> <button type="button" data-action="download" disabled>자료 파일 저장</button></div><p role="status" aria-live="polite"></p><div data-pdf style="margin-top:10px;padding:10px;border-top:1px solid #c9d6cb"><strong>Label·내역서 PDF 자동 저장</strong><p style="margin:4px 0">쿠팡에서 쉽먼트의 Label·내역서 PDF를 받으면 NOID-B(G드라이브 출력세트 폴더)로 바로 저장합니다. 따로 폴더에 옮기지 않아도 됩니다.</p><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:6px 0"><label>입고예정일 <select data-pdf-date style="height:30px;border-radius:8px"></select></label><button type="button" data-action="pdf-all" style="height:30px;padding:0 12px;border:1px solid #c9d6cb;border-radius:8px;background:#e3ede6;font-weight:700;cursor:pointer">이 날짜 Label·내역서 전부 받기</button></div><p data-pdf-batch style="margin:4px 0"></p><p data-pdf-status style="margin:4px 0">아직 받은 PDF 없음</p><p data-pdf-url style="margin:4px 0;font-size:11px;color:#5d6b62"></p></div>';
+  panel.innerHTML = '<h3>NOID-B 쉽먼트 입고결과</h3><p>입고예정일 9/13 이후 마감된 쉽먼트 중 새로 마감된 것만 읽습니다. 쿠팡 자료는 변경하지 않습니다.</p><div><button type="button" data-action="collect">입고결과 일괄 가져오기</button> <button type="button" data-action="cancel" hidden>중단</button> <button type="button" data-action="retry" disabled>NOID-B 전송 재시도</button> <button type="button" data-action="download" disabled>자료 파일 저장</button></div><p role="status" aria-live="polite"></p><div data-pdf style="margin-top:10px;padding:10px;border-top:1px solid #c9d6cb"><strong>Label·내역서 PDF 자동 저장</strong><p style="margin:4px 0">Label·내역서를 누르면 컴퓨터로 받지 않고 G드라이브 출력세트 폴더에 바로 저장합니다(저장 창 없음).</p><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:6px 0"><label>입고예정일 <select data-pdf-date style="height:30px;border-radius:8px"></select></label><button type="button" data-action="pdf-all" style="height:30px;padding:0 12px;border:1px solid #c9d6cb;border-radius:8px;background:#e3ede6;font-weight:700;cursor:pointer">이 날짜 Label·내역서 전부 받기</button></div><p data-pdf-batch style="margin:4px 0"></p><p data-pdf-status style="margin:4px 0">아직 받은 PDF 없음</p><p data-pdf-url style="margin:4px 0;font-size:11px;color:#5d6b62"></p></div>';
   function placePanel() {
     if (location.pathname === PANEL_PATH) {
       if (!panel.isConnected) (document.querySelector("#app") || document.body).prepend(panel);
@@ -147,7 +147,7 @@
         }
       }
       pdfBatch.textContent = `${date} 쉽먼트 ${rows.length}건: 새로 받기 ${clicked}개${skipped ? ` · 이미 받은 ${skipped}개 건너뜀` : ""}. 저장 결과는 아래에 표시됩니다.`
-        + (clicked ? " (크롬이 '여러 파일 다운로드'를 물으면 허용을 눌러 주세요.)" : "");
+       ;
     } finally { pdfBusy = false; pdfAll.disabled = dateSelect.disabled = false; }
   });
   placePanel();

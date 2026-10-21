@@ -130,7 +130,8 @@ async function noidbReadDownload(url) {
   if (/^data:application\/pdf;base64,/.test(url)) return url.split(",")[1];
   throw new Error("받은 PDF를 다시 읽지 못했습니다.");
 }
-async function noidbHandleDownload(item) {
+async function noidbHandleDownload(item, options = {}) {
+  let lastBase64 = "";
   if (!item || noidbPdfHandled.has(item.id)) return;
   const url = item.finalUrl || item.url || "";
   const name = String(item.filename || "").split(/[\\/]/).pop();
@@ -143,6 +144,7 @@ async function noidbHandleDownload(item) {
   noidbNotifyPdf({ phase: "sending", name, kind, url: shownUrl });
   try {
     const base64 = await noidbReadDownload(url);
+    lastBase64 = base64;
     const response = await fetch("https://noidb-os.vercel.app/api/wms/shipment-print/pdf-upload", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, kind, sourceUrl: shownUrl, base64 }),
@@ -151,9 +153,24 @@ async function noidbHandleDownload(item) {
     if (!response.ok || !result.ok) throw new Error(result.error || "PDF를 저장하지 못했습니다.");
     noidbNotifyPdf({ phase: "saved", name: result.fileName || name, kind, url: shownUrl, skipped: Boolean(result.skipped) });
   } catch (error) {
-    noidbNotifyPdf({ phase: "failed", name, kind, url: shownUrl, error: error.message });
+    noidbNotifyPdf({ phase: "failed", name, kind, url: shownUrl, error: error.message + (options.fallbackDownload ? " 이 PDF는 컴퓨터로 받았습니다." : "") });
+    if (options.fallbackDownload) chrome.downloads.download({ url: lastBase64 ? `data:application/pdf;base64,${lastBase64}` : (item.finalUrl || item.url), filename: name });
   }
 }
+// 0.9.11b(2026-10-21): 사용자 크롬은 '다운로드 전 저장 위치 묻기'가 켜져 있어 PDF마다 저장 창이 떴다.
+// 쿠팡 쉽먼트 Label·내역서 PDF는 컴퓨터로 받지 않고(저장 창이 뜨기 전에 취소) 같은 파일을 읽어 G드라이브에 바로 저장한다.
+// G드라이브 저장에 실패하면 그 PDF만 예전처럼 컴퓨터로 받게 한다(파일을 잃지 않도록).
+function noidbIsShipmentPdf(item) {
+  const name = String(item.filename || "").split(/[\\/]/).pop();
+  const url = item.finalUrl || item.url || "";
+  const fromCoupang = /^(blob:)?https:\/\/supplier\.coupang\.com\//.test(url) || String(item.referrer || "").startsWith("https://supplier.coupang.com/");
+  return fromCoupang && /^shipment_(Label|ManiFest)_document.*\.pdf$/i.test(name);
+}
+chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  if (item.byExtensionId === chrome.runtime.id || !noidbIsShipmentPdf(item)) { suggest(); return; }
+  chrome.downloads.cancel(item.id, () => { chrome.downloads.erase({ id: item.id }); });
+  void noidbHandleDownload(item, { fallbackDownload: true });
+});
 chrome.downloads.onChanged.addListener(delta => {
   if (!delta?.id || !(delta.filename?.current || delta.state?.current === "complete")) return;
   chrome.downloads.search({ id: delta.id }, items => { void noidbHandleDownload(items && items[0]); });

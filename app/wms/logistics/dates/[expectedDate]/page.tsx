@@ -693,7 +693,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
       <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "12px", margin: "12px 0 0", background: "#fff", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(160px, 260px)", gap: "10px", alignItems: "center" }}>
         <div>
           <strong style={{ display: "block", fontSize: "14px" }}>Label·내역서 PDF 받기</strong>
-          <span style={{ fontSize: "12px", color: wmsColors.muted }}>쿠팡 쉽먼트 화면에서 이 날짜 쉽먼트의 Label·내역서 PDF를 받으세요. 쉽먼트 확장(0.9.11)이 받은 PDF를 G드라이브 출력세트 폴더에 자동으로 저장하니, 받은 뒤 바로 4번 출력세트를 누르면 됩니다.</span>
+          <span style={{ fontSize: "12px", color: wmsColors.muted }}>쿠팡 쉽먼트 화면에서 이 날짜 쉽먼트의 Label·내역서 PDF를 받으세요. 쉽먼트 확장(0.9.12)이 받은 PDF를 G드라이브 출력세트 폴더에 자동으로 저장하니, 받은 뒤 바로 4번 출력세트를 누르면 됩니다.</span>
         </div>
         <a href="https://supplier.coupang.com/ibs/asn/active" target="_blank" rel="noreferrer" className="softBeigeButton" style={{ width: "100%", textDecoration: "none", boxSizing: "border-box" }}>
           PDF파일 다운받기

@@ -1499,7 +1499,7 @@ export default function ShipmentReceiptsPage() {
           </button>
           {/* 2026-10-15: 쿠팡 쉽먼트 화면에 '입고결과 일괄 가져오기' 칸을 띄우는 확장 기능. 같은 이름 zip을 같은 폴더에 덮어쓰고 새로고침. */}
           <a className={`softApricotButton ${styles.headerButton}`} href="/downloads/noidb-supplier-hub.zip" download>
-            확장 v0.9.11 받기
+            확장 v0.9.12 받기
           </a>
         </div>
       </header>

@@ -52,6 +52,12 @@
     window.postMessage({ source: "NOIDB_POC_PAGE_NETWORK", observation }, "*");
   }
 
+  // 0.9.11b: 쿠팡이 PDF를 받게 한 뒤 바로 blob 주소를 지우면 확장이 같은 파일을 다시 읽지 못한다 → 쉽먼트 화면에서는 1분 뒤에 지운다.
+  if (location.pathname.startsWith("/ibs/") && !URL.__noidbDelayedRevoke) {
+    const originalRevoke = URL.revokeObjectURL.bind(URL);
+    URL.revokeObjectURL = url => { setTimeout(() => originalRevoke(url), 60000); };
+    URL.__noidbDelayedRevoke = true;
+  }
   // 0.9.10(2026-10-21): 쉽먼트 Label·내역서 PDF를 받을 때 그 파일을 그대로 잡아 NOID-B(G드라이브 출력세트 폴더)로 보낸다.
   // 쿠팡에는 아무것도 보내거나 바꾸지 않는다. 쿠팡의 원래 다운로드도 그대로 진행된다.
   const pdfSeen = new Set();
