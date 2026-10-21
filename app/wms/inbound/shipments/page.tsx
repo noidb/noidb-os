@@ -19,6 +19,7 @@ import type {
 import styles from "./shipments.module.css";
 import DiscontinueByCode from "./DiscontinueByCode";
 import { saveReceiptTabCounts } from "@/lib/wms/receipt-tab-counts";
+import { readLastView, saveLastView } from "@/lib/wms/last-view-cache";
 
 type Tab = "anytime" | "results" | "pending" | "history";
 type Decision = "vendor" | "discontinue" | "reorder" | "marketing";
@@ -165,6 +166,8 @@ export default function ShipmentReceiptsPage() {
   const [busy, setBusy] = useState(false);
   const [fixture, setFixture] = useState(false);
   const [modeReady, setModeReady] = useState(false);
+  /** 마지막으로 본 목록을 먼저 보여 주는 중이면 그 저장 시각(2026-10-21). 최신 자료가 오면 비운다. */
+  const [cachedViewAt, setCachedViewAt] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [followUp, setFollowUp] = useState<
@@ -240,6 +243,20 @@ export default function ShipmentReceiptsPage() {
         return;
       }
       setFixture(false);
+      // 2026-10-21: 처음 열 때는 이 브라우저에 저장해 둔 마지막 목록을 바로 보여 주고, 뒤에서 최신 자료를 받아 바꾼다.
+      // 최신 자료가 올 때까지는 busy라서 처리 버튼은 눌리지 않는다(지난 자료로 처리하지 않게).
+      if (!manual) {
+        void readLastView<unknown>("logistics-receipts-board").then(cached => {
+          if (!cached) return;
+          try {
+            const view = asPayload(cached.data);
+            setPayload(current => current || view);
+            if (view.followUp) setFollowUp(current => current || view.followUp!);
+            setCachedViewAt(cached.savedAt);
+            setModeReady(true);
+          } catch { /* 형식이 바뀐 옛 저장본 — 무시 */ }
+        });
+      }
       const response = await fetch("/api/wms/logistics/receipts?view=board", {
         cache: "no-store",
       });
@@ -248,6 +265,8 @@ export default function ShipmentReceiptsPage() {
         throw new Error(data.error || "입고결과를 불러오지 못했습니다.");
       const next = asPayload(data);
       setPayload(next);
+      setCachedViewAt("");
+      void saveLastView("logistics-receipts-board", data);
       if (next.followUp) setFollowUp(next.followUp);
       else await loadFollowUp(next, false);
       setMessage(manual ? "최신 입고결과와 후속 처리 목록을 다시 불러왔습니다." : "");
@@ -273,6 +292,7 @@ export default function ShipmentReceiptsPage() {
       const next = asPayload(data);
       setPayload(next);
       if (next.followUp) setFollowUp(next.followUp);
+      void saveLastView("logistics-receipts-board", data);
     } catch { /* 다음 새로고침 때 다시 받음 */ }
   }
 
@@ -1462,6 +1482,7 @@ export default function ShipmentReceiptsPage() {
           <h1 className={styles.title}>거래처발주·단종관리</h1>
           {/* 2026-10-21: 불러오는 동안 빈 화면처럼 보여서 진행 표시를 둔다. */}
           {!payload && !error && <p className={styles.meta} role="status">거래처 발주·단종 목록을 불러오는 중…</p>}
+          {cachedViewAt && busy && <p className={styles.meta} role="status">마지막으로 본 목록({new Date(cachedViewAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })})입니다 · 최신 자료 확인 중…</p>}
         </header>
       ) : (<>
       <header className={styles.header}>
@@ -1496,6 +1517,7 @@ export default function ShipmentReceiptsPage() {
         </p>
       )}
       {tab !== "anytime" && <>
+      {cachedViewAt && busy && <p className={styles.notice} role="status">마지막으로 본 목록({new Date(cachedViewAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })})입니다 · 최신 자료 확인 중… 확인이 끝나면 버튼을 누를 수 있어요.</p>}
       <p className={styles.notice}>
         {payload?.board.collectedAt
           ? `입고예정일 9/13 이후 마감 쉽먼트 ${payload.targets.length}건 · 가져온 시각 ${new Date(payload.board.collectedAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
