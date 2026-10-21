@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SupplyStatusAudit } from "@/lib/wms/supply-status-update";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 import { wmsColors } from "@/lib/wms/ui-tokens";
@@ -12,13 +12,17 @@ import { wmsColors } from "@/lib/wms/ui-tokens";
  * 화면을 열 때 자동으로 조회하지 않는다 — 버튼을 누를 때만 G드라이브 최신 엑셀로 확인한다.
  * (2026-10-08 확장 화면 수집은 Supplier Hub가 중간에 비워져 삭제 — 엑셀 다운로드만 쓴다.)
  */
-export default function SupplyStatusAuditPanel({ onApplied, onAudited, compact = false }: {
+export default function SupplyStatusAuditPanel({ onApplied, onAudited, compact = false, headless = false, autoRun = false }: {
   /** 반영이 끝난 뒤 부르는 함수(입고결과 화면: 단종·단종해제 목록 다시 계산) */
   onApplied?: () => void;
   /** 최신파일을 확인하면 SKU ID별 최신 발주가능상태를 넘긴다(입고결과 표의 '발주상태' 칸) */
   onAudited?: (latest: { orderable: Record<string, string>; fileName: string; fileMtime: string }) => void;
   /** 입고결과 화면처럼 표 사이에 한 줄로 넣을 때 */
   compact?: boolean;
+  /** 작업센터 '자주 하는 일'(2026-10-21): 제목·확인 버튼 없이 결과만 보여 준다(바깥 '새로고침' 버튼이 확인을 대신함) */
+  headless?: boolean;
+  /** 화면에 나오자마자 최신파일을 확인한다 */
+  autoRun?: boolean;
 } = {}) {
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
@@ -50,6 +54,14 @@ export default function SupplyStatusAuditPanel({ onApplied, onAudited, compact =
       setLoading(false);
     }
   }
+
+  const autoRan = useRef(false);
+  useEffect(() => {
+    if (!autoRun || autoRan.current) return;
+    autoRan.current = true;
+    void runAudit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun]);
 
   async function applyChanges() {
     if (!audit || applying || audit.changeCount === 0) return;
@@ -90,8 +102,10 @@ export default function SupplyStatusAuditPanel({ onApplied, onAudited, compact =
   const shownChanges = audit ? audit.changes.filter(change => !filter || change.fields.some(field => field.startsWith(filter))) : [];
 
   return (
-    <section id="supply-status-audit" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: compact ? "10px" : "14px", padding: compact ? "10px 12px" : "14px", background: wmsColors.surfaceBeige, margin: compact ? "16px 0 4px" : undefined }}>
-      {compact ? (
+    <section id="supply-status-audit" className="wms-automation-card" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: compact ? "10px" : "14px", padding: compact ? "10px 12px" : "14px", background: wmsColors.surfaceBeige, margin: headless ? 0 : compact ? "16px 0 4px" : undefined }}>
+      {headless ? (
+        loading ? <p style={{ margin: 0, fontSize: "13px", color: wmsColors.muted }}>최신파일 확인 중…</p> : null
+      ) : compact ? (
         <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
           <strong style={{ fontSize: "15px", fontWeight: 800, color: wmsColors.ink, flex: "1 1 220px" }}>
             상품공급상태 최신파일 반영

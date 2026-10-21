@@ -307,11 +307,7 @@ export default function WmsWorkCenterPage() {
       {/* 2026-10-11 사용자 요청: 진행 중 발주 카드와 메뉴 카드가 똑같아 헷갈려서 제목·구분선으로 나눈다. */}
       <h2 className={styles.menuHeading}>작업 메뉴</h2>
       <div className={styles.tasks}>
-        <section className={styles.task}>
-          <h2>발주서작업</h2>
-          <p>입고예정일이 가까운 발주서부터 확인하고 발주묶음을 만듭니다.</p>
-          <Link className={styles.primaryPink} href="/wms/logistics/new-orders">발주서 검색·처리 시작</Link>
-        </section>
+        {/* 2026-10-21: '발주서작업' 칸은 위 '자주 하는 일' 2번(발주서작업 버튼)과 겹쳐서 뺐다. */}
         {/* 2026-10-20 사용자 요청: 하는 시점에 맞춰 수시 처리(거래처 발주·단종·단종해제)와 입고결과 처리(미납분 재발주·쿠폰광고)로 나눔. */}
         <section className={styles.task}>
           <h2>거래처발주·단종관리</h2>

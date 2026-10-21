@@ -981,13 +981,16 @@ export default function ShipmentReceiptsPage() {
           if ((line.route && line.route.decision !== "reorder") || covered[line.lineKey]) return (
             <div className={styles.decisionRow}>
               <span className={styles.meta} style={{ gridColumn: "span 2", textAlign: "center" }}>{status}</span>
-              <button className={`softSageButton ${styles.decisionButton}`} disabled={busyLine} onClick={() => void moveToReorder(line, status)}>
-                재발주요청으로 바꾸기
-              </button>
-              {/* 2026-10-21: 거래처에 발주했지만 최종 단종 답변을 받아 단종 처리한 줄 등 — 이 목록에서만 뺀다(거래처 발주 기록은 그대로). */}
-              <button className={`softBeigeButton ${styles.decisionButton}`} disabled={busyLine} onClick={() => { if (window.confirm(`SKU ${line.skuId}를 이 목록에서 삭제할까요? 거래처 발주 기록은 그대로 남고, '모든 쉽먼트 미납 전체'에서 되돌릴 수 있어요.`)) void toggleReorderExclusion(line, "exclude"); }}>
-                삭제
-              </button>
+              {/* 2026-10-21: 두 버튼을 같은 크기로 한 줄에 */}
+              <div style={{ gridColumn: "span 2", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                <button className={`softSageButton ${styles.decisionButton}`} disabled={busyLine} onClick={() => void moveToReorder(line, status)}>
+                  재발주요청
+                </button>
+                {/* 2026-10-21: 거래처에 발주했지만 최종 단종 답변을 받아 단종 처리한 줄 등 — 이 목록에서만 뺀다(거래처 발주 기록은 그대로). */}
+                <button className={`softBeigeButton ${styles.decisionButton}`} disabled={busyLine} onClick={() => { if (window.confirm(`SKU ${line.skuId}를 이 목록에서 삭제할까요? 거래처 발주 기록은 그대로 남고, '모든 쉽먼트 미납 전체'에서 되돌릴 수 있어요.`)) void toggleReorderExclusion(line, "exclude"); }}>
+                  삭제
+                </button>
+              </div>
             </div>
           );
           if (isSupplyReview(line) && !supplyChecks[line.skuId]) return (
@@ -1464,18 +1467,7 @@ export default function ShipmentReceiptsPage() {
       <header className={styles.header}>
         <h1 className={styles.title}>쉽먼트 입고결과</h1>
         <div className={styles.actions}>
-          {fixture ? (
-            <span className={`softBeigeButton ${styles.headerButton}`}>입고결과 가져오기</span>
-          ) : (
-            <a
-              className={`softBeigeButton ${styles.headerButton}`}
-              href="https://supplier.coupang.com/ibs/asn/active"
-              target="_blank"
-              rel="noreferrer"
-            >
-              입고결과 가져오기
-            </a>
-          )}
+          {/* 2026-10-21: '입고결과 가져오기'는 작업센터 '자주 하는 일' 3번 '바로가기'와 겹쳐서 뺐다. */}
           <button
             className={`softSageButton ${styles.headerButton}`}
             type="button"
@@ -1507,7 +1499,7 @@ export default function ShipmentReceiptsPage() {
       <p className={styles.notice}>
         {payload?.board.collectedAt
           ? `입고예정일 9/13 이후 마감 쉽먼트 ${payload.targets.length}건 · 가져온 시각 ${new Date(payload.board.collectedAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
-          : "아직 가져온 입고결과가 없습니다. '입고결과 가져오기'로 쿠팡 쉽먼트 화면을 열고 '입고결과 일괄 가져오기'를 눌러 주세요."}
+          : "아직 가져온 입고결과가 없습니다. 작업센터 '자주 하는 일'의 입고결과 가져오기 '바로가기'로 쿠팡 쉽먼트 화면을 열고 '입고결과 일괄 가져오기'를 눌러 주세요."}
       </p>
       {payload?.board.warnings
         .filter((warning) => !warning.startsWith("공급상태가 정상이 아닌"))

@@ -39,33 +39,40 @@ export default function DailyRoutine() {
       .catch(() => {});
   }, []);
 
-  const items: Array<{ id: RoutineId; title: string; summary: string; shortcut?: string; siteLink?: string; body?: ReactNode }> = [
+  // '새로고침'·'정리행 미리보기'를 다시 누르면 같은 칸을 처음부터 다시 실행한다(부품을 새로 그림).
+  const [runKey, setRunKey] = useState(0);
+  const items: Array<{ id: RoutineId; title: string; summary: string; label: string; rerun?: boolean; shortcut?: string; siteLink?: string; body?: ReactNode }> = [
     {
       id: "supply-status", title: "상품공급상태 최신파일 반영",
       summary: "쿠팡에서 상품공급상태 파일을 받아 G드라이브에 올린 뒤, 제품DB·보관 탭 발주가능상태를 맞춥니다.",
       shortcut: "https://supplier.coupang.com/plan/ticket",
-      body: <SupplyStatusAuditPanel compact onAudited={() => mark("supply-status")} onApplied={() => mark("supply-status")} />,
+      // 2026-10-21: '새로고침'이 곧 '최신파일 확인하기' — 누르면 바로 확인하고 결과(반영할 항목)만 보여 준다.
+      label: "새로고침", rerun: true,
+      body: <SupplyStatusAuditPanel key={runKey} headless autoRun onAudited={() => mark("supply-status")} onApplied={() => mark("supply-status")} />,
     },
     {
       id: "new-orders", title: "신규발주서 다운로드·발주확정",
       summary: "새로 나온 발주서를 받아 발주확정까지 진행합니다.",
       shortcut: "https://supplier.coupang.com/po-web/purchase/order/list",
-      siteLink: "/wms/logistics/new-orders",
+      label: "발주서작업", siteLink: "/wms/logistics/new-orders",
     },
     {
       id: "receipts", title: "입고결과 가져오기",
       summary: "쿠팡 쉽먼트 화면에서 확장 버튼 '입고결과 일괄 가져오기'를 누른 뒤 입고결과를 처리합니다.",
       shortcut: "https://supplier.coupang.com/ibs/asn/active",
-      siteLink: "/wms/vendor-orders?tab=results",
+      label: "결과보기", siteLink: "/wms/vendor-orders?tab=results",
     },
     {
       id: "sheet-cleanup", title: "구글시트 정리",
       summary: "제품DB·보관 탭 사이에 옮길 행(단종 → 보관, 재고있음 → 제품DB)을 정리합니다.",
-      body: <WarehouseRecheckCleanup onDone={(text, isError) => { setNote({ text, error: isError }); if (!isError) mark("sheet-cleanup"); }} />,
+      // 2026-10-21: 누르면 바로 정리할 행 목록을 보여 준다.
+      label: "정리행 미리보기", rerun: true,
+      body: <WarehouseRecheckCleanup key={runKey} embedded autoLoad onClose={() => setOpen(null)} onDone={(text, isError) => { setNote({ text, error: isError }); if (!isError) { mark("sheet-cleanup"); setOpen(null); } }} />,
     },
     {
       id: "wims", title: "WIMS 상품등록상태 확인",
       summary: "WIMS 화면에서 확장 기능 'WIMS 전체를 NOID-B로 전송'을 눌러 등록 결과를 가져옵니다.",
+      label: "하기",
       body: <WimsRegistrationImportPanel />,
     },
   ];
@@ -80,8 +87,10 @@ export default function DailyRoutine() {
           const isOpen = open === item.id;
           // 하기: 사이트 화면으로 이동(siteLink) 또는 이 자리에서 펼치기(body)
           const doButton = item.siteLink
-            ? <Link className="softSageButton" style={buttonStyle} href={item.siteLink} onClick={() => mark(item.id)}>하기</Link>
-            : <button type="button" className={isOpen ? "softApricotButton" : "softSageButton"} style={buttonStyle} aria-expanded={isOpen} onClick={() => { if (!isOpen && item.id === "wims") mark(item.id); setOpen(isOpen ? null : item.id); }}>{isOpen ? "접기" : "하기"}</button>;
+            ? <Link className="softSageButton" style={buttonStyle} href={item.siteLink} onClick={() => mark(item.id)}>{item.label}</Link>
+            : item.rerun
+              ? <button type="button" className="softSageButton" style={buttonStyle} onClick={() => { setRunKey((value) => value + 1); setOpen(item.id); }}>{item.label}</button>
+              : <button type="button" className={isOpen ? "softApricotButton" : "softSageButton"} style={buttonStyle} aria-expanded={isOpen} onClick={() => { if (!isOpen) mark(item.id); setOpen(isOpen ? null : item.id); }}>{isOpen ? "접기" : item.label}</button>;
           return (
             <article key={item.id} style={{ border: "1px solid #e5dace", background: "#fbf8f4", borderRadius: 10, padding: "10px 12px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "28px minmax(0, 1fr) minmax(150px, 220px)", gap: 10, alignItems: "center" }}>
@@ -98,7 +107,14 @@ export default function DailyRoutine() {
                   {item.shortcut && <a className="softBeigeButton" style={buttonStyle} href={item.shortcut} target="_blank" rel="noreferrer" onClick={() => mark(item.id)}>바로가기</a>}
                 </div>
               </div>
-              {isOpen && item.body && <div style={{ marginTop: 10 }}>{item.body}</div>}
+              {isOpen && item.body && (
+                <div style={{ marginTop: 10 }}>
+                  {item.body}
+                  {item.id === "supply-status" && (
+                    <button type="button" className="softApricotButton" style={{ ...buttonStyle, width: "100%", marginTop: 8 }} onClick={() => setOpen(null)}>닫기</button>
+                  )}
+                </div>
+              )}
             </article>
           );
         })}

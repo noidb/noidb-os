@@ -1,15 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import styles from "./shipments.module.css";
 
 type Move = { source: "창고재확인" | "보관" | "제품DB"; rowNumber: number; skuId: string; productName: string; result: string; orderableStatus: string; target: "보관" | "제품DB"; mode: "append" | "clear-status" | "delete-only"; release: boolean };
 type Preview = { token: string; pending: number; moves: Move[]; unknown: Array<{ rowNumber: number; skuId: string; productName: string; result: string }>; problems: string[] };
 
 /** 창고재확인 탭 정리: 미리보기로 옮길 행을 확인한 뒤 실행해야 시트가 바뀐다. */
-export default function WarehouseRecheckCleanup({ onDone }: { onDone: (message: string, isError?: boolean) => void }) {
+export default function WarehouseRecheckCleanup({ onDone, embedded = false, autoLoad = false, onClose }: {
+  onDone: (message: string, isError?: boolean) => void;
+  /** 작업센터 '자주 하는 일'(2026-10-21): 제목·설명·미리보기 버튼 없이 정리할 행 목록만 */
+  embedded?: boolean;
+  /** 화면에 나오자마자 정리할 행을 읽는다 */
+  autoLoad?: boolean;
+  /** '닫기'를 눌렀을 때(바깥에서 칸을 접기) */
+  onClose?: () => void;
+}) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState("");
+  const autoLoaded = useRef(false);
+  useEffect(() => {
+    if (!autoLoad || autoLoaded.current) return;
+    autoLoaded.current = true;
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoLoad]);
 
   async function load() {
     setBusy("preview");
@@ -37,12 +52,14 @@ export default function WarehouseRecheckCleanup({ onDone }: { onDone: (message: 
 
   return (
     <section>
-      <h2 className={styles.listTitle}>구글시트 정리</h2>
-      <p className={styles.meta}>제품DB: 현재상태에 '단종'이 들어간 행(거래처단종·단종(중복등록) 등)·비관리(중복등록) → 보관(적어 둔 이유도 함께). 보관: 현재상태에 '재고있음'이 들어간 행 → 제품DB(현재상태 비움, 발주가능상태가 정상이 아니면 단종해제 대상).</p>
+      {!embedded && <h2 className={styles.listTitle}>구글시트 정리</h2>}
+      {!embedded && <p className={styles.meta}>제품DB: 현재상태에 '단종'이 들어간 행(거래처단종·단종(중복등록) 등)·비관리(중복등록) → 보관(적어 둔 이유도 함께). 보관: 현재상태에 '재고있음'이 들어간 행 → 제품DB(현재상태 비움, 발주가능상태가 정상이 아니면 단종해제 대상).</p>}
       {!preview ? (
+        embedded ? <p className={styles.meta}>{busy === "preview" ? "정리할 행 읽는 중…" : "정리할 행을 읽지 못했습니다. 다시 눌러 주세요."}</p> : (
         <button type="button" className={`softSageButton ${styles.fullButton}`} disabled={Boolean(busy)} onClick={() => void load()}>
           {busy === "preview" ? "읽는 중…" : "정리할 행 미리보기"}
         </button>
+        )
       ) : (
         <>
           {preview.problems.length > 0 && <p className={`${styles.notice} ${styles.error}`}>{preview.problems.join(" ")}</p>}
@@ -74,7 +91,7 @@ export default function WarehouseRecheckCleanup({ onDone }: { onDone: (message: 
             <p className={styles.meta}>기준 없는 결과(그대로 둠): {preview.unknown.map((u) => `${u.skuId} '${u.result}'`).join(", ")}</p>
           )}
           <div className={styles.pairButtons}>
-            <button type="button" className={`softApricotButton ${styles.fullButton}`} disabled={Boolean(busy)} onClick={() => setPreview(null)}>닫기</button>
+            <button type="button" className={`softApricotButton ${styles.fullButton}`} disabled={Boolean(busy)} onClick={() => { setPreview(null); onClose?.(); }}>닫기</button>
             <button type="button" className={`softPinkButton ${styles.fullButton}`} disabled={Boolean(busy) || !preview.moves.length || preview.problems.length > 0} onClick={() => void run()}>
               {busy === "run" ? "옮기는 중…" : `정리 실행 (${preview.moves.length}건)`}
             </button>
