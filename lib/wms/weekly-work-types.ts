@@ -88,6 +88,8 @@ export interface WeeklyWorkspace {
   statusListRequestedPruned?: Partial<Record<"discontinue" | "release", { at: string; marks: Record<string, string> }>>;
   /** 미납분을 이미 거래처에 보낸 발주(입고대기·입고지연)로 처리한 기록. 미납 줄 키별. */
   coveredByVendorOrder?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; vendors: string[]; sentOn: string; at: string }>;
+  /** 작업센터 '매일 할 일'에서 항목별로 마지막으로 완료한 시각(항목 id → ISO, 2026-10-21). 기기 사이에 이어진다. */
+  dailyRoutineDoneAt?: Record<string, string>;
   /** 입고결과 미납 SKU 리스트에서 '재발주요청 제외'로 뺀 줄(줄 키별, 2026-10-21). 이미 단종했거나 아직 입고 전인 SKU를 재발주요청 파일에서 뺀다. */
   reorderExcluded?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; at: string }>;
   /** 재발주요청 화면 '전체 미납 목록'에서 '검토 완료로 정리'로 숨긴 미납 줄(줄 키 → 시각, 2026-10-20). 처리기록은 그대로 두고 목록에서만 뺀다. */
