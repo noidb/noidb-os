@@ -561,6 +561,33 @@ export default function ShipmentReceiptsPage() {
     }
   }
   // 2026-10-21: 미납 SKU 리스트는 '재발주요청 제외'만 고르고, 나머지는 파일 생성 때 한꺼번에 재발주요청으로 보낸다.
+  /** 거래처발주·단종·기존 발주 처리한 미납 줄을 재발주요청으로 바꾼다(2026-10-21). */
+  async function moveToReorder(line: LogisticsReceiptBoardLine, status: string) {
+    if (fixture || !payload) return;
+    if (!window.confirm(`SKU ${line.skuId}는 지금 '${status}' 상태예요. 재발주요청으로 바꿀까요?`)) return;
+    setError("");
+    setRoutingKeys((current) => ({ ...current, [line.lineKey]: true }));
+    try {
+      const response = await fetch("/api/wms/logistics/receipts/reroute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lineKey: line.lineKey, expectedCollectedAt: payload.collectedAt || payload.board.collectedAt }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "재발주요청으로 바꾸지 못했습니다.");
+      followUpStale.current = true;
+      await load(true);
+      setMessage(`SKU ${line.skuId} · 재발주요청으로 바꿨습니다.${data.note ? ` ${data.note}` : ""}`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "재발주요청으로 바꾸지 못했습니다.");
+    } finally {
+      setRoutingKeys((current) => {
+        const next = { ...current };
+        delete next[line.lineKey];
+        return next;
+      });
+    }
+  }
   async function toggleReorderExclusion(line: LogisticsReceiptBoardLine, action: "exclude" | "undo") {
     if (fixture || !payload) return;
     setError("");
@@ -746,20 +773,6 @@ export default function ShipmentReceiptsPage() {
       .map((line) => line.shipmentNumber),
   );
   const reorderExcluded = payload?.reorderExcluded || {};
-  const resultLines = [...shortageLines].sort(
-    (left, right) =>
-      (reorderExcluded[left.lineKey] ? 1 : 0) - (reorderExcluded[right.lineKey] ? 1 : 0) ||
-      (left.state === "ready" ? 0 : 1) - (right.state === "ready" ? 0 : 1) ||
-      left.shipmentNumber.localeCompare(right.shipmentNumber),
-  );
-  const routedLines = lines.filter((line) => line.state === "routed");
-  // 파일 생성 때 재발주요청으로 함께 보낼 미납 줄(제외하지 않은 것)
-  const reorderReadyLines = resultLines.filter((line) => line.kind === "shortage" && line.state === "ready" && (line.remainingQuantity ?? 0) > 0 && !reorderExcluded[line.lineKey]);
-  const reorderExcludedCount = resultLines.filter((line) => reorderExcluded[line.lineKey]).length;
-  // 전체 미납 보기: 예전 쉽먼트까지 미납이 있었던 모든 줄(이미 보낸 줄 포함)을 입고예정일 최신순으로.
-  const allMissLines = lines
-    .filter((line) => line.kind === "shortage" && Boolean(line.skuId) && ((line.remainingQuantity ?? 0) > 0 || Boolean(line.route)))
-    .sort((a, b) => (b.target.expectedDate || "").localeCompare(a.target.expectedDate || "") || a.shipmentNumber.localeCompare(b.shipmentNumber) || a.skuId.localeCompare(b.skuId));
   const missStatusOf = (line: LogisticsReceiptBoardLine): string => {
     if (line.route) return line.route.decision === "reorder" ? "재발주요청 보냄" : `${decisionLabel[line.route.decision]}(으)로 보냄`;
     if (covered[line.lineKey]) return "기존 거래처 발주로 처리";
@@ -768,6 +781,25 @@ export default function ShipmentReceiptsPage() {
     if (line.state === "ready") return "처리 전";
     return line.reviewReason || "확인 필요";
   };
+  // 2026-10-21 사용자 요청: 지금까지 가져온 모든 쉽먼트에서 아직 미납분 재발주요청으로 보내지 않은 미납 줄을 다 보여 준다.
+  // 거래처발주·단종·기존 발주 처리·단종확인·직접 제외한 줄도 다시 검토할 수 있게 상태와 함께 남긴다.
+  const missRank = (line: LogisticsReceiptBoardLine) => {
+    const status = missStatusOf(line);
+    return status === "처리 전" ? 0 : status === "재발주요청 제외함" ? 2 : 1;
+  };
+  const resultLines = lines
+    .filter((line) => line.kind === "shortage" && Boolean(line.skuId) && (line.remainingQuantity ?? 0) > 0 && line.route?.decision !== "reorder" && line.route?.decision !== "marketing")
+    .sort((left, right) => missRank(left) - missRank(right)
+      || (right.target.expectedDate || "").localeCompare(left.target.expectedDate || "")
+      || left.shipmentNumber.localeCompare(right.shipmentNumber) || left.skuId.localeCompare(right.skuId));
+  const routedLines = lines.filter((line) => line.state === "routed");
+  // 파일 생성 때 재발주요청으로 함께 보낼 미납 줄(처리 전인 것만 — 제외·거래처발주·단종·기존 발주 처리한 줄은 넣지 않음)
+  const reorderReadyLines = resultLines.filter((line) => missStatusOf(line) === "처리 전");
+  const reorderExcludedCount = resultLines.filter((line) => reorderExcluded[line.lineKey]).length;
+  // 전체 미납 보기: 예전 쉽먼트까지 미납이 있었던 모든 줄(이미 보낸 줄 포함)을 입고예정일 최신순으로.
+  const allMissLines = lines
+    .filter((line) => line.kind === "shortage" && Boolean(line.skuId) && ((line.remainingQuantity ?? 0) > 0 || Boolean(line.route)))
+    .sort((a, b) => (b.target.expectedDate || "").localeCompare(a.target.expectedDate || "") || a.shipmentNumber.localeCompare(b.shipmentNumber) || a.skuId.localeCompare(b.skuId));
   const allMissTodoCount = allMissLines.filter((line) => missStatusOf(line) === "처리 전").length;
   const unavailableShown = (payload?.board.unavailableSkus || []).filter((item) => !supplyChecks[item.skuId]);
   // 단종해제 대상: 서버가 제품DB·메모·화면 선택을 합친 목록. 화면에서 방금 누른 SKU도 바로 보이게 더한다.
@@ -863,44 +895,42 @@ export default function ShipmentReceiptsPage() {
             : "-")}
       </td>
       <td className={styles.decisionCell}>
-        {line.reviewReason && !isSupplyReview(line) && (
-          <div className={styles.meta}>{line.reviewReason}</div>
-        )}
-        {line.kind === "shortage" &&
-        line.state === "ready" &&
-        (line.remainingQuantity ?? 0) > 0 ? (
-          reorderExcluded[line.lineKey] ? (
+        {(() => {
+          // 2026-10-21: 재발주요청으로 안 보낸 미납 줄은 지금 상태를 보여 주고, 다시 고를 수 있게 한다.
+          const status = missStatusOf(line);
+          const busyLine = busy || routingKeys[line.lineKey];
+          if (status === "처리 전") return (
             <div className={styles.decisionRow}>
-              <span className={styles.meta} style={{ gridColumn: "span 2", textAlign: "center" }}>재발주요청 제외함</span>
-              <button
-                className={`softApricotButton ${styles.decisionButton}`}
-                style={{ gridColumn: "span 2" }}
-                disabled={busy || routingKeys[line.lineKey]}
-                onClick={() => void toggleReorderExclusion(line, "undo")}
-              >
-                제외 취소
-              </button>
-            </div>
-          ) : (
-            <div className={styles.decisionRow}>
-              {/* 2026-10-21: 거래처발주·단종은 수시로 처리하므로 여기서는 재발주요청 제외만 고른다. */}
-              <button
-                className={`softBeigeButton ${styles.decisionButton}`}
-                style={{ gridColumn: "span 2" }}
-                disabled={busy || routingKeys[line.lineKey]}
-                onClick={() => void toggleReorderExclusion(line, "exclude")}
-              >
+              <button className={`softBeigeButton ${styles.decisionButton}`} style={{ gridColumn: "span 2" }} disabled={busyLine} onClick={() => void toggleReorderExclusion(line, "exclude")}>
                 재발주요청 제외
               </button>
             </div>
-          )
-        ) : isSupplyReview(line) ? (
-          supplyButtons(line.skuId, line.productName)
-        ) : line.state === "review" ? (
-          "확인 필요"
-        ) : (
-          "대기 없음"
-        )}
+          );
+          if (status === "재발주요청 제외함") return (
+            <div className={styles.decisionRow}>
+              <span className={styles.meta} style={{ gridColumn: "span 2", textAlign: "center" }}>재발주요청 제외함</span>
+              <button className={`softApricotButton ${styles.decisionButton}`} style={{ gridColumn: "span 2" }} disabled={busyLine} onClick={() => void toggleReorderExclusion(line, "undo")}>
+                제외 취소
+              </button>
+            </div>
+          );
+          // 거래처발주·단종으로 보냈거나 기존 발주로 처리한 줄 → 재발주요청으로 바꿀 수 있다(단종신청 파일을 만든 뒤면 서버가 막고 이유를 알려 줌).
+          if ((line.route && line.route.decision !== "reorder") || covered[line.lineKey]) return (
+            <div className={styles.decisionRow}>
+              <span className={styles.meta} style={{ gridColumn: "span 2", textAlign: "center" }}>{status}</span>
+              <button className={`softSageButton ${styles.decisionButton}`} style={{ gridColumn: "span 2" }} disabled={busyLine} onClick={() => void moveToReorder(line, status)}>
+                재발주요청으로 바꾸기
+              </button>
+            </div>
+          );
+          if (isSupplyReview(line) && !supplyChecks[line.skuId]) return (
+            <>
+              <div className={styles.meta} style={{ textAlign: "center" }}>{line.reviewReason}</div>
+              {supplyButtons(line.skuId, line.productName)}
+            </>
+          );
+          return <div className={styles.meta} style={{ textAlign: "center" }}>{status}{isSupplyReview(line) ? " · 공급상태가 정상이 아니라 재발주요청 불가" : ""}</div>;
+        })()}
       </td>
     </tr>
   );
@@ -950,7 +980,7 @@ export default function ShipmentReceiptsPage() {
         {open && (detail ? (
           <div className={styles.tableWrap}>
             <table className={styles.table} aria-label={`쉽먼트 ${target.shipmentNumber} 내역`}>
-              <thead><tr><th>SKU</th><th>상품명</th><th>납품</th><th>입고</th><th>미납</th><th>마케팅</th></tr></thead>
+              <thead><tr><th>SKU</th><th>상품명</th><th>납품</th><th>입고</th><th>미납</th><th>미납 처리</th><th>마케팅</th></tr></thead>
               <tbody>
                 {/* 2026-10-21: 미납이 많은 줄부터 보이게 */}
                 {[...detail.lines].sort((a, b) => Math.max(0, b.deliveredQuantity - b.receivedQuantity) - Math.max(0, a.deliveredQuantity - a.receivedQuantity)).map((line, index) => {
@@ -962,6 +992,11 @@ export default function ShipmentReceiptsPage() {
                       <td>{line.deliveredQuantity}</td>
                       <td>{line.receivedQuantity}</td>
                       <td style={{ color: miss ? "#b33f35" : undefined, fontWeight: miss ? 800 : undefined }}>{miss || "-"}</td>
+                      {/* 2026-10-21: 미납 줄이 왜 미납 SKU 리스트에 없는지 여기서 바로 보이게 */}
+                      <td style={{ fontSize: "12px" }}>{miss ? (() => {
+                        const boardLine = lines.find((item) => item.kind === "shortage" && item.shipmentNumber === target.shipmentNumber && item.purchaseOrderNumber === line.purchaseOrderNumber && item.skuId === line.skuId);
+                        return boardLine ? missStatusOf(boardLine) : "미납 목록에 없음(수량 확인 필요)";
+                      })() : ""}</td>
                       <td style={{ fontSize: "12px" }}>{marketingState(target.shipmentNumber, line.skuId)}</td>
                     </tr>
                   );
@@ -1029,69 +1064,113 @@ export default function ShipmentReceiptsPage() {
                   전체 입고결과로 되돌리기
                 </button>
               )}
+              {followUpKind === "marketing" && (() => {
+                // 2026-10-21: 기존 쿠폰과 겹쳐서(또는 종료일을 몰라서) 파일에서 빠지는 상품을 따로 보여 주고 포함·제외를 고르게 한다.
+                const uniqueSkus = new Set(shownQueue.map((line) => line.skuId)).size;
+                const blockedBySku = new Map<string, { productName: string; note: string; lineKeys: string[] }>();
+                for (const line of shownQueue) {
+                  const note = (line as { couponNote?: string }).couponNote;
+                  if (!note) continue;
+                  const current = blockedBySku.get(line.skuId) || { productName: line.productName, note: note.replace(/^쿠폰 파일에서 빠짐 · /, ""), lineKeys: [] };
+                  current.lineKeys.push(line.lineKey);
+                  blockedBySku.set(line.skuId, current);
+                }
+                const blocked = [...blockedBySku.entries()];
+                return (
+                  <>
+                    {shownQueue.length > uniqueSkus && (
+                      <p className={styles.meta} style={{ margin: "0 0 8px" }}>SKU {uniqueSkus}개 · 같은 SKU {shownQueue.length - uniqueSkus}건은 파일에서 한 줄로 합쳐집니다.</p>
+                    )}
+                    {blocked.length > 0 && !fixture && (
+                      <div style={{ border: "1px solid #dfbdb2", background: "#fbf1ee", borderRadius: "10px", padding: "12px", margin: "0 0 12px" }}>
+                        <strong style={{ display: "block", marginBottom: "8px" }}>기존 쿠폰과 겹쳐 파일에서 빠지는 상품 {blocked.length}개 — 포함할지 제외할지 골라 주세요</strong>
+                        <div style={{ display: "grid", gap: "8px" }}>
+                          {blocked.map(([skuId, item]) => (
+                            <div key={skuId} style={{ display: "grid", gridTemplateColumns: "56px 1fr 300px", gap: "10px", alignItems: "center", background: "#fff", borderRadius: "8px", padding: "8px" }}>
+                              {productThumb(skuId)}
+                              <div>
+                                <strong>{productTitle(skuId, item.productName || "상품명 없음")}</strong>
+                                <span className={styles.meta} style={{ display: "block" }}>SKU {skuId} · {item.note}</span>
+                              </div>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                                <button type="button" className="softSageButton" disabled={busy} onClick={() => void followUpAction({ action: "includeBlockedCoupon", skuIds: [skuId] }, `SKU ${skuId} · 이번 쿠폰 파일에 포함합니다.`)}>포함</button>
+                                <button type="button" className="softBeigeButton" disabled={busy} onClick={() => void followUpAction({ action: "excludeMarketing", lineKeys: item.lineKeys }, `SKU ${skuId} · 쿠폰·광고에서 제외했습니다.`)}>제외</button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        {blocked.length > 1 && (
+                          <button type="button" className="softSageButton" style={{ width: "100%", marginTop: "8px" }} disabled={busy} onClick={() => void followUpAction({ action: "includeBlockedCoupon", skuIds: blocked.map(([skuId]) => skuId) }, `${blocked.length}개 모두 이번 쿠폰 파일에 포함합니다.`)}>{blocked.length}개 모두 포함</button>
+                        )}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
               {shownQueue.length ? (
-                <ul className={styles.workList}>
-                  {shownQueue.map((line) => (
-                    <li key={line.lineKey}>
-                      <strong>{line.productName}</strong>
-                      <small>
-                        SKU {line.skuId} · 쉽먼트 {line.shipmentNumber} · 발주{" "}
-                        {line.purchaseOrderNumber}
-                      </small>
-                      {/* 2026-10-11 사용자 요청: 어느 입고예정일 건의 미납인지, 몇 개 미납인지 */}
-                      {(() => {
-                        const extra = line as { expectedDate?: string; shortageQuantity?: number };
-                        const shortage = line.kind === "shortage" && extra.shortageQuantity ? extra.shortageQuantity : 0;
-                        if (!extra.expectedDate && !shortage) return null;
+                // 2026-10-21: 마무리 목록도 미납 SKU 리스트와 같은 표(사진·상품명·쉽먼트 정보)로 보여 준다.
+                <div className={styles.tableWrap} style={{ maxHeight: "560px", overflowY: "auto" }}>
+                  <table className={`${styles.table} ${styles.fixedTable}`} aria-label={`${followUpKind === "reorder" ? "재발주요청" : followUpKind === "discontinue" ? "단종서류" : "쿠폰·광고"} 대기 목록`}>
+                    <colgroup>
+                      <col className={styles.colInfo} />
+                      <col />
+                      {followUpKind !== "marketing" && <col className={styles.colNum} />}
+                      {followUpKind === "marketing" && !fixture && <col className={styles.colDecision} />}
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th>쉽먼트 정보</th>
+                        <th>상품명</th>
+                        {followUpKind !== "marketing" && <th>미납</th>}
+                        {followUpKind === "marketing" && !fixture && <th className={styles.decisionCell}>처리</th>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {shownQueue.map((line) => {
+                        const extra = line as { expectedDate?: string; shortageQuantity?: number; couponNote?: string };
                         return (
-                          <small>
-                            {extra.expectedDate ? `입고예정일 ${extra.expectedDate}` : ""}
-                            {extra.expectedDate && shortage ? " · " : ""}
-                            {shortage ? <b style={{ color: "#a6614e" }}>미납 {shortage}개</b> : null}
-                          </small>
+                          <tr key={line.lineKey}>
+                            <td className={styles.shipInfo}>{shipInfo(line.shipmentNumber, line.purchaseOrderNumber, extra.expectedDate || "")}</td>
+                            <td className={styles.product}>
+                              <div className={styles.productRow}>
+                                {productThumb(line.skuId)}
+                                <div>
+                                  <strong>{productDbBadge(line.skuId)}{productTitle(line.skuId, line.productName || "상품명 없음")}</strong>
+                                  <span className={styles.meta}>SKU {line.skuId}</span>
+                                  {extra.couponNote && <span className={`${styles.meta} ${styles.error}`}>{extra.couponNote}</span>}
+                                  {line.blockedReason && <span className={`${styles.meta} ${styles.error}`}>{line.blockedReason}</span>}
+                                </div>
+                              </div>
+                            </td>
+                            {followUpKind !== "marketing" && <td className={styles.shortageQty}>{extra.shortageQuantity || "-"}</td>}
+                            {followUpKind === "marketing" && !fixture && (
+                              <td className={styles.decisionCell}>
+                                <div className={styles.decisionRow}>
+                                  <button
+                                    type="button"
+                                    className={`softApricotButton ${styles.decisionButton}`}
+                                    disabled={busy}
+                                    onClick={() => void followUpAction({ action: "unqueueMarketing", lineKeys: [line.lineKey] }, `${line.productName} · 마케팅 SKU 리스트로 되돌렸습니다.`)}
+                                  >
+                                    입고결과로 되돌리기
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={`softBeigeButton ${styles.decisionButton}`}
+                                    disabled={busy}
+                                    onClick={() => void followUpAction({ action: "excludeMarketing", lineKeys: [line.lineKey] }, `${line.productName} · 쿠폰·광고에서 제외했습니다.`)}
+                                  >
+                                    쿠폰·광고 제외
+                                  </button>
+                                </div>
+                              </td>
+                            )}
+                          </tr>
                         );
-                      })()}
-                      {(line as { couponNote?: string }).couponNote && (
-                        <small className={styles.error}>{(line as { couponNote?: string }).couponNote}</small>
-                      )}
-                      {followUpKind === "marketing" && !fixture && (
-                        <span style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
-                          <button
-                            type="button"
-                            className={styles.button}
-                            disabled={busy}
-                            onClick={() =>
-                              void followUpAction(
-                                { action: "unqueueMarketing", lineKeys: [line.lineKey] },
-                                `${line.productName} · 마케팅 SKU 리스트로 되돌렸습니다.`,
-                              )
-                            }
-                          >
-                            입고결과로 되돌리기
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.button}
-                            disabled={busy}
-                            onClick={() =>
-                              void followUpAction(
-                                { action: "excludeMarketing", lineKeys: [line.lineKey] },
-                                `${line.productName} · 쿠폰·광고에서 제외했습니다.`,
-                              )
-                            }
-                          >
-                            제외
-                          </button>
-                        </span>
-                      )}
-                      {line.blockedReason && (
-                        <small className={styles.error}>
-                          {line.blockedReason}
-                        </small>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               ) : (
                 <p className={styles.meta}>대기 대상 0건</p>
               )}
@@ -1666,11 +1745,11 @@ export default function ShipmentReceiptsPage() {
         {tab === "results" && payload && (
           <>
             <h2 className={styles.listTitle}>
-              미납 SKU 리스트 <span>{missView === "all" ? `전체 ${allMissLines.length}건 · 처리 전 ${allMissTodoCount}건` : `${resultLines.length}건`}</span>
+              미납 SKU 리스트 <span>{missView === "all" ? `전체 ${allMissLines.length}건 · 처리 전 ${allMissTodoCount}건` : `${resultLines.length}건 · 처리 전 ${reorderReadyLines.length}건`}</span>
             </h2>
             {/* 2026-10-21: 예전 쉽먼트 미납까지 모두 검토할 수 있게 보기 전환 */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", margin: "0 0 10px" }}>
-              <button type="button" className={missView === "todo" ? "softSageButton" : "softApricotButton"} aria-pressed={missView === "todo"} onClick={() => setMissView("todo")}>지금 처리할 미납 ({resultLines.length})</button>
+              <button type="button" className={missView === "todo" ? "softSageButton" : "softApricotButton"} aria-pressed={missView === "todo"} onClick={() => setMissView("todo")}>재발주요청 안 보낸 미납 ({resultLines.length})</button>
               <button type="button" className={missView === "all" ? "softSageButton" : "softApricotButton"} aria-pressed={missView === "all"} onClick={() => setMissView("all")}>모든 쉽먼트 미납 전체 ({allMissLines.length})</button>
             </div>
             {missView === "all" ? (
@@ -1931,7 +2010,7 @@ export default function ShipmentReceiptsPage() {
             )}
             {renderFollowUpWork("marketing")}
             <p className={styles.meta}>
-              미납 검토 {shortageLines.length}건
+              미납 검토 {resultLines.length}건
               {shortageReviewLines.length > 0
                 ? ` · 확인 필요 ${shortageReviewLines.length}건`
                 : ""}{" "}

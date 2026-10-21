@@ -229,6 +229,8 @@
 .followUp {
   display: grid;
   gap: 14px;
+  /* 2026-10-21: 마무리 칸끼리 붙어 답답해 보여 위 간격을 둔다 */
+  margin-top: 20px;
 }
 .queueGrid {
   display: grid;
