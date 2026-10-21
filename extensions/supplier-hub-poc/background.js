@@ -87,11 +87,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       const response = await fetch("https://noidb-os.vercel.app/api/wms/shipment-print/pdf-upload", {
         method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
-        body: JSON.stringify({ name: message.name, kind: message.kind, sourceUrl: message.url, base64: message.base64 }),
+        body: JSON.stringify({ name: message.name, kind: message.kind, sourceUrl: message.url, base64: message.base64, expectedDate: message.expectedDate || "" }),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result.ok) throw new Error(result.error || "PDF를 저장하지 못했습니다.");
-      sendResponse({ ok: true, fileName: result.fileName, skipped: Boolean(result.skipped) });
+      sendResponse({ ok: true, fileName: result.fileName, skipped: Boolean(result.skipped), folder: result.folder || "" });
     } catch (error) {
       sendResponse({ ok: false, error: error.name === "AbortError" ? "PDF 저장 응답이 지연됐습니다." : error.message });
     } finally { clearTimeout(timer); }
@@ -130,6 +130,39 @@ async function noidbReadDownload(url) {
   if (/^data:application\/pdf;base64,/.test(url)) return url.split(",")[1];
   throw new Error("받은 PDF를 다시 읽지 못했습니다.");
 }
+// 0.9.13: 쉽먼트 화면 목록에서 이 PDF 쉽먼트의 입고예정일을 찾아 G드라이브 '출력세트/입고예정일' 폴더에 저장한다.
+async function noidbExpectedDate(name) {
+  try {
+    const tabs = await chrome.tabs.query({ url: "https://supplier.coupang.com/*" });
+    for (const tab of tabs) {
+      const result = await chrome.tabs.sendMessage(tab.id, { type: "NOIDB_EXPECTED_DATE", name }).catch(() => null);
+      if (result?.expectedDate) return result.expectedDate;
+    }
+  } catch {}
+  return "";
+}
+// 0.9.13: 쉽먼트 칸의 '저장 폴더 열기' — 고른 입고예정일 폴더(없으면 출력세트 폴더) 주소를 NOID-B에서 받아 새 탭으로 연다.
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== "NOIDB_PDF_FOLDER") return;
+  if (!String(sender.tab?.url || "").startsWith("https://supplier.coupang.com/")) return;
+  (async () => {
+    try {
+      const response = await fetch(`https://noidb-os.vercel.app/api/wms/shipment-print/pdf-upload?date=${encodeURIComponent(message.date || "")}`, { cache: "no-store" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok || !result.folderUrl) throw new Error(result.error || "폴더를 찾지 못했습니다.");
+      await chrome.tabs.create({ url: result.folderUrl });
+      sendResponse({ ok: true, dated: Boolean(result.dated) });
+    } catch (error) { sendResponse({ ok: false, error: error.message }); }
+  })();
+  return true;
+});
+// 0.9.13: 날짜 Label·내역서를 다 받으면 NOID-B 날짜 작업 화면을 열어 출력세트를 자동으로 만든다.
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== "NOIDB_OPEN_OUTPUT_SET" || !/^\d{4}-\d{2}-\d{2}$/.test(String(message.date || ""))) return;
+  if (!String(sender.tab?.url || "").startsWith("https://supplier.coupang.com/")) return;
+  chrome.tabs.create({ url: `https://noidb-os.vercel.app/wms/logistics/dates/${message.date}?autoOutput=1` }, () => sendResponse({ ok: true }));
+  return true;
+});
 async function noidbHandleDownload(item, options = {}) {
   let lastBase64 = "";
   if (!item || noidbPdfHandled.has(item.id)) return;
@@ -145,13 +178,14 @@ async function noidbHandleDownload(item, options = {}) {
   try {
     const base64 = await noidbReadDownload(url);
     lastBase64 = base64;
+    const expectedDate = await noidbExpectedDate(name);
     const response = await fetch("https://noidb-os.vercel.app/api/wms/shipment-print/pdf-upload", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, kind, sourceUrl: shownUrl, base64 }),
+      body: JSON.stringify({ name, kind, sourceUrl: shownUrl, base64, expectedDate }),
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.ok) throw new Error(result.error || "PDF를 저장하지 못했습니다.");
-    noidbNotifyPdf({ phase: "saved", name: result.fileName || name, kind, url: shownUrl, skipped: Boolean(result.skipped) });
+    noidbNotifyPdf({ phase: "saved", name: result.fileName || name, kind, url: shownUrl, skipped: Boolean(result.skipped), folder: result.folder || "" });
   } catch (error) {
     noidbNotifyPdf({ phase: "failed", name, kind, url: shownUrl, error: error.message + (options.fallbackDownload ? " 이 PDF는 컴퓨터로 받았습니다." : "") });
     if (options.fallbackDownload) chrome.downloads.download({ url: lastBase64 ? `data:application/pdf;base64,${lastBase64}` : (item.finalUrl || item.url), filename: name });

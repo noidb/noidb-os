@@ -8,13 +8,14 @@ export type ExtensionInfo = { id: string; name: string; version: string; zip: st
 export const SUPPLIER_HUB_EXTENSION: ExtensionInfo = {
   id: "supplier-hub",
   name: "NOID-B 쉽먼트 확장",
-  version: "0.9.12",
+  version: "0.9.13",
   zip: "/downloads/noidb-supplier-hub.zip",
   where: "쿠팡 쉽먼트 화면 위에 'NOID-B 쉽먼트 입고결과' 칸이 생깁니다.",
   features: [
     "입고결과 일괄 가져오기 — 새로 마감된 쉽먼트의 입고결과를 읽어 NOID-B에 저장",
-    "이 날짜 Label·내역서 전부 받기 — 입고예정일을 고르면 한 번에 받기(이미 받은 건 건너뜀)",
-    "Label·내역서 PDF는 저장 창 없이 G드라이브 쉽먼트출력세트 폴더에 바로 저장",
+    "이 날짜 Label·내역서 전부 받기 — 한 번에 받고, 다 받으면 NOID-B 출력세트를 자동으로 생성(이미 받은 건 건너뜀)",
+    "Label·내역서 PDF는 저장 창 없이 G드라이브 쉽먼트출력세트/입고예정일 폴더에 바로 저장(폴더 없으면 새로 만듦)",
+    "저장 폴더 열기 — 고른 입고예정일의 G드라이브 폴더를 새 탭으로 열기",
   ],
 };
 

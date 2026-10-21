@@ -1,13 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import {
-  downloadDriveFile,
-  isDriveReaderConfigured,
-  searchDriveFilesByName,
-  shouldRequireDriveReader,
-  type DriveFileInfo,
-} from "@/lib/wms/google-drive-reader";
+import { isDriveReaderConfigured, shouldRequireDriveReader } from "@/lib/wms/google-drive-reader";
+import { downloadOAuthDriveFile, listOAuthDriveFolderFiles, resolveDriveFolderPath, type OAuthDriveFileInfo } from "@/lib/wms/google-drive-oauth-reader";
 import {
   loadShipmentPrintWorkbookSources,
   selectShipmentPrintWorkbook,
@@ -31,35 +26,30 @@ async function localFiles(directory: string): Promise<SourceFile[]> {
 
 /** 같은 서버에서 방금 받은 PDF는 다시 내려받지 않는다(파일 아이디·수정시각이 같을 때만). */
 const downloadMemory = new Map<string, Buffer>();
-async function cachedDownload(file: DriveFileInfo): Promise<Buffer> {
+async function cachedDownload(file: OAuthDriveFileInfo): Promise<Buffer> {
   const key = `${file.id}|${file.modifiedTime}`;
   const hit = downloadMemory.get(key);
   if (hit) return hit;
-  const buffer = await downloadDriveFile(file.id);
+  const buffer = await downloadOAuthDriveFile(file.id);
   if (downloadMemory.size > 300) downloadMemory.delete(downloadMemory.keys().next().value!);
   downloadMemory.set(key, buffer);
   return buffer;
 }
 
-async function driveFiles(fragment: string, accept: (file: DriveFileInfo) => boolean = () => true): Promise<SourceFile[]> {
-  const files = (await searchDriveFilesByName(fragment)).filter(accept);
-  return Promise.all(files.map(async (file: DriveFileInfo) => ({
-    name: file.name,
-    modifiedTime: file.modifiedTime,
-    buffer: await cachedDownload(file),
-  })));
-}
-
 /**
- * 2026-10-21: G드라이브 전체의 Label·내역서 PDF를 모두 내려받아 느렸다. 쿠팡에서 Label·내역서는 입고예정일 전에 받으므로,
- * 입고예정일 30일 전 ~ 10일 뒤 사이에 저장된 PDF만 내려받는다(지난 날짜 재출력도 그 날짜 기준이라 그대로 된다).
+ * 2026-10-21(사용자 요청): G드라이브 전체에서 파일 이름으로 찾느라 오래 걸렸다.
+ * 이제 'G:\내 드라이브\쿠팡데이터\쉽먼트업로드완성\쉽먼트출력세트\입고예정일(YYYYMMDD)' 폴더 안의 PDF만 읽는다.
+ * (쿠팡 쉽먼트 확장이 받은 PDF를 이 날짜 폴더에 저장한다.)
  */
-function inDateWindow(dateTokens: string[]) {
-  const times = dateTokens.map(token => Date.parse(`${token.slice(0, 4)}-${token.slice(4, 6)}-${token.slice(6, 8)}T00:00:00+09:00`)).filter(Number.isFinite);
-  if (!times.length) return () => true;
-  const from = Math.min(...times) - 30 * 24 * 60 * 60 * 1000;
-  const to = Math.max(...times) + 10 * 24 * 60 * 60 * 1000;
-  return (file: DriveFileInfo) => { const at = Date.parse(file.modifiedTime || ""); return !Number.isFinite(at) || (at >= from && at <= to); };
+const PRINT_SET_FOLDER = ["쿠팡데이터", "쉽먼트업로드완성", "쉽먼트출력세트"];
+async function datedDriveFiles(dateTokens: string[]): Promise<SourceFile[]> {
+  const folders = await Promise.all(dateTokens.map(async token => {
+    try { return await resolveDriveFolderPath([...PRINT_SET_FOLDER, token]); }
+    catch { throw new Error(`G드라이브 쉽먼트출력세트/${token} 폴더가 없습니다. 쿠팡 쉽먼트 화면의 확장에서 이 날짜 Label·내역서를 먼저 받아 주세요.`); }
+  }));
+  const files = (await Promise.all(folders.map(listOAuthDriveFolderFiles))).flat()
+    .filter(file => /^shipment_(Label|ManiFest)_document\(/.test(file.name) && /\.pdf$/i.test(file.name));
+  return Promise.all(files.map(async file => ({ name: file.name, modifiedTime: file.modifiedTime, buffer: await cachedDownload(file) })));
 }
 
 export async function POST(request: NextRequest) {
@@ -78,12 +68,11 @@ export async function POST(request: NextRequest) {
     let pdfFiles: SourceFile[];
     let workbookFiles: Awaited<ReturnType<typeof loadShipmentPrintWorkbookSources>>;
     if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
-      const [labels, manifests, workbooks] = await Promise.all([
-        driveFiles("shipment_Label_document", inDateWindow(dateTokens)),
-        driveFiles("shipment_ManiFest_document", inDateWindow(dateTokens)),
+      const [datedPdfs, workbooks] = await Promise.all([
+        datedDriveFiles(dateTokens),
         loadShipmentPrintWorkbookSources(expectedWorkbookName),
       ]);
-      pdfFiles = [...labels, ...manifests];
+      pdfFiles = datedPdfs;
       workbookFiles = workbooks;
     } else {
       const root = process.env.WMS_SHIPMENT_PRINT_SOURCE_DIR || "G:\\내 드라이브\\쿠팡데이터\\쉽먼트업로드완성\\쉽먼트출력세트";
@@ -95,13 +84,12 @@ export async function POST(request: NextRequest) {
       workbookFiles = workbooks;
     }
 
-    // 로컬은 입고예정일 폴더(dateTokens)에서 이미 범위를 제한한다. Drive에서는 파일명 날짜가
-    // 입고예정일이 아니라 다운로드일로 저장되므로 날짜 문자열로 다시 거르면 정상 PDF가 누락된다.
+    // 로컬·Drive 모두 입고예정일 폴더에서만 읽는다. 파일명 날짜는 다운로드일이라 다시 거르지 않는다.
     // 최종 범위는 클라이언트가 PDF 내부 발주번호와 generation PO 집합을 정확히 대조해 제한한다.
     const labels = pdfFiles.filter(file => file.name.startsWith("shipment_Label_document(") && file.name.toLocaleLowerCase("ko").endsWith(".pdf"));
     const manifests = pdfFiles.filter(file => file.name.startsWith("shipment_ManiFest_document(") && file.name.toLocaleLowerCase("ko").endsWith(".pdf"));
     if (!labels.length || !manifests.length) {
-      return NextResponse.json({ error: `입고예정일 ${dateTokens.join(", ")}의 Label PDF와 ManiFest PDF를 모두 찾지 못했습니다.` }, { status: 400 });
+      return NextResponse.json({ error: `쉽먼트출력세트/${dateTokens.join(", ")} 폴더에서 Label PDF와 내역서 PDF를 모두 찾지 못했습니다. 쿠팡 쉽먼트 화면의 확장에서 이 날짜 Label·내역서를 받아 주세요.` }, { status: 400 });
     }
     let selectedWorkbook: SourceFile;
     try {

@@ -74,3 +74,39 @@ export async function generatedDriveSaveHeaders(
     };
   }
 }
+
+const DRIVE_API_FILES = "https://www.googleapis.com/drive/v3/files";
+const FOLDER_MIME_TYPE = "application/vnd.google-apps.folder";
+
+/**
+ * 상위 폴더 안의 하위 폴더를 찾고, 없으면 만든다(2026-10-21, 쉽먼트 PDF 입고예정일 폴더).
+ * 같은 이름이 여러 개면 가장 먼저 만든 폴더를 쓴다(사용자가 미리 만들어 둔 폴더 우선).
+ */
+export async function ensureDriveChildFolder(parentId: string, name: string): Promise<{ id: string; created: boolean }> {
+  const token = await getValidDriveAccessToken();
+  const q = `'${parentId.replace(/'/g, "\\'")}' in parents and name='${name.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}' and mimeType='${FOLDER_MIME_TYPE}' and trashed=false`;
+  const params = new URLSearchParams({ q, fields: "files(id,createdTime)", orderBy: "createdTime", pageSize: "5", spaces: "drive" });
+  const found = await fetch(`${DRIVE_API_FILES}?${params}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+  const data = await found.json().catch(() => ({}));
+  if (!found.ok) throw new Error(`Google Drive 폴더 조회 실패: ${data?.error?.message || `HTTP ${found.status}`}`);
+  if (data.files?.[0]?.id) return { id: String(data.files[0].id), created: false };
+  const response = await fetch(`${DRIVE_API_FILES}?fields=id`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name, mimeType: FOLDER_MIME_TYPE, parents: [parentId] }),
+  });
+  const created = await response.json().catch(() => ({}));
+  if (!response.ok || !created.id) throw new Error(`Google Drive 폴더를 만들지 못했습니다: ${created?.error?.message || `HTTP ${response.status}`}`);
+  return { id: String(created.id), created: true };
+}
+
+/** 파일을 다른 폴더로 옮긴다(복사하지 않음). */
+export async function moveDriveFile(fileId: string, fromFolderId: string, toFolderId: string): Promise<void> {
+  const token = await getValidDriveAccessToken();
+  const params = new URLSearchParams({ addParents: toFolderId, removeParents: fromFolderId, fields: "id" });
+  const response = await fetch(`${DRIVE_API_FILES}/${encodeURIComponent(fileId)}?${params}`, { method: "PATCH", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: "{}" });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(`Google Drive 파일을 옮기지 못했습니다: ${data?.error?.message || `HTTP ${response.status}`}`);
+  }
+}

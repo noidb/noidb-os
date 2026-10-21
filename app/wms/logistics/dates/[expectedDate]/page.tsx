@@ -181,6 +181,19 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     pendingActionPanelRef.current?.focus();
   }, [pendingAction]);
 
+  // 2026-10-21: 쿠팡 확장이 이 날짜 Label·내역서를 다 받은 뒤 '?autoOutput=1'로 이 화면을 열면 출력세트를 자동으로 한 번 만든다.
+  const autoOutputRef = useRef<(() => void) | null>(null);
+  const autoOutputStarted = useRef(false);
+  useEffect(() => {
+    if (autoOutputStarted.current || !groups?.length) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("autoOutput") !== "1") return;
+    autoOutputStarted.current = true;
+    params.delete("autoOutput");
+    window.history.replaceState(null, "", `${window.location.pathname}${params.size ? `?${params}` : ""}`);
+    window.setTimeout(() => autoOutputRef.current?.(), 0);
+  }, [groups]);
+
   if (groups === null) return <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "24px 16px", fontFamily: "sans-serif" }}><p>이 날짜 작업을 불러오는 중...</p>{loadError && <><p style={{ color: "#c0392b", fontSize: "13px" }}>{loadError}</p><button type="button" disabled={loadingGroups} onClick={() => void handleRefresh()} style={{ ...wmsPrimaryButton, width: "100%", opacity: loadingGroups ? 0.5 : 1 }}>다시 시도</button></>}</main>;
   if (!groups.length && !doneGroups.length) return <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "24px 16px", fontFamily: "sans-serif" }}><h1 style={{ margin: "0 0 8px", fontSize: "20px" }}>{expectedDate}</h1>{fixtureMode && <p style={{ padding: "10px", background: "#fff4d8", color: "#7a4d00", fontSize: "12px" }}>개발용 예시자료의 출고완료 결과입니다. 실제 출고 기록은 변경하지 않았습니다.</p>}<p>{completedGroupCount ? `이 날짜의 발주묶음 ${completedGroupCount}건은 출고완료 기록으로 남아 있습니다. 새 생성이나 번호 변경 없이 완료 이력으로 유지됩니다.` : loadError || "이 날짜의 발주묶음을 찾지 못했습니다."}</p><a href={`/wms/logistics/new-orders${fixtureMode ? "?logisticsFixture=1" : ""}`}>신규발주서 검색으로</a></main>;
   if (groups.length && groups.every(group => group.stage === "dispatched" || group.stage === "shipment_closed")) return <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "24px 16px", fontFamily: "sans-serif" }}><h1 style={{ margin: "0 0 8px", fontSize: "20px" }}>{expectedDate}</h1>{fixtureMode && <p style={{ padding: "10px", background: "#fff4d8", color: "#7a4d00", fontSize: "12px" }}>개발용 예시자료의 출고완료 결과입니다. 실제 출고 기록은 변경하지 않았습니다.</p>}<p>발주묶음 {groups.length}건 · 발주 {groups.reduce((sum, group) => sum + group.purchaseOrderNumbers.length, 0)}건 출고완료 기록이 저장되었습니다. 이 화면에서는 생성·번호변경을 잠급니다.</p><a href={`/wms/logistics/new-orders${fixtureMode ? "?logisticsFixture=1" : ""}`}>신규발주서 검색으로</a></main>;
@@ -599,6 +612,11 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
   const lastInvoiceGroup = groups.filter(group => group.invoiceGeneratedAt).sort((left, right) => String(right.invoiceGeneratedAt).localeCompare(String(left.invoiceGeneratedAt)))[0];
   const lastInvoiceGeneratedLabel = lastInvoiceGroup?.invoiceGeneratedAt ? formatSeoulDateTime(lastInvoiceGroup.invoiceGeneratedAt) : "";
   const shipmentGeneratedForAll = groups.every(group => group.shipmentFileName);
+  autoOutputRef.current = () => {
+    document.getElementById("output-set-step")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (shipmentGeneratedForAll && !hasUnsavedShipmentNumbers) void handleGenerateOutputSet();
+    else setOutputSetError("쉽먼트파일을 먼저 생성해야 출력세트를 자동으로 만들 수 있습니다.");
+  };
   const barcodeGeneratedForAll = groups.every(group => group.barcodeFileName);
   const outputSetGeneratedForAll = groups.every(group => group.outputSetGeneratedAt);
 
@@ -693,7 +711,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
       <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "12px", margin: "12px 0 0", background: "#fff", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(160px, 260px)", gap: "10px", alignItems: "center" }}>
         <div>
           <strong style={{ display: "block", fontSize: "14px" }}>Label·내역서 PDF 받기</strong>
-          <span style={{ fontSize: "12px", color: wmsColors.muted }}>쿠팡 쉽먼트 화면에서 이 날짜 쉽먼트의 Label·내역서 PDF를 받으세요. 쉽먼트 확장(0.9.12)이 받은 PDF를 G드라이브 출력세트 폴더에 자동으로 저장하니, 받은 뒤 바로 4번 출력세트를 누르면 됩니다.</span>
+          <span style={{ fontSize: "12px", color: wmsColors.muted }}>쿠팡 쉽먼트 화면의 확장 칸에서 이 날짜를 고르고 [이 날짜 Label·내역서 전부 받기]를 누르세요. PDF는 G드라이브 출력세트/입고예정일 폴더에 저장되고, 다 받으면 4번 출력세트가 자동으로 만들어집니다.</span>
         </div>
         <a href="https://supplier.coupang.com/ibs/asn/active" target="_blank" rel="noreferrer" className="softBeigeButton" style={{ width: "100%", textDecoration: "none", boxSizing: "border-box" }}>
           PDF파일 다운받기
@@ -735,7 +753,8 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
         <button type="button" disabled={savingShipmentNumbers} onClick={() => void handleSaveShipmentNumbers()} style={{ ...wmsSecondaryButton, width: "100%", marginTop: "10px", opacity: savingShipmentNumbers ? 0.5 : 1 }}>{savingShipmentNumbers ? "쉽먼트번호 전체 저장 중..." : "이 날짜 쉽먼트번호 전체 저장"}</button>
       </details>
 
-      <ShipmentWorkflowStepCard step={4} title="출력세트 생성" subtitle="쿠팡 쉽먼트 화면에서 Label·내역서 PDF를 받아 지정 폴더에 저장한 뒤 누르면, Label에서 쉽먼트번호를 자동으로 채우고 부착문서·동봉내역서·바코드를 한 번에 만듭니다." status={outputSetGeneratedForAll ? "done" : shipmentGeneratedForAll ? "current" : "blocked"}>
+      <span id="output-set-step" />
+      <ShipmentWorkflowStepCard step={4} title="출력세트 생성" subtitle="쿠팡 쉽먼트 화면의 확장에서 [이 날짜 Label·내역서 전부 받기]를 누르면, 다 받은 뒤 이 화면이 열리며 자동으로 만들어집니다. 직접 눌러도 됩니다(쉽먼트번호 자동 채움 → 부착문서·동봉내역서·바코드)." status={outputSetGeneratedForAll ? "done" : shipmentGeneratedForAll ? "current" : "blocked"}>
         {outputSetError && <p style={{ color: "#c0392b", fontSize: "12px", whiteSpace: "pre-wrap" }}>{outputSetError}</p>}
         {outputSetMessage && <p style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{outputSetMessage}</p>}
         <button type="button" disabled={generatingOutputSet || hasUnsavedShipmentNumbers || !shipmentGeneratedForAll} onClick={() => void handleGenerateOutputSet()} style={{ ...wmsPrimaryButton, width: "100%", opacity: generatingOutputSet || hasUnsavedShipmentNumbers || !shipmentGeneratedForAll ? 0.5 : 1 }}>

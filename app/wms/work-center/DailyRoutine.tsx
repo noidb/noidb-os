@@ -72,7 +72,7 @@ export default function DailyRoutine() {
     {
       id: "wims", title: "WIMS 상품등록상태 확인",
       summary: "WIMS 화면에서 확장 기능 'WIMS 전체를 NOID-B로 전송'을 눌러 등록 결과를 가져옵니다.",
-      label: "하기",
+      label: "결과보기",
       body: <WimsRegistrationImportPanel />,
     },
   ];
