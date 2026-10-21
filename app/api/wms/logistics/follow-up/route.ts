@@ -72,23 +72,22 @@ export async function POST(request: NextRequest) {
       });
       return NextResponse.json({ ok: true, marketingExcludedSkuIds: list }, { headers });
     }
+    // 2026-10-21: 기존 쿠폰이 아직 걸려 있거나 종료일을 모르는 SKU도 사용자가 '포함'을 고르면 이번 쿠폰 파일에 넣는다.
+    // 쿠폰 종료일 확인기록에 '어제 종료'로 남겨 쿠폰 겹침 검사를 통과시킨다. 목록 계산 없이 바로 저장한다(오래 걸리지 않게).
+    if (body.action === "includeBlockedCoupon") {
+      const skuIds = Array.isArray(body.skuIds) ? [...new Set(body.skuIds.filter((value): value is string => typeof value === "string" && /^\d+$/.test(value)))] : [];
+      if (!skuIds.length || skuIds.length > 500) throw new Error("포함할 SKU를 확인해 주세요.");
+      const yesterday = weeklyKoreaDay(new Date(Date.now() - 24 * 60 * 60 * 1000));
+      await mutateWeeklyWorkspace(workspace => {
+        recordWeeklyCouponChecks(workspace, skuIds.map(skuId => ({ skuId, expiresOn: yesterday })), "입고결과 쿠폰·광고 마무리에서 '포함' 선택");
+      });
+      return NextResponse.json({ ok: true, skuIds }, { headers });
+    }
     const value = await current(); let response: unknown;
     let completedStatusRun: typeof value.workspace.runs[number] | undefined;
     let completedVendorLineKeys: string[] = [];
     // 2026-10-11 사용자 요청: 미납분 재발주요청은 파일을 받지 않아도 '처리완료'로 이번 건을 끝낼 수 있게 한다.
     // 같은 검사를 거치도록 파일을 만들어 근거로 저장한 뒤 바로 완료 처리한다.
-    // 2026-10-21: 기존 쿠폰이 아직 걸려 있거나 종료일을 모르는 SKU도 사용자가 '포함'을 고르면 이번 쿠폰 파일에 넣는다.
-    // 쿠폰 종료일 확인기록에 '어제 종료'로 남겨 쿠폰 겹침 검사를 통과시킨다(누가 언제 골랐는지 출처에 남김).
-    if (body.action === "includeBlockedCoupon") {
-      const skuIds = Array.isArray(body.skuIds) ? [...new Set(body.skuIds.filter((value): value is string => typeof value === "string" && /^\d+$/.test(value)))] : [];
-      if (!skuIds.length || skuIds.length > 500) throw new Error("포함할 SKU를 확인해 주세요.");
-      const yesterday = weeklyKoreaDay(new Date(Date.now() - 24 * 60 * 60 * 1000));
-      response = await mutateWeeklyWorkspace(workspace => {
-        recordWeeklyCouponChecks(workspace, skuIds.map(skuId => ({ skuId, expiresOn: yesterday })), "입고결과 쿠폰·광고 마무리에서 '포함' 선택");
-        return { followUp: logisticsFollowUpResponse(workspace, value.board) };
-      });
-      return NextResponse.json({ ok: true, ...response as object }, { headers });
-    }
     if (body.action === "completeWithoutFile") {
       if (body.kind !== "reorder") throw new Error("파일 없이 완료는 미납분 재발주요청만 할 수 있습니다.");
       if (body.token !== logisticsFollowUpToken(value.workspace, value.board) || body.expectedCollectedAt !== value.board.collectedAt) throw new Error("목록이 변경됐습니다. 새로고침 후 다시 확인해 주세요.");

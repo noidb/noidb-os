@@ -561,6 +561,32 @@ export default function ShipmentReceiptsPage() {
     }
   }
   // 2026-10-21: 미납 SKU 리스트는 '재발주요청 제외'만 고르고, 나머지는 파일 생성 때 한꺼번에 재발주요청으로 보낸다.
+  /** 쿠폰 겹침 상품 '포함'(2026-10-21): 확인기록만 바로 저장하고 화면의 빠짐 표시를 지운다. 목록 전체를 다시 계산하지 않는다. */
+  async function includeBlockedCoupons(skuIds: string[]) {
+    if (fixture || !skuIds.length) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/wms/logistics/follow-up", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "includeBlockedCoupon", skuIds }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "포함하지 못했습니다.");
+      const included = new Set(skuIds);
+      setFollowUp((current) => current && {
+        ...current,
+        queues: { ...current.queues, marketing: current.queues.marketing.map((line) => included.has(line.skuId) ? { ...line, couponNote: undefined } : line) },
+      } as typeof current);
+      setMessage(`${skuIds.length === 1 ? `SKU ${skuIds[0]}` : `${skuIds.length}개`} · 다음 쿠폰·광고 파일 생성 때 포함합니다. 파일을 다시 생성해 주세요.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "포함하지 못했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  }
   /** 거래처발주·단종·기존 발주 처리한 미납 줄을 재발주요청으로 바꾼다(2026-10-21). */
   async function moveToReorder(line: LogisticsReceiptBoardLine, status: string) {
     if (fixture || !payload) return;
@@ -1093,14 +1119,14 @@ export default function ShipmentReceiptsPage() {
                                 <span className={styles.meta} style={{ display: "block" }}>SKU {skuId} · {item.note}</span>
                               </div>
                               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
-                                <button type="button" className="softSageButton" disabled={busy} onClick={() => void followUpAction({ action: "includeBlockedCoupon", skuIds: [skuId] }, `SKU ${skuId} · 이번 쿠폰 파일에 포함합니다.`)}>포함</button>
+                                <button type="button" className="softSageButton" disabled={busy} onClick={() => void includeBlockedCoupons([skuId])}>포함</button>
                                 <button type="button" className="softBeigeButton" disabled={busy} onClick={() => void followUpAction({ action: "excludeMarketing", lineKeys: item.lineKeys }, `SKU ${skuId} · 쿠폰·광고에서 제외했습니다.`)}>제외</button>
                               </div>
                             </div>
                           ))}
                         </div>
                         {blocked.length > 1 && (
-                          <button type="button" className="softSageButton" style={{ width: "100%", marginTop: "8px" }} disabled={busy} onClick={() => void followUpAction({ action: "includeBlockedCoupon", skuIds: blocked.map(([skuId]) => skuId) }, `${blocked.length}개 모두 이번 쿠폰 파일에 포함합니다.`)}>{blocked.length}개 모두 포함</button>
+                          <button type="button" className="softSageButton" style={{ width: "100%", marginTop: "8px" }} disabled={busy} onClick={() => void includeBlockedCoupons(blocked.map(([skuId]) => skuId))}>{blocked.length}개 모두 포함</button>
                         )}
                       </div>
                     )}
