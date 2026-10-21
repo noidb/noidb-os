@@ -17,7 +17,7 @@ type CatalogItem = {
   optionLabel: string;
 };
 
-type SortMode = "sku" | "quantity";
+type ViewMode = "month" | "year";
 
 function normalize(value: unknown): string {
   return String(value ?? "").trim().toLocaleLowerCase();
@@ -29,7 +29,7 @@ export default function InboundCumulativePage() {
   const [year, setYear] = useState<number | null>(null);
   const [month, setMonth] = useState<number | null>(null);
   const [search, setSearch] = useState("");
-  const [sortMode, setSortMode] = useState<SortMode>("sku");
+  const [viewMode, setViewMode] = useState<ViewMode>("month");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sourceWarning, setSourceWarning] = useState("");
@@ -81,14 +81,17 @@ export default function InboundCumulativePage() {
 
   const visibleRows = useMemo(() => {
     const query = normalize(search);
-    return rows
-      .filter(row => row.year === year && row.month === month)
-      .map(row => ({ ...row, item: catalog.get(row.skuId) }))
+    const totals = new Map<string, number>();
+    for (const row of rows) {
+      if (row.year !== year) continue;
+      if (viewMode === "month" && row.month !== month) continue;
+      totals.set(row.skuId, (totals.get(row.skuId) || 0) + row.actualReceivedQuantity);
+    }
+    return [...totals.entries()]
+      .map(([skuId, actualReceivedQuantity]) => ({ skuId, actualReceivedQuantity, item: catalog.get(skuId) }))
       .filter(row => !query || normalize(row.skuId).includes(query) || normalize(row.item?.productName).includes(query))
-      .sort((a, b) => sortMode === "quantity"
-        ? b.actualReceivedQuantity - a.actualReceivedQuantity || a.skuId.localeCompare(b.skuId)
-        : a.skuId.localeCompare(b.skuId));
-  }, [catalog, month, rows, search, sortMode, year]);
+      .sort((a, b) => b.actualReceivedQuantity - a.actualReceivedQuantity || a.skuId.localeCompare(b.skuId));
+  }, [catalog, month, rows, search, viewMode, year]);
 
   return (
     <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "18px 16px 32px", fontFamily: "sans-serif", color: wmsColors.ink, background: wmsColors.background, minHeight: "100vh" }}>
@@ -102,14 +105,17 @@ export default function InboundCumulativePage() {
       {loading ? <p style={{ color: wmsColors.muted }}>입고결과를 불러오는 중...</p> : error ? <p role="alert" style={{ color: "#a33" }}>{error}</p> : (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "10px" }}>
+            <button type="button" className={viewMode === "month" ? "softSageButton" : "softApricotButton"} aria-pressed={viewMode === "month"} onClick={() => setViewMode("month")}>월별 SKU 누적</button>
+            <button type="button" className={viewMode === "year" ? "softSageButton" : "softApricotButton"} aria-pressed={viewMode === "year"} onClick={() => setViewMode("year")}>연도별 SKU 누적</button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: viewMode === "month" ? "1fr 1fr" : "1fr", gap: "8px", marginBottom: "10px" }}>
             <label style={{ fontSize: "12px", fontWeight: 700 }}>연도<select value={year ?? ""} onChange={event => setYear(event.target.value ? Number(event.target.value) : null)} style={{ display: "block", width: "100%", marginTop: "4px", padding: "9px", border: `1px solid ${wmsColors.border}`, borderRadius: "8px", background: "#fff" }}><option value="">선택</option>{years.map(value => <option key={value} value={value}>{value}년</option>)}</select></label>
-            <label style={{ fontSize: "12px", fontWeight: 700 }}>월<select value={month ?? ""} onChange={event => setMonth(event.target.value ? Number(event.target.value) : null)} style={{ display: "block", width: "100%", marginTop: "4px", padding: "9px", border: `1px solid ${wmsColors.border}`, borderRadius: "8px", background: "#fff" }}><option value="">선택</option>{months.map(value => <option key={value} value={value}>{value}월</option>)}</select></label>
+            {viewMode === "month" ? <label style={{ fontSize: "12px", fontWeight: 700 }}>월<select value={month ?? ""} onChange={event => setMonth(event.target.value ? Number(event.target.value) : null)} style={{ display: "block", width: "100%", marginTop: "4px", padding: "9px", border: `1px solid ${wmsColors.border}`, borderRadius: "8px", background: "#fff" }}><option value="">선택</option>{months.map(value => <option key={value} value={value}>{value}월</option>)}</select></label> : null}
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "8px", marginBottom: "14px" }}>
-            <input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="SKU 또는 상품명 검색" aria-label="SKU 또는 상품명 검색" style={{ minWidth: 0, padding: "10px", border: `1px solid ${wmsColors.border}`, borderRadius: "8px", background: "#fff" }} />
-            <select value={sortMode} onChange={event => setSortMode(event.target.value as SortMode)} aria-label="정렬 기준" style={{ padding: "9px", border: `1px solid ${wmsColors.border}`, borderRadius: "8px", background: "#fff" }}><option value="sku">SKU순</option><option value="quantity">수량순</option></select>
+          <div style={{ marginBottom: "14px" }}>
+            <input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="SKU 또는 상품명 검색" aria-label="SKU 또는 상품명 검색" style={{ width: "100%", boxSizing: "border-box", minWidth: 0, padding: "10px", border: `1px solid ${wmsColors.border}`, borderRadius: "8px", background: "#fff" }} />
           </div>
-          {!visibleRows.length ? <p style={{ color: wmsColors.muted }}>선택한 조건에 입고결과가 없습니다.</p> : <div style={{ overflowX: "auto", background: "#fff", border: `1px solid ${wmsColors.border}`, borderRadius: "10px" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}><thead><tr>{["SKU ID", "상품명", "옵션명", "누적 입고수량"].map(label => <th key={label} scope="col" style={{ padding: "10px 8px", textAlign: "left", whiteSpace: "nowrap", background: wmsColors.surfaceBeige, borderBottom: `1px solid ${wmsColors.border}` }}>{label}</th>)}</tr></thead><tbody>{visibleRows.map(row => <tr key={row.skuId}><td style={{ padding: "10px 8px", borderBottom: `1px solid ${wmsColors.border}`, whiteSpace: "nowrap" }}>{row.skuId}</td><td style={{ padding: "10px 8px", borderBottom: `1px solid ${wmsColors.border}` }}>{row.item?.productName || ""}</td><td style={{ padding: "10px 8px", borderBottom: `1px solid ${wmsColors.border}` }}>{row.item?.optionLabel || ""}</td><td style={{ padding: "10px 8px", borderBottom: `1px solid ${wmsColors.border}`, whiteSpace: "nowrap", fontWeight: 800 }}>{row.actualReceivedQuantity.toLocaleString()}개</td></tr>)}</tbody></table></div>}
+          {!visibleRows.length ? <p style={{ color: wmsColors.muted }}>선택한 조건에 입고결과가 없습니다.</p> : <div style={{ overflowX: "auto", background: "#fff", border: `1px solid ${wmsColors.border}`, borderRadius: "10px" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}><thead><tr>{["SKU ID", "상품명", "옵션명", viewMode === "year" ? `${year ?? ""}년 누적 입고수량` : "누적 입고수량"].map(label => <th key={label} scope="col" style={{ padding: "10px 8px", textAlign: "left", whiteSpace: "nowrap", background: wmsColors.surfaceBeige, borderBottom: `1px solid ${wmsColors.border}` }}>{label}</th>)}</tr></thead><tbody>{visibleRows.map(row => <tr key={row.skuId}><td style={{ padding: "10px 8px", borderBottom: `1px solid ${wmsColors.border}`, whiteSpace: "nowrap" }}>{row.skuId}</td><td style={{ padding: "10px 8px", borderBottom: `1px solid ${wmsColors.border}` }}>{row.item?.productName || ""}</td><td style={{ padding: "10px 8px", borderBottom: `1px solid ${wmsColors.border}` }}>{row.item?.optionLabel || ""}</td><td style={{ padding: "10px 8px", borderBottom: `1px solid ${wmsColors.border}`, whiteSpace: "nowrap", fontWeight: 800 }}>{row.actualReceivedQuantity.toLocaleString()}개</td></tr>)}</tbody></table></div>}
           <a href="/wms/work-center" style={{ ...wmsGhostButton, display: "inline-flex", marginTop: "14px", textDecoration: "none" }}>작업센터로 돌아가기</a>
         </>
       )}
