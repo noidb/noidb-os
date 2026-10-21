@@ -600,9 +600,19 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
         {invoiceError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{invoiceError}</p>}
         {lastInvoiceGeneratedLabel && <p style={{ margin: "0 0 6px", fontSize: "12px", fontWeight: 700 }}>마지막 송장생성 {lastInvoiceGeneratedLabel}{!invoiceMessage && lastInvoiceGroup?.invoiceFileName ? ` · ${lastInvoiceGroup.invoiceFileName}` : ""}</p>}
         {invoiceMessage && <p style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{invoiceMessage}</p>}
-        <button type="button" disabled={generatingInvoice || previewLoading || !preview?.canGenerate || confirmedCount !== purchaseOrderNumbers.length} onClick={() => void handleGenerateInvoice()} style={{ ...wmsPrimaryButton, width: "100%", opacity: generatingInvoice || previewLoading || !preview?.canGenerate || confirmedCount !== purchaseOrderNumbers.length ? 0.5 : 1 }}>
-          {generatingInvoice ? "생성 중..." : invoiceGeneratedForAll ? "송장파일 다시 생성" : "이 날짜 송장파일 한 번에 생성"}
-        </button>
+        {/* 2026-10-21: 송장파일 생성과 한진택배 송장출력 화면 바로가기를 같은 크기로 나란히 */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "8px" }}>
+          <button type="button" disabled={generatingInvoice || previewLoading || !preview?.canGenerate || confirmedCount !== purchaseOrderNumbers.length} onClick={() => void handleGenerateInvoice()} style={{ ...wmsPrimaryButton, width: "100%", opacity: generatingInvoice || previewLoading || !preview?.canGenerate || confirmedCount !== purchaseOrderNumbers.length ? 0.5 : 1 }}>
+            {generatingInvoice ? "생성 중..." : invoiceGeneratedForAll ? "송장파일 다시 생성" : "이 날짜 송장파일 한 번에 생성"}
+          </button>
+          {/* 일반 크롬에서는 한진 오즈뷰어 오류가 나서, 컴퓨터에 등록한 'hanjinprint' 주소로 전용 크롬(전용 사용자 폴더·확장 끔)을 연다(2026-10-21). */}
+          <a href="hanjinprint:open" style={{ ...wmsPrimaryButton, width: "100%", background: "#f2dfd8", color: "#7f4032", border: "1px solid #dfbdb2", textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box" }}>
+            송장출력 하러가기
+          </a>
+        </div>
+        <p style={{ margin: "6px 0 0", fontSize: "11px", color: wmsColors.muted, textAlign: "right" }}>
+          '송장출력 하러가기'가 안 열리는 컴퓨터는 <a href="/downloads/hanjin-print-chrome-setup.reg" download style={{ color: wmsColors.muted }}>한진 전용 크롬 연결 파일</a>을 받아 한 번 실행해 주세요.
+        </p>
       </ShipmentWorkflowStepCard>
 
       <ShipmentWorkflowStepCard step={3} title="한진 결과 연결 · 쉽먼트 업로드파일" subtitle="한진 결과는 PO·날짜·센터 일치 검증 후 자동 연결됩니다. 쉽먼트 파일은 실제 다운로드한 확정수량 양식을 정확히 찾을 때만 생성됩니다." status={shipmentGeneratedForAll ? "done" : invoiceGeneratedForAll ? "current" : "blocked"}>

@@ -1,0 +1,12 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Classes\hanjinprint]
+@="URL:Hanjin Print Chrome"
+"URL Protocol"=""
+
+[HKEY_CURRENT_USER\Software\Classes\hanjinprint\shell]
+
+[HKEY_CURRENT_USER\Software\Classes\hanjinprint\shell\open]
+
+[HKEY_CURRENT_USER\Software\Classes\hanjinprint\shell\open\command]
+@="cmd /c start \"\" \"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" --user-data-dir=\"%LOCALAPPDATA%\\HanjinPrintChrome\" --disable-extensions --disable-background-networking https://focus.hanjin.com/release/listup-improvement"
