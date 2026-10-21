@@ -311,9 +311,9 @@ export default function WmsWorkCenterPage() {
         </section>
         {/* 2026-10-20 사용자 요청: 하는 시점에 맞춰 수시 처리(거래처 발주·단종·단종해제)와 입고결과 처리(미납분 재발주·쿠폰광고)로 나눔. */}
         <section className={styles.task}>
-          <h2>수시 처리</h2>
+          <h2>거래처발주·단종관리</h2>
           <p>거래처 발주, 단종 신청, 단종해제를 언제든 진행합니다.</p>
-          <Link className={styles.taskButtonGrayWhite} href="/wms/vendor-orders?tab=anytime">수시 처리{counts?.anytime ? ` ${counts.anytime}건` : ""}</Link>
+          <Link className={styles.taskButtonGrayWhite} href="/wms/vendor-orders?tab=anytime">거래처발주·단종관리{counts?.anytime ? ` ${counts.anytime}건` : ""}</Link>
         </section>
         <section className={styles.task}>
           <h2>입고결과 처리</h2>

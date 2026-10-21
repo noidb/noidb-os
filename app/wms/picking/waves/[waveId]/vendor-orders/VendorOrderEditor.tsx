@@ -597,7 +597,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     setLines(previous => previous.filter(item => item.id !== line.id));
     setSelectedLineIds(previous => { const next = new Set(previous); next.delete(line.id); return next; });
     setRemovedLineIds(previous => { const next = new Set(previous); next.delete(line.id); return next; });
-    setCompletionMessage(`SKU ${line.skuId}를 단종 신청 목록(수시 처리)에 넣고 이번 발주서에서 뺐습니다.`);
+    setCompletionMessage(`SKU ${line.skuId}를 단종 신청 목록(단종관리)에 넣고 이번 발주서에서 뺐습니다.`);
     notifyQueueChange();
   }
 
@@ -607,7 +607,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     if (!response.ok || !data.success) throw new Error(data.error || "단종 신청 목록에 넣지 못했습니다.");
     if (data.line) handleSentLineSaved(data.line);
     setExcludedLineIds(previous => new Set(previous).add(line.id));
-    setCompletionMessage(`SKU ${line.skuId}를 ${data.added ? "단종 신청 목록(수시 처리)에 넣고" : "단종 신청 목록에 이미 있어서"} 발주서에서 뺐습니다.`);
+    setCompletionMessage(`SKU ${line.skuId}를 ${data.added ? "단종 신청 목록(단종관리)에 넣고" : "단종 신청 목록에 이미 있어서"} 발주서에서 뺐습니다.`);
     notifyQueueChange();
   }
 
@@ -1525,7 +1525,7 @@ function VendorOrderLineCard({
 
   async function handleSetCatalogStatus(status: "단종" | "과재고") {
     if (status === "단종") {
-      if (!window.confirm(`SKU ${line.skuId}를 수시 처리의 단종 신청 목록에 넣고 이 발주서에서 뺄까요?`)) return;
+      if (!window.confirm(`SKU ${line.skuId}를 단종관리의 단종 신청 목록에 넣고 이 발주서에서 뺄까요?`)) return;
       setStatusSaving(status);
       setStatusMessage(null);
       try {

@@ -1223,7 +1223,7 @@ export default function ShipmentReceiptsPage() {
       {/* 2026-10-21 사용자 요청: 수시 처리는 쉽먼트 입고결과와 상관없어서, 위쪽 쉽먼트 버튼·가져온 시각·쉽먼트 경고를 숨긴다. */}
       {tab === "anytime" ? (
         <header className={styles.header}>
-          <h1 className={styles.title}>수시 처리</h1>
+          <h1 className={styles.title}>거래처발주·단종관리</h1>
         </header>
       ) : (<>
       <header className={styles.header}>
@@ -1337,10 +1337,10 @@ export default function ShipmentReceiptsPage() {
         </details>
       )}
       </>}
-      <nav className={styles.tabs} aria-label="입고결과 보기">
+      {/* 2026-10-21 사용자 요청: 거래처발주·단종관리 화면에는 입고결과 탭이 상관없어서 숨기고, 입고결과 화면 탭에서도 이 화면은 뺀다(메인 메뉴에서 따로 들어감). */}
+      {tab !== "anytime" && <nav className={styles.tabs} aria-label="입고결과 보기">
         {(
           [
-            ["anytime", "수시 처리", anytimeCount],
             ["results", "입고결과 처리", resultsCount],
             ["pending", "가져온 쉽먼트", 0],
             ["history", "처리이력", 0],
@@ -1355,7 +1355,7 @@ export default function ShipmentReceiptsPage() {
             {label}{count > 0 && <span className={styles.tabCount}>{count}</span>}
           </button>
         ))}
-      </nav>
+      </nav>}
       <section className={styles.panel}>
         {!payload && !busy && !error && (
           <p className={styles.empty}>
