@@ -25,9 +25,11 @@ export default function DailyRoutine() {
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     let active = true;
+    // 2026-10-21: 마지막 처리 시각은 이 브라우저에 기억해 둔 것을 먼저 보여 주고 서버 값으로 맞춘다.
+    try { const remembered = JSON.parse(window.localStorage.getItem("noidb-daily-routine-done") || "null"); if (remembered) { setDoneAt(remembered); setLoaded(true); } } catch { /* 없음 */ }
     void fetch("/api/wms/daily-routine", { cache: "no-store" }).then(async response => {
       const data = await response.json().catch(() => ({}));
-      if (active && response.ok && data.ok) setDoneAt(data.doneAt || {});
+      if (active && response.ok && data.ok) { setDoneAt(data.doneAt || {}); try { window.localStorage.setItem("noidb-daily-routine-done", JSON.stringify(data.doneAt || {})); } catch { /* 저장 못 해도 동작 */ } }
     }).catch(() => {}).finally(() => { if (active) setLoaded(true); });
     return () => { active = false; };
   }, []);
@@ -35,7 +37,7 @@ export default function DailyRoutine() {
   const mark = useCallback((id: RoutineId) => {
     setDoneAt(current => ({ ...current, [id]: new Date().toISOString() }));
     void fetch("/api/wms/daily-routine", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }), keepalive: true })
-      .then(async response => { const data = await response.json().catch(() => ({})); if (response.ok && data.ok) setDoneAt(data.doneAt || {}); })
+      .then(async response => { const data = await response.json().catch(() => ({})); if (response.ok && data.ok) { setDoneAt(data.doneAt || {}); try { window.localStorage.setItem("noidb-daily-routine-done", JSON.stringify(data.doneAt || {})); } catch { /* 저장 못 해도 동작 */ } } })
       .catch(() => {});
   }, []);
 

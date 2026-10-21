@@ -21,6 +21,16 @@ export default function LegacySkuCandidates({ names }: { names: string[] }) {
   useEffect(() => {
     let active = true;
     if (!key) { setCandidates([]); return; }
+    // 2026-10-21: 화면을 열 때마다 _SKU마스터 전체에서 다시 찾지 않도록, 같은 상품명으로 찾은 결과는 하루 동안 이 브라우저에 기억해 바로 보여 준다.
+    const memoryKey = `noidb-legacy-sku:${key}`;
+    try {
+      const remembered = JSON.parse(window.localStorage.getItem(memoryKey) || "null") as { at: number; list: Candidate[] } | null;
+      if (remembered && Date.now() - remembered.at < 24 * 60 * 60 * 1000) {
+        setCandidates(remembered.list);
+        setPicked(Object.fromEntries(remembered.list.map(item => [item.skuId, true])));
+        return;
+      }
+    } catch { /* 기억 없음 */ }
     void fetch("/api/wms/legacy-sku-candidates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ names: key.split("\n") }) })
       .then(response => response.json())
       .then((data: { ok?: boolean; candidates?: Candidate[]; error?: string }) => {
@@ -28,6 +38,7 @@ export default function LegacySkuCandidates({ names }: { names: string[] }) {
         if (!data.ok) throw new Error(data.error || "예전 SKU를 찾지 못했습니다.");
         const list = data.candidates || [];
         setCandidates(list);
+        try { window.localStorage.setItem(memoryKey, JSON.stringify({ at: Date.now(), list })); } catch { /* 저장 못 해도 동작 */ }
         setPicked(Object.fromEntries(list.map(item => [item.skuId, true])));
       })
       .catch(cause => { if (active) setError(cause instanceof Error ? cause.message : "예전 SKU를 찾지 못했습니다."); });

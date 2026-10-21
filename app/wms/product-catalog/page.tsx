@@ -1,5 +1,6 @@
 "use client";
 
+import { readLastView, saveLastView } from "@/lib/wms/last-view-cache";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -458,10 +459,19 @@ export default function ProductCatalogPage() {
   const loadCatalog = useCallback(async (activeRef?: { current: boolean }) => {
     setLoading(true);
     setError("");
+    // 2026-10-21: 열 때마다 제품DB 전체를 다시 읽는 동안 빈 화면이었다 → 마지막으로 본 목록을 먼저 보여 주고, 새 자료가 오면 바꾼다.
+    let freshArrived = false;
+    void readLastView<{ items: typeof items; configured: boolean }>("product-registration-catalog").then(cached => {
+      if (freshArrived || !cached?.data?.items?.length || (activeRef && !activeRef.current)) return;
+      setItems(current => current.length ? current : cached.data.items);
+      setConfigured(current => current || cached.data.configured);
+    });
     try {
       const response = await fetch("/api/wms/product-registration-catalog", { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || "상품 연결 대장을 읽지 못했습니다.");
+      freshArrived = true;
+      if (Array.isArray(data.items)) void saveLastView("product-registration-catalog", { items: data.items, configured: Boolean(data.configured) });
       if (!activeRef || activeRef.current) {
         setItems(Array.isArray(data.items) ? data.items : []);
         setConfigured(Boolean(data.configured));

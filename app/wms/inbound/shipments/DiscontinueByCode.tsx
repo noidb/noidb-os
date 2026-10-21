@@ -18,6 +18,24 @@ type Row = { skuId: string; productName: string; orderable: string; auto: boolea
  * 이제 표 하나에 두 출처를 같이 보여 주고(같은 SKU는 한 줄), 서류 한 번·완료 한 번으로 끝낸다.
  * 직접 입력은 예전처럼 서버에 자동 저장되어 회사·집·모바일 어디서든 이어진다(2026-10-19).
  */
+const LOOKUP_MEMORY_KEY = "noidb-discontinue-code-lookup-v1";
+const DRAFT_MEMORY_KEY = "noidb-discontinue-code-draft-v1";
+const LOOKUP_MEMORY_MS = 24 * 60 * 60 * 1000;
+type LookupMemory = Record<string, { at: number; matches: Match[] }>;
+function readLookupMemory(): LookupMemory {
+  try { return JSON.parse(window.localStorage.getItem(LOOKUP_MEMORY_KEY) || "{}") as LookupMemory; } catch { return {}; }
+}
+function saveLookupMemory(lookup: Lookup[]) {
+  try {
+    const memory = readLookupMemory();
+    const now = Date.now();
+    for (const entry of lookup) memory[entry.code] = { at: now, matches: entry.matches };
+    // 너무 커지지 않게 최근 500개만 둔다.
+    const recent = Object.entries(memory).sort((a, b) => b[1].at - a[1].at).slice(0, 500);
+    window.localStorage.setItem(LOOKUP_MEMORY_KEY, JSON.stringify(Object.fromEntries(recent)));
+  } catch { /* 저장 못 해도 화면은 그대로 동작 */ }
+}
+
 export default function DiscontinueByCode({ autoRows, latestOrderable, clearing, onClearAuto, onDone }: {
   autoRows: DiscontinueAutoRow[];
   latestOrderable: LatestOrderable;
@@ -36,15 +54,19 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lookupVersion = useRef(0);
 
+  const typed = useRef(false);
   useEffect(() => {
     let cancelled = false;
+    // 2026-10-21: 서버 응답을 기다리지 않고 이 브라우저에 기억해 둔 입력을 먼저 보여 준다(서버 내용이 오면 그걸로 맞춤).
+    try { const remembered = window.localStorage.getItem(DRAFT_MEMORY_KEY); if (remembered) setText(current => current || remembered); } catch { /* 없음 */ }
     fetch("/api/wms/logistics/discontinue-code-draft", { cache: "no-store" })
       .then(response => response.json())
       .then(data => {
         if (cancelled) return;
         if (!data.ok) throw new Error();
         // 불러오기 전에 이미 입력을 시작했으면 그 입력을 지우지 않는다.
-        setText(current => current || data.text || "");
+        if (!typed.current) setText(data.text || "");
+        try { window.localStorage.setItem(DRAFT_MEMORY_KEY, data.text || ""); } catch { /* 저장 못 해도 동작 */ }
         loaded.current = true;
         setSaveState("saved");
       })
@@ -54,21 +76,30 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
   }, []);
 
   // 직접 넣은 코드는 잠시 뒤 자동으로 찾아서 표에 같이 보여 준다(따로 '확인' 버튼을 누르지 않아도 됨).
+  // 2026-10-21: 새로고침·다시 들어올 때마다 같은 코드를 처음부터 다시 찾아 기다려야 했다 →
+  // 찾은 결과를 이 브라우저에 코드별로 기억해 바로 보여 주고, 처음 보는 코드만 찾는다(기억은 하루 지나면 조용히 다시 확인).
   useEffect(() => {
     const version = ++lookupVersion.current;
     if (!codesKey) { setLookup(null); setLookupState("idle"); return; }
-    setLookupState("loading");
+    const list = codesKey.split("\n");
+    const memory = readLookupMemory();
+    const known = list.filter(code => memory[code]);
+    const fresh = known.length === list.length && known.every(code => Date.now() - memory[code].at < LOOKUP_MEMORY_MS);
+    if (known.length) setLookup(known.map(code => ({ code, matches: memory[code].matches })));
+    if (fresh) { setLookupState("idle"); return; }
+    if (known.length !== list.length) setLookupState("loading");
     const timer = setTimeout(() => {
-      fetch("/api/wms/logistics/discontinue-file-by-code", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ codes: codesKey.split("\n"), check: true }) })
+      fetch("/api/wms/logistics/discontinue-file-by-code", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ codes: list, check: true }) })
         .then(response => response.json())
         .then(data => {
           if (version !== lookupVersion.current) return;
           if (!data.ok) throw new Error();
           setLookup(data.lookup);
           setLookupState("idle");
+          saveLookupMemory(data.lookup as Lookup[]);
         })
-        .catch(() => { if (version === lookupVersion.current) setLookupState("error"); });
-    }, 700);
+        .catch(() => { if (version === lookupVersion.current && known.length !== list.length) setLookupState("error"); });
+    }, known.length === list.length ? 0 : 700);
     return () => clearTimeout(timer);
   }, [codesKey]);
 
@@ -84,7 +115,9 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
   }
 
   function changeText(next: string) {
+    typed.current = true;
     setText(next);
+    try { window.localStorage.setItem(DRAFT_MEMORY_KEY, next); } catch { /* 저장 못 해도 동작 */ }
     if (loaded.current) saveDraft(next, 400);
   }
 

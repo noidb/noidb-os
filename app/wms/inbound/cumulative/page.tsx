@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { WMS_MOBILE_WIDTH, wmsColors, wmsGhostButton } from "@/lib/wms/ui-tokens";
 import { ClosedShipmentHistory } from "./ClosedShipmentHistory";
+import { readLastView, saveLastView } from "@/lib/wms/last-view-cache";
 
 type MonthlyInboundRow = {
   year: number;
@@ -38,6 +39,23 @@ export default function InboundCumulativePage() {
 
   useEffect(() => {
     let active = true;
+    // 2026-10-21: 열 때마다 전체 자료를 다시 받느라 기다렸다 → 마지막으로 본 누적표를 바로 보여 주고, 뒤에서 새 자료로 바꾼다.
+    let fresh = false;
+    const CACHE_KEY = "inbound-cumulative";
+    void readLastView<{ rows: MonthlyInboundRow[]; catalog: CatalogItem[]; warning: string }>(CACHE_KEY).then(cached => {
+      if (!active || fresh || !cached?.data?.rows?.length) return;
+      const sorted = cached.data.rows;
+      setRows(sorted);
+      setCatalog(new Map(cached.data.catalog.map(item => [item.skuId, item])));
+      setSourceWarning(cached.data.warning || "");
+      setYear(sorted[0].year);
+      setMonth(sorted[0].month);
+      setLoading(false);
+    });
+    const remember = (rowsToSave: MonthlyInboundRow[], catalogMap: Map<string, CatalogItem>, warning: string) => {
+      const used = new Set(rowsToSave.map(row => row.skuId));
+      void saveLastView(CACHE_KEY, { rows: rowsToSave, catalog: [...catalogMap.values()].filter(item => used.has(item.skuId)), warning });
+    };
     void Promise.all([
       fetch("/api/wms/supplier-hub-orders?includeHistorical=1", { cache: "no-store" }).then(async response => {
         const data = await response.json() as { cumulativeInboundBySku?: MonthlyInboundRow[]; monthlyInboundBySku?: MonthlyInboundRow[]; historicalInboundStats?: { sourceError?: string }; error?: string };
@@ -51,11 +69,13 @@ export default function InboundCumulativePage() {
       }),
     ]).then(([result, items]) => {
       if (!active) return;
+      fresh = true;
       const sorted = [...result.rows].sort((a, b) => b.year - a.year || b.month - a.month || a.skuId.localeCompare(b.skuId));
       setRows(sorted);
       setSourceWarning(result.warning);
       const catalogMap = new Map(items.map(item => [item.skuId, item]));
       setCatalog(catalogMap);
+      remember(sorted, catalogMap, result.warning);
       // 2026-10-21: 제품DB에 없는 SKU(보관 탭으로 옮긴 재등록완료 옛 SKU·가품중단 등)는 보관 탭에서 상품명을 찾아 채운다.
       const missing = [...new Set(result.rows.map(row => row.skuId))].filter(skuId => !catalogMap.get(skuId)?.productName);
       if (missing.length) void fetch("/api/wms/sku-names", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuIds: missing }) })
@@ -65,13 +85,15 @@ export default function InboundCumulativePage() {
           setCatalog(current => {
             const next = new Map(current);
             for (const item of data.items || []) if (!next.get(item.skuId)?.productName) next.set(item.skuId, { skuId: item.skuId, productName: item.productName, optionLabel: item.optionLabel, storedStatus: item.currentStatus || "" });
+            remember(sorted, next, result.warning);
             return next;
           });
         })
         .catch(() => {});
       if (sorted.length) {
-        setYear(sorted[0].year);
-        setMonth(sorted[0].month);
+        // 기억해 둔 표를 보는 동안 고른 연·월은 그대로 둔다.
+        setYear(current => current ?? sorted[0].year);
+        setMonth(current => current ?? sorted[0].month);
       }
     }).catch(reason => {
       if (active) setError(reason instanceof Error ? reason.message : "입고결과 누적을 불러오지 못했습니다.");
