@@ -618,9 +618,15 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
       <ShipmentWorkflowStepCard step={3} title="한진 결과 연결 · 쉽먼트 업로드파일" subtitle="한진 결과는 PO·날짜·센터 일치 검증 후 자동 연결됩니다. 쉽먼트 파일은 실제 다운로드한 확정수량 양식을 정확히 찾을 때만 생성됩니다." status={shipmentGeneratedForAll ? "done" : invoiceGeneratedForAll ? "current" : "blocked"}>
         {shipmentError && <div style={{ fontSize: "12px", color: "#c0392b" }}><p style={{ margin: "0 0 4px" }}>{shipmentError}</p>{shipmentReasons?.length ? <ul style={{ margin: 0, paddingLeft: "18px" }}>{shipmentReasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul> : null}</div>}
         {shipmentMessage && <p style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{shipmentMessage}</p>}
-        <button type="button" disabled={generatingShipment || !groups.every(group => group.invoiceFileName)} onClick={() => void handleGenerateShipment()} style={{ ...wmsPrimaryButton, width: "100%", opacity: generatingShipment || !groups.every(group => group.invoiceFileName) ? 0.5 : 1 }}>
-          {generatingShipment ? "생성 중..." : shipmentGeneratedForAll ? "쉽먼트파일 다시 생성" : "이 날짜 쉽먼트파일 한 번에 생성"}
-        </button>
+        {/* 2026-10-21: 쉽먼트파일 생성과 쿠팡 쉽먼트 화면 바로가기를 같은 크기로 나란히 */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "8px" }}>
+          <button type="button" disabled={generatingShipment || !groups.every(group => group.invoiceFileName)} onClick={() => void handleGenerateShipment()} style={{ ...wmsPrimaryButton, width: "100%", opacity: generatingShipment || !groups.every(group => group.invoiceFileName) ? 0.5 : 1 }}>
+            {generatingShipment ? "생성 중..." : shipmentGeneratedForAll ? "쉽먼트파일 다시 생성" : "이 날짜 쉽먼트파일 한 번에 생성"}
+          </button>
+          <a href="https://supplier.coupang.com/ibs/asn/active" target="_blank" rel="noreferrer" style={{ ...wmsPrimaryButton, width: "100%", background: "#f2dfd8", color: "#7f4032", border: "1px solid #dfbdb2", textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box" }}>
+            쉽먼트 하러가기
+          </a>
+        </div>
       </ShipmentWorkflowStepCard>
 
       <details style={{ margin: "14px 0" }} open>
