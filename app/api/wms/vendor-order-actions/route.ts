@@ -3,6 +3,7 @@ import { readSavedStatusList } from "@/lib/wms/status-list-cache";
 import { readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { readPickingWaveStore, mutatePickingWaveStore } from "@/lib/wms/picking-wave/server-store";
 import { isVendorLineResolved } from "@/lib/wms/vendor-order/receiving-state";
+import { appendDiscontinueCodes } from "@/lib/wms/discontinue-code-draft-store";
 import {
   applyReceivingCost,
   completeStatusRequests,
@@ -39,6 +40,20 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     if (body.action === "status") return NextResponse.json({ success: false, error: "제품DB를 바로 바꾸는 단종 처리는 중단되었습니다. 먼저 단종·해제 대기에 추가해 주세요." }, { status: 400 });
+    // 2026-10-21 사용자 요청: 거래처 발주서의 '단종으로 이동'은 수시 처리 '단종 신청 목록'에 SKU를 모은다.
+    // 이미 단종됐거나 처리한 SKU여도 막지 않고 발주서에서는 빼며, 목록에서 '빼기'로 지울 수 있다.
+    if (body.action === "discontinue-list") {
+      const skuId = String(body.skuId || "").trim();
+      if (!/^\d+$/.test(skuId)) throw new Error("단종 신청 목록에 넣을 SKU ID를 확인해 주세요.");
+      const { added } = await appendDiscontinueCodes([skuId]);
+      if (!body.sourceLineId) return NextResponse.json({ success: true, added: added.length > 0 });
+      const store = await readPickingWaveStore();
+      const source = store.vendorOrderLines.find(line => line.id === body.sourceLineId);
+      if (!source) throw new Error("단종 신청 목록에는 넣었지만 발주서 상품을 찾지 못했습니다. 새로고침해 주세요.");
+      if (isVendorLineResolved(source)) return NextResponse.json({ success: true, line: source, added: added.length > 0 });
+      const saved = await mutatePickingWaveStore({ action: "resolveSentVendorLine", lineId: source.id, expectedUpdatedAt: source.updatedAt, kind: "discontinue", destinationId: `discontinue-list:${skuId}`, now: new Date().toISOString() });
+      return NextResponse.json({ success: true, added: added.length > 0, line: saved.vendorOrderLines.find(line => line.id === source.id) });
+    }
     if (body.action === "queue-discontinue") {
       const store = body.sourceLineId ? await readPickingWaveStore() : null;
       const source = store?.vendorOrderLines.find(line => line.id === body.sourceLineId);

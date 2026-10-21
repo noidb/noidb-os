@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { get, put } from "@vercel/blob";
+import { put } from "@vercel/blob";
+import { getFreshPrivateBlob } from "./fresh-blob-get";
 
 /**
  * "바코드·SKU로 단종서류 만들기" 입력칸 누적 저장소 (2026-10-19 사용자 요청).
@@ -24,9 +25,32 @@ function normalize(value: unknown): DiscontinueCodeDraft {
   return { text: typeof raw.text === "string" ? raw.text : "", savedAt: typeof raw.savedAt === "string" ? raw.savedAt : "" };
 }
 
+async function readStrict(): Promise<DiscontinueCodeDraft> {
+  if (useBlobStore()) {
+    const result = await getFreshPrivateBlob(BLOB_PATH);
+    if (!result || result.statusCode !== 200) return normalize(null);
+    return normalize(JSON.parse(await new Response(result.stream).text()));
+  }
+  return readDiscontinueCodeDraft();
+}
+
+/**
+ * 거래처 발주서의 '단종으로 이동'(2026-10-21): SKU를 단종 신청 목록 직접 입력칸 맨 아래에 붙인다.
+ * 이미 있는 코드는 다시 넣지 않는다. 읽기에 실패하면 모아 둔 목록을 덮어쓰지 않도록 멈춘다.
+ */
+export async function appendDiscontinueCodes(codes: string[]): Promise<{ added: string[]; draft: DiscontinueCodeDraft }> {
+  const current = await readStrict();
+  const lines = current.text.split(/\r?\n/);
+  const existing = new Set(current.text.split(/[\s,]+/).map(value => value.trim()).filter(Boolean));
+  const added = [...new Set(codes.map(code => String(code || "").trim()).filter(Boolean))].filter(code => !existing.has(code));
+  if (!added.length) return { added, draft: current };
+  const base = lines.join("\n").replace(/\s+$/, "");
+  return { added, draft: await writeDiscontinueCodeDraft([base, ...added].filter(Boolean).join("\n")) };
+}
+
 export async function readDiscontinueCodeDraft(): Promise<DiscontinueCodeDraft> {
   if (useBlobStore()) {
-    const result = await get(BLOB_PATH, { access: "private", useCache: false }).catch(() => null);
+    const result = await getFreshPrivateBlob(BLOB_PATH).catch(() => null);
     if (!result || result.statusCode !== 200) return normalize(null);
     return normalize(JSON.parse(await new Response(result.stream).text()));
   }

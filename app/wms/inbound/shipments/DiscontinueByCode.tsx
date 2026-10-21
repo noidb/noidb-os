@@ -8,7 +8,7 @@ type Match = { skuId: string; productName: string; barcode: string; sheetName: s
 type Lookup = { code: string; matches: Match[] };
 export type DiscontinueAutoRow = { skuId: string; productName: string; orderableStatus: string; key: string };
 type LatestOrderable = { fileMtime: string; orderable: Record<string, string> } | null;
-type Row = { skuId: string; productName: string; orderable: string; auto: boolean; codes: string[]; sheetName: string };
+type Row = { skuId: string; productName: string; orderable: string; auto: boolean; autoKey: string; codes: string[]; sheetName: string };
 
 /**
  * 단종 신청 목록 (2026-10-20 사용자 요청으로 하나로 합침).
@@ -88,6 +88,14 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
     if (loaded.current) saveDraft(next, 400);
   }
 
+  async function removeRow(row: Row) {
+    if (row.auto) {
+      if (!window.confirm(`SKU ${row.skuId}를 단종 신청 목록에서 뺄까요? 뺀 SKU는 다시 뜨지 않습니다.`)) return;
+      if (!await onClearAuto([row.autoKey])) return;
+    }
+    if (row.codes.length) removeCodes(row.codes);
+  }
+
   // 직접 넣은 코드 줄만 입력칸에서 뺀다.
   function removeCodes(remove: string[]) {
     const drop = new Set(remove);
@@ -96,11 +104,11 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
 
   const orderableOf = (skuId: string, fallback: string) => latestOrderable ? latestOrderable.orderable[skuId] || "파일에 없음" : fallback || "미확인";
   const rows = new Map<string, Row>();
-  for (const row of autoRows) rows.set(row.skuId, { skuId: row.skuId, productName: row.productName, orderable: orderableOf(row.skuId, row.orderableStatus), auto: true, codes: [], sheetName: "" });
+  for (const row of autoRows) rows.set(row.skuId, { skuId: row.skuId, productName: row.productName, orderable: orderableOf(row.skuId, row.orderableStatus), auto: true, autoKey: row.key, codes: [], sheetName: "" });
   for (const entry of lookup || []) for (const match of entry.matches) {
     const existing = rows.get(match.skuId);
     if (existing) existing.codes.push(entry.code);
-    else rows.set(match.skuId, { skuId: match.skuId, productName: match.productName, orderable: orderableOf(match.skuId, ""), auto: false, codes: [entry.code], sheetName: match.sheetName });
+    else rows.set(match.skuId, { skuId: match.skuId, productName: match.productName, orderable: orderableOf(match.skuId, ""), auto: false, autoKey: "", codes: [entry.code], sheetName: match.sheetName });
   }
   const list = [...rows.values()];
   const notFound = (lookup || []).filter(entry => !entry.matches.length).map(entry => entry.code);
@@ -191,9 +199,8 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
                     <td>{row.productName} <span style={{ fontSize: "12px", color: "#8a8379", whiteSpace: "nowrap" }}>({source})</span></td>
                     <td className={`${styles.orderableCol} ${done ? styles.orderableDone : ""}`} title={done ? "쿠팡에서 처리 완료" : undefined}>{row.orderable}{done ? " ✓" : ""}</td>
                     <td className={styles.deleteCol}>
-                      {!row.auto && (
-                        <button type="button" className="softPinkButton" title="직접 넣은 코드를 입력칸에서 뺍니다." disabled={working} onClick={() => removeCodes(row.codes)}>빼기</button>
-                      )}
+                      {/* 2026-10-21: 이미 처리했거나 단종인 SKU는 어느 출처든 여기서 뺀다(자동 목록에서 뺀 SKU는 다시 뜨지 않음). */}
+                      <button type="button" className="softPinkButton" title={row.auto ? "이 SKU를 목록에서 뺍니다. 다시 뜨지 않습니다." : "직접 넣은 코드를 입력칸에서 뺍니다."} disabled={working} onClick={() => void removeRow(row)}>빼기</button>
                     </td>
                   </tr>
                 );

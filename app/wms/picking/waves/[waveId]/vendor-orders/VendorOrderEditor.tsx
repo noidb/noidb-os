@@ -576,17 +576,12 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     const response = await fetch("/api/wms/vendor-order-actions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "queue-discontinue",
-        skuId: line.skuId,
-        purchaseOrderNumber: line.relatedPurchaseOrderNumbers.join(","),
-        operator: rawWave?.workerName || "WMS 거래처 발주",
-      }),
+      body: JSON.stringify({ action: "discontinue-list", skuId: line.skuId }),
     });
     const data = await response.json();
-    if (!response.ok || !data.success) throw new Error(data.error || "단종대기에 추가하지 못했습니다.");
+    if (!response.ok || !data.success) throw new Error(data.error || "단종 신청 목록에 넣지 못했습니다.");
 
-    // 단종대기에 넣은 상품은 같은 초안에서 다시 주문하지 않도록 즉시 삭제 이력을 남긴다.
+    // 단종 신청 목록에 넣은 상품은 같은 초안에서 다시 주문하지 않도록 즉시 삭제 이력을 남긴다.
     const baseline = lineBaselines.current.get(line.id);
     if (baseline) {
       const deletedAt = new Date().toISOString();
@@ -596,23 +591,23 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
         body: JSON.stringify({ action: "deleteVendorLines", waveId: params.waveId, lineIds: [line.id], expectedUpdatedAtByLineId: { [line.id]: baseline.updatedAt }, deletedAt }),
       });
       const deleteData = await deleteResponse.json();
-      if (!deleteResponse.ok || !deleteData.ok) throw new Error(`단종대기에는 추가했지만 발주서에서 제외하지 못했습니다. ${deleteData.error || "목록을 새로 확인해 주세요."}`);
+      if (!deleteResponse.ok || !deleteData.ok) throw new Error(`단종 신청 목록에는 넣었지만 발주서에서 제외하지 못했습니다. ${deleteData.error || "목록을 새로 확인해 주세요."}`);
     }
     lineBaselines.current.delete(line.id);
     setLines(previous => previous.filter(item => item.id !== line.id));
     setSelectedLineIds(previous => { const next = new Set(previous); next.delete(line.id); return next; });
     setRemovedLineIds(previous => { const next = new Set(previous); next.delete(line.id); return next; });
-    setCompletionMessage(`SKU ${line.skuId}를 단종대기에 추가하고 이번 발주서에서 제외했습니다.`);
+    setCompletionMessage(`SKU ${line.skuId}를 단종 신청 목록(수시 처리)에 넣고 이번 발주서에서 뺐습니다.`);
     notifyQueueChange();
   }
 
   async function queueSentLineForDiscontinue(line: VendorOrderDraftLine) {
-    const response = await fetch("/api/wms/vendor-order-actions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "queue-discontinue", sourceLineId: line.id, expectedUpdatedAt: line.updatedAt, skuId: line.skuId, purchaseOrderNumber: line.relatedPurchaseOrderNumbers.join(","), operator: rawWave?.workerName || "WMS 거래처 발주" }) });
+    const response = await fetch("/api/wms/vendor-order-actions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "discontinue-list", sourceLineId: line.id, skuId: line.skuId }) });
     const data = await response.json();
-    if (!response.ok || !data.success) throw new Error(data.error || "단종대기에 추가하지 못했습니다.");
+    if (!response.ok || !data.success) throw new Error(data.error || "단종 신청 목록에 넣지 못했습니다.");
     if (data.line) handleSentLineSaved(data.line);
     setExcludedLineIds(previous => new Set(previous).add(line.id));
-    setCompletionMessage(`SKU ${line.skuId}를 단종대기에 추가했습니다. 전송·입고 이력은 보존됩니다.`);
+    setCompletionMessage(`SKU ${line.skuId}를 ${data.added ? "단종 신청 목록(수시 처리)에 넣고" : "단종 신청 목록에 이미 있어서"} 발주서에서 뺐습니다.`);
     notifyQueueChange();
   }
 
@@ -1524,14 +1519,14 @@ function VendorOrderLineCard({
 
   async function handleSetCatalogStatus(status: "단종" | "과재고") {
     if (status === "단종") {
-      if (!window.confirm(`SKU ${line.skuId}를 단종대기에 추가하고 이 발주서에서 제외할까요?`)) return;
+      if (!window.confirm(`SKU ${line.skuId}를 수시 처리의 단종 신청 목록에 넣고 이 발주서에서 뺄까요?`)) return;
       setStatusSaving(status);
       setStatusMessage(null);
       try {
         await onQueueDiscontinue();
-        setStatusMessage("단종대기 이동 완료");
+        setStatusMessage("단종 신청 목록으로 이동 완료");
       } catch (error) {
-        setStatusMessage(error instanceof Error ? error.message : "단종대기 이동 실패");
+        setStatusMessage(error instanceof Error ? error.message : "단종 신청 목록으로 이동 실패");
       } finally { setStatusSaving(null); }
       return;
     }
@@ -1731,7 +1726,7 @@ function VendorOrderLineCard({
       {!editable && !processingSent && canQueueDiscontinue && (
         <div style={{ marginTop: "10px" }}>
           <button type="button" onClick={() => handleSetCatalogStatus("단종")} disabled={Boolean(statusSaving)} style={{ ...wmsWarnButton, width: "100%", minHeight: "40px", fontSize: "12px" }}>
-            {statusSaving === "단종" ? "단종대기로 이동 중..." : "단종대기로 이동"}
+            {statusSaving === "단종" ? "단종으로 이동 중..." : "단종으로 이동"}
           </button>
           {statusMessage && <div style={{ marginTop: "6px", fontSize: "10px", color: statusMessage.includes("완료") ? wmsColors.greenDark : "#c0392b" }}>{statusMessage}</div>}
         </div>
