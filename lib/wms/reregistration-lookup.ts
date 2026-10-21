@@ -41,3 +41,28 @@ export async function loadReregistrationLookup(): Promise<ReregistrationLookup> 
   result.loaded = Boolean(tab || history);
   return result;
 }
+
+export { REREGISTRATION_TAB_TIER } from "./reregistration-tab-tier";
+
+/**
+ * 재등록SKU 탭에서 아직 재등록이 끝나지 않은 기존 SKU ID.
+ * 진행상태가 '완료'이거나 새 SKU ID가 적힌 줄은 끝난 것으로 보고 뺀다. 탭을 못 읽으면 빈 목록.
+ */
+export async function loadPendingReregistrationSkuIds(): Promise<Set<string>> {
+  const result = new Set<string>();
+  const rows = await fetchSheetRows("재등록SKU").catch(() => null);
+  if (!rows?.length) return result;
+  const headers = rows[0].map(header => clean(header).replace(/\s+/g, ""));
+  const skuColumn = headers.indexOf("SKUID");
+  const stateColumn = headers.indexOf("진행상태");
+  const newSkuColumn = headers.indexOf("새SKUID");
+  if (skuColumn < 0) return result;
+  for (const row of rows.slice(1)) {
+    const skuId = clean(row[skuColumn]);
+    if (!/^\d{5,20}$/.test(skuId)) continue;
+    if (stateColumn >= 0 && clean(row[stateColumn]).includes("완료")) continue;
+    if (newSkuColumn >= 0 && clean(row[newSkuColumn])) continue;
+    result.add(skuId);
+  }
+  return result;
+}

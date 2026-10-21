@@ -12,6 +12,7 @@ import { loadPreparedDetail, savePreparedDetail } from "@/lib/image-search/brows
 import { identifyPhoto, photoPriority, photoTier, type PhotoIdentity, type PhotoTier } from "@/lib/image-search/photo-kind";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 import type { ReregistrationExclusion } from "@/lib/wms/reregistration-exclusions";
+import { REREGISTRATION_TAB_TIER } from "@/lib/wms/reregistration-tab-tier";
 
 type PhotoHit = LocalPhoto & { fileName: string; preview: string; selected: boolean; identity: PhotoIdentity };
 /**
@@ -97,7 +98,7 @@ function namedModelGroupKey(item: ProductCatalogItem): string | null {
   return modelName || null;
 }
 
-/** 제품DB '재등록구분' 열(연결표 v8 병합, 2026-09-22) 기준 판단. 이 열이 재등록 목록의 유일한 기준이다. */
+/** 제품DB '재등록구분' 값 기준 판단. 이 열이 없어진 뒤로는 API가 재등록SKU 탭의 대기 SKU를 '재등록SKU탭'으로 채워 준다. */
 function reregistrationTierOf(item: ProductCatalogItem): string {
   return String(item.reregistrationTier || "").trim();
 }
@@ -108,7 +109,7 @@ function isPermanentlyExcluded(item: ProductCatalogItem): boolean {
 
 function isReregistrationTier(item: ProductCatalogItem): boolean {
   const tier = reregistrationTierOf(item);
-  return tier.startsWith("1차") || tier.startsWith("2차");
+  return tier.startsWith("1차") || tier.startsWith("2차") || tier.startsWith(REREGISTRATION_TAB_TIER);
 }
 
 function isRocketRegistered(item: ProductCatalogItem): boolean {
