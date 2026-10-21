@@ -16,14 +16,14 @@ export default function WarehouseRecheckCleanup({ onDone }: { onDone: (message: 
     try {
       const response = await fetch("/api/wms/warehouse-recheck-cleanup", { cache: "no-store" });
       const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || "창고재확인 탭을 읽지 못했습니다.");
+      if (!response.ok || !data.ok) throw new Error(data.error || "구글시트를 읽지 못했습니다.");
       setPreview(data);
-    } catch (cause) { onDone(cause instanceof Error ? cause.message : "창고재확인 탭을 읽지 못했습니다.", true); }
+    } catch (cause) { onDone(cause instanceof Error ? cause.message : "구글시트를 읽지 못했습니다.", true); }
     finally { setBusy(""); }
   }
   async function run() {
     if (!preview) return;
-    if (!window.confirm(`${preview.moves.length}행을 옮기고 원래 탭(창고재확인·보관·제품DB)에서 지울까요? (옮기기 전에 탭 백업을 남깁니다)`)) return;
+    if (!window.confirm(`${preview.moves.length}행을 옮기고 원래 탭(보관·제품DB)에서 지울까요? (옮기기 전에 탭 백업을 남깁니다)`)) return;
     setBusy("run");
     try {
       const response = await fetch("/api/wms/warehouse-recheck-cleanup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: preview.token }) });
@@ -37,8 +37,8 @@ export default function WarehouseRecheckCleanup({ onDone }: { onDone: (message: 
 
   return (
     <section>
-      <h2 className={styles.listTitle}>창고재확인·보관 정리</h2>
-      <p className={styles.meta}>창고재확인: 거래처단종 → 보관, 제품DB로 이동(재고있음) → 제품DB. 제품DB: 비관리(중복등록)·거래처단종·단종 → 보관. 보관: 제품DB로 이동(재고있음) → 제품DB(현재상태 비움, 발주가능상태가 정상이 아니면 단종해제 대상).</p>
+      <h2 className={styles.listTitle}>구글시트 정리</h2>
+      <p className={styles.meta}>제품DB: 현재상태에 '단종'이 들어간 행(거래처단종·단종(중복등록) 등)·비관리(중복등록) → 보관(적어 둔 이유도 함께). 보관: 제품DB로 이동(재고있음) → 제품DB(현재상태 비움, 발주가능상태가 정상이 아니면 단종해제 대상).</p>
       {!preview ? (
         <button type="button" className={`softSageButton ${styles.fullButton}`} disabled={Boolean(busy)} onClick={() => void load()}>
           {busy === "preview" ? "읽는 중…" : "정리할 행 미리보기"}

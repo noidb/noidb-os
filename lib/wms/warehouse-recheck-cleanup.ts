@@ -30,7 +30,8 @@ export function pickStorageTabTitle(titles: readonly string[]): string | null {
 /** 제품DB에서 보관 탭으로 옮길 현재상태 */
 export function isProductDbToStorageStatus(status: unknown): boolean {
   const key = String(status ?? "").replace(/\s+/g, "");
-  return key === "거래처단종" || key === "단종" || key.startsWith("비관리");
+  // 2026-10-21 사용자 요청: '단종'이 들어가면(예: 단종(중복등록) — 괄호 안은 사용자가 적어 둔 이유) 모두 보관으로. '단종해제'는 제외.
+  return (key.includes("단종") && !key.includes("해제")) || key.startsWith("비관리");
 }
 
 const squash = (value: unknown) => String(value ?? "").replace(/\s+/g, "");
@@ -120,7 +121,7 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       deleteStorageRows.push(rowNumber);
     });
   }
-  // 제품DB: 현재상태 비관리(중복등록)·거래처단종·단종 → 보관 탭, 제품DB에서 지움
+  // 제품DB: 현재상태 비관리(중복등록)·'단종'이 들어간 모든 상태(거래처단종·단종(중복등록) 등) → 보관 탭, 제품DB에서 지움
   const deleteProductDbRows: number[] = [];
   if (!problems.length && pd.status >= 0) {
     const stSku = find(stHeaders, "SKU ID", "SKUID", "SKU");
@@ -137,7 +138,8 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       if (!storage) { problems.push(`'${STORAGE_TAB}' 탭을 찾지 못했습니다.`); return; }
       const skuId = String(row[pd.sku] ?? "").trim();
       const already = Boolean(skuId) && inStorage.has(skuId);
-      if (!already) { appendStorage.push(mapRow(pdHeaders, row, stHeaders, {})); if (skuId) inStorage.add(skuId); }
+      // 현재상태(이유 포함)는 그대로 옮기고, 보관사유 칸이 있으면 그 글을 함께 남긴다.
+      if (!already) { appendStorage.push(mapRow(pdHeaders, row, stHeaders, { "보관사유": status })); if (skuId) inStorage.add(skuId); }
       moves.push({ source: "제품DB", rowNumber, skuId, productName: pdName >= 0 ? String(row[pdName] ?? "").trim() : "", result: status, orderableStatus: pd.orderable >= 0 ? String(row[pd.orderable] ?? "").trim() : "", target: STORAGE_LABEL, mode: already ? "delete-only" : "append", release: false });
       deleteProductDbRows.push(rowNumber);
     });

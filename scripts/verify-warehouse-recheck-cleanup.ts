@@ -28,7 +28,7 @@ assert.deepEqual(plan2.problems, []);
 assert.deepEqual(plan2.deleteProductDbRows, [2, 4, 5, 8]);
 assert.deepEqual(plan2.appendStorage, [["10", "가", "비관리(중복등록)", "정상"], ["12", "다", "거래처 단종", "불가"], ["13", "라", "단종", "정상"]], "보관에 이미 있는 SKU 8은 다시 붙이지 않음");
 assert.equal(plan2.moves.find(m => m.skuId === "8")?.mode, "delete-only");
-assert.ok(isProductDbToStorageStatus("비관리 (중복등록)") && !isProductDbToStorageStatus("판매중지") && !isProductDbToStorageStatus("가품중단"));
+assert.ok(isProductDbToStorageStatus("단종(중복등록)") && isProductDbToStorageStatus("거래처 단종") && !isProductDbToStorageStatus("단종해제") && isProductDbToStorageStatus("비관리 (중복등록)") && !isProductDbToStorageStatus("판매중지") && !isProductDbToStorageStatus("가품중단"));
 assert.equal(pickStorageTabTitle(["제품DB", "보관", "_백업__보관_비관리SKU_20261008_x", "_보관_비관리SKU_20261008"]), "_보관_비관리SKU_20261008");
 assert.equal(pickStorageTabTitle(["제품DB", "_백업__보관_비관리SKU_20261008_x"]), null);
 console.log("PASS 제품DB 비관리·거래처단종·단종 → 보관(_보관_비관리SKU_20261008)");
