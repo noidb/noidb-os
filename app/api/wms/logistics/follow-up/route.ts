@@ -74,6 +74,17 @@ export async function POST(request: NextRequest) {
     }
     // 2026-10-21: 기존 쿠폰이 아직 걸려 있거나 종료일을 모르는 SKU도 사용자가 '포함'을 고르면 이번 쿠폰 파일에 넣는다.
     // 쿠폰 종료일 확인기록에 '어제 종료'로 남겨 쿠폰 겹침 검사를 통과시킨다. 목록 계산 없이 바로 저장한다(오래 걸리지 않게).
+    // 2026-10-21: 쿠폰·광고 제외 이력에서 줄을 지운다(이미 단종·곧 단종 상품). 제외 상태는 그대로 두고 이력에서만 숨긴다.
+    if (body.action === "dismissExclusion") {
+      const keys = Array.isArray(body.lineKeys) ? body.lineKeys.filter((value): value is string => typeof value === "string" && value.length <= 400) : [];
+      if (!keys.length || keys.length > 500) throw new Error("삭제할 줄을 확인해 주세요.");
+      const wanted = new Set(keys);
+      await mutateWeeklyWorkspace(workspace => {
+        const exclusions = (workspace.logisticsFollowUp?.exclusions || []).map(item => wanted.has(item.lineKey) ? { ...item, dismissed: true } : item);
+        workspace.logisticsFollowUp = { ...workspace.logisticsFollowUp, exclusions };
+      });
+      return NextResponse.json({ ok: true }, { headers });
+    }
     if (body.action === "includeBlockedCoupon") {
       const skuIds = Array.isArray(body.skuIds) ? [...new Set(body.skuIds.filter((value): value is string => typeof value === "string" && /^\d+$/.test(value)))] : [];
       if (!skuIds.length || skuIds.length > 500) throw new Error("포함할 SKU를 확인해 주세요.");

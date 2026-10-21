@@ -561,6 +561,28 @@ export default function ShipmentReceiptsPage() {
     }
   }
   // 2026-10-21: 미납 SKU 리스트는 '재발주요청 제외'만 고르고, 나머지는 파일 생성 때 한꺼번에 재발주요청으로 보낸다.
+  /** 쿠폰·광고 제외 이력에서 줄 지우기(2026-10-21). 쿠폰·광고에서 빠진 상태는 그대로 두고 이력 목록에서만 숨긴다. */
+  async function dismissExclusionHistory(lineKey: string) {
+    if (fixture) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/wms/logistics/follow-up", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "dismissExclusion", lineKeys: [lineKey] }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "삭제하지 못했습니다.");
+      setFollowUp((current) => current && { ...current, exclusionHistory: current.exclusionHistory.filter((item) => item.lineKey !== lineKey) } as typeof current);
+      setMessage("제외 이력에서 삭제했습니다.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "삭제하지 못했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  }
   /** 쿠폰 겹침 상품 '포함'(2026-10-21): 확인기록만 바로 저장하고 화면의 빠짐 표시를 지운다. 목록 전체를 다시 계산하지 않는다. */
   async function includeBlockedCoupons(skuIds: string[]) {
     if (fixture || !skuIds.length) return;
@@ -627,7 +649,8 @@ export default function ShipmentReceiptsPage() {
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "저장하지 못했습니다.");
       setPayload((current) => current && { ...current, reorderExcluded: data.reorderExcluded });
-      setMessage(action === "exclude" ? `SKU ${line.skuId} · 재발주요청에서 제외했습니다.` : `SKU ${line.skuId} · 제외를 취소했습니다.`);
+      const routed = Boolean(line.route || payload.coveredByVendorOrder?.[line.lineKey]);
+      setMessage(action === "exclude" ? `SKU ${line.skuId} · ${routed ? "미납 목록에서 삭제했습니다." : "재발주요청에서 제외했습니다."}` : `SKU ${line.skuId} · ${routed ? "삭제를 되돌렸습니다." : "제외를 취소했습니다."}`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "저장하지 못했습니다.");
     } finally {
@@ -819,6 +842,8 @@ export default function ShipmentReceiptsPage() {
   // 단종해제를 고른 SKU는 '단종해제 승인 대기'로 남기고, 쿠팡이 정상으로 바꾸면 자동으로 '처리 전'이 되어 재발주요청 대상이 된다.
   const hiddenAsDiscontinued = (line: LogisticsReceiptBoardLine) => {
     if (supplyChecks[line.skuId]?.decision === "discontinued") return true;
+    // 거래처발주·기존 발주로 처리한 줄을 '삭제'했으면 목록에서 뺀다(최종 단종 답변을 받고 단종 처리한 것 등).
+    if ((line.route || covered[line.lineKey]) && reorderExcluded[line.lineKey]) return true;
     const status = currentOrderStatus(line.skuId);
     return Boolean((line.route || covered[line.lineKey]) && status && status !== "정상" && supplyChecks[line.skuId]?.decision !== "release");
   };
@@ -956,8 +981,12 @@ export default function ShipmentReceiptsPage() {
           if ((line.route && line.route.decision !== "reorder") || covered[line.lineKey]) return (
             <div className={styles.decisionRow}>
               <span className={styles.meta} style={{ gridColumn: "span 2", textAlign: "center" }}>{status}</span>
-              <button className={`softSageButton ${styles.decisionButton}`} style={{ gridColumn: "span 2" }} disabled={busyLine} onClick={() => void moveToReorder(line, status)}>
+              <button className={`softSageButton ${styles.decisionButton}`} disabled={busyLine} onClick={() => void moveToReorder(line, status)}>
                 재발주요청으로 바꾸기
+              </button>
+              {/* 2026-10-21: 거래처에 발주했지만 최종 단종 답변을 받아 단종 처리한 줄 등 — 이 목록에서만 뺀다(거래처 발주 기록은 그대로). */}
+              <button className={`softBeigeButton ${styles.decisionButton}`} disabled={busyLine} onClick={() => { if (window.confirm(`SKU ${line.skuId}를 이 목록에서 삭제할까요? 거래처 발주 기록은 그대로 남고, '모든 쉽먼트 미납 전체'에서 되돌릴 수 있어요.`)) void toggleReorderExclusion(line, "exclude"); }}>
+                삭제
               </button>
             </div>
           );
@@ -1390,27 +1419,33 @@ export default function ShipmentReceiptsPage() {
                           {(line as { reason?: string }).reason ? ` · ${(line as { reason?: string }).reason}` : ""}
                         </small>
                       </strong>
-                      {line.restoredAt ? (
-                        <span className={styles.meta}>복원완료</span>
-                      ) : (line as { autoBlocked?: boolean }).autoBlocked ? (
-                        <span className={styles.meta}>단종 처리 상품이라 복원할 수 없어요</span>
-                      ) : (
+                      {/* 2026-10-21: 제외 이력도 이미 단종됐거나 곧 단종될 상품은 '삭제'로 목록에서 지운다(쿠폰·광고 제외는 그대로 유지). */}
+                      <div style={{ display: "grid", gridTemplateColumns: line.restoredAt || (line as { autoBlocked?: boolean }).autoBlocked ? "1fr 120px" : "120px 120px", gap: "8px", alignItems: "center", marginTop: "6px" }}>
+                        {line.restoredAt ? (
+                          <span className={styles.meta}>복원완료</span>
+                        ) : (line as { autoBlocked?: boolean }).autoBlocked ? (
+                          <span className={styles.meta}>단종 처리 상품이라 복원할 수 없어요</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="softSageButton"
+                            style={{ minHeight: 36, padding: "6px 10px", fontSize: 13 }}
+                            disabled={busy}
+                            onClick={() => void followUpAction({ action: "restoreMarketing", lineKeys: [line.lineKey] }, "초도입고 검토 후보로 복원했습니다.")}
+                          >
+                            제외 복원
+                          </button>
+                        )}
                         <button
-                          className={styles.button}
+                          type="button"
+                          className="softBeigeButton"
+                          style={{ minHeight: 36, padding: "6px 10px", fontSize: 13 }}
                           disabled={busy}
-                          onClick={() =>
-                            void followUpAction(
-                              {
-                                action: "restoreMarketing",
-                                lineKeys: [line.lineKey],
-                              },
-                              "초도입고 검토 후보로 복원했습니다.",
-                            )
-                          }
+                          onClick={() => void dismissExclusionHistory(line.lineKey)}
                         >
-                          제외 복원
+                          삭제
                         </button>
-                      )}
+                      </div>
                     </div>
                   ))}
                 </section>
@@ -1826,6 +1861,14 @@ export default function ShipmentReceiptsPage() {
                                   onClick={() => void toggleReorderExclusion(line, reorderExcluded[line.lineKey] ? "undo" : "exclude")}
                                 >
                                   {reorderExcluded[line.lineKey] ? "제외 취소" : "재발주요청 제외"}
+                                </button>
+                              </div>
+                            )}
+                            {(line.route || covered[line.lineKey]) && line.route?.decision !== "reorder" && reorderExcluded[line.lineKey] && (
+                              <div className={styles.decisionRow}>
+                                <span className={styles.meta} style={{ gridColumn: "span 2", textAlign: "center" }}>미납 목록에서 삭제함</span>
+                                <button className={`softApricotButton ${styles.decisionButton}`} style={{ gridColumn: "span 2" }} disabled={busy || routingKeys[line.lineKey]} onClick={() => void toggleReorderExclusion(line, "undo")}>
+                                  삭제 되돌리기
                                 </button>
                               </div>
                             )}

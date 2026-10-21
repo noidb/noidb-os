@@ -21,7 +21,8 @@ export async function POST(request: NextRequest) {
       const current = { ...(workspace.reorderExcluded || {}) };
       if (body.action === "undo") delete current[lineKey];
       else if (body.action === "exclude") {
-        if (workspace.logisticsReceiptRoutes?.[lineKey]) throw new Error("이미 처리한 상품입니다. 새로고침하면 목록에서 빠집니다.");
+        // 2026-10-21: 거래처발주·단종으로 보낸 줄도 '삭제'(목록에서 빼기)할 수 있게 한다. 재발주요청으로 이미 보낸 줄만 막는다.
+        if (workspace.logisticsReceiptRoutes?.[lineKey]?.decision === "reorder") throw new Error("이미 재발주요청으로 보낸 상품입니다. 새로고침하면 목록에서 빠집니다.");
         current[lineKey] = { skuId: text(body.skuId, 20), productName: text(body.productName), shipmentNumber: text(body.shipmentNumber, 20),
           quantity: Number.isSafeInteger(body.quantity) ? Number(body.quantity) : 0, at: new Date().toISOString() };
       } else throw new Error("처리 방법을 확인해 주세요.");
