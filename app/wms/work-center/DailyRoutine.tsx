@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { wmsColors } from "@/lib/wms/ui-tokens";
 import SupplyStatusAuditPanel from "@/app/product-registration/SupplyStatusAuditPanel";
@@ -12,20 +12,39 @@ import WarehouseRecheckCleanup from "@/app/wms/inbound/shipments/WarehouseRechec
  * 매일·수시·며칠에 한 번 하는 일이 화면 여기저기 흩어져 있어 잊기 쉬워서 한곳에 모은다.
  * - '하기': 사이트 안에서 처리(공급상태 반영·구글시트 정리·WIMS 등록상태는 원래 화면의 같은 부품을 여기서 펼쳐 바로 실행).
  * - '바로가기': 그 일을 하는 쿠팡 화면을 새 탭으로 연다.
- * - 완료 기록은 두지 않는다(매일 하는 일이 아닌 것도 있어서). 부품은 펼칠 때만 그려 화면을 열 때 느려지지 않는다.
+ * - 항목마다 마지막으로 처리한 시각을 서버에 남겨 회사·집·모바일에서 같게 보인다(하기·바로가기를 누르거나 반영·정리를 마쳤을 때).
+ * - 부품은 펼칠 때만 그려 화면을 열 때 느려지지 않는다.
  */
 type RoutineId = "supply-status" | "new-orders" | "receipts" | "sheet-cleanup" | "wims";
+const timeLabel = (iso: string) => new Date(iso).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit" });
 
 export default function DailyRoutine() {
   const [open, setOpen] = useState<RoutineId | null>(null);
   const [note, setNote] = useState<{ text: string; error?: boolean } | null>(null);
+  const [doneAt, setDoneAt] = useState<Record<string, string>>({});
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/wms/daily-routine", { cache: "no-store" }).then(async response => {
+      const data = await response.json().catch(() => ({}));
+      if (active && response.ok && data.ok) setDoneAt(data.doneAt || {});
+    }).catch(() => {}).finally(() => { if (active) setLoaded(true); });
+    return () => { active = false; };
+  }, []);
+  /** 마지막 처리 시각 남기기. 화면은 바로 바꾸고 저장은 뒤에서 한다(실패해도 작업은 막지 않음). */
+  const mark = useCallback((id: RoutineId) => {
+    setDoneAt(current => ({ ...current, [id]: new Date().toISOString() }));
+    void fetch("/api/wms/daily-routine", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }), keepalive: true })
+      .then(async response => { const data = await response.json().catch(() => ({})); if (response.ok && data.ok) setDoneAt(data.doneAt || {}); })
+      .catch(() => {});
+  }, []);
 
   const items: Array<{ id: RoutineId; title: string; summary: string; shortcut?: string; siteLink?: string; body?: ReactNode }> = [
     {
       id: "supply-status", title: "상품공급상태 최신파일 반영",
       summary: "쿠팡에서 상품공급상태 파일을 받아 G드라이브에 올린 뒤, 제품DB·보관 탭 발주가능상태를 맞춥니다.",
       shortcut: "https://supplier.coupang.com/plan/ticket",
-      body: <SupplyStatusAuditPanel compact />,
+      body: <SupplyStatusAuditPanel compact onAudited={() => mark("supply-status")} onApplied={() => mark("supply-status")} />,
     },
     {
       id: "new-orders", title: "신규발주서 다운로드·발주확정",
@@ -42,7 +61,7 @@ export default function DailyRoutine() {
     {
       id: "sheet-cleanup", title: "구글시트 정리",
       summary: "제품DB·보관 탭 사이에 옮길 행(단종 → 보관, 재고있음 → 제품DB)을 정리합니다.",
-      body: <WarehouseRecheckCleanup onDone={(text, isError) => setNote({ text, error: isError })} />,
+      body: <WarehouseRecheckCleanup onDone={(text, isError) => { setNote({ text, error: isError }); if (!isError) mark("sheet-cleanup"); }} />,
     },
     {
       id: "wims", title: "WIMS 상품등록상태 확인",
@@ -61,8 +80,8 @@ export default function DailyRoutine() {
           const isOpen = open === item.id;
           // 하기: 사이트 화면으로 이동(siteLink) 또는 이 자리에서 펼치기(body)
           const doButton = item.siteLink
-            ? <Link className="softSageButton" style={buttonStyle} href={item.siteLink}>하기</Link>
-            : <button type="button" className={isOpen ? "softApricotButton" : "softSageButton"} style={buttonStyle} aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : item.id)}>{isOpen ? "접기" : "하기"}</button>;
+            ? <Link className="softSageButton" style={buttonStyle} href={item.siteLink} onClick={() => mark(item.id)}>하기</Link>
+            : <button type="button" className={isOpen ? "softApricotButton" : "softSageButton"} style={buttonStyle} aria-expanded={isOpen} onClick={() => { if (!isOpen && item.id === "wims") mark(item.id); setOpen(isOpen ? null : item.id); }}>{isOpen ? "접기" : "하기"}</button>;
           return (
             <article key={item.id} style={{ border: "1px solid #e5dace", background: "#fbf8f4", borderRadius: 10, padding: "10px 12px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "28px minmax(0, 1fr) minmax(150px, 220px)", gap: 10, alignItems: "center" }}>
@@ -70,10 +89,13 @@ export default function DailyRoutine() {
                 <div style={{ minWidth: 0 }}>
                   <strong style={{ display: "block", fontSize: 15, color: wmsColors.ink }}>{item.title}</strong>
                   <span style={{ display: "block", fontSize: 12, color: wmsColors.muted }}>{item.summary}</span>
+                  <span style={{ display: "block", fontSize: 12, marginTop: 2, color: doneAt[item.id] ? "#3f574b" : wmsColors.muted, fontWeight: doneAt[item.id] ? 700 : 400 }}>
+                    {!loaded ? "마지막 처리 확인 중…" : doneAt[item.id] ? `마지막 처리 ${timeLabel(doneAt[item.id])}` : "마지막 처리 기록 없음"}
+                  </span>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: item.shortcut ? "1fr 1fr" : "1fr", gap: 6 }}>
                   {doButton}
-                  {item.shortcut && <a className="softBeigeButton" style={buttonStyle} href={item.shortcut} target="_blank" rel="noreferrer">바로가기</a>}
+                  {item.shortcut && <a className="softBeigeButton" style={buttonStyle} href={item.shortcut} target="_blank" rel="noreferrer" onClick={() => mark(item.id)}>바로가기</a>}
                 </div>
               </div>
               {isOpen && item.body && <div style={{ marginTop: 10 }}>{item.body}</div>}
