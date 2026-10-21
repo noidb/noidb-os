@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import ExcelJS from "exceljs";
@@ -423,26 +424,82 @@ export async function loadSupplierHubPurchaseOrdersFromDriveFiles(files: DriveFi
   return (await loadSupplierHubPurchaseOrderSnapshotsFromDriveFiles(files)).orders;
 }
 
+/**
+ * 2026-10-21: 발주서를 불러올 때마다 G드라이브 발주서 폴더의 예전 파일까지 전부 다시 내려받아 읽어서(불러오기·목록 조회 두 번)
+ * 파일이 쌓일수록 '불러오는 중'이 길어졌다. 파일(아이디+수정시각)별로 읽은 결과를 저장해 두고 새 파일만 읽는다.
+ * 같은 파일 목록이면 묶음 결과 하나만 읽는다. 저장은 바뀌지 않는 파일(내용이 같으면 같은 이름)이라 덮어쓰기 충돌이 없다.
+ */
+const PARSE_CACHE_VERSION = "po-parse-v1";
+const parseMemoryCache = new Map<string, SupplierHubPurchaseOrder[]>();
+function parseCacheKey(parts: string[]): string {
+  return `output-${createHash("sha256").update(JSON.stringify([PARSE_CACHE_VERSION, ...parts])).digest("hex")}.json`;
+}
+async function readParseCache(key: string): Promise<SupplierHubPurchaseOrder[] | null> {
+  // 같은 서버에서 다시 쓸 때도 원본이 바뀌지 않게 복사본을 넘긴다.
+  const memory = parseMemoryCache.get(key);
+  if (memory) return structuredClone(memory);
+  try {
+    const { readWeeklyFile } = await import("./weekly-work-files");
+    const bytes = await readWeeklyFile(key);
+    if (!bytes) return null;
+    const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    parseMemoryCache.set(key, structuredClone(parsed as SupplierHubPurchaseOrder[]));
+    return parsed as SupplierHubPurchaseOrder[];
+  } catch { return null; }
+}
+async function writeParseCache(key: string, orders: SupplierHubPurchaseOrder[]): Promise<void> {
+  parseMemoryCache.set(key, structuredClone(orders));
+  try {
+    const { saveWeeklyFile } = await import("./weekly-work-files");
+    await saveWeeklyFile(key, Buffer.from(JSON.stringify(orders)));
+  } catch { /* 저장 실패 — 다음에 다시 읽으면 된다 */ }
+}
+async function parseDriveFile(file: DriveFileInfo): Promise<SupplierHubPurchaseOrder[]> {
+  const raw = await downloadDriveFile(file.id);
+  const inputs: { name: string; displayName: string; buffer: Buffer }[] = [];
+  if (file.name.toLowerCase().endsWith(".zip")) {
+    const zip = await JSZip.loadAsync(raw);
+    for (const [name, entry] of Object.entries(zip.files)) {
+      if (!entry.dir && name.toLowerCase().endsWith(".xlsx")) {
+        inputs.push({ name, displayName: `${file.name} :: ${name}`, buffer: await entry.async("nodebuffer") });
+      }
+    }
+  } else {
+    inputs.push({ name: file.name, displayName: file.name, buffer: raw });
+  }
+  const orders: SupplierHubPurchaseOrder[] = [];
+  for (const input of inputs) {
+    const order = await parseSupplierHubPurchaseOrderBuffer(input.buffer, input.displayName, resolveSupplierHubSnapshotTime(input.name, file.name, file.modifiedTime));
+    if (order?.purchaseOrderNumber) orders.push(order);
+  }
+  return orders;
+}
+async function cachedDriveFileOrders(file: DriveFileInfo): Promise<SupplierHubPurchaseOrder[]> {
+  const key = parseCacheKey([file.id, file.modifiedTime, file.name]);
+  const cached = await readParseCache(key);
+  if (cached) return cached;
+  const orders = await parseDriveFile(file);
+  await writeParseCache(key, orders);
+  return orders;
+}
+
 async function loadSupplierHubPurchaseOrderSnapshotsFromDriveFiles(files: DriveFileInfo[]): Promise<SupplierHubSnapshotSelection> {
-  const candidates: SupplierHubPurchaseOrder[] = [];
-  for (const file of files) {
-      const raw = await downloadDriveFile(file.id);
-      const inputs: { name: string; displayName: string; buffer: Buffer }[] = [];
-      if (file.name.toLowerCase().endsWith(".zip")) {
-        const zip = await JSZip.loadAsync(raw);
-        for (const [name, entry] of Object.entries(zip.files)) {
-          if (!entry.dir && name.toLowerCase().endsWith(".xlsx")) {
-            inputs.push({ name, displayName: `${file.name} :: ${name}`, buffer: await entry.async("nodebuffer") });
-          }
-        }
-      } else {
-        inputs.push({ name: file.name, displayName: file.name, buffer: raw });
+  // 입력 순서가 결과(같은 발주번호 덮어쓰기)에 영향을 주므로 순서를 그대로 지킨다.
+  const listKey = parseCacheKey(["list", ...files.map(file => `${file.id}|${file.modifiedTime}|${file.name}`)]);
+  let candidates = await readParseCache(listKey);
+  if (!candidates) {
+    const perFile: SupplierHubPurchaseOrder[][] = new Array(files.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < files.length) {
+        const index = next++;
+        perFile[index] = await cachedDriveFileOrders(files[index]);
       }
-      for (const input of inputs) {
-        const order = await parseSupplierHubPurchaseOrderBuffer(input.buffer, input.displayName, resolveSupplierHubSnapshotTime(input.name, file.name, file.modifiedTime));
-        if (!order?.purchaseOrderNumber) continue;
-        candidates.push(order);
-      }
+    };
+    await Promise.all(Array.from({ length: Math.min(6, files.length) }, worker));
+    candidates = perFile.flat();
+    if (files.length) await writeParseCache(listKey, candidates);
   }
   return selectLatestSupplierHubPurchaseOrderSnapshots(candidates);
 }
