@@ -4,7 +4,10 @@ import { inspectShipmentPdf, matchShipmentPrintGroups, parseBarcodeWorkbook, typ
 export interface ShipmentPrintLoadCache { pdfs: Map<string, ShipmentPdfFile>; catalog?: ProductCatalogItem[] }
 export function createShipmentPrintLoadCache(): ShipmentPrintLoadCache { return { pdfs: new Map() }; }
 
-async function inspectSources(sources: EncodedSource[], kind: "label" | "manifest", cache: ShipmentPrintLoadCache) {
+async function inspectSources(allSources: EncodedSource[], kind: "label" | "manifest", cache: ShipmentPrintLoadCache) {
+  // 2026-10-21: 같은 PDF를 직접 저장도 하고 확장이 자동 저장도 하면 똑같은 파일이 두 개 → 내용이 같은 것은 한 번만 읽는다.
+  const seenContent = new Set<string>();
+  const sources = allSources.filter(source => { if (seenContent.has(source.base64)) return false; seenContent.add(source.base64); return true; });
   const result: ShipmentPdfFile[] = [];
   // At most two PDF workers at a time; the packing page reuses results across generations.
   for (let offset = 0; offset < sources.length; offset += 2) {
@@ -15,10 +18,12 @@ async function inspectSources(sources: EncodedSource[], kind: "label" | "manifes
       cache.pdfs.set(key, parsed); return parsed;
     })));
   }
-  return result;
+  // 같은 쉽먼트번호 PDF가 여러 개면(다시 받은 경우 등) 서버가 최신순으로 보내므로 처음 것(최신)만 쓴다.
+  const seenShipment = new Set<string>();
+  return result.filter(file => { if (!file.shipmentNumber) return true; if (seenShipment.has(file.shipmentNumber)) return false; seenShipment.add(file.shipmentNumber); return true; });
 }
 
-interface EncodedSource { name: string; base64: string }
+interface EncodedSource { name: string; base64: string; modifiedTime?: string }
 function decodeFile(source: EncodedSource, type: string): File {
   const binary = atob(source.base64);
   const bytes = new Uint8Array(binary.length);

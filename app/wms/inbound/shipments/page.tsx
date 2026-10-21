@@ -1460,6 +1460,8 @@ export default function ShipmentReceiptsPage() {
       {tab === "anytime" ? (
         <header className={styles.header}>
           <h1 className={styles.title}>거래처발주·단종관리</h1>
+          {/* 2026-10-21: 불러오는 동안 빈 화면처럼 보여서 진행 표시를 둔다. */}
+          {!payload && !error && <p className={styles.meta} role="status">거래처 발주·단종 목록을 불러오는 중…</p>}
         </header>
       ) : (<>
       <header className={styles.header}>

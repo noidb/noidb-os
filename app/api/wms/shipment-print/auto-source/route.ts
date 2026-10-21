@@ -113,7 +113,11 @@ export async function POST(request: NextRequest) {
       throw error;
     }
 
-    const encode = (file: SourceFile) => ({ name: file.name, base64: file.buffer.toString("base64") });
+    // 2026-10-21: 같은 쉽먼트 PDF가 직접 저장본·확장 자동저장본으로 두 개 있을 수 있어, 최신 파일이 먼저 오게 보낸다(사이트가 최신 1개만 씀).
+    const encode = (file: SourceFile) => ({ name: file.name, modifiedTime: file.modifiedTime, base64: file.buffer.toString("base64") });
+    const newestFirst = (a: SourceFile, b: SourceFile) => String(b.modifiedTime || "").localeCompare(String(a.modifiedTime || ""));
+    labels.sort(newestFirst);
+    manifests.sort(newestFirst);
     return NextResponse.json({
       labels: labels.map(encode),
       manifests: manifests.map(encode),

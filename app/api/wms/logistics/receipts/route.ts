@@ -131,6 +131,10 @@ function laterOrdersForMarketing(lines: readonly { lineKey: string; kind: string
 }
 
 async function responseBoard() {
+  // 2026-10-21: 화면을 열 때 오래 걸려(거래처발주·단종관리가 빈 화면처럼 보임) 서로 상관없는 읽기는 처음에 함께 시작한다.
+  const indexPromise = getCachedPurchaseOrderIndex().catch(() => null);
+  const discontinueQueuePromise = readWeeklyDiscontinueQueue();
+  discontinueQueuePromise.catch(() => {});
   const [firstRead, catalog, vendorStore, rereg] = await Promise.all([readWeeklyWorkspace(), readCatalog(), readPickingWaveStore().catch(() => null), loadReregistrationLookup()]);
   const statusSource = catalog ? await loadStatusSourceItems(catalog.items) : null;
   const openOrders = vendorStore ? openVendorOrdersBySku(vendorStore) : {};
@@ -153,7 +157,7 @@ async function responseBoard() {
     excludedMarketingLineKeys: [...activeMarketingExclusionKeys(workspace)],
   });
   const followUp = logisticsFollowUpResponse(workspace, board);
-  const source = await readWeeklyDiscontinueQueue();
+  const source = await discontinueQueuePromise;
   followUp.queues.discontinue.push(...previewFollowUpDiscontinue(source).map(row => ({ lineKey: `status::${row.requestId}`, sourceLineKey: row.requestId, shipmentNumber: "", boxId: "", purchaseOrderNumber: row.purchaseOrderNumber, skuId: row.skuId, productName: row.productName, barcode: "", kind: "shortage" as const, sourceFingerprint: row.requestId, state: "ready" as const })));
   const shownSkuIds = [...board.lines.map(line => line.skuId), ...(board.unavailableSkus || []).map(item => item.skuId)];
   // 2026-10-11 사용자 요청: 마케팅 SKU에 발주상태(제품DB 발주가능상태, 없으면 쿠팡 조회값)를 보여 실수 단종을 찾는다.
@@ -170,7 +174,8 @@ async function responseBoard() {
   try {
     const marketingRows = board.lines.filter(line => line.kind === "marketing");
     if (marketingRows.length) {
-      const index = await getCachedPurchaseOrderIndex();
+      const index = await indexPromise;
+      if (!index) throw new Error("원발주서 색인 없음");
       const latestBySku = new Map<string, { price: number; date: string }>();
       for (const document of index.byPurchaseOrderNumber.values()) for (const record of document.records) {
         if (!record.unitPrice) continue;
