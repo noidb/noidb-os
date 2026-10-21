@@ -79,10 +79,12 @@ export function queueMarketing(workspace: WeeklyWorkspace, targets: LogisticsRec
   const candidates = new Map(board.lines.filter(row => row.kind === "marketing" && row.state === "ready" && !activeMarketingExclusionKeys(workspace).has(row.lineKey)).map(row => [row.lineKey, row]));
   if ([...selected, ...excluded].some(key => !candidates.has(key))) throw new Error("현재 초도 입고 후보만 선택 또는 제외할 수 있습니다.");
   // Validate the entire batch against a copy before creating any source run.
+  // 2026-10-21: 같은 SKU가 여러 쉽먼트에 1개씩 들어온 줄을 함께 보내면 둘째 줄이 '이미 검토 목록에 있음'으로 막혀
+  // 묶음 전체가 실패했다. 파일 생성 때 SKU당 한 줄로 합쳐지므로(batchRuns·transientRun) 같은 SKU도 함께 받는다.
   const copy = structuredClone(workspace);
-  for (const key of selected) reserveLogisticsReceiptRoute(copy, targets, { lineKey: key, decision: "marketing", expectedCollectedAt: board.collectedAt!, confirmMarketing: true } as RouteLogisticsReceiptInput, undefined, at);
+  for (const key of selected) reserveLogisticsReceiptRoute(copy, targets, { lineKey: key, decision: "marketing", expectedCollectedAt: board.collectedAt!, confirmMarketing: true, allowQueuedSameSku: true } as RouteLogisticsReceiptInput, undefined, at);
   for (const key of selected) {
-    const reserved = reserveLogisticsReceiptRoute(workspace, targets, { lineKey: key, decision: "marketing", expectedCollectedAt: board.collectedAt!, confirmMarketing: true } as RouteLogisticsReceiptInput, undefined, at);
+    const reserved = reserveLogisticsReceiptRoute(workspace, targets, { lineKey: key, decision: "marketing", expectedCollectedAt: board.collectedAt!, confirmMarketing: true, allowQueuedSameSku: true } as RouteLogisticsReceiptInput, undefined, at);
     const skuId = reserved.run.logisticsReceiptLine!.skuId;
     reserved.run.snapshot.couponReceiptKeys = { ...reserved.run.snapshot.couponReceiptKeys,
       [skuId]: [...new Set([...(reserved.run.snapshot.couponReceiptKeys?.[skuId] || []), reserved.run.logisticsReceiptLine!.lineKey])] };

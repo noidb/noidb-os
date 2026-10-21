@@ -18,6 +18,8 @@ export interface RouteLogisticsReceiptInput {
   decision: LogisticsReceiptDecision;
   expectedCollectedAt: string;
   confirmMarketing?: boolean;
+  /** 쿠폰·광고 한꺼번에 보내기(queueMarketing) 전용: 같은 SKU가 이미 대기 중이어도 막지 않는다. 파일 생성 때 SKU당 한 줄로 합쳐진다. */
+  allowQueuedSameSku?: boolean;
 }
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const receiptSourceFingerprint = logisticsReceiptSourceFingerprint;
@@ -77,7 +79,7 @@ export function reserveLogisticsReceiptRoute(workspace: WeeklyWorkspace, targets
       const run = workspace.runs.find(item => item.id === route.runId);
       return Boolean(run && !run.couponUploadedAt && !run.completedAt && run.snapshot.couponItems.some(item => item.skuId === line.skuId));
     });
-    if (other) throw new Error("이 SKU는 이미 쿠폰·광고 검토 목록에 있습니다.");
+    if (other && !input.allowQueuedSameSku) throw new Error("이 SKU는 이미 쿠폰·광고 검토 목록에 있습니다.");
   } else if (line.kind !== "shortage" || line.state !== "ready" || !line.remainingQuantity || line.remainingQuantity <= 0) {
     throw new Error("확정된 미납수량이 있는 상품만 분류할 수 있습니다.");
   }
