@@ -725,13 +725,18 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     if (draftsRef.current[vendorName]?.status === "sent") { setSaveError("전송완료 발주서는 수정할 수 없습니다."); return; }
     const now = new Date().toISOString();
     const targetDraftId = draftIdFor(vendorName);
-    const activeSkus = new Set(linesRef.current
-      .filter(line => line.draftId === targetDraftId && !excludedLineIds.has(line.id) && !line.orderExclusion)
+    // 2026-10-21 사용자 요청: 같은 거래처에 이미 발주 중인 SKU(작성 중이든 보낸 발주든, 처리 끝나지 않은 것)는 다시 넣지 않는다.
+    const key = vendorKeyOf(vendorName);
+    const openLine = (line: VendorOrderDraftLine) => vendorKeyOf(line.vendorName || UNASSIGNED_VENDOR_NAME) === key && !excludedLineIds.has(line.id) && !routedVendorLineIds.has(line.id) && !line.orderExclusion && !removedLineIds.has(line.id) && !isVendorLineResolved(line);
+    const sentHistory = sharedSnapshot ? sharedSnapshot.vendorOrderLines.map(line => savedSentLines[line.id] || line).filter(line => !sharedSnapshot.deletedVendorLineIds[line.id] && sharedSnapshot.vendorOrderDrafts.some(draft => draft.id === line.draftId && draft.status === "sent")) : [];
+    const activeSkus = new Set([...linesRef.current, ...sentHistory].filter(line => line.draftId === targetDraftId ? !excludedLineIds.has(line.id) && !line.orderExclusion && !removedLineIds.has(line.id) : openLine(line))
       .map(line => normalizeSkuId(line.skuId)));
     const added: VendorOrderDraftLine[] = [];
+    const duplicates: string[] = [];
     for (const product of products) {
       const skuId = normalizeSkuId(product.skuId);
-      if (!skuId || activeSkus.has(skuId)) continue;
+      if (!skuId) continue;
+      if (activeSkus.has(skuId)) { duplicates.push(skuId); continue; }
       activeSkus.add(skuId);
       added.push({
         id: params.waveId + "::" + vendorName + "::manual-" + crypto.randomUUID(),
@@ -753,7 +758,8 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
       setOpenVendorKeys(previous => new Set(previous).add(vendorKeyOf(vendorName)));
       const lastId = added[added.length - 1].id;
       setTimeout(() => document.querySelector(`[data-line-id="${CSS.escape(lastId)}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
-    } else setCompletionMessage("선택한 상품은 이미 발주 초안에 있습니다.");
+    }
+    if (duplicates.length) window.alert(`SKU ${duplicates.join(", ")}는 이미 발주중입니다. 중복으로 추가하지 않았습니다.`);
     setSearchAddVendor(null); setVariantTarget(null);
   }
 
