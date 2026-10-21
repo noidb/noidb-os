@@ -29,13 +29,37 @@ async function localFiles(directory: string): Promise<SourceFile[]> {
   return files.filter((file) => file !== null);
 }
 
+/** 같은 서버에서 방금 받은 PDF는 다시 내려받지 않는다(파일 아이디·수정시각이 같을 때만). */
+const downloadMemory = new Map<string, Buffer>();
+async function cachedDownload(file: DriveFileInfo): Promise<Buffer> {
+  const key = `${file.id}|${file.modifiedTime}`;
+  const hit = downloadMemory.get(key);
+  if (hit) return hit;
+  const buffer = await downloadDriveFile(file.id);
+  if (downloadMemory.size > 300) downloadMemory.delete(downloadMemory.keys().next().value!);
+  downloadMemory.set(key, buffer);
+  return buffer;
+}
+
 async function driveFiles(fragment: string, accept: (file: DriveFileInfo) => boolean = () => true): Promise<SourceFile[]> {
   const files = (await searchDriveFilesByName(fragment)).filter(accept);
   return Promise.all(files.map(async (file: DriveFileInfo) => ({
     name: file.name,
     modifiedTime: file.modifiedTime,
-    buffer: await downloadDriveFile(file.id),
+    buffer: await cachedDownload(file),
   })));
+}
+
+/**
+ * 2026-10-21: G드라이브 전체의 Label·내역서 PDF를 모두 내려받아 느렸다. 쿠팡에서 Label·내역서는 입고예정일 전에 받으므로,
+ * 입고예정일 30일 전 ~ 10일 뒤 사이에 저장된 PDF만 내려받는다(지난 날짜 재출력도 그 날짜 기준이라 그대로 된다).
+ */
+function inDateWindow(dateTokens: string[]) {
+  const times = dateTokens.map(token => Date.parse(`${token.slice(0, 4)}-${token.slice(4, 6)}-${token.slice(6, 8)}T00:00:00+09:00`)).filter(Number.isFinite);
+  if (!times.length) return () => true;
+  const from = Math.min(...times) - 30 * 24 * 60 * 60 * 1000;
+  const to = Math.max(...times) + 10 * 24 * 60 * 60 * 1000;
+  return (file: DriveFileInfo) => { const at = Date.parse(file.modifiedTime || ""); return !Number.isFinite(at) || (at >= from && at <= to); };
 }
 
 export async function POST(request: NextRequest) {
@@ -55,8 +79,8 @@ export async function POST(request: NextRequest) {
     let workbookFiles: Awaited<ReturnType<typeof loadShipmentPrintWorkbookSources>>;
     if (isDriveReaderConfigured() || shouldRequireDriveReader()) {
       const [labels, manifests, workbooks] = await Promise.all([
-        driveFiles("shipment_Label_document"),
-        driveFiles("shipment_ManiFest_document"),
+        driveFiles("shipment_Label_document", inDateWindow(dateTokens)),
+        driveFiles("shipment_ManiFest_document", inDateWindow(dateTokens)),
         loadShipmentPrintWorkbookSources(expectedWorkbookName),
       ]);
       pdfFiles = [...labels, ...manifests];

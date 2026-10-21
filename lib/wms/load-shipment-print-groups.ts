@@ -37,6 +37,28 @@ function sameSet(left: Set<string>, right: Set<string>): boolean {
  * 자체가 이미 날짜를 확정하므로, 웨이브 아이템의 shippingGroupKey에서 날짜 토큰을 역산하던
  * 옛 로직(loadShipmentPrintGroups 본문 참고)은 필요 없다.
  */
+/**
+ * 2026-10-21: '출력세트 생성' 한 번에 쉽먼트번호 찾기와 출력세트 만들기가 같은 Label·내역서 PDF를 두 번 내려받았다.
+ * 같은 날짜·발주·쉽먼트파일 요청은 2분 동안 처음 받은 결과를 같이 쓴다(실패한 결과는 다시 받는다).
+ */
+const dateAutoSourceCache = new Map<string, { at: number; promise: Promise<{ ok: boolean; status: number; source: any }> }>();
+async function fetchDateAutoSource(expectedDate: string, purchaseOrderNumbers: string[], shipmentFileName: string): Promise<{ response: { ok: boolean; status: number }; source: any }> {
+  const dateToken = expectedDate.replace(/-/g, "");
+  const body = { waveId: `date:${expectedDate}`, dateTokens: [dateToken], expectedPurchaseOrderNumbers: [...purchaseOrderNumbers].sort(), expectedWorkbookName: shipmentFileName };
+  const key = JSON.stringify(body);
+  const cached = dateAutoSourceCache.get(key);
+  let entry = cached && Date.now() - cached.at < 120_000 ? cached : undefined;
+  if (!entry) {
+    entry = { at: Date.now(), promise: fetch("/api/wms/shipment-print/auto-source", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }).then(async response => ({ ok: response.ok, status: response.status, source: await response.json() })) };
+    dateAutoSourceCache.set(key, entry);
+  }
+  const result = await entry.promise.catch(error => { dateAutoSourceCache.delete(key); throw error; });
+  if (!result.ok || result.source?.error) dateAutoSourceCache.delete(key);
+  return { response: { ok: result.ok, status: result.status }, source: result.source };
+}
+
 export async function loadShipmentPrintGroupsByDate(
   expectedDate: string,
   purchaseOrderNumbers: string[],
@@ -50,16 +72,7 @@ export async function loadShipmentPrintGroupsByDate(
     throw new Error(`입고예정일·발주번호·쉽먼트번호가 올바르지 않습니다: ${expectedDate}`);
   }
 
-  const sourceResponse = await fetch("/api/wms/shipment-print/auto-source", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      waveId: `date:${expectedDate}`,
-      dateTokens: [dateToken],
-      expectedPurchaseOrderNumbers: [...expected],
-      expectedWorkbookName: shipmentFileName,
-    }),
-  });
-  const source = await sourceResponse.json();
+  const { response: sourceResponse, source } = await fetchDateAutoSource(expectedDate, [...expected], shipmentFileName);
   if (!sourceResponse.ok || source.error) throw new Error(source.error || "출력세트 원본을 불러오지 못했습니다.");
 
   const cache = options.cache || createShipmentPrintLoadCache();
@@ -118,11 +131,7 @@ export async function loadShipmentPrintGroupsByDate(
 export async function detectShipmentNumbersByDate(expectedDate: string, purchaseOrderNumbers: string[], shipmentFileName: string): Promise<Map<string, string>> {
   const expected = new Set(purchaseOrderNumbers.map(String));
   const dateToken = expectedDate.replace(/-/g, "");
-  const sourceResponse = await fetch("/api/wms/shipment-print/auto-source", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ waveId: `date:${expectedDate}`, dateTokens: [dateToken], expectedPurchaseOrderNumbers: [...expected], expectedWorkbookName: shipmentFileName }),
-  });
-  const source = await sourceResponse.json();
+  const { response: sourceResponse, source } = await fetchDateAutoSource(expectedDate, [...expected], shipmentFileName);
   if (!sourceResponse.ok || source.error) throw new Error(source.error || "Label PDF를 불러오지 못했습니다.");
   const labels = await inspectSources(source.labels as EncodedSource[], "label", createShipmentPrintLoadCache());
   const byPo = new Map<string, string>();

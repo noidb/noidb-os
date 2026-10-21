@@ -65,6 +65,8 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
 
   const [savingShipmentNumbers, setSavingShipmentNumbers] = useState(false);
   const [shipmentNumberDrafts, setShipmentNumberDrafts] = useState<Record<string, string>>({});
+  /** 쉽먼트번호 칸은 평소 접어 두고, 자동으로 못 찾았을 때만 펼친다(2026-10-21). */
+  const [shipmentNumbersOpen, setShipmentNumbersOpen] = useState(false);
   const [shipmentNumberSaveMessage, setShipmentNumberSaveMessage] = useState<string | null>(null);
   const [shipmentNumberSaveError, setShipmentNumberSaveError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<"confirm" | "dispatched" | null>(null);
@@ -434,6 +436,61 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
   /** ④ 출력세트 생성 — Supplier Hub 물류>쉽먼트에서 다운로드해 이미 저장해 둔 Label·내역서 PDF를
    *  기준으로 부착문서·동봉내역서·바코드 3종을 만든다. PDF 원본이 아직 저장 전이면 auto-source API가
    *  안내 메시지를 그대로 돌려준다. */
+  /**
+   * 2026-10-21 사용자 요청: '출력세트 생성' 한 번에 쉽먼트번호까지 채운다.
+   * 쉽먼트번호가 빈 묶음이 있으면 저장된 Label PDF에서 합배송 송장(센터)별 번호를 읽어 검사한 뒤 저장한다.
+   * 못 찾거나 번호가 맞지 않으면 아무것도 저장하지 않고, 쉽먼트번호 칸을 펼쳐 직접 입력하게 한다.
+   */
+  async function autoFillShipmentNumbers(current: InvoiceGroup[], shipmentFileName: string): Promise<InvoiceGroup[]> {
+    const valid = (group: InvoiceGroup) => /^\d{8}$/.test((group.shipmentNumbers[0] || "").trim());
+    if (current.every(valid)) return current;
+    setOutputSetMessage("Label PDF에서 쉽먼트번호를 찾는 중…");
+    const byPo = await detectShipmentNumbersByDate(expectedDate, purchaseOrderNumbers, shipmentFileName);
+    const bins = mergeGroupsByCenter(current);
+    const missing: string[] = [], mixed: string[] = [];
+    const numberByGroupId = new Map<string, string>();
+    for (const bin of bins) {
+      const saved = [...new Set(bin.map(group => (group.shipmentNumbers[0] || "").trim()).filter(value => /^\d{8}$/.test(value)))];
+      const found = [...new Set(bin.flatMap(group => group.purchaseOrderNumbers).map(po => byPo.get(po)).filter((value): value is string => Boolean(value)))];
+      const numbers = saved.length ? saved : found;
+      if (numbers.length === 1) for (const group of bin) numberByGroupId.set(group.id, numbers[0]);
+      else (numbers.length ? mixed : missing).push(bin[0].fulfillmentCenter);
+    }
+    // 같은 센터는 송장이 나뉘어도 쉽먼트 1건, 다른 센터끼리 같은 번호는 안 됨.
+    const centerByNumber = new Map<string, string>();
+    for (const group of current) {
+      const value = numberByGroupId.get(group.id);
+      if (!value) continue;
+      const center = centerByNumber.get(value);
+      if (center && center !== group.fulfillmentCenter) mixed.push(`${center}·${group.fulfillmentCenter}(같은 번호 ${value})`);
+      centerByNumber.set(value, group.fulfillmentCenter);
+    }
+    const sameCenterNumbers = new Map<string, Set<string>>();
+    for (const group of current) { const value = numberByGroupId.get(group.id); if (value) sameCenterNumbers.set(group.fulfillmentCenter, new Set([...(sameCenterNumbers.get(group.fulfillmentCenter) || []), value])); }
+    for (const [center, values] of sameCenterNumbers) if (values.size > 1) mixed.push(`${center}(번호 ${values.size}개)`);
+    if (missing.length || mixed.length) {
+      setShipmentNumbersOpen(true);
+      throw new Error([
+        "쉽먼트번호를 모두 자동으로 채우지 못해 출력세트를 만들지 않았습니다.",
+        missing.length ? `Label PDF에서 찾지 못함: ${missing.join(", ")} — 쿠팡에서 이 센터의 Label·내역서 PDF를 받아 지정 폴더에 저장했는지 확인해 주세요.` : "",
+        mixed.length ? `번호가 맞지 않음: ${[...new Set(mixed)].join(", ")}` : "",
+        "아래 '물류센터별 묶음 상세'에서 직접 입력·저장한 뒤 다시 눌러도 됩니다.",
+      ].filter(Boolean).join("\n"));
+    }
+    const now = new Date().toISOString();
+    const next: InvoiceGroup[] = [];
+    for (const group of current) {
+      const value = numberByGroupId.get(group.id)!;
+      if (group.shipmentNumbers[0] === value && group.shipmentRegisteredAt) { next.push(group); continue; }
+      const updated: InvoiceGroup = { ...group, shipmentNumbers: [value], shipmentRegisteredAt: now, barcodeFileName: undefined, barcodeGeneratedAt: undefined, outputSetGeneratedAt: undefined, outputSetFiles: undefined, updatedAt: now };
+      await invoiceGroupRepository.save(updated);
+      next.push(updated);
+    }
+    setGroups(next);
+    setShipmentNumberDrafts({});
+    return next;
+  }
+
   async function handleGenerateOutputSet() {
     if (generatingOutputSet) return;
     if (hasUnsavedShipmentNumbers) { setOutputSetError("변경한 쉽먼트번호를 전체 저장한 뒤 출력세트를 생성하세요."); return; }
@@ -445,8 +502,10 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     setOutputSetError(null);
     setOutputSetMessage(null);
     try {
+      const filledGroups = await autoFillShipmentNumbers(groups || [], shipmentFileName);
+      setOutputSetMessage("부착문서·동봉내역서·바코드를 만드는 중…");
       const { groups: printGroups } = await loadShipmentPrintGroupsByDate(expectedDate, purchaseOrderNumbers, shipmentFileName, {
-        expectedShipmentNumbers: groups.flatMap(group => group.shipmentNumbers),
+        expectedShipmentNumbers: filledGroups.flatMap(group => group.shipmentNumbers),
       });
       const [labelsPdf, manifestsPdf, barcodeXlsx] = await Promise.all([
         buildFourUpLabelPdf(printGroups), buildMergedManifestPdf(printGroups), buildLogisticsBarTenderWorkbook(printGroups),
@@ -470,6 +529,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
       setOutputSetMessage(`출력세트 생성 완료 · ${fileName} · 부착문서+동봉내역서+바코드`);
     } catch (error) {
       closeReservedDownloadTarget(downloadTarget);
+      setOutputSetMessage(null);
       setOutputSetError(error instanceof Error ? error.message : "출력세트 생성 중 오류가 발생했습니다.");
     } finally {
       setGeneratingOutputSet(false);
@@ -629,8 +689,18 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
         </div>
       </ShipmentWorkflowStepCard>
 
-      <details style={{ margin: "14px 0" }} open>
-        <summary style={{ cursor: "pointer", fontSize: "12px", color: wmsColors.muted }}>물류센터별 묶음 상세 · 쉽먼트번호 입력 ({groups.length}개)</summary>
+      {/* 2026-10-21: 3번(쉽먼트파일)과 4번(출력세트) 사이 할 일 — 쿠팡 쉽먼트 화면에서 Label·내역서 PDF 받기 */}
+      <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "12px", margin: "12px 0 0", background: "#fff", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(160px, 260px)", gap: "10px", alignItems: "center" }}>
+        <div>
+          <strong style={{ display: "block", fontSize: "14px" }}>Label·내역서 PDF 받기</strong>
+          <span style={{ fontSize: "12px", color: wmsColors.muted }}>쿠팡 쉽먼트 화면에서 이 날짜 쉽먼트의 Label·내역서 PDF를 받아 지정 폴더에 저장한 뒤 4번 출력세트를 눌러 주세요.</span>
+        </div>
+        <a href="https://supplier.coupang.com/ibs/asn/active" target="_blank" rel="noreferrer" className="softBeigeButton" style={{ width: "100%", textDecoration: "none", boxSizing: "border-box" }}>
+          PDF파일 다운받기
+        </a>
+      </div>
+      <details style={{ margin: "14px 0" }} open={shipmentNumbersOpen} onToggle={event => setShipmentNumbersOpen((event.currentTarget as HTMLDetailsElement).open)}>
+        <summary style={{ cursor: "pointer", fontSize: "12px", color: wmsColors.muted }}>물류센터별 묶음 상세 · 쉽먼트번호 (출력세트 생성 때 Label PDF에서 자동으로 채움 · 못 찾을 때만 직접 입력) ({groups.length}개)</summary>
         <p style={{ fontSize: "11px", color: wmsColors.muted, lineHeight: 1.6, margin: "6px 0" }}>
           쉽먼트번호는 Supplier Hub에 쉽먼트를 등록해야 발급됩니다. 각 묶음의 8자리 번호를 입력한 뒤 아래에서 전체 저장하면 출력세트를 만들 수 있습니다.
         </p>
@@ -665,10 +735,10 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
         <button type="button" disabled={savingShipmentNumbers} onClick={() => void handleSaveShipmentNumbers()} style={{ ...wmsSecondaryButton, width: "100%", marginTop: "10px", opacity: savingShipmentNumbers ? 0.5 : 1 }}>{savingShipmentNumbers ? "쉽먼트번호 전체 저장 중..." : "이 날짜 쉽먼트번호 전체 저장"}</button>
       </details>
 
-      <ShipmentWorkflowStepCard step={4} title="출력세트 생성" subtitle="Supplier Hub 물류>쉽먼트에서 Label·내역서를 먼저 다운로드해 지정 폴더에 저장한 뒤 눌러 주세요. 부착문서·동봉내역서·바코드가 함께 생성됩니다." status={outputSetGeneratedForAll ? "done" : groups.every(group => group.shipmentNumbers.some(value => /^\d{8}$/.test(value.trim()))) ? "current" : "blocked"}>
+      <ShipmentWorkflowStepCard step={4} title="출력세트 생성" subtitle="쿠팡 쉽먼트 화면에서 Label·내역서 PDF를 받아 지정 폴더에 저장한 뒤 누르면, Label에서 쉽먼트번호를 자동으로 채우고 부착문서·동봉내역서·바코드를 한 번에 만듭니다." status={outputSetGeneratedForAll ? "done" : shipmentGeneratedForAll ? "current" : "blocked"}>
         {outputSetError && <p style={{ color: "#c0392b", fontSize: "12px", whiteSpace: "pre-wrap" }}>{outputSetError}</p>}
         {outputSetMessage && <p style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{outputSetMessage}</p>}
-        <button type="button" disabled={generatingOutputSet || hasUnsavedShipmentNumbers || !groups.every(group => group.shipmentNumbers.some(value => /^\d{8}$/.test(value.trim())))} onClick={() => void handleGenerateOutputSet()} style={{ ...wmsPrimaryButton, width: "100%", opacity: generatingOutputSet || hasUnsavedShipmentNumbers || !groups.every(group => group.shipmentNumbers.some(value => /^\d{8}$/.test(value.trim()))) ? 0.5 : 1 }}>
+        <button type="button" disabled={generatingOutputSet || hasUnsavedShipmentNumbers || !shipmentGeneratedForAll} onClick={() => void handleGenerateOutputSet()} style={{ ...wmsPrimaryButton, width: "100%", opacity: generatingOutputSet || hasUnsavedShipmentNumbers || !shipmentGeneratedForAll ? 0.5 : 1 }}>
           {generatingOutputSet ? "생성 중..." : outputSetGeneratedForAll ? "출력세트 다시 생성" : "이 날짜 출력세트 한 번에 생성"}
         </button>
       </ShipmentWorkflowStepCard>
