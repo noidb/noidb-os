@@ -13,6 +13,7 @@ import { INVOICE_GROUP_STAGE_LABEL, INVOICE_GROUP_STAGE_ORDER, canMarkInvoiceGro
 import styles from "./work-center.module.css";
 import { readReceiptTabCounts, type ReceiptTabCounts } from "@/lib/wms/receipt-tab-counts";
 import DailyRoutine from "./DailyRoutine";
+import ExtensionDownloads from "./ExtensionDownloads";
 
 /**
  * 작업센터 첫 화면의 "부족분 거래처별 발주서" 진입 배너 (2026-08-19 신규).
@@ -299,6 +300,7 @@ export default function WmsWorkCenterPage() {
       <AppNavigation active="work-center" />
       {/* 2026-10-21 사용자 요청: 매일·수시로 하는 일을 한곳에 모아 잊지 않게 */}
       <DailyRoutine />
+      <ExtensionDownloads />
       <InProgressOrdersSection live={live} />
       <ShipmentClosedGroupsBanner groups={live.groups} />
 
