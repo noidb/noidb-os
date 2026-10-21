@@ -98,3 +98,63 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   })();
   return true;
 });
+
+// 0.9.11(2026-10-21): 쿠팡의 [Label]·[내역서] 버튼은 PDF를 크롬 다운로드로 바로 내려받아 화면 안에서는 잡히지 않았다.
+// 크롬 다운로드를 지켜보다가 쿠팡에서 받은 쉽먼트 Label·내역서 PDF면 같은 파일을 한 번 더 읽어 NOID-B에 저장한다.
+const noidbPdfHandled = new Set();
+function noidbPdfKind(text) { return /manifest/i.test(text) ? "ManiFest" : /label/i.test(text) ? "Label" : ""; }
+async function noidbNotifyPdf(detail) {
+  try {
+    const tabs = await chrome.tabs.query({ url: "https://supplier.coupang.com/*" });
+    for (const tab of tabs) chrome.tabs.sendMessage(tab.id, { type: "NOIDB_PDF_STATUS", detail }).catch?.(() => {});
+  } catch {}
+}
+function noidbToBase64(buffer) {
+  const bytes = new Uint8Array(buffer); let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(index, index + 0x8000));
+  return btoa(binary);
+}
+async function noidbReadDownload(url) {
+  // 쿠팡 화면(같은 사이트)에서 읽으면 로그인 상태·blob 주소 그대로 읽힌다. 안 되면 확장이 직접 읽는다.
+  try {
+    const tabs = await chrome.tabs.query({ url: "https://supplier.coupang.com/*" });
+    for (const tab of tabs) {
+      const result = await chrome.tabs.sendMessage(tab.id, { type: "NOIDB_FETCH_FOR_PDF", url }).catch(() => null);
+      if (result?.ok && result.base64) return result.base64;
+    }
+  } catch {}
+  if (/^https:\/\/supplier\.coupang\.com\//.test(url)) {
+    const response = await fetch(url, { credentials: "include", cache: "no-store" });
+    if (response.ok) return noidbToBase64(await response.arrayBuffer());
+  }
+  if (/^data:application\/pdf;base64,/.test(url)) return url.split(",")[1];
+  throw new Error("받은 PDF를 다시 읽지 못했습니다.");
+}
+async function noidbHandleDownload(item) {
+  if (!item || noidbPdfHandled.has(item.id)) return;
+  const url = item.finalUrl || item.url || "";
+  const name = String(item.filename || "").split(/[\\/]/).pop();
+  const fromCoupang = /^(blob:)?https:\/\/supplier\.coupang\.com\//.test(url) || /^(blob:)?https:\/\/supplier\.coupang\.com\//.test(item.url || "") || String(item.referrer || "").startsWith("https://supplier.coupang.com/");
+  if (!fromCoupang || !name) return;
+  const kind = noidbPdfKind(`${name} ${url}`);
+  if (!kind || !(/\.pdf$/i.test(name) || /pdf/i.test(item.mime || ""))) return;
+  noidbPdfHandled.add(item.id);
+  const shownUrl = url.startsWith("blob:") ? `${url.split("/").slice(0, 3).join("/")}/… (blob)` : url.split("?")[0];
+  noidbNotifyPdf({ phase: "sending", name, kind, url: shownUrl });
+  try {
+    const base64 = await noidbReadDownload(url);
+    const response = await fetch("https://noidb-os.vercel.app/api/wms/shipment-print/pdf-upload", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, kind, sourceUrl: shownUrl, base64 }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.error || "PDF를 저장하지 못했습니다.");
+    noidbNotifyPdf({ phase: "saved", name: result.fileName || name, kind, url: shownUrl, skipped: Boolean(result.skipped) });
+  } catch (error) {
+    noidbNotifyPdf({ phase: "failed", name, kind, url: shownUrl, error: error.message });
+  }
+}
+chrome.downloads.onChanged.addListener(delta => {
+  if (!delta?.id || !(delta.filename?.current || delta.state?.current === "complete")) return;
+  chrome.downloads.search({ id: delta.id }, items => { void noidbHandleDownload(items && items[0]); });
+});

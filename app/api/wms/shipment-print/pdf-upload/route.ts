@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
     if (buffer.length < 5 || buffer.subarray(0, 4).toString("latin1") !== "%PDF") throw new Error("PDF 파일이 아닙니다.");
     const hash = createHash("sha256").update(buffer).digest("hex").slice(0, 10);
     const prefix = `shipment_${kind}_document(`;
-    const original = String(body.name || "").replace(/[\\/:*?"<>|]+/g, " ").replace(/\.pdf$/i, "").trim().slice(0, 120);
+    const original = String(body.name || "").replace(/[\\/:*?"<>|]+/g, " ").replace(/\.pdf$/i, "").replace(/\s*\(\d+\)$/, "").trim().slice(0, 120);
     const inner = original.startsWith(prefix) ? original.slice(prefix.length).replace(/\)$/, "") : original || new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 19).replace(/\D/g, "");
     const fileName = `${prefix}${inner})_${hash}.pdf`;
     const folderId = await resolveDriveFolderPath(FOLDER);

@@ -34,6 +34,22 @@
   });
 
   // 0.9.10: 쉽먼트 Label·내역서 PDF → NOID-B 저장. 결과는 쉽먼트 칸에 보이도록 화면 이벤트로 알린다.
+  // 0.9.11: 크롬 다운로드로 받은 PDF를 확장이 다시 읽을 때(쿠팡 화면 안에서 읽어야 로그인·blob 주소가 그대로 통함)
+  try {
+    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+      if (message?.type !== "NOIDB_FETCH_FOR_PDF" || typeof message.url !== "string") return;
+      fetch(message.url, { credentials: "include", cache: "no-store" }).then(response => {
+        if (!response.ok) throw new Error(String(response.status));
+        return response.arrayBuffer();
+      }).then(buffer => {
+        const bytes = new Uint8Array(buffer); let binary = "";
+        for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(index, index + 0x8000));
+        sendResponse({ ok: true, base64: btoa(binary) });
+      }).catch(() => sendResponse({ ok: false }));
+      return true;
+    });
+  } catch {}
+
   window.addEventListener("message", event => {
     if (event.source !== window || event.data?.source !== "NOIDB_SHIPMENT_PDF") return;
     const { name, kind, url, base64 } = event.data;
