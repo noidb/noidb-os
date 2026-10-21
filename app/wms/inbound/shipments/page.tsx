@@ -57,6 +57,8 @@ type ApiPayload = {
   skuNames?: Record<string, string>;
   /** 기존 발주로 처리한 미납 줄 */
   coveredByVendorOrder?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; vendors: string[]; sentOn: string; at: string }>;
+  /** 미납 SKU 리스트에서 '재발주요청 제외'로 뺀 줄(2026-10-21) */
+  reorderExcluded?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; at: string }>;
   /** 쉽먼트별 내역과 처음 가져온 시각(2026-10-15) */
   shipmentDetails?: Record<string, { firstSeenAt: string; totalDelivered: number | null; totalReceived: number | null; lines: Array<{ purchaseOrderNumber: string; skuId: string; productName: string; deliveredQuantity: number; receivedQuantity: number }> }>;
   /** 공급상태가 정상이 아닌 SKU 확인 결과(단종확인·단종해제) */
@@ -556,6 +558,71 @@ export default function ShipmentReceiptsPage() {
       });
     }
   }
+  // 2026-10-21: 미납 SKU 리스트는 '재발주요청 제외'만 고르고, 나머지는 파일 생성 때 한꺼번에 재발주요청으로 보낸다.
+  async function toggleReorderExclusion(line: LogisticsReceiptBoardLine, action: "exclude" | "undo") {
+    if (fixture || !payload) return;
+    setError("");
+    setRoutingKeys((current) => ({ ...current, [line.lineKey]: true }));
+    try {
+      const response = await fetch("/api/wms/logistics/reorder-exclusion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, lineKey: line.lineKey, skuId: line.skuId, productName: line.productName, shipmentNumber: line.shipmentNumber, quantity: line.remainingQuantity ?? 0 }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "저장하지 못했습니다.");
+      setPayload((current) => current && { ...current, reorderExcluded: data.reorderExcluded });
+      setMessage(action === "exclude" ? `SKU ${line.skuId} · 재발주요청에서 제외했습니다.` : `SKU ${line.skuId} · 제외를 취소했습니다.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "저장하지 못했습니다.");
+    } finally {
+      setRoutingKeys((current) => {
+        const next = { ...current };
+        delete next[line.lineKey];
+        return next;
+      });
+    }
+  }
+  /** 제외하지 않은 미납 줄을 모두 재발주요청으로 보낸 뒤 재발주요청 파일을 만든다. */
+  async function sendReorderAndGenerate(targets: LogisticsReceiptBoardLine[]) {
+    if (!payload) return;
+    if (fixture) {
+      for (const line of targets) await submitDecision(line, "reorder");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const failed: string[] = [];
+    try {
+      for (const [index, line] of targets.entries()) {
+        setMessage(`재발주요청으로 보내는 중… ${index + 1}/${targets.length}`);
+        try {
+          const response = await fetch("/api/wms/logistics/receipts/route-item", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lineKey: line.lineKey, decision: "reorder", expectedCollectedAt: payload.collectedAt || payload.board.collectedAt }),
+          });
+          const data = await response.json();
+          if (!response.ok || !data.ok) throw new Error(data.error || "보내지 못했습니다.");
+          const route = (data.route || { decision: "reorder", runId: "", at: new Date().toISOString(), completed: true, quantity: line.remainingQuantity ?? 0, sourceFingerprint: "" }) as LogisticsReceiptBoardLine["route"];
+          setPayload((current) => current && {
+            ...current,
+            board: { ...current.board, lines: current.board.lines.map((item) => item.lineKey === line.lineKey ? { ...item, state: "routed", route, reviewReason: "후속 처리 중" } : item) },
+          });
+        } catch (cause) {
+          failed.push(`SKU ${line.skuId}: ${cause instanceof Error ? cause.message : "보내지 못했습니다."}`);
+        }
+      }
+    } finally {
+      setBusy(false);
+    }
+    followUpStale.current = true;
+    if (failed.length) {
+      setError(`재발주요청으로 못 보낸 상품 ${failed.length}건 — ${failed.join(" / ")}`);
+      if (failed.length === targets.length) return;
+    }
+    await followUpAction({ action: "generate", kind: "reorder" }, "미납분 재발주요청 파일을 생성했습니다.");
+  }
   const openOrderNote = (skuId: string) => {
     const order = payload?.openVendorOrders?.[skuId];
     if (!order) return null;
@@ -676,12 +743,17 @@ export default function ShipmentReceiptsPage() {
       .filter((line) => line.state === "pending" || line.state === "unknown")
       .map((line) => line.shipmentNumber),
   );
+  const reorderExcluded = payload?.reorderExcluded || {};
   const resultLines = [...shortageLines].sort(
     (left, right) =>
+      (reorderExcluded[left.lineKey] ? 1 : 0) - (reorderExcluded[right.lineKey] ? 1 : 0) ||
       (left.state === "ready" ? 0 : 1) - (right.state === "ready" ? 0 : 1) ||
       left.shipmentNumber.localeCompare(right.shipmentNumber),
   );
   const routedLines = lines.filter((line) => line.state === "routed");
+  // 파일 생성 때 재발주요청으로 함께 보낼 미납 줄(제외하지 않은 것)
+  const reorderReadyLines = resultLines.filter((line) => line.kind === "shortage" && line.state === "ready" && (line.remainingQuantity ?? 0) > 0 && !reorderExcluded[line.lineKey]);
+  const reorderExcludedCount = resultLines.filter((line) => reorderExcluded[line.lineKey]).length;
   const unavailableShown = (payload?.board.unavailableSkus || []).filter((item) => !supplyChecks[item.skuId]);
   // 단종해제 대상: 서버가 제품DB·메모·화면 선택을 합친 목록. 화면에서 방금 누른 SKU도 바로 보이게 더한다.
   const serverRelease = payload?.statusLists?.release || [];
@@ -782,50 +854,31 @@ export default function ShipmentReceiptsPage() {
         {line.kind === "shortage" &&
         line.state === "ready" &&
         (line.remainingQuantity ?? 0) > 0 ? (
-          <div className={styles.decisionRow}>
-            {/* 2026-10-20: 입고결과 처리의 기본 동작은 미납분 재발주요청 — 맨 앞에 주요 색으로 둔다. */}
-            <button
-              className={`softSageButton ${styles.decisionButton}`}
-              style={{ gridColumn: "span 2" }}
-              disabled={busy || routingKeys[line.lineKey]}
-              onClick={() => void submitDecision(line, "reorder")}
-            >
-              미납분 재발주요청
-            </button>
-            <button
-              className={`softBeigeButton ${styles.decisionButton}`}
-              disabled={busy || routingKeys[line.lineKey]}
-              onClick={() => void submitDecision(line, "discontinue")}
-            >
-              단종
-            </button>
-            {payload?.openVendorOrders?.[line.skuId] ? (
-              <>
-                <button
-                  className={`softSageButton ${styles.decisionButton}`}
-                  disabled={busy || routingKeys[line.lineKey]}
-                  onClick={() => void coverByVendorOrder(line, "cover")}
-                >
-                  기존 발주로 처리
-                </button>
-                <button
-                  className={`softPinkButton ${styles.decisionButton}`}
-                  disabled={busy || routingKeys[line.lineKey]}
-                  onClick={() => void submitDecision(line, "vendor")}
-                >
-                  추가 발주
-                </button>
-              </>
-            ) : (
+          reorderExcluded[line.lineKey] ? (
+            <div className={styles.decisionRow}>
+              <span className={styles.meta} style={{ gridColumn: "span 2", textAlign: "center" }}>재발주요청 제외함</span>
               <button
                 className={`softApricotButton ${styles.decisionButton}`}
+                style={{ gridColumn: "span 2" }}
                 disabled={busy || routingKeys[line.lineKey]}
-                onClick={() => void submitDecision(line, "vendor")}
+                onClick={() => void toggleReorderExclusion(line, "undo")}
               >
-                거래처발주
+                제외 취소
               </button>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className={styles.decisionRow}>
+              {/* 2026-10-21: 거래처발주·단종은 수시로 처리하므로 여기서는 재발주요청 제외만 고른다. */}
+              <button
+                className={`softBeigeButton ${styles.decisionButton}`}
+                style={{ gridColumn: "span 2" }}
+                disabled={busy || routingKeys[line.lineKey]}
+                onClick={() => void toggleReorderExclusion(line, "exclude")}
+              >
+                재발주요청 제외
+              </button>
+            </div>
+          )
         ) : isSupplyReview(line) ? (
           supplyButtons(line.skuId, line.productName)
         ) : line.state === "review" ? (
@@ -928,7 +981,9 @@ export default function ShipmentReceiptsPage() {
                     : "쿠폰·광고 마무리"}
               </h2>
               <p className={styles.meta}>
-                현재 대기 {activeFollowUpQueue.length}건
+                {followUpKind === "reorder"
+                  ? `파일에 넣을 미납 ${activeFollowUpQueue.length + reorderReadyLines.length}건${reorderExcludedCount ? ` · 재발주요청 제외 ${reorderExcludedCount}건` : ""}`
+                  : `현재 대기 ${activeFollowUpQueue.length}건`}
               </p>
               {/* 2026-10-11 사용자 요청: 쿠폰·광고로 보낸 상품을 입고결과 마케팅 SKU 리스트로 되돌리기 */}
               {followUpKind === "marketing" && !fixture && activeFollowUpQueue.length > 0 && (
@@ -1083,19 +1138,21 @@ export default function ShipmentReceiptsPage() {
                       <button
                         className={styles.button}
                         disabled={
-                          busy || blocked || !activeFollowUpQueue.length
+                          busy || blocked || (!activeFollowUpQueue.length && !(followUpKind === "reorder" && reorderReadyLines.length))
                         }
                         onClick={() =>
-                          void followUpAction(
-                            { action: "generate", kind: followUpKind },
-                            `${followUpKind === "reorder" ? "미납분 재발주요청" : followUpKind === "discontinue" ? "단종" : "쿠폰·광고"} 누적 대상 파일을 생성했습니다.`,
-                          )
+                          followUpKind === "reorder" && reorderReadyLines.length
+                            ? void sendReorderAndGenerate(reorderReadyLines)
+                            : void followUpAction(
+                                { action: "generate", kind: followUpKind },
+                                `${followUpKind === "reorder" ? "미납분 재발주요청" : followUpKind === "discontinue" ? "단종" : "쿠폰·광고"} 누적 대상 파일을 생성했습니다.`,
+                              )
                         }
                       >
                         {followUpKind === "discontinue"
                           ? "단종서류 생성"
                           : followUpKind === "reorder"
-                            ? "미납분 재발주요청 파일 생성"
+                            ? `미납분 재발주요청 파일 생성 (${activeFollowUpQueue.length + reorderReadyLines.length}건)`
                             : "쿠폰·광고 파일 생성"}
                       </button>
                       {followUpKind === "reorder" && !fixture && (

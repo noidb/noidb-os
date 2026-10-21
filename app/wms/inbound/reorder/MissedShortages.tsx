@@ -12,7 +12,7 @@ const decisionLabel: Record<string, string> = { reorder: "재발주요청", vend
  * 줄마다 지금 어디로 보냈는지 보여 주고, 미분류는 재발주요청에 넣고, 잘못 보낸 줄은 재발주요청으로 바꾼다.
  */
 export default function MissedShortages({ onAdded }: { onAdded: () => void }) {
-  const [lines, setLines] = useState<Line[]>([]), [covered, setCovered] = useState<Record<string, unknown>>({}), [collectedAt, setCollectedAt] = useState("");
+  const [lines, setLines] = useState<Line[]>([]), [covered, setCovered] = useState<Record<string, unknown>>({}), [excluded, setExcluded] = useState<Record<string, unknown>>({}), [collectedAt, setCollectedAt] = useState("");
   const [busyKey, setBusyKey] = useState(""), [state, setState] = useState<"loading" | "ready" | "error">("loading"), [note, setNote] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [hiddenCount, setHiddenCount] = useState(0), [lastBatch, setLastBatch] = useState<{ at: string; count: number } | null>(null);
@@ -23,6 +23,7 @@ export default function MissedShortages({ onAdded }: { onAdded: () => void }) {
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "입고결과를 불러오지 못했습니다.");
       setCovered(data.coveredByVendorOrder || {});
+      setExcluded(data.reorderExcluded || {});
       // 2026-10-20: '검토 완료로 정리'로 숨긴 줄은 빼고 보여 준다(처리기록은 그대로).
       const hidden = new Set<string>(data.missedListReviewed?.keys || []);
       const all = (data.board.lines as Line[]).filter(line => line.kind === "shortage" && ((line.remainingQuantity ?? 0) > 0 || line.route));
@@ -35,7 +36,7 @@ export default function MissedShortages({ onAdded }: { onAdded: () => void }) {
     } catch (error) { setNote(error instanceof Error ? error.message : "입고결과를 불러오지 못했습니다."); setState("error"); }
   }
   useEffect(() => { void load(); }, []);
-  const statusOf = (line: Line) => covered[line.lineKey] ? "기존 발주로 처리" : line.route ? decisionLabel[line.route.decision] || "처리됨"
+  const statusOf = (line: Line) => covered[line.lineKey] ? "기존 발주로 처리" : !line.route && excluded[line.lineKey] ? "재발주요청 제외" : line.route ? decisionLabel[line.route.decision] || "처리됨"
     : line.state === "review" ? "확인 필요" : "미분류";
   async function toReorder(line: Line) {
     const current = statusOf(line);
