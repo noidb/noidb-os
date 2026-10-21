@@ -122,6 +122,15 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: 10px;
+  /* 2026-10-21: 한 카드를 열어도 같은 줄의 다른 카드가 길게 늘어나지 않게 */
+  align-items: start;
+}
+/* 연 쉽먼트는 한 줄 전체 폭으로 펼쳐 내역을 넓게 본다 */
+.shipmentOpen {
+  grid-column: 1 / -1;
+}
+.shipmentOpen .table {
+  min-width: 0;
 }
 .shipment {
   border: 1px solid #d4e0e3;

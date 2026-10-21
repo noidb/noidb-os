@@ -162,6 +162,8 @@ export default function ShipmentReceiptsPage() {
   const [tab, setTab] = useState<Tab>("anytime");
   const [optimisticDone, setOptimisticDone] = useState<Set<string>>(new Set());
   const [openShipments, setOpenShipments] = useState<Set<string>>(new Set());
+  /** 미납 SKU 리스트 보기: 지금 처리할 것만 / 모든 쉽먼트의 미납 전체(2026-10-21) */
+  const [missView, setMissView] = useState<"todo" | "all">("todo");
   const [busy, setBusy] = useState(false);
   const [fixture, setFixture] = useState(false);
   const [modeReady, setModeReady] = useState(false);
@@ -754,6 +756,19 @@ export default function ShipmentReceiptsPage() {
   // 파일 생성 때 재발주요청으로 함께 보낼 미납 줄(제외하지 않은 것)
   const reorderReadyLines = resultLines.filter((line) => line.kind === "shortage" && line.state === "ready" && (line.remainingQuantity ?? 0) > 0 && !reorderExcluded[line.lineKey]);
   const reorderExcludedCount = resultLines.filter((line) => reorderExcluded[line.lineKey]).length;
+  // 전체 미납 보기: 예전 쉽먼트까지 미납이 있었던 모든 줄(이미 보낸 줄 포함)을 입고예정일 최신순으로.
+  const allMissLines = lines
+    .filter((line) => line.kind === "shortage" && Boolean(line.skuId) && ((line.remainingQuantity ?? 0) > 0 || Boolean(line.route)))
+    .sort((a, b) => (b.target.expectedDate || "").localeCompare(a.target.expectedDate || "") || a.shipmentNumber.localeCompare(b.shipmentNumber) || a.skuId.localeCompare(b.skuId));
+  const missStatusOf = (line: LogisticsReceiptBoardLine): string => {
+    if (line.route) return line.route.decision === "reorder" ? "재발주요청 보냄" : `${decisionLabel[line.route.decision]}(으)로 보냄`;
+    if (covered[line.lineKey]) return "기존 거래처 발주로 처리";
+    if (isSupplyReview(line) && supplyChecks[line.skuId]) return supplyChecks[line.skuId].decision === "release" ? "단종해제 대상으로 보냄" : "단종확인함";
+    if (reorderExcluded[line.lineKey]) return "재발주요청 제외함";
+    if (line.state === "ready") return "처리 전";
+    return line.reviewReason || "확인 필요";
+  };
+  const allMissTodoCount = allMissLines.filter((line) => missStatusOf(line) === "처리 전").length;
   const unavailableShown = (payload?.board.unavailableSkus || []).filter((item) => !supplyChecks[item.skuId]);
   // 단종해제 대상: 서버가 제품DB·메모·화면 선택을 합친 목록. 화면에서 방금 누른 SKU도 바로 보이게 더한다.
   const serverRelease = payload?.statusLists?.release || [];
@@ -893,6 +908,7 @@ export default function ShipmentReceiptsPage() {
   const shipmentDetails = payload?.shipmentDetails || {};
   const latestFirstSeen = Object.values(shipmentDetails).map((detail) => detail.firstSeenAt).filter(Boolean).sort().slice(-1)[0] || "";
   const newTargets = latestFirstSeen ? (payload?.targets || []).filter((target) => shipmentDetails[target.shipmentNumber]?.firstSeenAt === latestFirstSeen) : [];
+  const newTargetNumbers = new Set(newTargets.map((target) => target.shipmentNumber));
   // 2026-10-15: 1개 입고 줄이 마케팅 SKU 리스트에 왜 있는지/없는지 내역에서 바로 보이게 한다.
   const marketingState = (shipmentNumber: string, skuId: string) => {
     const line = payload?.board.lines.find((item) => item.kind === "marketing" && item.shipmentNumber === shipmentNumber && item.skuId === skuId);
@@ -911,7 +927,7 @@ export default function ShipmentReceiptsPage() {
     const received = detail ? detail.lines.reduce((sum, line) => sum + line.receivedQuantity, 0) : null;
     const shortage = delivered !== null && received !== null ? Math.max(0, delivered - received) : null;
     return (
-      <article className={styles.shipment} key={`${isNew ? "new-" : ""}${target.shipmentNumber}`} style={isNew ? { borderColor: "#dfbdb2", background: "#fff" } : undefined}>
+      <article className={`${styles.shipment} ${open ? styles.shipmentOpen : ""}`} key={`${isNew ? "new-" : ""}${target.shipmentNumber}`} style={isNew ? { borderColor: "#dfbdb2", background: "#fff" } : undefined}>
         <button
           type="button"
           onClick={() => setOpenShipments((current) => { const next = new Set(current); if (next.has(target.shipmentNumber)) next.delete(target.shipmentNumber); else next.add(target.shipmentNumber); return next; })}
@@ -923,7 +939,7 @@ export default function ShipmentReceiptsPage() {
             쉽먼트 {target.shipmentNumber} {open ? "▲" : "▼"}
           </strong>
           <p className={styles.meta}>
-            {[isNew ? `${target.expectedDate} 입고 · ${target.centerName}` : "", detail ? `SKU ${new Set(detail.lines.map((line) => line.skuId)).size}종 · 납품 ${delivered} · 입고 ${received}` : "", shortage ? `미납 ${shortage}` : detail ? "미납 없음" : ""].filter(Boolean).join(" · ")}
+            {[isNew ? `${target.expectedDate} 입고 · ${target.centerName}` : "", !isNew && detail?.firstSeenAt ? `처음 가져옴 ${new Date(detail.firstSeenAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : "", detail ? `SKU ${new Set(detail.lines.map((line) => line.skuId)).size}종 · 납품 ${delivered} · 입고 ${received}` : "", shortage ? `미납 ${shortage}` : detail ? "미납 없음" : ""].filter(Boolean).join(" · ")}
           </p>
           <p className={styles.meta}>
             발주{" "}
@@ -936,7 +952,8 @@ export default function ShipmentReceiptsPage() {
             <table className={styles.table} aria-label={`쉽먼트 ${target.shipmentNumber} 내역`}>
               <thead><tr><th>SKU</th><th>상품명</th><th>납품</th><th>입고</th><th>미납</th><th>마케팅</th></tr></thead>
               <tbody>
-                {detail.lines.map((line, index) => {
+                {/* 2026-10-21: 미납이 많은 줄부터 보이게 */}
+                {[...detail.lines].sort((a, b) => Math.max(0, b.deliveredQuantity - b.receivedQuantity) - Math.max(0, a.deliveredQuantity - a.receivedQuantity)).map((line, index) => {
                   const miss = Math.max(0, line.deliveredQuantity - line.receivedQuantity);
                   return (
                     <tr key={`${line.purchaseOrderNumber}-${line.skuId}-${index}`}>
@@ -1439,7 +1456,8 @@ export default function ShipmentReceiptsPage() {
         {tab === "pending" &&
           payload &&
           (payload.targets.length ? (
-            groupedTargets(payload.targets).map(([date, centers]) => (
+            // 2026-10-21: 맨 위 '새로 가져온 쉽먼트'에 있는 것은 아래 날짜별 목록에서 뺀다(같은 쉽먼트가 두 번 보여 헷갈림).
+            groupedTargets(payload.targets.filter((target) => !newTargetNumbers.has(target.shipmentNumber))).map(([date, centers]) => (
               <section className={styles.dateBlock} key={date}>
                 <h2 className={styles.dateTitle}>{date}</h2>
                 {[...centers.entries()]
@@ -1648,8 +1666,61 @@ export default function ShipmentReceiptsPage() {
         {tab === "results" && payload && (
           <>
             <h2 className={styles.listTitle}>
-              미납 SKU 리스트 <span>{resultLines.length}건</span>
+              미납 SKU 리스트 <span>{missView === "all" ? `전체 ${allMissLines.length}건 · 처리 전 ${allMissTodoCount}건` : `${resultLines.length}건`}</span>
             </h2>
+            {/* 2026-10-21: 예전 쉽먼트 미납까지 모두 검토할 수 있게 보기 전환 */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", margin: "0 0 10px" }}>
+              <button type="button" className={missView === "todo" ? "softSageButton" : "softApricotButton"} aria-pressed={missView === "todo"} onClick={() => setMissView("todo")}>지금 처리할 미납 ({resultLines.length})</button>
+              <button type="button" className={missView === "all" ? "softSageButton" : "softApricotButton"} aria-pressed={missView === "all"} onClick={() => setMissView("all")}>모든 쉽먼트 미납 전체 ({allMissLines.length})</button>
+            </div>
+            {missView === "all" ? (
+              <div className={styles.tableWrap}>
+                <table className={`${styles.table} ${styles.fixedTable}`} aria-label="모든 쉽먼트 미납 전체">
+                  {resultColumns}
+                  {resultHead}
+                  <tbody>
+                    {allMissLines.map((line) => {
+                      const status = missStatusOf(line);
+                      const canExclude = !line.route && !covered[line.lineKey] && line.state === "ready" && (line.remainingQuantity ?? 0) > 0;
+                      return (
+                        <tr key={`all-${line.lineKey}`} style={status === "처리 전" ? undefined : { opacity: 0.72 }}>
+                          <td className={styles.shipInfo}>{shipInfo(line.shipmentNumber, line.purchaseOrderNumber, line.target.expectedDate)}</td>
+                          <td className={styles.product}>
+                            <div className={styles.productRow}>
+                              {productThumb(line.skuId)}
+                              <div>
+                                <strong>{productDbBadge(line.skuId)}{productTitle(line.skuId, line.productName || "상품명 없음")}</strong>
+                                <span className={styles.meta}>SKU {line.skuId}</span>
+                                {openOrderNote(line.skuId)}
+                              </div>
+                            </div>
+                          </td>
+                          <td>{line.deliveredQuantity ?? "-"}</td>
+                          <td>{line.receivedQuantity ?? "-"}</td>
+                          <td className={styles.shortageQty}>{line.remainingQuantity ?? line.shortageQuantity ?? "-"}</td>
+                          <td className={styles.decisionCell}>
+                            <div className={styles.meta} style={{ textAlign: "center", fontWeight: status === "처리 전" ? 800 : 400 }}>{status}</div>
+                            {canExclude && (
+                              <div className={styles.decisionRow}>
+                                <button
+                                  className={`${reorderExcluded[line.lineKey] ? "softApricotButton" : "softBeigeButton"} ${styles.decisionButton}`}
+                                  style={{ gridColumn: "span 2" }}
+                                  disabled={busy || routingKeys[line.lineKey]}
+                                  onClick={() => void toggleReorderExclusion(line, reorderExcluded[line.lineKey] ? "undo" : "exclude")}
+                                >
+                                  {reorderExcluded[line.lineKey] ? "제외 취소" : "재발주요청 제외"}
+                                </button>
+                              </div>
+                            )}
+                            {!line.route && isSupplyReview(line) && !supplyChecks[line.skuId] && supplyButtons(line.skuId, line.productName)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
             <div className={styles.tableWrap}>
               <table className={`${styles.table} ${styles.fixedTable}`} aria-label="미납 SKU 리스트">
                 {resultColumns}
@@ -1657,7 +1728,8 @@ export default function ShipmentReceiptsPage() {
                 <tbody>{resultLines.map(renderResultRow)}</tbody>
               </table>
             </div>
-            {!resultLines.length && (
+            )}
+            {missView === "todo" && !resultLines.length && (
               <p className={styles.empty}>검토할 미납 상품이 없습니다.</p>
             )}
             {shortageReviewLines.length > 0 && (
