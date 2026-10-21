@@ -112,6 +112,14 @@ function isReregistrationTier(item: ProductCatalogItem): boolean {
   return tier.startsWith("1차") || tier.startsWith("2차") || tier.startsWith(REREGISTRATION_TAB_TIER);
 }
 
+/** 제품DB 현재상태가 판매중지인 상품(2026-10-21 '판매중지 상품' 목록). */
+function isSalesStopped(item: ProductCatalogItem): boolean {
+  return String(item.currentStatus || "").includes("판매중지");
+}
+
+/** 모델 묶음으로 보여 주는 목록(판매저조 단종 SKU·판매중지 상품). */
+const MODEL_LIST_STATUSES = new Set(["reregister", "stopped"]);
+
 function isRocketRegistered(item: ProductCatalogItem): boolean {
   return /^R/i.test(String(item.barcode || "").trim());
 }
@@ -473,7 +481,7 @@ export default function ProductCatalogPage() {
     const model = params.get("model")?.trim();
     // 기본은 '전체 상태'. 예전에 고른 '재등록 필요'를 되살리면 검색해도 대부분 안 나와서 되살리지 않는다.
     const nextStatus = params.get("status") || saved.status;
-    if (nextStatus && nextStatus !== "reregister") setStatus(nextStatus);
+    if (nextStatus && !MODEL_LIST_STATUSES.has(nextStatus)) setStatus(nextStatus);
     if (model) setQuery(model);
     else if (saved.query) setQuery(saved.query);
   }, []);
@@ -529,11 +537,12 @@ export default function ProductCatalogPage() {
         || (status === "issued" && Boolean(item.skuId))
         || (status === "wims" && Boolean(wims))
         || (status === "reregister" && reregistration)
+        || (status === "stopped" && isSalesStopped(item) && !excludedModelKeys.has(namedModelGroupKey(item) || ""))
         || (status === "rocket-pending" && rocketPending);
       return matchesQuery && matchesStatus;
     }).sort((a, b) => (Number(b.cumulativeInbound) || 0) - (Number(a.cumulativeInbound) || 0)
       || Number(isReregistrationTarget(b)) - Number(isReregistrationTarget(a)));
-  }, [items, rocketItems, query, snapshot, status, isReregistrationTarget]);
+  }, [items, rocketItems, query, snapshot, status, isReregistrationTarget, excludedModelKeys]);
 
   /** 모델명 기준 전체 모델 묶음(검색·상태 필터와 무관). */
   const allModelGroups = useMemo(() => {
@@ -598,6 +607,7 @@ export default function ProductCatalogPage() {
     reregisterModels: [...reregisterModelKeys].filter(key => !excludedModelKeys.has(key) && !stagedKeys.has(key)).length,
     reregisterCandidates: items.filter(item => isReregistrationTarget(item)).length,
     rocketPending: items.filter(item => !isRocketRegistered(item)).length,
+    stoppedModels: new Set(items.filter(isSalesStopped).map(item => namedModelGroupKey(item)).filter((key): key is string => Boolean(key) && !excludedModelKeys.has(key!) && !stagedKeys.has(key!))).size,
   }), [items, isReregistrationTarget, reregisterModelKeys, excludedModelKeys, stagedKeys]);
 
   const reregistrationGroups = useMemo(() => {
@@ -693,7 +703,7 @@ export default function ProductCatalogPage() {
   // 되살리는 중인 모델. 목록이 다시 계산돼도(제품DB 새로고침 등) 진행 중인 되살리기를 버리고 처음부터 다시 하지 않는다.
   const restoringModels = useRef(new Set<string>());
   useEffect(() => {
-    if ((status !== "reregister" && status !== "rocket-new") || !restoreTargets.length) return;
+    if ((!MODEL_LIST_STATUSES.has(status) && status !== "rocket-new") || !restoreTargets.length) return;
     // 사진이 커서(1장 약 8MB) 여러 모델을 한꺼번에 되살리면 화면이 느려진다 — 3개 모델 이하일 때만 자동으로 연다.
     const autoOpen = restoreTargets.length <= 3;
     void (async () => {
@@ -1103,16 +1113,16 @@ export default function ProductCatalogPage() {
 
       <div style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: 16, marginBottom: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
-          {[["전체 행", summary.total], ["재등록 모델", summary.reregisterModels], ["재등록 후보 행", summary.reregisterCandidates], ["로켓 등록 증빙 확인", summary.rocketPending]].map(([label, value]) => (
+          {[["전체 행", summary.total], ["판매저조 단종 모델", summary.reregisterModels], ["판매중지 모델", summary.stoppedModels], ["로켓 등록 증빙 확인", summary.rocketPending]].map(([label, value]) => (
             <div key={String(label)} style={{ background: wmsColors.surface, borderRadius: 10, padding: "10px 12px" }}><div style={{ color: wmsColors.muted, fontSize: 11 }}>{label}</div><strong style={{ color: wmsColors.ink, fontSize: 20 }}>{value}</strong></div>
           ))}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-          <input value={query} onChange={event => { setQuery(event.target.value); if (event.target.value.trim() && status === "reregister") setStatus("all"); }} placeholder="모델명·모델SKU·SKU ID·바코드·상품명 검색" style={{ flex: "1 1 340px", minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px" }} />
+          <input value={query} onChange={event => { setQuery(event.target.value); if (event.target.value.trim() && MODEL_LIST_STATUSES.has(status)) setStatus("all"); }} placeholder="모델명·모델SKU·SKU ID·바코드·상품명 검색" style={{ flex: "1 1 340px", minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px" }} />
           {query && <button type="button" onClick={() => { setQuery(""); try { window.sessionStorage.setItem(VIEW_KEY, JSON.stringify({ status, query: "" })); } catch {} }} title="검색어를 지웁니다." style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>검색 초기화</button>}
           <button type="button" onClick={() => void loadCatalog()} disabled={loading} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "새로 읽는 중…" : "제품DB 새로고침"}</button>
           <select value={status} onChange={event => setStatus(event.target.value)} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 10px", background: "#fff" }}>
-            <option value="all">전체 상태</option><option value="reregister">재등록 필요(모델 전체)</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="rocket-new">Wing 등록검토 (Wing에만 있음)</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
+            <option value="all">전체 상태</option><option value="reregister">판매저조 단종 SKU (재등록SKU 탭)</option><option value="stopped">제품DB 판매중지 상품</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="rocket-new">Wing 등록검토 (Wing에만 있음)</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
           </select>
         </div>
       </div>
@@ -1155,8 +1165,8 @@ export default function ProductCatalogPage() {
       {/* 창을 다시 누를 때의 자동 새로고침은 목록을 그대로 둔 채 뒤에서 읽는다(처음 한 번만 로딩 화면). */}
       {loading && !items.length ? <p style={{ color: wmsColors.muted }}>상품 연결 대장을 읽는 중입니다.</p> : (
         <div style={{ display: "grid", gap: 10 }}>
-          {(status === "reregister" || reregistrationGroups.length > 0) && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 2 }}>
-            <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>{status === "reregister" ? "재등록 작업 묶음" : status === "rocket-new" ? "Wing 등록검토 · Wing에만 있는 상품" : "모델별 목록"} · {reregistrationGroups.length}개 모델</div>
+          {(MODEL_LIST_STATUSES.has(status) || reregistrationGroups.length > 0) && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 2 }}>
+            <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>{status === "reregister" ? "판매저조 단종 SKU · 재등록 작업 묶음" : status === "stopped" ? "제품DB 판매중지 상품" : status === "rocket-new" ? "Wing 등록검토 · Wing에만 있는 상품" : "모델별 목록"} · {reregistrationGroups.length}개 모델</div>
             {status === "rocket-new" && <p style={{ margin: "6px 0 10px", fontSize: 12, color: wmsColors.ink }}>쿠팡 Wing에만 있고 로켓(Supplier Hub)에는 없는 상품입니다. 로켓에 같은 상품이나 같은 모델이 있는 것은 중복 반려를 막으려고 뺐어요. 오래돼 등록하지 않을 상품은 "삭제"로 목록에서 빼세요(쿠팡·Wing 상품은 그대로). 사진검색은 MYBOX 사진 폴더 전체에서 모델명으로 찾아서 처음 한 번은 오래 걸릴 수 있어요.</p>}
             {!manualExclusions && <p style={{ fontSize: 12 }}>재등록 제외 목록을 확인하는 중입니다. 확인 전에는 등록 준비를 할 수 없습니다.</p>}
             {manualExclusions && Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).length > 0 && <div style={{ margin: "8px 0 12px", padding: 12, border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff" }}>
@@ -1278,7 +1288,7 @@ export default function ProductCatalogPage() {
               </div>)}
             </div>}
           </details>}
-          {status !== "reregister" && status !== "rocket-new" && unnamedItems.slice(0, 200).map((item, index) => {
+          {!MODEL_LIST_STATUSES.has(status) && status !== "rocket-new" && unnamedItems.slice(0, 200).map((item, index) => {
             const rowKey = `${item.skuId}|${item.modelSku}|${item.modelName}|${index}`;
             const wims = snapshot ? findWimsRow(item, snapshot.rows) : null;
             const photoKey = item.modelName || item.modelSku || item.productName;
@@ -1312,8 +1322,8 @@ export default function ProductCatalogPage() {
               {photos && photos.hits.length > 0 && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 6, marginTop: 10 }}>{photos.hits.slice(0, 8).map(hit => <div key={hit.id} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, padding: 7, fontSize: 10, overflow: "hidden" }}><div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{hit.fileName}</div><div style={{ color: wmsColors.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{hit.id}</div></div>)}</div>}
             </article>;
           })}
-          {status !== "reregister" && status !== "rocket-new" && unnamedItems.length > 200 && <p style={{ color: wmsColors.muted, fontSize: 12 }}>검색 결과가 많아 처음 200개만 표시합니다. 검색어를 좁혀 주세요.</p>}
-          {status !== "reregister" && (status !== "rocket-new" || rocketItems) && filteredItems.length === 0 && <p style={{ color: wmsColors.muted }}>조건에 맞는 상품이 없습니다.</p>}
+          {!MODEL_LIST_STATUSES.has(status) && status !== "rocket-new" && unnamedItems.length > 200 && <p style={{ color: wmsColors.muted, fontSize: 12 }}>검색 결과가 많아 처음 200개만 표시합니다. 검색어를 좁혀 주세요.</p>}
+          {!MODEL_LIST_STATUSES.has(status) && (status !== "rocket-new" || rocketItems) && filteredItems.length === 0 && <p style={{ color: wmsColors.muted }}>조건에 맞는 상품이 없습니다.</p>}
         </div>
       )}
       {viewerHit && viewerState && viewer && <div role="dialog" aria-modal="true" aria-label="사진 크게 보기" onClick={() => setViewer(null)} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.82)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16 }}>
