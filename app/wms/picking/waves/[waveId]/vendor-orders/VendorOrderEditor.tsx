@@ -754,6 +754,10 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
       linesRef.current = nextLines;
       setLines(nextLines);
       markVendorRevisionLocal(vendorName);
+      // 새로 넣은 상품이 보이도록 그 카드로 이동한다(거래처 묶음 맨 아래).
+      setOpenVendorKeys(previous => new Set(previous).add(vendorKeyOf(vendorName)));
+      const lastId = added[added.length - 1].id;
+      setTimeout(() => document.querySelector(`[data-line-id="${CSS.escape(lastId)}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
     } else setCompletionMessage("선택한 상품은 이미 발주 초안에 있습니다.");
     setSearchAddVendor(null); setVariantTarget(null);
   }
@@ -1061,8 +1065,11 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     }).sort((a, b) => a.vendorName === UNASSIGNED_VENDOR_NAME ? 1 : b.vendorName === UNASSIGNED_VENDOR_NAME ? -1 : a.vendorName.localeCompare(b.vendorName, "ko", { numeric: true }));
   })();
 
+  const lineGridStyle: React.CSSProperties = params.waveId.startsWith(VENDOR_QUEUE_PREFIX) ? { marginBottom: "10px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: 10 } : { marginBottom: "10px" };
   // 발주 1건(초안 또는 전송한 발주)을 그린다. 같은 거래처의 발주들은 아래 vendorSections에서 한 묶음으로 보인다.
-  const renderOrderEntry = (entry: typeof orderEntries[number], bare = false) => {
+  const renderOrderEntry = (entry: typeof orderEntries[number], mode: "full" | "lines" | "tail" = "full"): any => {
+            // 2026-10-21: 거래처 묶음 안에서는 발주일별 카드로 나누지 않는다. "lines"는 상품 카드만, "tail"은 상품 아래 작업칸(임시저장·발주서 내보내기)만 그린다.
+            const bare = mode !== "full";
             const historical = !entry.group;
             const group = entry.group || { vendorName: entry.vendorName, lines: entry.historyLines || [] };
             const status = entry.draft?.status || statusOf(group.vendorName);
@@ -1081,38 +1088,9 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
             const onlyDelayed = status === "sent" && delayedClassificationCount > 0 && pendingClassificationCount === 0;
             // 2026-10-21: 보낸 발주에서도 옵션을 더 넣을 수 있게 한다(그 거래처의 새 발주 초안에 담김).
             const canAddToVendor = !isPreview && !workspaceMoved && !historyView && statusSavingVendor !== group.vendorName;
-
-            return (
-              <div key={entry.id} data-vendor-group={group.vendorName} data-vendor-order-id={entry.id} style={bare ? undefined : cardStyle}>
-                {!bare && <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
-                  <h3 style={{ margin: 0, fontSize: "15px", minWidth: 0, overflowWrap: "anywhere" }}>
-                    발주일 {new Date(entry.draft?.createdAt || group.lines[0]?.createdAt || Date.now()).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric" })}
-                    <span style={{ marginLeft: "8px", fontSize: "12px", color: wmsColors.muted, fontWeight: 400 }}>
-                      실제부족 {totalActualShortage}개 · 발주 {totalOrderQuantity}개 · {group.lines.length}종
-                    </span>
-                  </h3>
-                  {entry.draft?.sentAt && <span style={{ color: wmsColors.muted, fontSize: "12px" }}>전송 {new Date(entry.draft.sentAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}</span>}
-                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", maxWidth: "100%" }}>
-                    <StatusBadge status={status === "approved" ? "draft" : status} delayed={onlyDelayed} />
-                    {status !== "sent" && entry.draft && (!isPreview || historyView) && <DeleteVendorOrderButton draft={entry.draft} label={entry.label} disabled={saving || workspaceMoved || Boolean(statusSavingVendor)} onDeleted={handleVendorOrderDeleted} />}
-                    {!entry.draft && editable && <button type="button" disabled={saving} onClick={() => void deleteVendorOrder(group.vendorName, group.lines)} style={{ ...wmsWarnButton, minHeight: "36px", fontSize: "12px" }}>발주서 삭제</button>}
-                  </div>
-                </div>}
-                {!orderCollapsed && <fieldset id={`vendor-order-${entry.id}`} disabled={saving} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
-                {status === "sent" && !bare && <p role="status" style={{ fontSize: "12px" }}>미처리 {pendingClassificationCount} · 입고지연 {delayedClassificationCount}</p>}
-                {!historical && editConflicts.filter(conflict => conflict.vendorName === group.vendorName).map(conflict => <div key={conflict.key} role="alert" style={{ padding: 12, background: wmsColors.warnSoft, marginBottom: 10 }}>
-                  <p>다른 기기에서도 같은 {conflict.field === "__deleted" ? "상품 또는 발주서가 삭제·변경되었습니다" : `항목(${conflict.field})을 변경했습니다`}.</p>
-                  {conflict.field !== "__deleted" && <button type="button" onClick={() => resolveEditConflict(conflict, true)} style={wmsSecondaryButton}>내 입력 유지: {String(conflict.local ?? "")}</button>}
-                  <button type="button" onClick={() => resolveEditConflict(conflict, false)} style={wmsSecondaryButton}>다른 기기 변경 적용{conflict.field === "__deleted" ? "" : `: ${String(conflict.remote ?? "")}`}</button>
-                </div>)}
-                {!bare && <div style={{ fontSize: "11px", color: wmsColors.muted, marginBottom: "8px" }}>
-                  발주일 {new Date(entry.draft?.createdAt || Date.now()).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul" })}
-                </div>}
-
-                <div style={params.waveId.startsWith(VENDOR_QUEUE_PREFIX) ? { marginBottom: "10px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: 10 } : { marginBottom: "10px" }}>
-                  {group.lines.filter(lineMatchesSearch).map(line => (
-                    <div key={line.id} style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "6px", alignItems: "start", position: "relative" }}>
-                    {bare && <span style={{ position: "absolute", top: 6, left: 40, zIndex: 2, background: "#f4f1ec", color: "#4b4744", border: "1px solid #ddd5ca", borderRadius: "8px", padding: "2px 8px", fontSize: "11px", fontWeight: 800 }}>발주 {new Date(entry.draft?.sentAt || entry.draft?.createdAt || line.createdAt).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric" })}</span>}
+            const lineElements = group.lines.filter(lineMatchesSearch).map(line => (
+                    <div key={line.id} data-line-id={line.id} style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "6px", alignItems: "start", position: "relative" }}>
+                    {bare && <span style={{ position: "absolute", top: 6, left: 40, zIndex: 2, background: status === "sent" ? "#f4f1ec" : "#e3ede6", color: status === "sent" ? "#4b4744" : "#3f574b", border: `1px solid ${status === "sent" ? "#ddd5ca" : "#b9cbbc"}`, borderRadius: "8px", padding: "2px 8px", fontSize: "11px", fontWeight: 800 }}>{status === "sent" ? `발주 ${new Date(entry.draft?.sentAt || entry.draft?.createdAt || line.createdAt).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric" })}` : "작성중"}</span>}
                     {isAddedToday(line) && <span style={{ position: "absolute", top: 6, right: 6, zIndex: 2, background: "#60766a", color: "#fff", borderRadius: "8px", padding: "2px 8px", fontSize: "11px", fontWeight: 800 }}>새로 추가</span>}
                     {status !== "sent" || processingSent ? <input type="checkbox" aria-label={`${line.productName} 선택`} checked={selectedLineIds.has(line.id)} disabled={saving || isPreview || workspaceMoved || Boolean(getVendorLineDeletionBlockReason(line, entry.draft, true))} title={getVendorLineDeletionBlockReason(line, entry.draft, true) || "삭제할 상품 선택"} onChange={() => setSelectedLineIds(prev => { const next = new Set(prev); if (next.has(line.id)) next.delete(line.id); else next.add(line.id); return next; })} style={{ width: "24px", height: "24px", marginTop: "12px" }} /> : <div />}
                     <VendorOrderLineCard
@@ -1158,8 +1136,39 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                       }}
                     />
                     </div>
-                  ))}
-                </div>
+                  ));
+            if (mode === "lines") return lineElements;
+
+            return (
+              <div key={entry.id} data-vendor-group={group.vendorName} data-vendor-order-id={entry.id} style={bare ? undefined : cardStyle}>
+                {!bare && <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
+                  <h3 style={{ margin: 0, fontSize: "15px", minWidth: 0, overflowWrap: "anywhere" }}>
+                    발주일 {new Date(entry.draft?.createdAt || group.lines[0]?.createdAt || Date.now()).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric" })}
+                    <span style={{ marginLeft: "8px", fontSize: "12px", color: wmsColors.muted, fontWeight: 400 }}>
+                      실제부족 {totalActualShortage}개 · 발주 {totalOrderQuantity}개 · {group.lines.length}종
+                    </span>
+                  </h3>
+                  {entry.draft?.sentAt && <span style={{ color: wmsColors.muted, fontSize: "12px" }}>전송 {new Date(entry.draft.sentAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}</span>}
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", maxWidth: "100%" }}>
+                    <StatusBadge status={status === "approved" ? "draft" : status} delayed={onlyDelayed} />
+                    {status !== "sent" && entry.draft && (!isPreview || historyView) && <DeleteVendorOrderButton draft={entry.draft} label={entry.label} disabled={saving || workspaceMoved || Boolean(statusSavingVendor)} onDeleted={handleVendorOrderDeleted} />}
+                    {!entry.draft && editable && <button type="button" disabled={saving} onClick={() => void deleteVendorOrder(group.vendorName, group.lines)} style={{ ...wmsWarnButton, minHeight: "36px", fontSize: "12px" }}>발주서 삭제</button>}
+                  </div>
+                </div>}
+                {!orderCollapsed && <fieldset id={`vendor-order-${entry.id}`} disabled={saving} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
+                {status === "sent" && !bare && <p role="status" style={{ fontSize: "12px" }}>미처리 {pendingClassificationCount} · 입고지연 {delayedClassificationCount}</p>}
+                {!historical && editConflicts.filter(conflict => conflict.vendorName === group.vendorName).map(conflict => <div key={conflict.key} role="alert" style={{ padding: 12, background: wmsColors.warnSoft, marginBottom: 10 }}>
+                  <p>다른 기기에서도 같은 {conflict.field === "__deleted" ? "상품 또는 발주서가 삭제·변경되었습니다" : `항목(${conflict.field})을 변경했습니다`}.</p>
+                  {conflict.field !== "__deleted" && <button type="button" onClick={() => resolveEditConflict(conflict, true)} style={wmsSecondaryButton}>내 입력 유지: {String(conflict.local ?? "")}</button>}
+                  <button type="button" onClick={() => resolveEditConflict(conflict, false)} style={wmsSecondaryButton}>다른 기기 변경 적용{conflict.field === "__deleted" ? "" : `: ${String(conflict.remote ?? "")}`}</button>
+                </div>)}
+                {!bare && <div style={{ fontSize: "11px", color: wmsColors.muted, marginBottom: "8px" }}>
+                  발주일 {new Date(entry.draft?.createdAt || Date.now()).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul" })}
+                </div>}
+
+                {mode === "full" && <div style={lineGridStyle}>
+                  {lineElements}
+                </div>}
 
                 {editable && pendingReorders.length > 0 && (
                   <div style={{ background: "#fff3e0", border: `1px solid ${wmsColors.warn}`, borderRadius: "10px", padding: "10px", marginBottom: "10px" }}>
@@ -1178,6 +1187,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                     <button onClick={() => persistAll(undefined, undefined, group.vendorName)} disabled={saving} style={{ ...wmsSecondaryButton, minHeight: "36px", fontSize: "12px" }}>
                       {saving ? "저장 중..." : "임시저장"}
                     </button>
+                    {bare && entry.draft && <DeleteVendorOrderButton draft={entry.draft} label={entry.label} disabled={saving || workspaceMoved || Boolean(statusSavingVendor)} onDeleted={handleVendorOrderDeleted} />}
                   </div>
                 )}
 
@@ -1275,27 +1285,27 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
             const open = Boolean(normalizedSearch) || openVendorKeys.has(section.key);
             const draftEntries = section.entries.filter(entry => (entry.draft?.status || (entry.group ? statusOf(entry.vendorName) : "sent")) !== "sent");
             const sentEntries = section.entries.filter(entry => !draftEntries.includes(entry));
-            const sentLineCount = sentEntries.reduce((sum, entry) => sum + (entry.group?.lines || entry.historyLines || []).length, 0);
             const canAdd = !isPreview && !workspaceMoved && !historyView;
             return (
               <section key={section.key} aria-label={`${section.vendorName} 발주`} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                <div style={{ display: "grid", gridTemplateColumns: canAdd ? "minmax(0,1fr) 96px" : "minmax(0,1fr)", gap: "8px", alignItems: "stretch" }}>
-                  <button type="button" aria-expanded={open} onClick={() => setOpenVendorKeys(previous => { const next = new Set(previous); if (next.has(section.key)) next.delete(section.key); else next.add(section.key); return next; })}
-                    style={{ textAlign: "left", minHeight: "48px", padding: "8px 10px", borderRadius: "8px", border: `1px solid ${wmsColors.border}`, borderLeft: "4px solid #60766a", background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                    <span style={{ fontSize: "13px", color: "#60766a", width: "12px" }}>{open ? "▾" : "▸"}</span>
-                    <strong style={{ fontSize: "16px", overflowWrap: "anywhere" }}>{section.vendorName}</strong>
-                    <span style={{ fontSize: "12px", color: wmsColors.muted }}>{draftEntries.length ? "작성중 · " : ""}미처리 {pendingCount} · 입고지연 {delayedCount} · {sectionLines.length}종</span>
-                  </button>
-                  {canAdd && <button type="button" disabled={saving || Boolean(statusSavingVendor)} onClick={() => { setOpenVendorKeys(previous => new Set(previous).add(section.key)); void startVendorProductAdd(section.vendorName); }}
-                    style={{ ...wmsGhostButton, minHeight: "48px", fontSize: "12px", borderRadius: "8px" }}>+ 상품 추가</button>}
-                </div>
-                {open && <>
-                  {draftEntries.map(entry => renderOrderEntry(entry))}
-                  {sentEntries.length > 0 && <div style={cardStyle}>
-                    <p role="status" style={{ margin: "0 0 10px", fontSize: "13px", fontWeight: 800 }}>보낸 발주 {sentEntries.length}건 · {sentLineCount}종 <span style={{ fontWeight: 400, color: wmsColors.muted }}>· 미처리 {sentEntries.flatMap(entry => entry.group?.lines || entry.historyLines || []).filter(line => vendorLineClassification(line) === "pending").length} · 입고지연 {sentEntries.flatMap(entry => entry.group?.lines || entry.historyLines || []).filter(line => vendorLineClassification(line) === "delayed").length}</span></p>
-                    {sentEntries.map(entry => renderOrderEntry(entry, true))}
-                  </div>}
-                </>}
+                <button type="button" aria-expanded={open} onClick={() => setOpenVendorKeys(previous => { const next = new Set(previous); if (next.has(section.key)) next.delete(section.key); else next.add(section.key); return next; })}
+                  style={{ textAlign: "left", minHeight: "48px", padding: "8px 10px", borderRadius: "8px", border: `1px solid ${wmsColors.border}`, borderLeft: "4px solid #60766a", background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: "13px", color: "#60766a", width: "12px" }}>{open ? "▾" : "▸"}</span>
+                  <strong style={{ fontSize: "16px", overflowWrap: "anywhere" }}>{section.vendorName}</strong>
+                  <span style={{ fontSize: "12px", color: wmsColors.muted }}>{draftEntries.length ? "작성중 · " : ""}미처리 {pendingCount} · 입고지연 {delayedCount} · {sectionLines.length}종</span>
+                </button>
+                {open && <div style={cardStyle}>
+                  {/* 보낸 상품 → 작성 중 상품 순서로 한 목록에 이어서 보여 주고, 새로 넣은 상품은 맨 아래에 붙는다. */}
+                  <fieldset disabled={saving} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
+                    <div style={lineGridStyle}>
+                      {sentEntries.map(entry => renderOrderEntry(entry, "lines"))}
+                      {draftEntries.map(entry => renderOrderEntry(entry, "lines"))}
+                    </div>
+                  </fieldset>
+                  {draftEntries.map(entry => renderOrderEntry(entry, "tail"))}
+                  {canAdd && <button type="button" disabled={saving || Boolean(statusSavingVendor)} onClick={() => void startVendorProductAdd(section.vendorName)}
+                    style={{ ...wmsGhostButton, width: "100%", minHeight: "44px", fontSize: "13px", borderRadius: "8px", marginTop: "10px" }}>+ 상품 추가</button>}
+                </div>}
               </section>
             );
           })}
@@ -1328,7 +1338,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
       )}
       {variantTarget && <ProductVariantAddSheet anchorSkuId={variantTarget.skuId} catalogItems={Array.from(liveCatalogByProductCode.values())} existingSkuIds={groups.find(group => group.vendorName === variantTarget.vendorName)?.lines.map(line => line.skuId) || []} onClose={() => setVariantTarget(null)} onSelect={(products: ProductCatalogItem[]) => {
         const anchor = linesRef.current.find(line => normalizeSkuId(line.skuId) === normalizeSkuId(variantTarget.skuId) && line.vendorName === variantTarget.vendorName);
-        addProductsFromSearch(variantTarget.vendorName, products, anchor?.manualListGroup, anchor?.isStockReplenishment);
+        addProductsFromSearch(variantTarget.vendorName, products, new Date().toISOString() + "::" + crypto.randomUUID(), anchor?.isStockReplenishment);
       }} />}
     </main>
   );
