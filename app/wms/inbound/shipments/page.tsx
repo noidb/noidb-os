@@ -969,6 +969,15 @@ export default function ShipmentReceiptsPage() {
   const renderFollowUpWork = (followUpKind: FollowUpKind) => {
     if (!followUpData) return null;
     const activeFollowUpQueue = followUpQueueOf(followUpKind);
+    // 2026-10-21: 재발주요청은 미납 SKU 리스트에서 제외하지 않은 줄도 파일 생성 때 함께 들어가므로 목록에 미리 보여 준다.
+    type QueueRow = (typeof activeFollowUpQueue)[number];
+    const shownQueue: QueueRow[] = followUpKind === "reorder"
+      ? [...activeFollowUpQueue, ...reorderReadyLines
+          .filter((line) => !activeFollowUpQueue.some((item) => item.lineKey === line.lineKey))
+          .map((line) => ({ lineKey: line.lineKey, productName: line.productName, skuId: line.skuId, shipmentNumber: line.shipmentNumber,
+            purchaseOrderNumber: line.purchaseOrderNumber, kind: "shortage", expectedDate: line.target.expectedDate,
+            shortageQuantity: line.remainingQuantity ?? 0 }) as unknown as QueueRow)]
+      : activeFollowUpQueue;
     const activeFollowUpProof = followUpProofOf(followUpKind);
     return (
       <section className={styles.followUp} aria-label="후속처리">
@@ -1003,9 +1012,9 @@ export default function ShipmentReceiptsPage() {
                   전체 입고결과로 되돌리기
                 </button>
               )}
-              {activeFollowUpQueue.length ? (
+              {shownQueue.length ? (
                 <ul className={styles.workList}>
-                  {activeFollowUpQueue.map((line) => (
+                  {shownQueue.map((line) => (
                     <li key={line.lineKey}>
                       <strong>{line.productName}</strong>
                       <small>
