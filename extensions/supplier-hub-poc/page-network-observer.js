@@ -52,6 +52,63 @@
     window.postMessage({ source: "NOIDB_POC_PAGE_NETWORK", observation }, "*");
   }
 
+  // 0.9.10(2026-10-21): 쉽먼트 Label·내역서 PDF를 받을 때 그 파일을 그대로 잡아 NOID-B(G드라이브 출력세트 폴더)로 보낸다.
+  // 쿠팡에는 아무것도 보내거나 바꾸지 않는다. 쿠팡의 원래 다운로드도 그대로 진행된다.
+  const pdfSeen = new Set();
+  function pdfKind(text) {
+    if (/manifest/i.test(text)) return "ManiFest";
+    if (/label/i.test(text)) return "Label";
+    return "";
+  }
+  function nameFromDisposition(value) {
+    const raw = String(value || "");
+    const encoded = raw.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    if (encoded) { try { return decodeURIComponent(encoded); } catch {} }
+    return raw.match(/filename="?([^";]+)"?/i)?.[1] || "";
+  }
+  function forwardPdf(buffer, name, url) {
+    try {
+      if (!location.pathname.startsWith("/ibs/")) return;
+      const bytes = new Uint8Array(buffer);
+      if (bytes.length < 5 || bytes[0] !== 0x25 || bytes[1] !== 0x50 || bytes[2] !== 0x44 || bytes[3] !== 0x46) return; // %PDF
+      const kind = pdfKind(`${name} ${url}`);
+      if (!kind) return;
+      const key = `${bytes.length}:${Array.from(bytes.slice(-48)).join(",")}`;
+      if (pdfSeen.has(key)) return;
+      pdfSeen.add(key);
+      let binary = "";
+      for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(index, index + 0x8000));
+      window.postMessage({ source: "NOIDB_SHIPMENT_PDF", name: String(name || ""), kind, url: sanitizeUrl(url).url, base64: btoa(binary) }, "*");
+    } catch {}
+  }
+  function capturePdfUrl(href, name) {
+    try {
+      const url = new URL(href, location.href);
+      if (url.protocol !== "blob:" && url.origin !== location.origin) return;
+      if (!pdfKind(`${name} ${url.href}`) && url.protocol !== "blob:") return;
+      originalFetchForPdf(url.href, { credentials: "include" }).then(response => {
+        const disposition = response.headers.get("content-disposition") || "";
+        return response.arrayBuffer().then(buffer => forwardPdf(buffer, name || nameFromDisposition(disposition) || url.pathname.split("/").pop(), url.href));
+      }).catch(() => {});
+    } catch {}
+  }
+  const originalFetchForPdf = window.fetch ? window.fetch.bind(window) : null;
+  // 링크를 눌러 받는 경우(다운로드 링크·blob 주소)
+  document.addEventListener("click", event => {
+    const anchor = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+    if (anchor && originalFetchForPdf) capturePdfUrl(anchor.href, anchor.getAttribute("download") || anchor.textContent || "");
+  }, true);
+  const originalAnchorClick = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function observedAnchorClick() {
+    if (this.href && originalFetchForPdf) capturePdfUrl(this.href, this.getAttribute("download") || "");
+    return originalAnchorClick.apply(this, arguments);
+  };
+  const originalWindowOpen = window.open;
+  window.open = function observedOpen(url) {
+    if (url && originalFetchForPdf) capturePdfUrl(url, "");
+    return originalWindowOpen.apply(this, arguments);
+  };
+
   function requestMeta(method, url, body) {
     const safeUrl = sanitizeUrl(url);
     return {
@@ -74,6 +131,10 @@
       post(requestMeta(method, url, body));
       return originalFetch.apply(this, arguments).then(response => {
         const contentType = response.headers.get("content-type") || "";
+        const disposition = response.headers.get("content-disposition") || "";
+        if (/pdf|octet-stream/i.test(contentType) || /shipment_/i.test(disposition)) {
+          response.clone().arrayBuffer().then(buffer => forwardPdf(buffer, nameFromDisposition(disposition), String(url))).catch(() => {});
+        }
         response.clone().text().then(raw => post({
           ...requestMeta(method, url, body),
           phase: "response",
@@ -96,6 +157,14 @@
     const request = this.__NOIDB_POC_REQUEST__ || { method: "GET", url: location.href };
     post(requestMeta(request.method, request.url, body));
     this.addEventListener("load", () => {
+      try {
+        const type = this.getResponseHeader("content-type") || "", disposition = this.getResponseHeader("content-disposition") || "";
+        if (/pdf|octet-stream/i.test(type) || /shipment_/i.test(disposition)) {
+          const name = nameFromDisposition(disposition);
+          if (this.response instanceof ArrayBuffer) forwardPdf(this.response, name, String(request.url));
+          else if (this.response instanceof Blob) this.response.arrayBuffer().then(buffer => forwardPdf(buffer, name, String(request.url))).catch(() => {});
+        }
+      } catch {}
       let raw = "";
       try { raw = this.responseType === "" || this.responseType === "text" ? this.responseText : JSON.stringify(this.response); } catch {}
       const contentType = this.getResponseHeader("content-type") || "";

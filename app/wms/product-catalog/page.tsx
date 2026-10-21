@@ -13,6 +13,7 @@ import { identifyPhoto, photoPriority, photoTier, type PhotoIdentity, type Photo
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 import type { ReregistrationExclusion } from "@/lib/wms/reregistration-exclusions";
 import { REREGISTRATION_TAB_TIER } from "@/lib/wms/reregistration-tab-tier";
+import LegacySkuCandidates from "./LegacySkuCandidates";
 
 type PhotoHit = LocalPhoto & { fileName: string; preview: string; selected: boolean; identity: PhotoIdentity };
 /**
@@ -1136,7 +1137,8 @@ export default function ProductCatalogPage() {
         <p style={{ margin: "6px 0 4px", color: wmsColors.ink, fontSize: 12 }}>여기 있는 모델은 아래 재등록 목록에서 빠집니다. 이 카드에서 바로 등록 준비·사진검색·재등록 제외를 하세요.</p>
         <p style={{ margin: "0 0 12px", color: wmsColors.muted, fontSize: 12 }}>등록일은 반려일이 아닙니다. 상세 반려 사유와 반려일은 쿠팡 반려 안내에서 확인해 주세요.</p>
         <div style={{ display: "grid", gap: 8 }}>
-          {rejectedGroups.map(stage => renderGroupCard(stage.group, <StageInfo stage={stage} />, wmsColors.warn))}
+          {/* 2026-10-21: 반려 카드마다 쿠팡에 남아 있는 예전 SKU 후보를 찾아 바로 단종 신청 목록에 넣게 한다. */}
+          {rejectedGroups.map(stage => renderGroupCard(stage.group, <><StageInfo stage={stage} /><LegacySkuCandidates names={[...stage.group.items.map(item => item.productName), ...stage.wimsRows.map(row => row.productName)].filter(Boolean)} /></>, wmsColors.warn))}
         </div>
       </section>}
       {/* 모델SKU가 없어 제품DB 모델과 연결되지 않은 WIMS 반려 기록 — 대부분 사이트 사용 전 반려 후 이미 다시 올린 상품이라

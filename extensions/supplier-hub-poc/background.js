@@ -75,3 +75,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   })();
   return true;
 });
+
+// 0.9.10(2026-10-21): 쿠팡에서 받은 쉽먼트 Label·내역서 PDF를 NOID-B에 보내 G드라이브 출력세트 폴더에 저장한다.
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== "NOIDB_SAVE_SHIPMENT_PDF") return;
+  let source;
+  try { source = new URL(sender.tab?.url || ""); } catch { return; }
+  if (source.origin !== "https://supplier.coupang.com") return;
+  (async () => {
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 60000);
+    try {
+      const response = await fetch("https://noidb-os.vercel.app/api/wms/shipment-print/pdf-upload", {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+        body: JSON.stringify({ name: message.name, kind: message.kind, sourceUrl: message.url, base64: message.base64 }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) throw new Error(result.error || "PDF를 저장하지 못했습니다.");
+      sendResponse({ ok: true, fileName: result.fileName, skipped: Boolean(result.skipped) });
+    } catch (error) {
+      sendResponse({ ok: false, error: error.name === "AbortError" ? "PDF 저장 응답이 지연됐습니다." : error.message });
+    } finally { clearTimeout(timer); }
+  })();
+  return true;
+});
