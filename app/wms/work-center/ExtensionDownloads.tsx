@@ -17,7 +17,7 @@ export default function ExtensionDownloads() {
             <div>
               <strong style={{ fontSize: 15, color: wmsColors.ink }}>{extension.name}</strong>
               <span style={{ marginLeft: 6, fontSize: 12, fontWeight: 700, color: "#60766a" }}>v{extension.version}</span>
-              <span style={{ display: "block", fontSize: 12, color: wmsColors.muted }}>{extension.where}</span>
+              {extension.where && <span style={{ display: "block", fontSize: 12, color: wmsColors.muted }}>{extension.where}</span>}
             </div>
             <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: wmsColors.ink, lineHeight: 1.55 }}>
               {extension.features.map(feature => <li key={feature}>{feature}</li>)}
