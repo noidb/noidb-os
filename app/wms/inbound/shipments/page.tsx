@@ -802,7 +802,7 @@ export default function ShipmentReceiptsPage() {
   const missStatusOf = (line: LogisticsReceiptBoardLine): string => {
     if (line.route) return line.route.decision === "reorder" ? "재발주요청 보냄" : `${decisionLabel[line.route.decision]}(으)로 보냄`;
     if (covered[line.lineKey]) return "기존 거래처 발주로 처리";
-    if (isSupplyReview(line) && supplyChecks[line.skuId]) return supplyChecks[line.skuId].decision === "release" ? "단종해제 대상으로 보냄" : "단종확인함";
+    if (isSupplyReview(line) && supplyChecks[line.skuId]) return supplyChecks[line.skuId].decision === "release" ? "단종해제 승인 대기" : "단종확인함";
     if (reorderExcluded[line.lineKey]) return "재발주요청 제외함";
     if (line.state === "ready") return "처리 전";
     return line.reviewReason || "확인 필요";
@@ -813,8 +813,17 @@ export default function ShipmentReceiptsPage() {
     const status = missStatusOf(line);
     return status === "처리 전" ? 0 : status === "재발주요청 제외함" ? 2 : 1;
   };
+  // 지금 발주가능상태(제품DB 기준). 정상이 아니면 쿠팡에 재발주요청을 할 수 없다.
+  const currentOrderStatus = (skuId: string) => payload?.orderStatuses?.[skuId] || "";
+  // 2026-10-21 사용자 요청: 단종확인한 SKU, 그리고 거래처발주·기존 발주로 처리한 뒤 이미 단종된(발주가능상태가 정상이 아니고 단종해제를 고르지 않은) SKU는 목록에서 뺀다.
+  // 단종해제를 고른 SKU는 '단종해제 승인 대기'로 남기고, 쿠팡이 정상으로 바꾸면 자동으로 '처리 전'이 되어 재발주요청 대상이 된다.
+  const hiddenAsDiscontinued = (line: LogisticsReceiptBoardLine) => {
+    if (supplyChecks[line.skuId]?.decision === "discontinued") return true;
+    const status = currentOrderStatus(line.skuId);
+    return Boolean((line.route || covered[line.lineKey]) && status && status !== "정상" && supplyChecks[line.skuId]?.decision !== "release");
+  };
   const resultLines = lines
-    .filter((line) => line.kind === "shortage" && Boolean(line.skuId) && (line.remainingQuantity ?? 0) > 0 && line.route?.decision !== "reorder" && line.route?.decision !== "marketing")
+    .filter((line) => line.kind === "shortage" && Boolean(line.skuId) && (line.remainingQuantity ?? 0) > 0 && line.route?.decision !== "reorder" && line.route?.decision !== "marketing" && !hiddenAsDiscontinued(line))
     .sort((left, right) => missRank(left) - missRank(right)
       || (right.target.expectedDate || "").localeCompare(left.target.expectedDate || "")
       || left.shipmentNumber.localeCompare(right.shipmentNumber) || left.skuId.localeCompare(right.skuId));
@@ -941,6 +950,9 @@ export default function ShipmentReceiptsPage() {
             </div>
           );
           // 거래처발주·단종으로 보냈거나 기존 발주로 처리한 줄 → 재발주요청으로 바꿀 수 있다(단종신청 파일을 만든 뒤면 서버가 막고 이유를 알려 줌).
+          if (((line.route && line.route.decision !== "reorder") || covered[line.lineKey]) && supplyChecks[line.skuId]?.decision === "release" && currentOrderStatus(line.skuId) !== "정상") return (
+            <div className={styles.meta} style={{ textAlign: "center" }}>{status} · 단종해제 승인 대기</div>
+          );
           if ((line.route && line.route.decision !== "reorder") || covered[line.lineKey]) return (
             <div className={styles.decisionRow}>
               <span className={styles.meta} style={{ gridColumn: "span 2", textAlign: "center" }}>{status}</span>
@@ -955,7 +967,7 @@ export default function ShipmentReceiptsPage() {
               {supplyButtons(line.skuId, line.productName)}
             </>
           );
-          return <div className={styles.meta} style={{ textAlign: "center" }}>{status}{isSupplyReview(line) ? " · 공급상태가 정상이 아니라 재발주요청 불가" : ""}</div>;
+          return <div className={styles.meta} style={{ textAlign: "center" }}>{status === "단종해제 승인 대기" ? "단종해제 승인 대기 · 정상으로 바뀌면 재발주요청 대상" : status}</div>;
         })()}
       </td>
     </tr>

@@ -160,8 +160,10 @@ async function responseBoard() {
   const orderStatuses: Record<string, string> = {};
   for (const status of workspace.logisticsReceipts?.skuStatuses || []) if (status.orderStatus) orderStatuses[status.skuId] = status.orderStatus;
   const marketingSkuIds = new Set(board.lines.filter(line => line.kind === "marketing").map(line => line.skuId));
-  for (const item of catalog?.items || []) if (marketingSkuIds.has(item.skuId) && item.orderableStatus?.trim()) orderStatuses[item.skuId] = item.orderableStatus.trim();
-  for (const key of Object.keys(orderStatuses)) if (!marketingSkuIds.has(key)) delete orderStatuses[key];
+  // 2026-10-21: 미납 SKU 리스트도 지금 발주가능상태로 단종 여부를 가린다(거래처발주로 보낸 뒤 단종된 SKU 등).
+  const statusSkuIds = new Set([...marketingSkuIds, ...board.lines.filter(line => line.kind === "shortage" && line.skuId).map(line => line.skuId)]);
+  for (const item of catalog?.items || []) if (statusSkuIds.has(item.skuId) && item.orderableStatus?.trim()) orderStatuses[item.skuId] = item.orderableStatus.trim();
+  for (const key of Object.keys(orderStatuses)) if (!statusSkuIds.has(key)) delete orderStatuses[key];
   // 2026-10-11 사용자 요청: 마케팅 SKU에도 원발주서 매입가(공급가 > 매입가, 부가세 포함 단가)를 보여 준다. 못 읽으면 표시만 빠진다.
   // 그 발주의 원발주서가 폴더에 없으면 같은 SKU의 가장 최근 원발주서 매입가로 채우고 표시를 구분한다(2026-10-11 사용자 확정).
   const marketingPrices: Record<string, { price: number; fromOtherOrder?: boolean }> = {};

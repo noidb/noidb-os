@@ -17,6 +17,18 @@ const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(valu
 const now = () => new Date().toISOString();
 const sourceKey = (run: WeeklyRun) => run.logisticsReceiptLine?.lineKey || "";
 const isMarketing = (run: WeeklyRun) => Boolean(run.logisticsReceiptLine && run.snapshot.couponItems.length);
+/**
+ * 2026-10-21: 같은 SKU가 여러 쉽먼트 줄로 대기 중이면 쿠폰 파일에는 한 줄로 합쳐 들어간다. 예전에는 합쳐진 나머지 줄이
+ * 처리완료 표시를 못 받아 대기목록에 남았다. 이 줄이 대기에 들어간 뒤 같은 SKU 쿠폰이 처리완료됐으면 함께 끝난 것으로 본다.
+ * (그 뒤 재입고로 새로 대기에 들어온 줄은 createdAt이 더 늦어 다시 마케팅 대상으로 남는다.)
+ */
+function mergedIntoCompletedCoupon(workspace: WeeklyWorkspace, run: WeeklyRun): boolean {
+  if (!isMarketing(run) || run.couponUploadedAt || run.completedAt) return false;
+  const skuId = run.logisticsReceiptLine!.skuId;
+  const queuedAt = Date.parse(run.snapshot.createdAt || run.updatedAt);
+  return workspace.runs.some(other => other.id !== run.id && isMarketing(other) && other.logisticsReceiptLine!.skuId === skuId
+    && Boolean(other.couponUploadedAt) && Date.parse(other.couponUploadedAt!) >= queuedAt);
+}
 const isDiscontinue = (run: WeeklyRun) => Boolean(run.logisticsReceiptLine && run.reviews[run.logisticsReceiptLine.skuId]?.decision === "discontinue");
 const isReorder = (run: WeeklyRun) => Boolean(run.logisticsReceiptLine && run.reviews[run.logisticsReceiptLine.skuId]?.decision === "reorder");
 const isVendor = (run: WeeklyRun) => Boolean(run.logisticsReceiptLine && run.reviews[run.logisticsReceiptLine.skuId]?.decision === "order");
@@ -54,7 +66,7 @@ export function logisticsFollowUpResponse(workspace: WeeklyWorkspace, board: Log
       expectedDate: (receipt?.shipmentNumber && workspace.logisticsReceipts?.shipmentMetadata?.[receipt.shipmentNumber]?.expectedDate) || undefined, shortageQuantity: row.shortageQuantity }));
   });
   return { ok: true, token: logisticsFollowUpToken(workspace, board), collectedAt: board.collectedAt,
-    queues: { marketing: select(run => isMarketing(run) && !run.couponUploadedAt && !run.completedAt && !excluded.has(sourceKey(run))).map(row => ({ ...row, blockedReason: workspace.logisticsFollowUp?.blockedMarketingSkuIds?.includes(row.skuId) ? "단종 분류되어 쿠폰·광고 생성이 차단되었습니다." : undefined, couponNote: couponBlockReasons.get(row.skuId) })), discontinue: select(run => isDiscontinue(run) && !run.discontinueSubmittedAt && !run.discontinueSubmittedSkuIds?.includes(run.logisticsReceiptLine!.skuId) && !run.completedAt), reorder, vendor: select(run => isVendor(run) && !run.completedAt) },
+    queues: { marketing: select(run => isMarketing(run) && !run.couponUploadedAt && !run.completedAt && !excluded.has(sourceKey(run)) && !mergedIntoCompletedCoupon(workspace, run)).map(row => ({ ...row, blockedReason: workspace.logisticsFollowUp?.blockedMarketingSkuIds?.includes(row.skuId) ? "단종 분류되어 쿠폰·광고 생성이 차단되었습니다." : undefined, couponNote: couponBlockReasons.get(row.skuId) })), discontinue: select(run => isDiscontinue(run) && !run.discontinueSubmittedAt && !run.discontinueSubmittedSkuIds?.includes(run.logisticsReceiptLine!.skuId) && !run.completedAt), reorder, vendor: select(run => isVendor(run) && !run.completedAt) },
     exclusionHistory: (() => {
       // 2026-10-11: 단종으로 분류된 SKU는 쿠폰·광고 후보에서 자동으로 빠진다(사용자가 직접 뺀 게 아님). 이유를 붙여 구분한다.
       const discontinuedSkus = new Set([...(workspace.logisticsFollowUp?.blockedMarketingSkuIds || []), ...workspace.runs.filter(isDiscontinue).map(run => run.logisticsReceiptLine!.skuId)]);
@@ -134,7 +146,7 @@ export function unqueueMarketing(workspace: WeeklyWorkspace, board: LogisticsRec
 }
 function batchRuns(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, kind: "marketing" | "discontinue") {
   const rows = allSourceLines(board); const excluded = activeMarketingExclusionKeys(workspace); const rejectedSku = new Set([...(workspace.logisticsFollowUp?.blockedMarketingSkuIds || []), ...workspace.runs.filter(isDiscontinue).map(run => run.logisticsReceiptLine!.skuId)]);
-  const candidates = workspace.runs.filter(kind === "marketing" ? isMarketing : isDiscontinue).filter(run => !run.completedAt && (kind === "marketing" ? !run.couponUploadedAt && !excluded.has(sourceKey(run)) : !run.discontinueSubmittedAt && !run.discontinueSubmittedSkuIds?.includes(run.logisticsReceiptLine!.skuId)));
+  const candidates = workspace.runs.filter(kind === "marketing" ? isMarketing : isDiscontinue).filter(run => !run.completedAt && (kind === "marketing" ? !run.couponUploadedAt && !excluded.has(sourceKey(run)) && !mergedIntoCompletedCoupon(workspace, run) : !run.discontinueSubmittedAt && !run.discontinueSubmittedSkuIds?.includes(run.logisticsReceiptLine!.skuId)));
   const invalid = candidates.find(run => { if (!run.logisticsReceiptLine) return false; const row = rows.get(sourceKey(run)); return !row || row.state === "review" || receiptSourceFingerprint(row) !== workspace.logisticsReceiptRoutes?.[sourceKey(run)]?.sourceFingerprint; });
   if (invalid) throw new Error("쉽먼트 출처 수량이 바뀌었거나 재검토가 필요합니다. 목록을 새로고침해 주세요.");
   const source = candidates.filter(run => {
@@ -144,8 +156,8 @@ function batchRuns(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, kin
     const row = rows.get(sourceKey(run)); return Boolean(row && row.state !== "review" && receiptSourceFingerprint(row) === (workspace.logisticsReceiptRoutes?.[sourceKey(run)]?.sourceFingerprint));
   });
   if (kind === "marketing" && candidates.some(run => !run.couponUploadedAt && !run.completedAt && rejectedSku.has(run.logisticsReceiptLine!.skuId))) throw new Error("단종 분류된 쿠폰·광고 후보가 있습니다. 목록을 확인해 주세요.");
-  const deduped = kind === "marketing" ? source.filter((run, index, all) => all.findIndex(other => other.logisticsReceiptLine!.skuId === run.logisticsReceiptLine!.skuId) === index) : source;
-  return deduped;
+  // 2026-10-21: 같은 SKU 줄도 모두 파일 근거(sourceKeys)에 넣어 처리완료 때 함께 끝나게 한다. 파일에는 transientRun이 SKU당 한 줄로 합친다.
+  return source;
 }
 function transientRun(runs: WeeklyRun[], kind: "marketing" | "discontinue"): WeeklyRun {
   // 2026-10-11: 같은 SKU가 여러 쉽먼트에서 모이면 쿠폰 파일에는 한 줄만 넣는다(입고 근거는 모두 남김).
