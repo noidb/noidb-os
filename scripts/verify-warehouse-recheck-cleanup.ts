@@ -64,3 +64,16 @@ console.log("rerun ok");
   if (plan.deleteStorageRows.length || plan.appendProductDb.length) throw new Error("재등록 SKU가 제품DB로 되돌아감");
   console.log("reregistered → storage OK");
 }
+
+// 2026-10-22 현재상태에 '재등록'이 들어간 제품DB 행 → 재등록SKU 탭에 한 줄 + 보관으로
+{
+  const pdH = ["현재상태", "모델명/품번", "모델SKU", "SKU ID", "이미지", "상품명", "제품링크"];
+  const stH = ["현재상태", "SKU ID", "상품명", "보관사유"];
+  const rrH = ["SKU ID", "모델명/품번", "모델SKU", "기존 현재상태", "기록일", "진행상태", "새 SKU ID", "완료일", "이미지", "상품명", "제품링크"];
+  const pd = [pdH, ["재등록/소재수정후", "wr1", "wr1S", "501", "=IMAGE(\"u\",4,80,80)", "반지", "http://x"], ["소재수정후 재등록", "wr2", "wr2S", "502", "", "반지2", ""], ["과재고", "a", "b", "503", "", "그대로", ""]];
+  const plan = planWarehouseRecheckCleanup([], pd, [stH], new Set(["502"]), rrH, "2026-10-22");
+  if (plan.deleteProductDbRows.join() !== "2,3") throw new Error("재등록 행 제품DB에서 지우기 실패");
+  if (plan.appendRereg.length !== 1 || plan.appendRereg[0].join("|") !== "501|wr1|wr1S|재등록/소재수정후|2026-10-22|대기|||=IMAGE(\"u\",4,80,80)|반지|http://x") throw new Error("재등록SKU 줄 실패: " + JSON.stringify(plan.appendRereg));
+  if (plan.appendStorage.map(r => r[3]).join() !== "재등록SKU(재등록/소재수정후),재등록SKU(소재수정후 재등록)") throw new Error("보관사유 실패");
+  console.log("재등록 키워드 → 재등록SKU+보관 OK");
+}

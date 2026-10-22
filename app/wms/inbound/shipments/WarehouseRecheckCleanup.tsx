@@ -45,7 +45,7 @@ export default function WarehouseRecheckCleanup({ onDone, embedded = false, auto
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "정리하지 못했습니다.");
       setPreview(null);
-      onDone(`정리 완료: 보관으로 ${data.toStorage}건(제품DB에서 ${data.fromProductDb}건) · 제품DB로 ${data.toProductDb}건(보관 탭에서 ${data.fromStorage}건)${data.release ? ` · 단종해제 대상 ${data.release}건 추가` : ""}. 새로고침하면 단종해제 목록에 반영돼요.`);
+      onDone(`정리 완료: 보관으로 ${data.toStorage}건(제품DB에서 ${data.fromProductDb}건) · 제품DB로 ${data.toProductDb}건(보관 탭에서 ${data.fromStorage}건)${data.toRereg ? ` · 재등록SKU 탭에 ${data.toRereg}건 추가` : ""}${data.release ? ` · 단종해제 대상 ${data.release}건 추가` : ""}. 새로고침하면 단종해제 목록에 반영돼요.`);
     } catch (cause) { onDone(cause instanceof Error ? cause.message : "정리하지 못했습니다.", true); }
     finally { setBusy(""); }
   }
@@ -53,7 +53,7 @@ export default function WarehouseRecheckCleanup({ onDone, embedded = false, auto
   return (
     <section>
       {!embedded && <h2 className={styles.listTitle}>구글시트 정리</h2>}
-      {!embedded && <p className={styles.meta}>제품DB: 현재상태에 '단종'이 들어간 행(거래처단종·단종(중복등록) 등)·비관리(중복등록)·재등록SKU 탭에 있는 SKU → 보관(적어 둔 이유도 함께). 보관: 현재상태에 '재고있음'이 들어간 행 → 제품DB(현재상태 비움, 발주가능상태가 정상이 아니면 단종해제 대상).</p>}
+      {!embedded && <p className={styles.meta}>제품DB: 현재상태에 '단종'이 들어간 행(거래처단종·단종(중복등록) 등)·비관리(중복등록)·재등록SKU 탭에 있는 SKU → 보관(적어 둔 이유도 함께). 현재상태에 '재등록'이 들어간 행은 재등록SKU 탭에도 넣어요. 보관: 현재상태에 '재고있음'이 들어간 행 → 제품DB(현재상태 비움, 발주가능상태가 정상이 아니면 단종해제 대상).</p>}
       {!preview ? (
         embedded ? <p className={styles.meta}>{busy === "preview" ? "정리할 행 읽는 중…" : "정리할 행을 읽지 못했습니다. 다시 눌러 주세요."}</p> : (
         <button type="button" className={`softSageButton ${styles.fullButton}`} disabled={Boolean(busy)} onClick={() => void load()}>

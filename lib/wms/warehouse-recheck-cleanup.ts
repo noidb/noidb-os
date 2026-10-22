@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
  *   판매중지·가품중단은 옮기지 않는다. 보관 탭에 같은 SKU가 이미 있으면 새로 붙이지 않고 제품DB에서만 지운다.
  * 재등록SKU 탭(사용자 확정 2026-10-22): 그 탭에 있는 옛 SKU는 현재상태와 상관없이 제품DB에서 보관 탭으로 옮긴다(새 SKU로 재등록할 대상).
  *   보관 탭에서 '재고있음'으로 바꿔 둬도 재등록SKU 탭에 있으면 제품DB로 되돌리지 않는다.
+ * 제품DB 현재상태에 '재등록'이 들어간 행(예: 재등록/소재수정후, 2026-10-22): 재등록SKU 탭에 한 줄 넣고(진행상태 대기) 위와 같이 보관으로 옮긴다.
  */
 export const RECHECK_TAB = "창고재확인";
 export const STORAGE_TAB = "_보관_비관리SKU_20261008";
@@ -57,8 +58,8 @@ function mapRow(sourceHeaders: string[], source: string[], targetHeaders: string
   });
 }
 
-export function planWarehouseRecheckCleanup(recheck: string[][], productDb: string[][], storage: string[][] | null, reregisteredSkuIds: ReadonlySet<string> = new Set()): CleanupPlan & { appendStorage: string[][]; appendProductDb: string[][]; clearStatusRows: number[]; deleteRows: number[]; deleteStorageRows: number[]; deleteProductDbRows: number[] } {
-  const token = createHash("sha256").update(JSON.stringify([recheck, storage, productDb, [...reregisteredSkuIds].sort()])).digest("hex").slice(0, 32);
+export function planWarehouseRecheckCleanup(recheck: string[][], productDb: string[][], storage: string[][] | null, reregisteredSkuIds: ReadonlySet<string> = new Set(), reregHeaders: readonly string[] = [], today = ""): CleanupPlan & { appendRereg: string[][]; appendStorage: string[][]; appendProductDb: string[][]; clearStatusRows: number[]; deleteRows: number[]; deleteStorageRows: number[]; deleteProductDbRows: number[] } {
+  const token = createHash("sha256").update(JSON.stringify([recheck, storage, productDb, [...reregisteredSkuIds].sort(), reregHeaders, today])).digest("hex").slice(0, 32);
   const problems: string[] = [];
   const headers = (recheck[0] || []).map(value => String(value ?? ""));
   const col = { result: find(headers, "창고 확인결과", "창고확인결과"), sku: find(headers, "SKU ID", "SKUID", "SKU"), name: find(headers, "상품명"), orderable: find(headers, "발주가능상태") };
@@ -127,6 +128,7 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
   }
   // 제품DB: 현재상태 비관리(중복등록)·'단종'이 들어간 모든 상태(거래처단종·단종(중복등록) 등) → 보관 탭, 제품DB에서 지움
   const deleteProductDbRows: number[] = [];
+  const appendRereg: string[][] = [];
   if (!problems.length && pd.status >= 0) {
     const stSku = find(stHeaders, "SKU ID", "SKUID", "SKU");
     const inStorage = new Set<string>();
@@ -135,11 +137,18 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
     appendStorage.forEach(row => { if (stSku >= 0) inStorage.add(String(row[stSku] ?? "").trim()); });
     const keep = new Set(clearStatusRows);
     const pdName = find(pdHeaders, "상품명");
+    const reregPlanned = new Set<string>();
     productDb.slice(1).forEach((row, index) => {
       const rowNumber = index + 2;
       const status = String(row[pd.status] ?? "").trim();
       const skuId = String(row[pd.sku] ?? "").trim();
-      const reregistered = Boolean(skuId) && reregisteredSkuIds.has(skuId);
+      const markedRereg = squash(status).includes("재등록");
+      const reregistered = Boolean(skuId) && (reregisteredSkuIds.has(skuId) || markedRereg);
+      if (markedRereg && skuId && !reregisteredSkuIds.has(skuId) && !reregPlanned.has(skuId)) {
+        if (!reregHeaders.length) { problems.push("'재등록SKU' 탭을 찾지 못했습니다."); return; }
+        appendRereg.push(mapRow(pdHeaders, row, [...reregHeaders], { "기존현재상태": status, "기록일": today, "진행상태": "대기" }));
+        reregPlanned.add(skuId);
+      }
       if ((!isProductDbToStorageStatus(status) && !reregistered) || keep.has(rowNumber)) return;
       if (!storage) { problems.push(`'${STORAGE_TAB}' 탭을 찾지 못했습니다.`); return; }
       const reason = reregistered ? (status ? `재등록SKU(${status})` : "재등록SKU") : status;
@@ -150,5 +159,5 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       deleteProductDbRows.push(rowNumber);
     });
   }
-  return { token, pending, moves, unknown, problems: [...new Set(problems)], appendStorage, appendProductDb, clearStatusRows: [...new Set(clearStatusRows)], deleteRows, deleteStorageRows, deleteProductDbRows };
+  return { token, pending, moves, unknown, problems: [...new Set(problems)], appendRereg, appendStorage, appendProductDb, clearStatusRows: [...new Set(clearStatusRows)], deleteRows, deleteStorageRows, deleteProductDbRows };
 }
