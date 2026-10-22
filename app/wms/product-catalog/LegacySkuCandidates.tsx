@@ -7,7 +7,7 @@ type Candidate = { skuId: string; productName: string; barcode: string; orderabl
 
 /**
  * 반려 카드의 '쿠팡에 남아 있는 예전 SKU 후보'(2026-10-21 사용자 요청).
- * 재등록이 '기존 상품과 중복'으로 반려되면 예전 SKU를 먼저 단종해야 하는데, 제품DB·보관 탭에 없는 SKU도 있어 찾기 어려웠다.
+ * 재등록이 '기존 상품과 중복'으로 반려되면 예전 SKU를 먼저 단종해야 하는데, 제품DB·비관리SKU 탭에 없는 SKU도 있어 찾기 어려웠다.
  * '_SKU마스터'(쿠팡 전체 SKU)에서 상품명이 비슷한 SKU를 찾아 보여 주고, 고른 것을 '단종 신청 목록'에 바로 넣는다.
  */
 export default function LegacySkuCandidates({ names }: { names: string[] }) {

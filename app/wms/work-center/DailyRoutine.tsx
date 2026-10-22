@@ -46,7 +46,7 @@ export default function DailyRoutine() {
   const items: Array<{ id: RoutineId; title: string; summary: string; label: string; rerun?: boolean; shortcut?: string; siteLink?: string; body?: ReactNode }> = [
     {
       id: "supply-status", title: "상품공급상태 최신파일 반영",
-      summary: "쿠팡에서 상품공급상태 파일을 받아 G드라이브에 올린 뒤, 제품DB·보관 탭 발주가능상태를 맞춥니다.",
+      summary: "쿠팡에서 상품공급상태 파일을 받아 G드라이브에 올린 뒤, 제품DB·비관리SKU 탭 발주가능상태를 맞춥니다.",
       shortcut: "https://supplier.coupang.com/plan/ticket",
       // 2026-10-21: '새로고침'이 곧 '최신파일 확인하기' — 누르면 바로 확인하고 결과(반영할 항목)만 보여 준다.
       label: "새로고침", rerun: true,
@@ -66,7 +66,7 @@ export default function DailyRoutine() {
     },
     {
       id: "sheet-cleanup", title: "구글시트 정리",
-      summary: "제품DB·보관 탭 사이에 옮길 행(단종 → 보관, 재고있음 → 제품DB)을 정리합니다.",
+      summary: "제품DB·비관리SKU 탭 사이에 옮길 행(단종 → 비관리SKU, 재고있음 → 제품DB)을 정리합니다.",
       // 2026-10-21: 누르면 바로 정리할 행 목록을 보여 준다.
       label: "정리행 미리보기", rerun: true,
       body: <WarehouseRecheckCleanup key={runKey} embedded autoLoad onClose={() => setOpen(null)} onDone={(text, isError) => { setNote({ text, error: isError }); if (!isError) { mark("sheet-cleanup"); setOpen(null); } }} />,

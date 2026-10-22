@@ -206,7 +206,7 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
     <section>
       <h2 className={styles.listTitle}>단종 신청 목록 {list.length > 0 && <span>{list.length}건</span>}</h2>
       <p className={styles.meta}>
-        제품DB·보관 탭 현재상태가 판매중지·단종·거래처단종·가품중단인데 발주가능상태가 아직 정상인 SKU와, 아래 칸에 직접 넣은 바코드·SKU를 한 표로 보여 줘요. 같은 SKU는 한 번만 들어가요.
+        제품DB·비관리SKU 탭 현재상태가 판매중지·단종·거래처단종·가품중단인데 발주가능상태가 아직 정상인 SKU와, 아래 칸에 직접 넣은 바코드·SKU를 한 표로 보여 줘요. 같은 SKU는 한 번만 들어가요.
       </p>
       {list.length > 0 ? (
         <div className={`${styles.tableWrap} ${styles.copyScroll}`}>

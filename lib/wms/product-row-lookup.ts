@@ -79,13 +79,13 @@ export interface CodeLookupResult {
 
 /**
  * 바코드나 SKU ID 목록으로 상품을 찾는다(2026-10-15 — 출력하고 남은 바코드 라벨로 단종서류 만들기).
- * 읽기 전용이라 전 탭을 본다(2026-10-19 — 보관 탭 '_보관_비관리SKU_…'으로 옮긴 SKU의 상품명이 안 나왔음).
+ * 읽기 전용이라 전 탭을 본다(2026-10-19 — 보관 탭(지금 이름 '비관리SKU')으로 옮긴 SKU의 상품명이 안 나왔음).
  * 순서: 제품DB → 보관 탭 → 보이는 다른 탭 → '_' 이력·숨김 탭. 같은 SKU는 먼저 찾은 탭 값을 쓴다.
  * 탭마다 칸 이름이 조금 달라도(SKU / SKU ID, 상품명 / 제품명) 찾는다.
  */
 export async function lookupCodesAnyTab(codes: string[]): Promise<CodeLookupResult[]> {
   const all = await fetchSpreadsheetTabs();
-  const rank = (tab: { title: string; hidden?: boolean }) => tab.title === PRODUCT_DB_SHEET_NAME ? 0 : tab.title.includes("보관") ? 1 : !tab.hidden && !tab.title.startsWith("_") ? 2 : 3;
+  const rank = (tab: { title: string; hidden?: boolean }) => tab.title === PRODUCT_DB_SHEET_NAME ? 0 : (tab.title.includes("보관") || tab.title.includes("비관리SKU")) ? 1 : !tab.hidden && !tab.title.startsWith("_") ? 2 : 3;
   const ordered = [...all].sort((a, b) => rank(a) - rank(b)).map(tab => tab.title);
   if (!ordered.includes(PRODUCT_DB_SHEET_NAME)) ordered.unshift(PRODUCT_DB_SHEET_NAME);
   const values = await batchGet(ordered, "FORMATTED_VALUE");

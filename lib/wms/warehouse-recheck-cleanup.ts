@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
  * - 그 밖의 결과: 기준이 없어 그대로 두고 알려 준다
  * 옮긴 행은 창고재확인 탭에서 지운다. 열은 같은 이름끼리 맞춰 넣는다.
  *
- * 보관 탭 = '_보관_비관리SKU_20261008'(사용자 확인 2026-10-19). 거래처단종은 이 탭으로 옮긴다.
+ * 보관 탭 = '비관리SKU'(2026-10-22 사용자 요청으로 '_보관_비관리SKU_20261008'에서 이름 변경). 거래처단종은 이 탭으로 옮긴다.
  * 제품DB(사용자 확정 2026-10-19): 현재상태가 비관리(중복등록)·거래처단종·단종인 행은 보관 탭으로 옮기고 제품DB에서 지운다.
  *   판매중지·가품중단은 옮기지 않는다. 보관 탭에 같은 SKU가 이미 있으면 새로 붙이지 않고 제품DB에서만 지운다.
  * 재등록SKU 탭(사용자 확정 2026-10-22): 그 탭에 있는 옛 SKU는 현재상태와 상관없이 제품DB에서 지운다(새 SKU로 재등록할 대상).
@@ -19,14 +19,17 @@ import { createHash } from "node:crypto";
  * 제품DB 현재상태에 '재등록'이 들어간 행(예: 재등록/소재수정후, 2026-10-22): 재등록SKU 탭에 한 줄 넣고(진행상태 대기) 제품DB에서 지운다.
  */
 export const RECHECK_TAB = "창고재확인";
-export const STORAGE_TAB = "_보관_비관리SKU_20261008";
+export const STORAGE_TAB = "비관리SKU";
+/** 예전 이름 — 시트 탭 이름을 바꾸기 전에도 동작하게 함께 찾는다. */
+export const LEGACY_STORAGE_TAB = "_보관_비관리SKU_20261008";
 const STORAGE_LABEL = "보관" as const;
 
-/** 시트 탭 이름 중 보관 탭을 고른다: 정확한 이름 → '보관_비관리'가 들어간 탭(백업 탭 제외) → 예전 '보관'. */
+/** 시트 탭 이름 중 보관(비관리SKU) 탭을 고른다: '비관리SKU' → 예전 이름 → '비관리SKU'가 들어간 탭(백업 탭 제외) → 예전 '보관'. */
 export function pickStorageTabTitle(titles: readonly string[]): string | null {
   const live = titles.filter(title => !title.startsWith("_백업_"));
   if (live.includes(STORAGE_TAB)) return STORAGE_TAB;
-  const loose = live.find(title => /보관_?비관리/.test(title.replace(/\s+/g, "")));
+  if (live.includes(LEGACY_STORAGE_TAB)) return LEGACY_STORAGE_TAB;
+  const loose = live.find(title => /비관리SKU/i.test(title.replace(/\s+/g, "")));
   if (loose) return loose;
   return live.includes("보관") ? "보관" : null;
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchSheetRows } from "@/lib/wms/google-sheets";
-import { STORAGE_TAB } from "@/lib/wms/warehouse-recheck-cleanup";
+import { LEGACY_STORAGE_TAB, STORAGE_TAB } from "@/lib/wms/warehouse-recheck-cleanup";
 import { loadReregistrationLookup } from "@/lib/wms/reregistration-lookup";
 
 export const runtime = "nodejs";
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     const wanted = new Set(Array.isArray(body.skuIds) ? body.skuIds.map(clean).filter(id => /^\d{5,20}$/.test(id)).slice(0, 5000) : []);
     if (!wanted.size) return NextResponse.json({ ok: true, items: [] }, { headers });
     const [storage, reregistration] = await Promise.all([
-      fetchSheetRows(STORAGE_TAB).catch(() => [] as string[][]),
+      fetchSheetRows(STORAGE_TAB).catch(() => fetchSheetRows(LEGACY_STORAGE_TAB)).catch(() => [] as string[][]),
       loadReregistrationLookup().catch(() => ({ reregisteredSkuIds: new Set<string>(), names: {} as Record<string, string>, loaded: false })),
     ]);
     const found = new Map<string, { skuId: string; productName: string; optionLabel: string; currentStatus: string }>();

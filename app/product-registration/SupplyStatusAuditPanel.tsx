@@ -67,7 +67,7 @@ export default function SupplyStatusAuditPanel({ onApplied, onAudited, compact =
     if (!audit || applying || audit.changeCount === 0) return;
     const confirmed = window.confirm(
       `제품DB ${audit.changeCount.toLocaleString()}건을 쿠팡 최신값으로 바꿉니다.\n\n` +
-      `SKU ID가 같은 행의 상품명·발주가능상태·바코드만 바뀝니다(보관 탭은 발주가능상태만).\n` +
+      `SKU ID가 같은 행의 상품명·발주가능상태·바코드만 바뀝니다(비관리SKU 탭은 발주가능상태만).\n` +
       `반영 전에 바뀌는 탭 전체를 백업하며, 새 행은 만들지 않습니다.`
     );
     if (!confirmed) return;
@@ -109,7 +109,7 @@ export default function SupplyStatusAuditPanel({ onApplied, onAudited, compact =
         <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
           <strong style={{ fontSize: "15px", fontWeight: 800, color: wmsColors.ink, flex: "1 1 220px" }}>
             상품공급상태 최신파일 반영
-            <span style={{ display: "block", fontSize: "11px", fontWeight: 500, color: wmsColors.muted }}>G드라이브 상품공급상태관리 폴더의 가장 최신 파일 → 제품DB·보관 탭 발주가능상태</span>
+            <span style={{ display: "block", fontSize: "11px", fontWeight: 500, color: wmsColors.muted }}>G드라이브 상품공급상태관리 폴더의 가장 최신 파일 → 제품DB·비관리SKU 탭 발주가능상태</span>
           </strong>
           <button type="button" className="softBeigeButton" onClick={() => void runAudit()} disabled={loading} style={{ flex: "0 0 220px", minHeight: "38px", fontSize: "14px" }}>
             {loading ? "최신파일 확인 중..." : "최신파일 확인하기"}
@@ -135,7 +135,7 @@ export default function SupplyStatusAuditPanel({ onApplied, onAudited, compact =
           </p>
           {audit.changeCount === 0 ? (
             <p style={{ margin: 0, padding: "10px", borderRadius: "9px", background: wmsColors.greenSoft, color: wmsColors.greenDark, fontSize: "12px", fontWeight: 700 }}>
-              제품DB·보관 탭이 쿠팡 최신 상태와 같습니다.
+              제품DB·비관리SKU 탭이 쿠팡 최신 상태와 같습니다.
             </p>
           ) : (
             <>
