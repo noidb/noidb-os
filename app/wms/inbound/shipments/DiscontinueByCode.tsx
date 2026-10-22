@@ -6,9 +6,26 @@ import styles from "./shipments.module.css";
 
 type Match = { skuId: string; productName: string; barcode: string; sheetName: string };
 type Lookup = { code: string; matches: Match[] };
-export type DiscontinueAutoRow = { skuId: string; productName: string; orderableStatus: string; key: string };
+export type DiscontinueAutoRow = { skuId: string; productName: string; orderableStatus: string; key: string; reason?: string; currentStatus?: string; origin?: string };
+
+/**
+ * 2026-10-23 사용자 요청: 목록에 왜 떴는지 경로가 보이게 — 지금 있는 탭과 어디서 옮겨 왔는지.
+ * 예) 제품DB → 비관리SKU · 거래처단종 / 제품DB → 판매중지SKU / 제품DB · 단종 (정리 때 비관리SKU로)
+ */
+function autoSourceLabel(row: { reason?: string; currentStatus?: string; origin?: string }): string {
+  const reason = String(row.reason || "제품DB");
+  const status = String(row.currentStatus || "").trim();
+  const withStatus = (text: string) => status ? `${text} · ${status}` : text;
+  if (reason === "제품DB") {
+    const next = /판매중지/.test(status) ? " (정리 때 판매중지SKU로)" : /단종|비관리/.test(status) && !/해제/.test(status) ? " (정리 때 비관리SKU로)" : "";
+    return withStatus("제품DB") + next;
+  }
+  if (reason === "비관리SKU" || reason === "판매중지SKU") return withStatus(row.origin && row.origin !== reason ? `${row.origin} → ${reason}` : reason);
+  if (reason === "재등록완료 옛 SKU") return "실적저조SKU·교체이력 · 재등록완료 옛 SKU";
+  return reason;
+}
 type LatestOrderable = { fileMtime: string; orderable: Record<string, string> } | null;
-type Row = { skuId: string; productName: string; orderable: string; auto: boolean; autoKey: string; codes: string[]; sheetName: string };
+type Row = { skuId: string; productName: string; orderable: string; auto: boolean; autoKey: string; codes: string[]; sheetName: string; autoLabel?: string };
 
 /**
  * 단종 신청 목록 (2026-10-20 사용자 요청으로 하나로 합침).
@@ -145,7 +162,7 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
 
   const orderableOf = (skuId: string, fallback: string) => latestOrderable ? latestOrderable.orderable[skuId] || "파일에 없음" : fallback || "미확인";
   const rows = new Map<string, Row>();
-  for (const row of autoRows) rows.set(row.skuId, { skuId: row.skuId, productName: row.productName, orderable: orderableOf(row.skuId, row.orderableStatus), auto: true, autoKey: row.key, codes: [], sheetName: "" });
+  for (const row of autoRows) rows.set(row.skuId, { skuId: row.skuId, productName: row.productName, orderable: orderableOf(row.skuId, row.orderableStatus), auto: true, autoKey: row.key, codes: [], sheetName: "", autoLabel: autoSourceLabel(row) });
   for (const entry of lookup || []) for (const match of entry.matches) {
     const existing = rows.get(match.skuId);
     if (existing) existing.codes.push(entry.code);
@@ -243,7 +260,7 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
               {list.map(row => {
                 // 단종 대상은 쿠팡 발주가능상태가 '정상이 아님'이 되면 처리가 끝난 것 → 세이지로 표시
                 const done = Boolean(latestOrderable?.orderable[row.skuId]) && row.orderable !== "정상" && row.orderable !== "확인필요";
-                const source = row.auto ? (row.codes.length ? "제품DB · 직접 입력" : "제품DB") : `직접 입력${row.sheetName && row.sheetName !== "제품DB" ? ` · ${row.sheetName}` : ""}`;
+                const source = row.auto ? `${row.autoLabel || "제품DB"}${row.codes.length ? " · 직접 입력" : ""}` : `직접 입력${row.sheetName && row.sheetName !== "제품DB" ? ` · ${row.sheetName}` : ""}`;
                 return (
                   <tr key={row.skuId}>
                     <td>{row.skuId}</td>
