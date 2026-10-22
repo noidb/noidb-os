@@ -18,7 +18,7 @@ export const MEMO_RELEASE_SKU_IDS: readonly string[] = [
 /** 사용자가 단종 대상이라고 알려 준 SKU(2026-10-08) — 판매중지(제품링크 중단)·재등록완료된 옛 SKU라 발주가능상태가 불가여야 한다. */
 export const MEMO_DISCONTINUE_SKU_IDS: readonly string[] = ["39127489", "38248703", "36789607"];
 
-export interface StatusListItem { skuId: string; productName: string; currentStatus: string; orderableStatus: string; reason: string; key: string; /** 옮겨 오기 전 탭(비관리SKU '원본 위치') */ origin?: string; /** 옮긴 이유(비관리SKU 보관사유 등) */ moveReason?: string }
+export interface StatusListItem { skuId: string; productName: string; currentStatus: string; orderableStatus: string; reason: string; key: string; /** 옮겨 오기 전 탭(비관리SKU '원본 위치') */ origin?: string; /** 옮긴 이유(비관리SKU 보관사유 등) */ moveReason?: string; /** 지금 이 SKU가 있는 탭(2026-10-23: 시트에서 바로 찾게) */ currentTab?: string }
 export interface StatusLists { discontinue: StatusListItem[]; release: StatusListItem[]; /** 재등록으로 바뀐 옛 SKU라서 뺀 SKU */ reregisteredExcluded: string[] }
 /** '목록 비우기'로 처리완료한 항목. 키는 SKU·현재상태·발주가능상태 묶음이라 상태가 바뀌면 다시 나타난다. */
 export type StatusListCleared = { discontinue?: Record<string, string>; release?: Record<string, string> };
@@ -81,6 +81,9 @@ export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuI
   const addRelease = (skuId: string, fallbackName: string, reason: string) => {
     if (release.has(skuId)) return;
     const item = bySku.get(skuId);
+    // 2026-10-23: 옛 SKU 탭(판매중지SKU·실적저조SKU·그 외 재등록SKU)에 있는 SKU는 해제 대상이 아니다.
+    // 예전 메모(10-08) 해제 목록에 있어도 단종 목록에서 빼지 않는다(빠졌다가 '재등록완료 옛 SKU'로 잘못 다시 들어갔음: 37667186·40284016 등).
+    if (item?.sourceTab) return;
     // 이미 쿠팡 발주가능상태가 정상이면 해제할 필요가 없다(메모·화면 선택이라도 뺀다).
     if (item && item.orderableStatus.trim() === "정상") { discontinue.delete(skuId); return; }
     release.set(skuId, { skuId, productName: item ? displayName(item) : fallbackName || options.nameFallback?.[skuId] || "제품DB에 없음", currentStatus: item?.currentStatus.trim() || "",

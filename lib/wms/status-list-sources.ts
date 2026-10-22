@@ -10,7 +10,7 @@ const squash = (value: unknown) => String(value ?? "").replace(/\s+/g, "");
  * 단종·단종해제 목록에 쓸 행: 제품DB 탭 + 보관 탭(2026-10-08 — 보관 탭의 거래처단종이 빠졌던 문제).
  * 같은 SKU가 두 탭에 있으면 제품DB 값을 쓴다. 보관 탭을 못 읽으면 제품DB만 쓴다.
  */
-export async function loadStatusSourceItems(catalogItems: readonly ProductCatalogItem[]): Promise<{ items: StatusSourceItem[]; storageLoaded: boolean }> {
+export async function loadStatusSourceItems(catalogItems: readonly ProductCatalogItem[]): Promise<{ items: StatusSourceItem[]; storageLoaded: boolean; tabsBySku: Record<string, string[]> }> {
   // 보관 탭 = '비관리SKU'(예전 '_보관_비관리SKU_20261008', 2026-10-19): 제품DB에서 옮긴 거래처단종·단종도 단종 대상에 계속 잡히게 한다.
   const titles = await fetchSpreadsheetTabs().then(tabs => tabs.map(tab => tab.title)).catch(() => [] as string[]);
   const title = titles.length ? pickStorageTabTitle(titles) : "보관";
@@ -18,16 +18,24 @@ export async function loadStatusSourceItems(catalogItems: readonly ProductCatalo
   // 2026-10-23: 실적저조SKU·그 외 재등록SKU도 읽는다 — 옛 SKU 탭에 있는데 쿠팡이 아직 '정상'이면 단종 대상.
   const lowTab = pickLowPerformanceTab(titles);
   const retiredTabs = [STOPPED_TAB, lowTab, OTHER_REREGISTRATION_TAB].filter((tab): tab is string => Boolean(tab) && titles.includes(tab!));
+  // 한 번 실패하면(일시적인 시트 읽기 오류) 한 번 더 읽는다 — 탭을 못 읽으면 그 탭의 SKU가 엉뚱한 사유로 보였다(2026-10-23).
+  const read = (tab: string) => fetchSheetRows(tab).catch(() => fetchSheetRows(tab)).catch(() => null);
   const [rows, ...retiredRows] = await Promise.all([
-    title ? fetchSheetRows(title).catch(() => null) : Promise.resolve(null),
-    ...retiredTabs.map(tab => fetchSheetRows(tab).catch(() => null)),
+    title ? read(title) : Promise.resolve(null),
+    ...retiredTabs.map(tab => read(tab)),
   ]);
+  // 2026-10-23 사용자 요청: 목록에 'SKU가 지금 어느 탭에 있는지'를 보여 준다(그 탭에서 바로 검색할 수 있게).
+  const tabsBySku: Record<string, string[]> = {};
+  const note = (skuId: string, tab: string) => { if (skuId && !(tabsBySku[skuId] ||= []).includes(tab)) tabsBySku[skuId].push(tab); };
+  for (const item of catalogItems) note(item.skuId, "제품DB");
+  retiredTabs.forEach((tab, index) => skuIdsOf(retiredRows[index]).forEach(skuId => note(skuId, tab === lowTab ? "실적저조SKU" : tab)));
+  skuIdsOf(rows).forEach(skuId => note(skuId, "비관리SKU"));
   const known = new Set(catalogItems.map(item => item.skuId));
   const stopped = retiredTabs.flatMap((tab, index) => (retiredRows[index]?.length ? readRows(retiredRows[index]!, known, { sourceTab: tab === lowTab ? "실적저조SKU" : tab }) : null) || []);
-  if (!rows || !rows.length) return { items: [...catalogItems, ...stopped], storageLoaded: false };
+  if (!rows || !rows.length) return { items: [...catalogItems, ...stopped], storageLoaded: false, tabsBySku };
   const storage = readRows(rows, known, { storageTab: true });
-  if (!storage) return { items: [...catalogItems, ...stopped], storageLoaded: false };
-  return { items: [...catalogItems, ...stopped, ...storage], storageLoaded: true };
+  if (!storage) return { items: [...catalogItems, ...stopped], storageLoaded: false, tabsBySku };
+  return { items: [...catalogItems, ...stopped, ...storage], storageLoaded: true, tabsBySku };
 }
 
 /**
@@ -41,6 +49,12 @@ export function storageOrigin(raw: string, moveReason: string): string {
   if (["제품DB", "판매중지SKU", "그 외 재등록SKU", "창고재확인"].includes(tab)) return tab;
   if (/^재등록완료\(새 SKU/.test(moveReason)) return "실적저조SKU";
   return "제품DB";
+}
+
+function skuIdsOf(rows: string[][] | null | undefined): string[] {
+  if (!rows?.length) return [];
+  const col = rows[0].findIndex(header => squash(header) === "SKUID");
+  return col < 0 ? [] : rows.slice(1).map(row => String(row[col] ?? "").trim()).filter(id => /^\d{1,20}$/.test(id));
 }
 
 function readRows(rows: string[][], known: Set<string>, mark: Pick<StatusSourceItem, "storageTab" | "sourceTab">): StatusSourceItem[] | null {

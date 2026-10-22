@@ -7,7 +7,7 @@ import styles from "./shipments.module.css";
 
 type Match = { skuId: string; productName: string; barcode: string; sheetName: string };
 type Lookup = { code: string; matches: Match[] };
-export type DiscontinueAutoRow = { skuId: string; productName: string; orderableStatus: string; key: string; reason?: string; currentStatus?: string; origin?: string; moveReason?: string };
+export type DiscontinueAutoRow = { skuId: string; productName: string; orderableStatus: string; key: string; reason?: string; currentStatus?: string; origin?: string; moveReason?: string; currentTab?: string };
 
 type LatestOrderable = { fileMtime: string; orderable: Record<string, string> } | null;
 type Row = { skuId: string; productName: string; orderable: string; auto: boolean; autoKey: string; codes: string[]; sheetName: string; autoLabel?: string; autoTitle?: string };

@@ -130,6 +130,12 @@ function laterOrdersForMarketing(lines: readonly { lineKey: string; kind: string
   return result;
 }
 
+/** 2026-10-23: 목록마다 SKU가 지금 있는 탭을 붙인다(사용자가 그 탭에서 바로 검색). */
+function withCurrentTab(lists: ReturnType<typeof buildStatusLists>, tabsBySku: Record<string, string[]>) {
+  const add = <T extends { skuId: string }>(row: T) => ({ ...row, currentTab: (tabsBySku[row.skuId] || []).join("·") || "시트에 없음" });
+  return { ...lists, discontinue: lists.discontinue.map(add), release: lists.release.map(add) };
+}
+
 async function responseBoard() {
   // 2026-10-21: 화면을 열 때 오래 걸려(거래처발주·단종관리가 빈 화면처럼 보임) 서로 상관없는 읽기는 처음에 함께 시작한다.
   const indexPromise = getCachedPurchaseOrderIndex().catch(() => null);
@@ -219,12 +225,12 @@ async function responseBoard() {
       return [kind, batch && recent && batch.keys.length > 1 ? { at: batch.at, count: batch.keys.length } : null];
     })),
     statusListRequested: stored.statusListRequested || {},
-    statusLists: statusSource ? buildStatusLists(statusSource.items, {
+    statusLists: statusSource ? withCurrentTab(buildStatusLists(statusSource.items, {
       releaseFromScreen: Object.fromEntries(Object.entries(stored.supplyStatusChecks || {}).filter(([, check]) => check.decision === "release" && !check.releasedListClearedAt)),
       cleared: stored.statusListCleared,
       nameFallback: { ...rereg.names, ...Object.fromEntries((stored.logisticsReceipts?.shipments || []).flatMap(shipment => shipment.lines.map(line => [line.skuId, line.productName]))) },
       reregisteredSkuIds: rereg.reregisteredSkuIds,
-    }) : null,
+    }), statusSource.tabsBySku) : null,
     openVendorOrders: Object.fromEntries(board.lines.filter(line => line.kind === "shortage" && openOrders[line.skuId]).map(line => [line.skuId, openOrders[line.skuId]])),
     marketingExclusion: { listedSkuCount: MARKETING_PERMANENT_EXCLUDED_SKU_IDS.length, models: exclusions.models, skuCount: exclusions.skuIds.size, userSkus: workspace.marketingExcludedSkuIds || [] } };
 }
