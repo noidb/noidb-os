@@ -89,3 +89,15 @@ console.log("rerun ok");
   if (plan.deleteStorageRows.join() !== "2" || plan.moves[0]?.target !== "재등록SKU" || plan.appendProductDb.length) throw new Error("보관 중복 정리 실패");
   console.log("보관 재등록 중복 정리 OK");
 }
+
+// 2026-10-22 한 SKU는 한 탭에만: 비관리SKU 안 중복은 아래 줄 지움, 제품DB에도 있으면(제품DB가 단종·비관리·재등록이 아니면) 비관리SKU에서 지움
+{
+  const pdH = ["현재상태", "SKU ID", "상품명"];
+  const stH = ["현재상태", "SKU ID", "상품명", "보관사유"];
+  const pd = [pdH, ["과재고", "700", "제품DB에있음"], ["단종", "701", "단종으로적음"]];
+  const st = [stH, ["단종", "700", "중복1", ""], ["단종", "701", "중복2", ""], ["단종", "702", "같은거", ""], ["단종", "702", "같은거", ""]];
+  const plan = planWarehouseRecheckCleanup([], pd, st, new Set());
+  if (plan.deleteStorageRows.join() !== "2,5") throw new Error("비관리 중복 정리 실패: " + plan.deleteStorageRows.join());
+  if (plan.deleteProductDbRows.join() !== "3" || plan.appendStorage.length) throw new Error("제품DB 단종 줄은 비관리SKU에 이미 있어 제품DB에서만 지움");
+  console.log("한 SKU 한 탭 OK");
+}

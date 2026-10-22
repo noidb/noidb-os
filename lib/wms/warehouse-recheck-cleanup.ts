@@ -113,6 +113,7 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
   if (storage && !problems.length) {
     const st = { sku: find(stHeaders, "SKU ID", "SKUID", "SKU"), status: find(stHeaders, "현재상태"), result: find(stHeaders, "창고 확인결과", "창고확인결과"), name: find(stHeaders, "상품명"), orderable: find(stHeaders, "발주가능상태") };
     const planned = new Set(appendProductDb.map(row => String(row[pd.sku] ?? "").trim()));
+    const seenStorage = new Set<string>();
     storage.slice(1).forEach((row, index) => {
       const rowNumber = index + 2;
       // 2026-10-22: 재등록SKU 탭에 이미 있는 SKU는 보관 탭에 중복으로 두지 않는다 → 보관에서 지운다.
@@ -122,9 +123,29 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
         deleteStorageRows.push(rowNumber);
         return;
       }
+      const storageName = st.name >= 0 ? String(row[st.name] ?? "").trim() : "";
+      const storageOrderable = st.orderable >= 0 ? String(row[st.orderable] ?? "").trim() : "";
+      // 2026-10-22 '한 SKU는 한 탭에만'(사용자 확정): 비관리SKU 안에서 같은 SKU가 또 나오면 아래 줄을 지운다.
+      if (storageSku && seenStorage.has(storageSku)) {
+        moves.push({ source: "보관", rowNumber, skuId: storageSku, productName: storageName, result: "같은 SKU가 위에 또 있음", orderableStatus: storageOrderable, target: "보관", mode: "delete-only", release: false });
+        deleteStorageRows.push(rowNumber);
+        return;
+      }
+      if (storageSku) seenStorage.add(storageSku);
       // 2026-10-21 사용자 요청: 현재상태를 '재고있음'으로만 바꿔 둬도(글자만 들어 있으면) 제품DB로 옮긴다.
       const marked = [st.status, st.result].some(column => column >= 0 && squash(row[column]).includes("재고있음"));
-      if (!marked) return;
+      if (!marked) {
+        // 2026-10-22: 제품DB에도 있는 SKU — 제품DB 현재상태가 단종·비관리·재등록이면 제품DB 쪽이 지워지고(아래), 아니면 제품DB에 두고 비관리SKU에서 지운다.
+        const pdRow = storageSku ? productDbRowBySku.get(storageSku) : undefined;
+        if (pdRow) {
+          const pdStatus = String(productDb[pdRow - 1]?.[pd.status] ?? "").trim();
+          if (!isProductDbToStorageStatus(pdStatus) && !squash(pdStatus).includes("재등록")) {
+            moves.push({ source: "보관", rowNumber, skuId: storageSku, productName: storageName, result: `제품DB에 있음${pdStatus ? `(${pdStatus})` : ""}`, orderableStatus: storageOrderable, target: "제품DB", mode: "delete-only", release: false });
+            deleteStorageRows.push(rowNumber);
+          }
+        }
+        return;
+      }
       const skuId = storageSku;
       const productName = st.name >= 0 ? String(row[st.name] ?? "").trim() : "";
       const existing = productDbRowBySku.get(skuId);
