@@ -347,6 +347,51 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       void stNameCol;
     }
   }
+  // 2026-10-23 사용자 확정: 제품DB에는 정상 입고될 수 있는 SKU만 둔다. 한 옵션이라도 판매중지(링크 죽음)면
+  // 같은 노출상품ID(제품링크 번호)를 쓰는 옵션은 전부 판매중지다 → 제품DB·실적저조SKU에 남은 같은 링크 옵션도 판매중지SKU로.
+  const productIdOf = (headers: string[], row: string[]) => {
+    const link = find(headers, "제품링크"), idCol = find(headers, "노출상품ID");
+    return String(link >= 0 ? row[link] ?? "" : "").match(/\/products\/(\d+)/)?.[1] || (idCol >= 0 ? String(row[idCol] ?? "").replace(/\D/g, "") : "");
+  };
+  const deadIds = new Set<string>();
+  if (stoppedHeaders.length) {
+    const collect = (rows: string[][] | null | undefined, all: boolean) => {
+      const headers = (rows?.[0] || []).map(value => String(value ?? ""));
+      const statusCol = find(headers, "현재상태");
+      for (const row of rows?.slice(1) || []) {
+        if (!all && !(statusCol >= 0 && squash(row[statusCol]).includes("판매중지"))) continue;
+        const id = productIdOf(headers, row);
+        if (id) deadIds.add(id);
+      }
+    };
+    collect(extraTabs.stopped, true);
+    collect(productDb, false);
+    collect(reregRows, false);
+    collect(extraTabs.other, false);
+  }
+  const deadLinkStatus = (status: string) => squash(status).includes("판매중지") ? status : status ? `판매중지(${status})` : "판매중지";
+  // 실적저조SKU 탭: 판매중지이거나 판매중지 링크와 같은 링크인 줄 → 판매중지SKU(링크가 죽어 판매중지가 우선)
+  if (reregRows && reregPlan && !reregPlan.rebuild && stoppedHeaders.length && !problems.length) {
+    const rrHeaders = (reregRows[0] || []).map(value => String(value ?? ""));
+    const rr = { sku: find(rrHeaders, "SKU ID", "SKUID"), status: find(rrHeaders, "현재상태"), name: find(rrHeaders, "상품명"), orderable: find(rrHeaders, "발주가능상태") };
+    const leavingRows = new Set(deleteReregRows);
+    reregRows.slice(1).forEach((row, index) => {
+      const rowNumber = index + 2;
+      const skuId = rr.sku >= 0 ? String(row[rr.sku] ?? "").trim() : "";
+      if (!skuId || leavingRows.has(rowNumber)) return;
+      const status = rr.status >= 0 ? String(row[rr.status] ?? "").trim() : "";
+      const id = productIdOf(rrHeaders, row);
+      if (!squash(status).includes("판매중지") && !(id && deadIds.has(id))) return;
+      if (!stoppedIds.has(skuId) && !retiredPlanned["판매중지SKU"].has(skuId)) {
+        appendStopped.push(mapRow(rrHeaders, row, stoppedHeaders, { "현재상태": deadLinkStatus(status) }));
+        retiredPlanned["판매중지SKU"].add(skuId);
+      }
+      deleteReregRows.push(rowNumber);
+      reregisteredSkuIds = new Set([...reregisteredSkuIds].filter(other => other !== skuId));
+      stoppedIds.add(skuId);
+      moves.push({ source: "재등록SKU", rowNumber, skuId, productName: rr.name >= 0 ? String(row[rr.name] ?? "").trim() : "", result: squash(status).includes("판매중지") ? `${status} → 판매중지가 실적저조보다 우선` : `판매중지 옵션과 같은 링크(${id}) → 판매중지`, orderableStatus: rr.orderable >= 0 ? String(row[rr.orderable] ?? "").trim() : "", target: "판매중지SKU", mode: "append", release: false });
+    });
+  }
   // 제품DB: 현재상태 비관리(중복등록)·'단종'이 들어간 모든 상태(거래처단종·단종(중복등록) 등) → 보관 탭, 제품DB에서 지움
   const deleteProductDbRows: number[] = [];
   if (!problems.length && pd.status >= 0) {
@@ -371,14 +416,16 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       const markedRereg = squash(status).includes("재등록") && !/재등록파일생성|재등록완료|승인대기/.test(squash(status));
       // 2026-10-22: 판매중지 → 판매중지SKU 탭. 실적저조 목록·옛 SKU 탭에 있는 SKU도 제품DB에 두지 않는다.
       // 판매중지SKU 탭이 아직 없으면 판매중지 줄은 예전처럼 제품DB에 둔다.
-      const markedStopped = squash(status).includes("판매중지") && stoppedHeaders.length > 0;
+      const pdLinkId = productIdOf(pdHeaders, row);
+      const deadLink = stoppedHeaders.length > 0 && Boolean(pdLinkId) && deadIds.has(pdLinkId) && !/재등록파일생성|승인대기/.test(squash(status));
+      const markedStopped = (squash(status).includes("판매중지") && stoppedHeaders.length > 0) || deadLink;
       const retired = Boolean(skuId) && (Boolean(inRetiredTab(skuId)) || LOW_PERFORMANCE_SKU_IDS.has(skuId) || forcedRereg.has(skuId) || retiredPlanned["그 외 재등록SKU"].has(skuId) || retiredPlanned["판매중지SKU"].has(skuId));
       if ((retired || markedRereg || markedStopped) && !keep.has(rowNumber)) {
         const target = markedStopped && !inRetiredTab(skuId) ? "판매중지SKU" : retiredTarget(skuId, [status]);
-        const mode = addToRetiredTab(target, skuId, pdHeaders, row, target === "판매중지SKU" ? {} : { "기존현재상태": status, "기록일": today, "진행상태": "대기" });
+        const mode = addToRetiredTab(target, skuId, pdHeaders, row, target === "판매중지SKU" ? (deadLink ? { "현재상태": deadLinkStatus(status) } : {}) : { "기존현재상태": status, "기록일": today, "진행상태": "대기" });
         if (!mode) return;
         reregPlanned.add(skuId);
-        moves.push({ source: "제품DB", rowNumber, skuId, productName: pdName >= 0 ? String(row[pdName] ?? "").trim() : "", result: status || `${target === "재등록SKU" ? LOW_PERFORMANCE_TAB : target} 탭에 있음`, orderableStatus: pd.orderable >= 0 ? String(row[pd.orderable] ?? "").trim() : "", target, mode, release: false });
+        moves.push({ source: "제품DB", rowNumber, skuId, productName: pdName >= 0 ? String(row[pdName] ?? "").trim() : "", result: deadLink && !squash(status).includes("판매중지") ? `판매중지 옵션과 같은 링크(${pdLinkId})${status ? ` · ${status}` : ""} → 판매중지` : status || `${target === "재등록SKU" ? LOW_PERFORMANCE_TAB : target} 탭에 있음`, orderableStatus: pd.orderable >= 0 ? String(row[pd.orderable] ?? "").trim() : "", target, mode, release: false });
         deleteProductDbRows.push(rowNumber);
         return;
       }

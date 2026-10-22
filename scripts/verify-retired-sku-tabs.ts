@@ -59,3 +59,25 @@ console.log("PASS 판매중지SKU 탭 없으면 제품DB에 둠");
 const lists = buildStatusLists([{ skuId: "300", currentStatus: "판매중지", orderableStatus: "정상", productName: "a", optionLabel: "", reregistrationTier: "", sourceTab: "판매중지SKU" }], { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [], reregisteredSkuIds: new Set(["300"]) });
 assert.deepEqual(lists.discontinue.map(item => [item.skuId, item.reason]), [["300", "판매중지SKU"]]);
 console.log("PASS 판매중지SKU 탭 정상 SKU → 단종 대상");
+
+// 2026-10-23: 한 옵션이라도 판매중지면 같은 링크(노출상품ID) 옵션 전부 판매중지 → 제품DB·실적저조SKU에서 판매중지SKU로
+{
+  const L = (id: string) => `https://www.coupang.com/vp/products/${id}?itemId=1`;
+  const HH = ["현재상태", "모델명/품번", "SKU ID", "상품명", "발주가능상태", "제품링크"];
+  const RRH = [...HH, "기존 현재상태", "기록일", "진행상태", "새 SKU ID", "완료일"];
+  const pdx = [HH, ["과재고", "m1", "500", "같은 링크 과재고", "정상", L("777")], ["", "m1", "501", "다른 링크", "정상", L("888")], ["재등록파일생성", "m1", "", "새 줄", "", ""]];
+  const stoppedx = [HH, ["판매중지", "m1", "502", "죽은 링크", "불가", L("777")]];
+  const rrx = [RRH, ["재고있음", "m2", "503", "실적저조 같은 링크", "일시중단", L("777"), "", "", "대기", "", ""], ["판매중지", "m3", "504", "실적저조 판매중지", "", "", "", "", "대기", "", ""], ["과재고", "m4", "505", "실적저조 그대로", "일시중단", L("999"), "", "", "대기", "", ""]];
+  const p = planWarehouseRecheckCleanup([], pdx, null, new Set(), RRH, "2026-10-23", rrx, new Set(), { other: [RRH], stopped: stoppedx });
+  assert.deepEqual(p.problems, []);
+  const m = (sku: string) => p.moves.find(x => x.skuId === sku);
+  assert.equal(m("500")?.target, "판매중지SKU");
+  assert.deepEqual(p.appendStopped.find(row => row[2] === "500")?.[0], "판매중지(과재고)");
+  assert.equal(m("501"), undefined, "다른 링크는 제품DB에 둠");
+  assert.equal(m("503")?.target, "판매중지SKU");
+  assert.equal(m("504")?.target, "판매중지SKU");
+  assert.equal(m("505"), undefined);
+  assert.deepEqual(p.deleteReregRows.sort(), [2, 3]);
+  assert.deepEqual(p.deleteProductDbRows, [2], "재등록파일생성 새 줄은 그대로");
+  console.log("PASS 같은 링크 옵션 → 판매중지SKU (제품DB·실적저조SKU)");
+}
