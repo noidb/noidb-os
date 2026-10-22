@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import { backupSheetWithinSpreadsheet, fetchSheetRows, fetchSpreadsheetTabs, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
 import { pickStorageTabTitle } from "./warehouse-recheck-cleanup";
+import { OTHER_REREGISTRATION_TAB, STOPPED_TAB, pickLowPerformanceTab } from "./retired-sku-tabs";
 import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
 import { buildReregistrationDoneUpdates } from "./reregistration-tier";
 import { collectRetiredSkuIds, fetchSkuReplacementHistory, skuRetirementKey } from "./sku-retirement";
@@ -644,6 +645,8 @@ export function compareSupplyStatusWithProductDb(
 
 /** 보관 탭에서 바꿀 발주가능상태 한 칸 */
 export interface StorageAvailabilityUpdate {
+  /** 바꿀 탭(비관리SKU·판매중지SKU·실적저조SKU·그 외 재등록SKU) */
+  title?: string;
   sheetRowNumber: number;
   col: number;
   skuId: string;
@@ -684,11 +687,16 @@ export function compareSupplyStatusWithStorageTab(downloadRows: DownloadRow[], s
   return updates;
 }
 
-async function loadStorageTab(): Promise<{ title: string; rows: string[][] } | null> {
-  const title = await fetchSpreadsheetTabs().then(tabs => pickStorageTabTitle(tabs.map(tab => tab.title))).catch(() => null);
-  if (!title) return null;
-  const rows = await fetchSheetRows(title).catch(() => null);
-  return rows && rows.length ? { title, rows } : null;
+/**
+ * 제품DB 밖 탭(비관리SKU + 2026-10-23 옛 SKU 탭: 판매중지SKU·실적저조SKU·그 외 재등록SKU)의 발주가능상태도 쿠팡 최신값으로 맞춘다.
+ * 단종 신청 목록이 이 탭들의 발주가능상태로 계산되므로, 예전에는 이 탭들 값이 오래된 채 남았다.
+ */
+async function loadStatusTabs(): Promise<{ title: string; rows: string[][] }[]> {
+  const titles = await fetchSpreadsheetTabs().then(tabs => tabs.map(tab => tab.title)).catch(() => [] as string[]);
+  const wanted = [pickStorageTabTitle(titles), pickLowPerformanceTab(titles), STOPPED_TAB, OTHER_REREGISTRATION_TAB]
+    .filter((title): title is string => Boolean(title) && titles.includes(title!));
+  const loaded = await Promise.all([...new Set(wanted)].map(async title => ({ title, rows: await fetchSheetRows(title).catch(() => null) })));
+  return loaded.filter((tab): tab is { title: string; rows: string[][] } => Boolean(tab.rows?.length));
 }
 
 async function computeSupplyStatusAudit(): Promise<InternalSupplyStatusAudit | null> {
@@ -701,8 +709,9 @@ async function computeSupplyStatusAudit(): Promise<InternalSupplyStatusAudit | n
   const headers = sheetRows[0].map(value => String(value ?? "").trim());
   const idx = resolveProductDbHeaderIndex(headers);
   const result = compareSupplyStatusWithProductDb(parsed.rows, sheetRows, idx, retiredSkuIds);
-  const storage = await loadStorageTab();
-  const storageUpdates = storage ? compareSupplyStatusWithStorageTab(parsed.rows, storage.rows) : [];
+  const statusTabs = await loadStatusTabs();
+  const storageUpdates = statusTabs.flatMap(tab => compareSupplyStatusWithStorageTab(parsed.rows, tab.rows).map(update => ({ ...update, title: tab.title })));
+  const storage = statusTabs.length ? { title: statusTabs.map(tab => tab.title).join("·") } : null;
 
   const auditWithoutToken: Omit<SupplyStatusAudit, "dryRunToken"> = {
     fileFound: true,
@@ -724,7 +733,7 @@ async function computeSupplyStatusAudit(): Promise<InternalSupplyStatusAudit | n
       skuId: update.skuId,
       productName: update.productName,
       fields: [update.updateProductName && "상품명", update.updateOrderAvailability && `발주가능상태 → ${update.orderAvailability}`, update.updateBarcode && `바코드 → ${update.barcode}`].filter((field): field is string => Boolean(field)),
-    })).concat(storageUpdates.map(update => ({ skuId: update.skuId, productName: update.productName, fields: [`발주가능상태 → ${update.orderAvailability} (보관 탭)`] }))),
+    })).concat(storageUpdates.map(update => ({ skuId: update.skuId, productName: update.productName, fields: [`발주가능상태 → ${update.orderAvailability} (${update.title || "보관 탭"})`] }))),
   };
   // 같은 SKU가 파일에 여러 번 있고 값이 서로 다르면 '확인필요'로 둔다.
   const latestOrderable: Record<string, string> = {};
@@ -796,18 +805,24 @@ export async function applySupplyStatusAudit(expectedDryRunToken: string): Promi
   }
 
   const backup = result.updates.length ? await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME) : null;
-  const storageBackup = result.storageUpdates.length && result.storageTitle ? await backupSheetWithinSpreadsheet(result.storageTitle) : null;
+  const tabTitles = [...new Set(result.storageUpdates.map(update => update.title).filter((title): title is string => Boolean(title)))];
+  const storageBackups: { sheetName: string }[] = [];
+  for (const title of tabTitles) storageBackups.push(await backupSheetWithinSpreadsheet(title));
   const rechecked = await computeSupplyStatusAudit();
   if (!rechecked || rechecked.audit.dryRunToken !== result.audit.dryRunToken) throw new SupplyStatusPreviewChangedError();
 
   const cellUpdates = buildSafeSupplyStatusCellUpdates(rechecked.headerIndex, rechecked.updates);
   await updateSheetCells(PRODUCT_DB_SHEET_NAME, cellUpdates);
-  const storageCells: SheetCellUpdate[] = rechecked.storageUpdates.map(update => ({ row: update.sheetRowNumber, col: update.col, value: update.orderAvailability }));
-  if (rechecked.storageTitle) await updateSheetCells(rechecked.storageTitle, storageCells);
+  const storageCells: SheetCellUpdate[] = [];
+  for (const title of [...new Set(rechecked.storageUpdates.map(update => update.title).filter((title): title is string => Boolean(title)))]) {
+    const cells = rechecked.storageUpdates.filter(update => update.title === title).map(update => ({ row: update.sheetRowNumber, col: update.col, value: update.orderAvailability }));
+    await updateSheetCells(title, cells);
+    storageCells.push(...cells);
+  }
   return {
     applied: true,
     audit: rechecked.audit,
-    backupSheetName: [backup?.sheetName, storageBackup?.sheetName].filter(Boolean).join(", ") || undefined,
+    backupSheetName: [backup?.sheetName, ...storageBackups.map(item => item.sheetName)].filter(Boolean).join(", ") || undefined,
     writtenRowCount: rechecked.updates.length + rechecked.storageUpdates.length,
     writtenCellCount: cellUpdates.length + storageCells.length,
   };
