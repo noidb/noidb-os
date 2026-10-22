@@ -129,9 +129,9 @@ const TAB_LOW = "실적저조SKU", TAB_LOW_LEGACY = "재등록SKU", TAB_OTHER = 
 function exposedProductIdOf(item: ProductCatalogItem): string {
   return String(item.productLink || "").match(/\/products\/(\d+)/)?.[1] || "";
 }
+/** 판매중지SKU 탭 줄, 또는 어느 탭이든 현재상태가 판매중지인 줄(예: 실적저조SKU 탭의 판매중지 4개). */
 function isStoppedItem(item: ProductCatalogItem): boolean {
-  const tab = sourceTabOf(item);
-  return tab === TAB_STOPPED || (!tab && isSalesStopped(item));
+  return sourceTabOf(item) === TAB_STOPPED || isSalesStopped(item);
 }
 
 /** 모델 묶음으로 보여 주는 목록(실적저조·그 외 재등록·판매중지 탭). */
