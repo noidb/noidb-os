@@ -121,8 +121,10 @@ export function planReregistrationTab(reregRows: string[][], productDb: string[]
     const model = rr.model >= 0 ? key(row[rr.model]) : "";
     const color = rr.color >= 0 ? key(row[rr.color]) : "";
     const name = rr.name >= 0 ? key(row[rr.name]) : "";
+    // 2026-10-22: 모델SKU가 같아도 옵션(1P/한쌍, 사이즈 등)이 다르면 다른 상품이다(예: 41093260 로즈골드 1P ↔ 39864522 로즈골드한쌍).
+    const sameOption = (other: string[]) => !color || pd.color < 0 || !key(other[pd.color]) || key(other[pd.color]) === color;
     const pair = active.find(other => String(other[pdSku] ?? "").trim() !== id && (
-      (msku && pd.msku >= 0 && key(other[pd.msku]) === msku) ||
+      (msku && pd.msku >= 0 && key(other[pd.msku]) === msku && sameOption(other)) ||
       (model && color && name && pd.model >= 0 && pd.color >= 0 && pd.name >= 0 && key(other[pd.model]) === model && key(other[pd.color]) === color && key(other[pd.name]) === name)));
     if (pair) { const pairId = String(pair[pdSku] ?? "").trim(); leaving.push({ rowNumber: index + 2, skuId: id, row, status: "비관리(중복등록)", reason: `재등록완료(새 SKU ${pairId})`, pair: pairId }); return; }
     keepIds.add(id);

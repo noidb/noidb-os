@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { isProductDbToStorageStatus, pickStorageTabTitle, planWarehouseRecheckCleanup } from "../lib/wms/warehouse-recheck-cleanup";
+import { isProductDbToStorageStatus, pickStorageTabTitle, planReregistrationTab, planWarehouseRecheckCleanup } from "../lib/wms/warehouse-recheck-cleanup";
 const recheck = [["SKU ID", "상품명", "현재상태", "발주가능상태", "창고 확인결과", "이미지"],
   ["1", "가", "창고재확인", "정상", "", "=IMAGE(\"a\")"],
   ["2", "나", "창고재확인", "불가", "거래처 단종", "=IMAGE(\"b\")"],
@@ -124,4 +124,15 @@ console.log("rerun ok");
   if (reasons !== "재등록완료(새 SKU 900)/비관리(중복등록),거래처단종/거래처단종") throw new Error("비관리로 옮김 실패: " + reasons);
   if (plan2.deleteStorageRows.join() !== "2") throw new Error("예전 비관리 줄(800)은 새 줄로 바꿔야 함");
   console.log("재등록SKU 형식 맞추기·단종/중복 비관리 OK");
+}
+
+// 2026-10-22 모델SKU가 같아도 옵션이 다르면(1P ↔ 한쌍) 같은 제품이 아님 → 재등록SKU에 남김
+{
+  const H = ["현재상태", "모델명/품번", "모델SKU", "SKU ID", "상품명", "색상", "발주가능상태", "기존 현재상태", "기록일", "진행상태", "새 SKU ID", "완료일"];
+  const pdH = ["현재상태", "모델명/품번", "모델SKU", "SKU ID", "상품명", "색상", "발주가능상태"];
+  const pd = [pdH, ["", "mp1", "mp1RG", "200", "십자가, 로즈골드한쌍", "로즈골드한쌍", "정상"], ["", "we1", "we1RG", "201", "귀걸이, 로즈골드", "로즈골드", "정상"]];
+  const rr = [H, ["", "mp1", "mp1RG", "100", "십자가, 로즈골드 1P", "로즈골드 1P", "일시중단", "", "", "대기", "", ""], ["", "we1", "we1RG", "101", "귀걸이, 로즈골드", "로즈골드", "일시중단", "", "", "대기", "", ""]];
+  const p = planReregistrationTab(rr, pd, null);
+  if ([...p.keepIds].join() !== "100" || p.leaving.map(l => l.skuId).join() !== "101") throw new Error("옵션 다른 짝 실패: " + [...p.keepIds].join() + " / " + p.leaving.map(l => l.skuId).join());
+  console.log("옵션 다르면 짝 아님 OK");
 }
