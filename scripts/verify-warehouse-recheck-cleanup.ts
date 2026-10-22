@@ -61,7 +61,7 @@ console.log("rerun ok");
   const plan = planWarehouseRecheckCleanup([], pd, st, new Set(["111", "333"]));
   if (plan.deleteProductDbRows.join() !== "2") throw new Error("재등록SKU 행을 제품DB에서 지우지 않음");
   if (plan.appendStorage.length || plan.appendRereg.length || plan.moves[0]?.target !== "재등록SKU" || plan.moves[0]?.mode !== "delete-only") throw new Error("이미 재등록SKU에 있으면 제품DB에서만 지워야 함");
-  if (plan.deleteStorageRows.length || plan.appendProductDb.length) throw new Error("재등록 SKU가 제품DB로 되돌아감");
+  if (plan.deleteStorageRows.join() !== "2" || plan.appendProductDb.length) throw new Error("재등록 SKU는 제품DB로 되돌리지 않고 보관에서 지워야 함");
   console.log("reregistered → storage OK");
 }
 
