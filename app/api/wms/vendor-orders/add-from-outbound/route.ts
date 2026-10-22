@@ -5,6 +5,7 @@ import { fetchProductCatalog, type ProductCatalogItem } from "@/lib/wms/product-
 import { mutatePickingWaveStore } from "@/lib/wms/picking-wave/server-store";
 import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraftLine } from "@/lib/wms/vendor-order/types";
+import { toVendorOrderQuantity } from "@/lib/wms/vendor-order/aggregate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,7 +46,7 @@ export async function POST(request: NextRequest) {
         id: `${operationId}::${skuId}`, draftId: `${operationId}::${vendorName}`, waveId: operationId, vendorName, skuId,
         modelName: row?.modelSku || row?.modelName || "", category: row?.category || "", optionLabel: row?.optionLabel || "",
         productName: row?.productName || "", imageUrl: row?.imageUrl || "", barcode: row?.barcode || "",
-        actualShortageQuantity: entry.quantity, shortageQuantity: entry.quantity, currentStock: row?.currentStock || "",
+        actualShortageQuantity: entry.quantity, shortageQuantity: toVendorOrderQuantity(entry.quantity, "", vendorName), currentStock: row?.currentStock || "",
         // 쿠팡 발주번호를 넣지 않는다: 직접 고른 줄로 다뤄 같은 거래처로 그대로 묶이게 한다(번호는 메모에 남김).
         relatedPurchaseOrderNumbers: [],
         memo: `${expectedDate} 출고분 재고부족`, isManuallyAdded: true, sourceType: "picking-shortage",

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { usePickingWaveRepository } from "@/lib/wms/picking-wave/context";
 import { useVendorOrderRepository } from "@/lib/wms/vendor-order/context";
 import { recalculateAutoVendorOrderLines } from "@/lib/wms/vendor-order/recalculate";
-import { toVendorOrderQuantity } from "@/lib/wms/vendor-order/aggregate";
+import { toVendorOrderQuantity, vendorSmallOrderDefault } from "@/lib/wms/vendor-order/aggregate";
 import {
   MANUAL_VENDOR_WORKSPACE_ID,
   UNASSIGNED_VENDOR_NAME,
@@ -199,7 +199,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
       imageUrl: product.imageUrl,
       barcode: product.barcode,
       actualShortageQuantity: 0,
-      shortageQuantity: 12,
+      shortageQuantity: vendorSmallOrderDefault(vendorName) ?? 12,
       currentStock: product.currentStock,
       relatedPurchaseOrderNumbers: [],
       memo: "",
@@ -225,7 +225,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
     });
     const newIdPrefix = `${params.waveId}::${vendorName}::manual-`;
     setLines(prev => prev.map(line => line.id.startsWith(newIdPrefix) && line.skuId === product.skuId
-      ? { ...line, memo: "저재고 추가발주", actualShortageQuantity: 0, shortageQuantity: 12 }
+      ? { ...line, memo: "저재고 추가발주", actualShortageQuantity: 0, shortageQuantity: vendorSmallOrderDefault(vendorName) ?? 12 }
       : line));
   }
 
@@ -237,7 +237,7 @@ export default function VendorOrdersPage({ params }: { params: { waveId: string 
     // actual-inbound-shortage 출처(쿠팡 실제 미납)는 12개 단위 올림을 절대 쓰지 않는다 — 재발주
     // 큐를 거쳐도 같은 규칙이 유지돼야 한다(2026-09-11). picking-shortage 출처는 기존 그대로 올림.
     const isActualInboundShortage = source.sourceType === "actual-inbound-shortage";
-    const roundQuantity = (value: number) => isActualInboundShortage ? value : toVendorOrderQuantity(value);
+    const roundQuantity = (value: number) => isActualInboundShortage ? value : toVendorOrderQuantity(value, "", vendorName);
     const existing = lines.find(line => line.vendorName === vendorName && line.skuId === source.skuId);
     if (existing) {
       updateLine(existing.id, {

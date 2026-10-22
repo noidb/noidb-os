@@ -36,7 +36,7 @@ export function recalculateAutoVendorOrderLines(
   const updatedProductCodes: string[] = [];
 
   for (const item of shortageItems) {
-    const orderQuantity = toVendorOrderQuantity(item.shortageQuantity);
+    const orderQuantity = toVendorOrderQuantity(item.shortageQuantity, "", autoLinesByCode.get(item.productCode)?.vendorName || item.vendorName || "");
     const existing = autoLinesByCode.get(item.productCode);
     if (existing) {
       if (existing.shortageQuantity !== orderQuantity || existing.actualShortageQuantity !== item.shortageQuantity) updatedProductCodes.push(item.productCode);

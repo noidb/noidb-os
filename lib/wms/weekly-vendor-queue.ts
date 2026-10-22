@@ -26,7 +26,7 @@ export async function transferWeeklyVendorQueue(runId: string, revision: number,
       const item = run.snapshot.vendorItems.find(item => item.skuId === review.skuId);
       if (!item || !Number.isSafeInteger(item.shortageQuantity) || item.shortageQuantity <= 0) throw new Error("실제 미입고 수량을 확인할 수 없는 상품입니다. 입고 자료를 다시 확인해 주세요.");
       if (item.discontinued) throw new Error("단종된 SKU입니다. 단종해제를 먼저 처리해 주세요.");
-      draftRun.reviews[review.skuId] = { ...review, quantity: toVendorOrderQuantity(item.shortageQuantity, item.productName) };
+      draftRun.reviews[review.skuId] = { ...review, quantity: toVendorOrderQuantity(item.shortageQuantity, item.productName, review.vendorName) };
     }
     const eligible = weeklySelectedOrders(draftRun).filter(review => !selected || selected.has(review.skuId));
     if (selected && eligible.length !== selected.size) throw new Error("선택한 SKU의 상태가 바뀌었습니다. 다시 확인해 주세요.");

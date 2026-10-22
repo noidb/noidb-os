@@ -350,7 +350,7 @@ export function buildWeeklySnapshot(input: BuildInput): WeeklySnapshot {
     if (!product?.imageUrl.trim()) issues.add("거래처에 보낼 상품 사진을 추가해 주세요.");
     vendorItems.push({ ...baseItem(skuId), vendorName: product?.vendorName || "", imageUrl: product?.imageUrl || "",
       optionLabel: product?.optionLabel || "", modelName: product?.modelName || "", barcode: product?.barcode || "",
-      shortageQuantity: shortage.quantity, openOrderQuantity, suggestedQuantity: toVendorOrderQuantity(Math.max(0, shortage.quantity - openOrderQuantity), product?.productName || ""),
+      shortageQuantity: shortage.quantity, openOrderQuantity, suggestedQuantity: toVendorOrderQuantity(Math.max(0, shortage.quantity - openOrderQuantity), product?.productName || "", product?.vendorName || ""),
       ...(shortage.confirmedQuantity === null ? {} : { confirmedQuantity: shortage.confirmedQuantity }),
       ...(shortage.receivedQuantity === null ? {} : { receivedQuantity: shortage.receivedQuantity }),
       shortageDetails: shortage.details.sort((a, b) => a.purchaseOrderNumber.localeCompare(b.purchaseOrderNumber)),

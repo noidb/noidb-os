@@ -6,10 +6,23 @@ import { sortWarehouseProducts } from "../category-order";
 /** 거래처 자동 발주의 SKU별 최소 주문 단위(한 타스). */
 export const MIN_AUTO_VENDOR_ORDER_QUANTITY = 12;
 
-export function toVendorOrderQuantity(shortageQuantity: number, _productContext = ""): number {
+/** 부족수량 10개 이하일 때 거래처별 기본 발주 수량(2026-10-22 사용자 확정).
+ *  부족수량이 이 값보다 많으면(10개 이하 안에서) 부족수량 그대로, 10개를 넘으면 12개 단위 올림. */
+const SMALL_ORDER_LIMIT = 10;
+const VENDOR_SMALL_ORDER_DEFAULT: Record<string, number> = { "모건쥬얼리": 10, "창성": 5 };
+
+export function vendorSmallOrderDefault(vendorName = ""): number | undefined {
+  return VENDOR_SMALL_ORDER_DEFAULT[vendorName.replace(/\s/g, "")];
+}
+
+export function toVendorOrderQuantity(shortageQuantity: number, _productContext = "", vendorName = ""): number {
   const safeShortage = Math.max(0, Math.ceil(shortageQuantity));
   if (safeShortage === 0) return 0;
-  return Math.ceil(safeShortage / MIN_AUTO_VENDOR_ORDER_QUANTITY) * MIN_AUTO_VENDOR_ORDER_QUANTITY;
+  const smallDefault = vendorSmallOrderDefault(vendorName);
+  if (smallDefault !== undefined && safeShortage <= SMALL_ORDER_LIMIT) return Math.max(smallDefault, safeShortage);
+  // 그 외 거래처: 10개 미만 12개, 10개 이상 24개, 그 위로는 12개 단위 올림(2026-10-22 사용자 확정).
+  if (safeShortage < 10) return MIN_AUTO_VENDOR_ORDER_QUANTITY;
+  return Math.max(MIN_AUTO_VENDOR_ORDER_QUANTITY * 2, Math.ceil(safeShortage / MIN_AUTO_VENDOR_ORDER_QUANTITY) * MIN_AUTO_VENDOR_ORDER_QUANTITY);
 }
 
 /**
@@ -55,7 +68,7 @@ export function buildVendorOrderDraftsFromWaveItems(
       imageUrl: item.imageUrl || "",
       barcode: item.catalogBarcode || "",
       actualShortageQuantity: item.shortageQuantity,
-      shortageQuantity: toVendorOrderQuantity(item.shortageQuantity),
+      shortageQuantity: toVendorOrderQuantity(item.shortageQuantity, "", vendorName),
       currentStock: item.catalogCurrentStock || "",
       relatedPurchaseOrderNumbers: Array.from(new Set(item.sources.map(source => source.purchaseOrderNumber))),
       memo: "",

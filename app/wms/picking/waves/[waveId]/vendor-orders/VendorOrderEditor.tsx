@@ -41,6 +41,7 @@ import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 import { planVendorReassignment } from "@/lib/wms/vendor-order/reassign-vendor";
 import VendorOrderExportPanel from "./ExportPanel";
 import VendorOrderCardPreview from "./VendorOrderCardPreview";
+import { getVendorOrderCardImage } from "@/lib/wms/vendor-order/card-image";
 import ProductSearchAddSheet from "./ProductSearchAddSheet";
 import DeleteVendorOrderButton from "./DeleteVendorOrderButton";
 import CompleteReceivingButton from "./CompleteReceivingButton";
@@ -745,7 +746,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
         modelName: product.modelName, category: product.category || "",
         optionLabel: resolveDisplayNameAndOption(product.productName, "", product.optionLabel).option,
         productName: product.productName, imageUrl: product.imageUrl, barcode: product.barcode,
-        actualShortageQuantity: 0, shortageQuantity: toVendorOrderQuantity(1, [product.category, product.modelName, product.productName].join(" ")), currentStock: product.currentStock,
+        actualShortageQuantity: 0, shortageQuantity: toVendorOrderQuantity(1, [product.category, product.modelName, product.productName].join(" "), vendorName), currentStock: product.currentStock,
         relatedPurchaseOrderNumbers: [], memo: "", isManuallyAdded: true, isStockReplenishment, manualListGroup, createdAt: now, updatedAt: now,
       });
     }
@@ -782,7 +783,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     if (existing) {
       updateLine(existing.id, {
         actualShortageQuantity: (existing.actualShortageQuantity || 0) + pendingQuantity,
-        shortageQuantity: toVendorOrderQuantity((existing.actualShortageQuantity || existing.shortageQuantity) + pendingQuantity, [existing.category, existing.modelName, existing.productName].join(" ")),
+        shortageQuantity: toVendorOrderQuantity((existing.actualShortageQuantity || existing.shortageQuantity) + pendingQuantity, [existing.category, existing.modelName, existing.productName].join(" "), vendorName),
         memo: [existing.memo, `미입고 재발주 ${pendingQuantity}개`].filter(Boolean).join(" · "),
       });
     } else {
@@ -792,7 +793,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
         draftId: draftIdFor(vendorName),
         waveId: params.waveId,
         actualShortageQuantity: pendingQuantity,
-        shortageQuantity: toVendorOrderQuantity(pendingQuantity, [source.category, source.modelName, source.productName].join(" ")),
+        shortageQuantity: toVendorOrderQuantity(pendingQuantity, [source.category, source.modelName, source.productName].join(" "), vendorName),
         receivedQuantity: 0,
         reorderPendingQuantity: undefined,
         reorderRequestedAt: undefined,
@@ -1437,7 +1438,7 @@ function VendorOrderLineCard({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const receiptShortage = line.shipmentReceiptDetails?.reduce((sum, detail) => sum + detail.shortageQuantity, 0);
   const suggestedOrderQuantity = receiptShortage && line.vendorName.trim() && line.vendorName !== UNASSIGNED_VENDOR_NAME
-    ? line.vendorName.trim() === "창성" ? receiptShortage : toVendorOrderQuantity(receiptShortage) : undefined;
+    ? line.vendorName.trim() === "창성" ? receiptShortage : toVendorOrderQuantity(receiptShortage, "", line.vendorName) : undefined;
 
   /** 거래처명 입력은 로컬 draft로만 관리하고, blur(입력 완료) 시점에만 부모 lines 상태로
    *  올려보낸다 (2026-08-20 신규). 이전에는 onChange마다 곧바로 부모 lines를 갱신했는데, 부모의
@@ -1455,6 +1456,26 @@ function VendorOrderLineCard({
 
   const { option: displayOption } = resolveDisplayNameAndOption(line.productName, line.optionLabel);
   const photoEditable = editable && !optionsBusy;
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
+
+  /** 카드 클릭 후 Ctrl+C — 오른쪽 마우스 '이미지 복사' 없이 카드 이미지를 그대로 복사한다(2026-10-22).
+   *  초안·전송 상관없이 카톡에 바로 붙여넣는 용도. 이미지 Promise를 그대로 넘겨 복사 권한이 유지된다. */
+  function copyCardImage() {
+    setCopyMessage(null);
+    if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
+      setCopyMessage("이 브라우저는 이미지 복사를 지원하지 않습니다. 오른쪽 마우스로 복사해 주세요.");
+      return;
+    }
+    const blob = getVendorOrderCardImage(line.vendorName, line, orderDate);
+    void navigator.clipboard.write([new ClipboardItem({ "image/png": blob })])
+      .then(() => setCopyMessage("카드 이미지 복사됨"))
+      .catch(() => setCopyMessage("복사하지 못했습니다. 다시 Ctrl+C를 눌러 주세요."));
+  }
+  useEffect(() => {
+    if (!copyMessage) return;
+    const timer = window.setTimeout(() => setCopyMessage(null), 2500);
+    return () => window.clearTimeout(timer);
+  }, [copyMessage]);
 
 
   /** 이미지 업로드는 이미 성공했지만(구글드라이브), 제품DB 시트 쓰기가 실패했을 때 재시도할 수 있게
@@ -1557,9 +1578,14 @@ function VendorOrderLineCard({
   }
 
   return (
-    <div data-vendor-sku={line.skuId} tabIndex={photoEditable ? 0 : -1} aria-label={line.skuId + " 상품 사진 붙여넣기"} onClick={event => {
-      if (!photoEditable || (event.target as HTMLElement).closest("input, textarea, select, button, a")) return;
+    <div data-vendor-sku={line.skuId} tabIndex={0} aria-label={line.skuId + (photoEditable ? " 카드 복사·사진 붙여넣기" : " 카드 복사")} onClick={event => {
+      if ((event.target as HTMLElement).closest("input, textarea, select, button, a")) return;
       event.currentTarget.focus();
+    }} onCopy={event => {
+      if ((event.target as HTMLElement).closest("input, textarea, select, [contenteditable=true]")) return;
+      if (window.getSelection()?.toString().trim()) return;
+      event.preventDefault();
+      copyCardImage();
     }} onPaste={event => {
       const file = Array.from(event.clipboardData.files).find(file => file.type.startsWith("image/"));
       if (!photoEditable) return;
@@ -1573,7 +1599,8 @@ function VendorOrderLineCard({
       if (images[0]) void pastePhoto(images[0]); else setImageSaveError("웹 링크 대신 이미지 파일을 끌어 놓거나 복사해 주세요.");
     }} style={{ ...wmsOuterCard, padding: "12px", marginBottom: "10px", height: compact ? "100%" : undefined, boxSizing: "border-box", display: compact ? "flex" : undefined, flexDirection: compact ? "column" : undefined, outline: imageDragActive ? `3px solid ${wmsColors.green}` : undefined, outlineOffset: imageDragActive ? "2px" : undefined }}>
       <VendorOrderCardPreview line={line} vendorName={line.vendorName} orderDate={orderDate} onEditImage={editable ? () => setImageEditOpen(true) : undefined} />
-      {editable && <p style={{ margin: "8px 0 0", fontSize: 12, color: wmsColors.muted }}>사진을 끌어 놓거나 클릭 후 Ctrl+V</p>}
+      {copyMessage ? <p role="status" style={{ margin: "8px 0 0", fontSize: 12, fontWeight: 700, color: wmsColors.muted }}>{copyMessage}</p>
+        : <p style={{ margin: "8px 0 0", fontSize: 12, color: wmsColors.muted }}>{editable ? "클릭 후 Ctrl+C 복사 · 사진은 끌어 놓거나 Ctrl+V" : "클릭 후 Ctrl+C 복사"}</p>}
       {imageSaving && <p role="status">사진 저장 중…</p>}
 
       {imageSaveError && (
@@ -1678,7 +1705,7 @@ function VendorOrderLineCard({
           )}
           <div style={{ fontSize: "11px", color: wmsColors.warn, fontWeight: 700 }}>실제 부족수량 {line.actualShortageQuantity ?? line.shortageQuantity}개</div>
           {editable && suggestedOrderQuantity !== undefined && <div style={{ fontSize: "12px", textAlign: "center", lineHeight: 1.6 }}>
-            {line.vendorName.trim() === "창성" ? "창성 · 미납수량 그대로" : "12개 단위 발주"} · 권장 {suggestedOrderQuantity}개
+            {line.vendorName.trim() === "창성" ? "창성 · 미납수량 그대로" : line.vendorName.trim() === "모건쥬얼리" ? "10개 이하 10개" : "10개 미만 12개 · 이상 24개"} · 권장 {suggestedOrderQuantity}개
             {line.shortageQuantity !== suggestedOrderQuantity && <button type="button" style={{ ...wmsGhostButton, display: "block", margin: "6px auto 0", minHeight: 36 }} onClick={() => onChange({ shortageQuantity: suggestedOrderQuantity })}>권장 수량 적용</button>}
           </div>}
         </div>

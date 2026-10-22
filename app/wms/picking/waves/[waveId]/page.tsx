@@ -373,8 +373,8 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
         const combinedPos = Array.from(new Set([...(existing.relatedPurchaseOrderNumbers || []), ...relatedPurchaseOrderNumbers]));
         if (combinedActual === (existing.actualShortageQuantity || 0) && combinedPos.length === existing.relatedPurchaseOrderNumbers.length) continue;
         const productContext = [existing.category, existing.modelName, existing.productName].join(" ");
-        const previousAutoQuantity = toVendorOrderQuantity(existing.actualShortageQuantity || 0, productContext);
-        const updated = { ...existing, actualShortageQuantity: combinedActual, shortageQuantity: existing.shortageQuantity === previousAutoQuantity ? toVendorOrderQuantity(combinedActual, productContext) : existing.shortageQuantity, relatedPurchaseOrderNumbers: combinedPos, updatedAt: now };
+        const previousAutoQuantity = toVendorOrderQuantity(existing.actualShortageQuantity || 0, productContext, existing.vendorName);
+        const updated = { ...existing, actualShortageQuantity: combinedActual, shortageQuantity: existing.shortageQuantity === previousAutoQuantity ? toVendorOrderQuantity(combinedActual, productContext, existing.vendorName) : existing.shortageQuantity, relatedPurchaseOrderNumbers: combinedPos, updatedAt: now };
         existingBySku.set(skuId, updated);
         linesToSave.push(updated);
         updatedCount += 1;
@@ -395,7 +395,7 @@ export default function WmsPickingWaveDetailPage({ params }: { params: { waveId:
         imageUrl: live.imageUrl || "",
         barcode: live.catalogBarcode || item.catalogBarcode || "",
         actualShortageQuantity: actualQuantity,
-        shortageQuantity: toVendorOrderQuantity(actualQuantity, [live.category || item.category, live.catalogModelName || item.modelName, live.name || item.productName].join(" ")),
+        shortageQuantity: toVendorOrderQuantity(actualQuantity, [live.category || item.category, live.catalogModelName || item.modelName, live.name || item.productName].join(" "), vendorName),
         currentStock: live.catalogCurrentStock || item.catalogCurrentStock || "",
         relatedPurchaseOrderNumbers,
         memo: "피킹 목록에서 추가",
