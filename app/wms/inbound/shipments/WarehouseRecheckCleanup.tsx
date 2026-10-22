@@ -79,7 +79,7 @@ export default function WarehouseRecheckCleanup({ onDone, embedded = false, auto
                       <td>{move.skuId}</td>
                       <td>{move.productName}</td>
                       <td>{move.result}</td>
-                      <td>{move.target}{move.mode === "clear-status" ? ` (제품DB에 이미 있음 · ${move.source}에서 지움)` : move.mode === "delete-only" ? (move.target === "재등록SKU" ? " (재등록SKU에 이미 있음 · 제품DB에서만 지움)" : " (보관에 이미 있음 · 제품DB에서만 지움)") : ""}</td>
+                      <td>{move.target}{move.mode === "clear-status" ? ` (제품DB에 이미 있음 · ${move.source}에서 지움)` : move.mode === "delete-only" ? (move.target === "재등록SKU" ? ` (재등록SKU에 이미 있음 · ${move.source}에서만 지움)` : " (보관에 이미 있음 · 제품DB에서만 지움)") : ""}</td>
                       <td className={move.release ? styles.statusCell : undefined}>{move.orderableStatus}{move.release ? " → 단종해제" : ""}</td>
                     </tr>
                   ))}

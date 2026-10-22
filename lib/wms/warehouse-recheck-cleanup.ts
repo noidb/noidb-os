@@ -112,11 +112,17 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
     const planned = new Set(appendProductDb.map(row => String(row[pd.sku] ?? "").trim()));
     storage.slice(1).forEach((row, index) => {
       const rowNumber = index + 2;
+      // 2026-10-22: 재등록SKU 탭에 이미 있는 SKU는 보관 탭에 중복으로 두지 않는다 → 보관에서 지운다.
+      const storageSku = st.sku >= 0 ? String(row[st.sku] ?? "").trim() : "";
+      if (storageSku && reregisteredSkuIds.has(storageSku)) {
+        moves.push({ source: "보관", rowNumber, skuId: storageSku, productName: st.name >= 0 ? String(row[st.name] ?? "").trim() : "", result: "재등록SKU 탭에 있음", orderableStatus: st.orderable >= 0 ? String(row[st.orderable] ?? "").trim() : "", target: "재등록SKU", mode: "delete-only", release: false });
+        deleteStorageRows.push(rowNumber);
+        return;
+      }
       // 2026-10-21 사용자 요청: 현재상태를 '재고있음'으로만 바꿔 둬도(글자만 들어 있으면) 제품DB로 옮긴다.
       const marked = [st.status, st.result].some(column => column >= 0 && squash(row[column]).includes("재고있음"));
       if (!marked) return;
-      const skuId = st.sku >= 0 ? String(row[st.sku] ?? "").trim() : "";
-      if (skuId && reregisteredSkuIds.has(skuId)) return;
+      const skuId = storageSku;
       const productName = st.name >= 0 ? String(row[st.name] ?? "").trim() : "";
       const existing = productDbRowBySku.get(skuId);
       const orderableHere = st.orderable >= 0 ? String(row[st.orderable] ?? "").trim() : "";

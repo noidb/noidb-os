@@ -78,3 +78,12 @@ console.log("rerun ok");
   if (plan.moves.map(m => m.target).join() !== "재등록SKU,재등록SKU") throw new Error("옮길 곳 실패");
   console.log("재등록 키워드 → 재등록SKU+보관 OK");
 }
+
+// 2026-10-22 보관 탭에 있는 재등록SKU 탭 SKU는 보관에서 지움(중복 방지)
+{
+  const pdH = ["현재상태", "SKU ID", "상품명"];
+  const stH = ["현재상태", "SKU ID", "상품명", "보관사유"];
+  const plan = planWarehouseRecheckCleanup([], [pdH], [stH, ["과재고", "900", "옛것", "재등록SKU(과재고)"], ["단종", "901", "그대로", "단종"]], new Set(["900"]));
+  if (plan.deleteStorageRows.join() !== "2" || plan.moves[0]?.target !== "재등록SKU" || plan.appendProductDb.length) throw new Error("보관 중복 정리 실패");
+  console.log("보관 재등록 중복 정리 OK");
+}
