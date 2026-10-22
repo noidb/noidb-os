@@ -125,6 +125,15 @@ function sourceTabOf(item: ProductCatalogItem): string {
 }
 const TAB_LOW = "실적저조SKU", TAB_LOW_LEGACY = "재등록SKU", TAB_OTHER = "그 외 재등록SKU", TAB_STOPPED = "판매중지SKU";
 
+/** 제품링크의 노출상품ID(…/vp/products/숫자). 같은 링크를 쓰는 옵션끼리 묶는 데 쓴다. */
+function exposedProductIdOf(item: ProductCatalogItem): string {
+  return String(item.productLink || "").match(/\/products\/(\d+)/)?.[1] || "";
+}
+function isStoppedItem(item: ProductCatalogItem): boolean {
+  const tab = sourceTabOf(item);
+  return tab === TAB_STOPPED || (!tab && isSalesStopped(item));
+}
+
 /** 모델 묶음으로 보여 주는 목록(실적저조·그 외 재등록·판매중지 탭). */
 const MODEL_LIST_STATUSES = new Set(["reregister", "other-rereg", "stopped"]);
 
@@ -632,6 +641,37 @@ export default function ProductCatalogPage() {
   const rejectedGroups = useMemo(() => stagedGroups.filter(stage => stage.kind === "rejected"), [stagedGroups]);
   const progressGroups = useMemo(() => stagedGroups.filter(stage => stage.kind === "progress"), [stagedGroups]);
 
+  /**
+   * 2026-10-22 사용자 확정
+   * - 판매중지: 링크가 죽어서 같은 노출상품ID를 쓰는 옵션 전부가 재등록 대상 → 그 옵션을 모두(제품DB·실적저조 등) 한 묶음으로.
+   * - 실적저조·그 외 재등록: 링크는 살아 있고 다른 옵션은 정상 입고 중이라 그 탭의 SKU만.
+   *   단, 같은 노출상품ID(또는 같은 모델)가 판매중지에도 있으면 판매중지 쪽에 모두 나오고 여기서는 뺀다.
+   */
+  const tabGroups = useMemo(() => {
+    const stoppedIds = new Set(items.filter(isStoppedItem).map(exposedProductIdOf).filter(Boolean));
+    const stoppedSkus = new Set(items.filter(isStoppedItem).map(item => clean(item.skuId)).filter(Boolean));
+    const inStopped = (item: ProductCatalogItem) => isStoppedItem(item) || stoppedSkus.has(clean(item.skuId))
+      || (Boolean(exposedProductIdOf(item)) && stoppedIds.has(exposedProductIdOf(item)));
+    const toGroups = (list: ProductCatalogItem[]) => {
+      const map = new Map<string, ProductCatalogItem[]>();
+      for (const item of list) {
+        const key = namedModelGroupKey(item) || `sku:${item.skuId}`;
+        map.set(key, [...(map.get(key) || []), item]);
+      }
+      return [...map].map(([key, groupItems]) => ({
+        key, modelName: groupItems[0]?.modelName || "모델명 없음",
+        productName: groupItems[0] ? resolveDisplayNameAndOption(groupItems[0].productName || "", groupItems[0].optionLabel).name : "상품명 없음",
+        items: groupItems, topInbound: Math.max(0, ...groupItems.map(item => Number(item.cumulativeInbound) || 0)),
+      } satisfies ModelGroup));
+    };
+    const tabOf = (item: ProductCatalogItem) => sourceTabOf(item) === TAB_LOW_LEGACY ? TAB_LOW : sourceTabOf(item);
+    return {
+      stopped: toGroups(items.filter(inStopped)),
+      low: toGroups(items.filter(item => tabOf(item) === TAB_LOW && !inStopped(item))),
+      other: toGroups(items.filter(item => tabOf(item) === TAB_OTHER && !inStopped(item))),
+    };
+  }, [items]);
+
   const summary = useMemo(() => {
     const dbItems = items.filter(item => !sourceTabOf(item));
     const countModels = (keys: Set<string>) => [...keys].filter(key => !excludedModelKeys.has(key) && !stagedKeys.has(key)).length;
@@ -640,15 +680,22 @@ export default function ProductCatalogPage() {
     issued: dbItems.filter(item => item.skuId).length,
     pending: dbItems.filter(item => !item.skuId).length,
     models: new Set(dbItems.map(item => item.modelName).filter(Boolean)).size,
-    otherModels: countModels(otherModelKeys),
-    reregisterModels: [...reregisterModelKeys].filter(key => !excludedModelKeys.has(key) && !stagedKeys.has(key)).length,
+    otherModels: tabGroups.other.filter(group => !excludedModelKeys.has(group.key) && !stagedKeys.has(group.key)).length,
+    reregisterModels: tabGroups.low.filter(group => !excludedModelKeys.has(group.key) && !stagedKeys.has(group.key)).length,
     reregisterCandidates: items.filter(item => isReregistrationTarget(item)).length,
     rocketPending: dbItems.filter(item => !isRocketRegistered(item)).length,
-    stoppedModels: countModels(stoppedModelKeys),
+    stoppedModels: tabGroups.stopped.filter(group => !excludedModelKeys.has(group.key) && !stagedKeys.has(group.key)).length,
   };
-  }, [items, isReregistrationTarget, reregisterModelKeys, excludedModelKeys, stagedKeys, otherModelKeys, stoppedModelKeys]);
+  }, [items, isReregistrationTarget, excludedModelKeys, stagedKeys, tabGroups]);
 
   const reregistrationGroups = useMemo(() => {
+    if (status === "reregister" || status === "other-rereg" || status === "stopped") {
+      const needle = clean(query);
+      const list = status === "stopped" ? tabGroups.stopped : status === "other-rereg" ? tabGroups.other : tabGroups.low;
+      return list.filter(group => !excludedModelKeys.has(group.key) && !stagedKeys.has(group.key)
+        && (!needle || group.items.some(item => [item.modelName, item.modelSku, item.skuId, item.barcode, item.productName, item.optionLabel].map(clean).join(" ").includes(needle))))
+        .sort((a, b) => b.topInbound - a.topInbound);
+    }
     const matchedKeys = new Set<string>();
     for (const item of filteredItems) {
       const key = namedModelGroupKey(item);
@@ -658,7 +705,7 @@ export default function ProductCatalogPage() {
       // 같은 입고량(로켓 미등록은 모두 0)이면 쿠팡 발주가능상태 "정상"인 모델을 먼저 보여준다.
       .sort((a, b) => b.topInbound - a.topInbound
         || Number(b.items.some(item => item.orderableStatus === "정상")) - Number(a.items.some(item => item.orderableStatus === "정상")));
-  }, [filteredItems, allModelGroups, stagedKeys]);
+  }, [filteredItems, allModelGroups, stagedKeys, status, query, tabGroups, excludedModelKeys]);
   const unnamedItems = useMemo(() => filteredItems.filter(item => !namedModelGroupKey(item)), [filteredItems]);
   const [groupLimit, setGroupLimit] = useState(100);
   useEffect(() => { setGroupLimit(100); }, [status, query]);

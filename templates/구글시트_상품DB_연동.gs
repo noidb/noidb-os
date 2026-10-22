@@ -2663,7 +2663,10 @@ function reregistrationEligibility_(db, model) {
   // 근거로 계속 개별 검증한다.
   // 2026-10-22: 판매중지·실적저조 옛 SKU는 제품DB가 아니라 판매중지SKU·실적저조SKU·그 외 재등록SKU 탭에 있다.
   // 그 탭에 같은 모델 줄이 있으면 재등록 대상이다(저장할 때 그 줄을 제품DB로 가져와 기존처럼 덮어쓴다).
-  const stopped = items.some(item => item.tab || String(item.values[columns['현재상태']] || '').trim() === '판매중지');
+  // 실적저조·그 외 재등록 줄은 링크가 살아 있고 같은 모델의 다른 옵션은 정상이라, 그 줄만으로는 모델 전체를 덮어쓰지 않는다
+  // (제품DB에 살아 있는 옵션이 하나도 없을 때만 전체 재등록). 판매중지SKU 탭 줄은 링크가 죽은 것이라 모델 전체가 대상이다.
+  const stopped = items.some(item => (item.tab && item.tab.name === '판매중지SKU') || String(item.values[columns['현재상태']] || '').trim() === '판매중지')
+    || (items.length > 0 && items.every(item => item.tab));
   const retry = items.every(item => String(item.values[columns['현재상태']] || '').trim() === '재등록파일생성' && emptyIds(item.values));
   const keys = items.map(item => String(item.values[columns['모델SKU']] || '').trim().toUpperCase());
   const uniqueOptions = keys.every((key, index) => key && keys.indexOf(key) === index);
