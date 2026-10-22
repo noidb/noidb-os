@@ -47,7 +47,7 @@ export function lastClearedBatch(cleared: Record<string, string> = {}): { at: st
   return { at, keys: Object.entries(cleared).filter(([, value]) => value === at).map(([key]) => key) };
 }
 
-export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier">[], options: {
+export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier"> & { storageTab?: boolean })[], options: {
   releaseFromScreen?: Record<string, { productName: string; at?: string; manual?: boolean }>;
   cleared?: StatusListCleared;
   memoReleaseSkuIds?: readonly string[];
@@ -63,7 +63,12 @@ export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId
   for (const item of items) {
     if (!item.skuId) continue;
     const orderable = item.orderableStatus.trim();
-    if (isDiscontinueStatus(item.currentStatus) && orderable === "정상") {
+    // 2026-10-22 사용자 확정: 비관리SKU 탭 줄은 '재고있음'(→ 제품DB로 옮길 것)이 아니면 모두 단종할 상품이다.
+    // 쿠팡 발주가능상태가 아직 '정상'이면 현재상태가 무엇이든(비관리(중복등록)·재등록완료·빈칸 등) 단종 대상이고,
+    // 예전에 목록을 비웠어도 쿠팡이 아직 정상이면 다시 보인다(서류가 안 들어간 것이므로).
+    if (item.storageTab && orderable === "정상" && !squash(item.currentStatus).includes("재고있음")) {
+      discontinue.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable, reason: "비관리SKU", key: itemKey(item, "비관리SKU") });
+    } else if (isDiscontinueStatus(item.currentStatus) && orderable === "정상") {
       discontinue.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable, reason: "제품DB", key: itemKey(item) });
     } else if (!isDiscontinueStatus(item.currentStatus) && isReleaseStatus(item.currentStatus) && orderable !== "정상") {
       release.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable || "미확인", reason: "제품DB", key: itemKey(item) });
@@ -92,6 +97,7 @@ export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId
     }
     // 2026-10-22: 직접 추가한 SKU, 제품DB로 이미 목록에 있던 SKU를 다시 고른 경우도 비운 뒤 새로 고른 것으로 본다.
     const pickedAgain = (item: StatusListItem) => {
+      if (list === discontinue && item.reason === "비관리SKU") return true;
       const at = list === release ? options.releaseFromScreen?.[item.skuId]?.at : undefined;
       return Boolean(at && at > (doneAt.get(item.skuId) || ""));
     };

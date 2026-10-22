@@ -2,7 +2,7 @@ import { fetchSheetRows, fetchSpreadsheetTabs } from "./google-sheets";
 import { pickStorageTabTitle } from "./warehouse-recheck-cleanup";
 import type { ProductCatalogItem } from "./product-catalog";
 
-type StatusSourceItem = Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier">;
+type StatusSourceItem = Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier"> & { /** 비관리SKU 탭에서 온 줄 */ storageTab?: boolean };
 const squash = (value: unknown) => String(value ?? "").replace(/\s+/g, "");
 
 /**
@@ -33,7 +33,7 @@ export async function loadStatusSourceItems(catalogItems: readonly ProductCatalo
     if (!/^\d{1,20}$/.test(skuId) || known.has(skuId)) continue;
     known.add(skuId);
     const get = (index: number) => index >= 0 ? String(row[index] ?? "").trim() : "";
-    storage.push({ skuId, currentStatus: get(idx.status), orderableStatus: get(idx.orderable), productName: get(idx.name), optionLabel: get(idx.option), reregistrationTier: get(idx.tier) });
+    storage.push({ skuId, currentStatus: get(idx.status), orderableStatus: get(idx.orderable), productName: get(idx.name), optionLabel: get(idx.option), reregistrationTier: get(idx.tier), storageTab: true });
   }
   return { items: [...catalogItems, ...storage], storageLoaded: true };
 }

@@ -55,3 +55,14 @@ console.log("PASS discontinue/release lists from 제품DB, memo merge, dedupe, c
   assert.deepEqual(r.discontinue.map(x => x.skuId), ["3"]);
   console.log("contains rule OK");
 }
+
+// 2026-10-22 비관리SKU: 재고있음이 아니고 쿠팡 정상이면 현재상태와 상관없이 단종 대상, 예전에 비웠어도 다시 보임
+{
+  const s = (skuId: string, currentStatus: string, orderableStatus: string) => ({ ...(item(skuId, currentStatus, orderableStatus) as object), storageTab: true }) as never;
+  const rows = [s("1", "비관리(중복등록)", "정상"), s("2", "재고있음", "정상"), s("3", "거래처단종", "불가"), s("4", "", "정상"), s("5", "재등록완료", "정상")];
+  const first = buildStatusLists(rows, { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [] });
+  assert.deepEqual(first.discontinue.map(x => x.skuId), ["1", "4", "5"]);
+  const cleared = buildStatusLists(rows, { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [], cleared: { discontinue: Object.fromEntries(first.discontinue.map(x => [x.key, "2026-10-20"])) } });
+  assert.deepEqual(cleared.discontinue.map(x => x.skuId), ["1", "4", "5"], "쿠팡이 아직 정상이면 다시 보임");
+  console.log("비관리SKU 정상 → 단종 대상 OK");
+}
