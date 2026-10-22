@@ -18,7 +18,7 @@ export const MEMO_RELEASE_SKU_IDS: readonly string[] = [
 /** 사용자가 단종 대상이라고 알려 준 SKU(2026-10-08) — 판매중지(제품링크 중단)·재등록완료된 옛 SKU라 발주가능상태가 불가여야 한다. */
 export const MEMO_DISCONTINUE_SKU_IDS: readonly string[] = ["39127489", "38248703", "36789607"];
 
-export interface StatusListItem { skuId: string; productName: string; currentStatus: string; orderableStatus: string; reason: string; key: string; /** 옮겨 오기 전 탭(비관리SKU '원본 위치') */ origin?: string }
+export interface StatusListItem { skuId: string; productName: string; currentStatus: string; orderableStatus: string; reason: string; key: string; /** 옮겨 오기 전 탭(비관리SKU '원본 위치') */ origin?: string; /** 옮긴 이유(비관리SKU 보관사유 등) */ moveReason?: string }
 export interface StatusLists { discontinue: StatusListItem[]; release: StatusListItem[]; /** 재등록으로 바뀐 옛 SKU라서 뺀 SKU */ reregisteredExcluded: string[] }
 /** '목록 비우기'로 처리완료한 항목. 키는 SKU·현재상태·발주가능상태 묶음이라 상태가 바뀌면 다시 나타난다. */
 export type StatusListCleared = { discontinue?: Record<string, string>; release?: Record<string, string> };
@@ -48,7 +48,7 @@ export function lastClearedBatch(cleared: Record<string, string> = {}): { at: st
   return { at, keys: Object.entries(cleared).filter(([, value]) => value === at).map(([key]) => key) };
 }
 
-export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier"> & { storageTab?: boolean; sourceTab?: string; origin?: string; productLink?: string })[], options: {
+export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier"> & { storageTab?: boolean; sourceTab?: string; origin?: string; productLink?: string; moveReason?: string })[], options: {
   releaseFromScreen?: Record<string, { productName: string; at?: string; manual?: boolean }>;
   cleared?: StatusListCleared;
   memoReleaseSkuIds?: readonly string[];
@@ -68,7 +68,7 @@ export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuI
     // 쿠팡 발주가능상태가 아직 '정상'이면 현재상태가 무엇이든(비관리(중복등록)·재등록완료·빈칸 등) 단종 대상이고,
     // 예전에 목록을 비웠어도 쿠팡이 아직 정상이면 다시 보인다(서류가 안 들어간 것이므로).
     if (item.storageTab && orderable === "정상" && !squash(item.currentStatus).includes("재고있음")) {
-      discontinue.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable, reason: "비관리SKU", key: itemKey(item, "비관리SKU"), origin: item.origin });
+      discontinue.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable, reason: "비관리SKU", key: itemKey(item, "비관리SKU"), origin: item.origin, moveReason: item.moveReason });
     } else if (item.sourceTab && orderable === "정상") {
       // 2026-10-23: 판매중지SKU·실적저조SKU·그 외 재등록SKU(제품DB로 갈 수 없는 옛 SKU)는 현재상태와 상관없이 쿠팡이 '정상'이면 단종 대상.
       discontinue.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable, reason: item.sourceTab, key: itemKey(item, item.sourceTab), origin: item.sourceTab === "판매중지SKU" ? "제품DB" : undefined });

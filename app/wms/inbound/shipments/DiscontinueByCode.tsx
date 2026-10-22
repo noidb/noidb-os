@@ -1,31 +1,16 @@
 "use client";
 
 import { discontinueMarkMessage } from "@/lib/wms/discontinue-mark-message";
+import { autoSourceLabel } from "@/lib/wms/discontinue-source-label";
 import { useEffect, useRef, useState } from "react";
 import styles from "./shipments.module.css";
 
 type Match = { skuId: string; productName: string; barcode: string; sheetName: string };
 type Lookup = { code: string; matches: Match[] };
-export type DiscontinueAutoRow = { skuId: string; productName: string; orderableStatus: string; key: string; reason?: string; currentStatus?: string; origin?: string };
+export type DiscontinueAutoRow = { skuId: string; productName: string; orderableStatus: string; key: string; reason?: string; currentStatus?: string; origin?: string; moveReason?: string };
 
-/**
- * 2026-10-23 사용자 요청: 목록에 왜 떴는지 경로가 보이게 — 지금 있는 탭과 어디서 옮겨 왔는지.
- * 예) 제품DB → 비관리SKU · 거래처단종 / 제품DB → 판매중지SKU / 제품DB · 단종 (정리 때 비관리SKU로)
- */
-function autoSourceLabel(row: { reason?: string; currentStatus?: string; origin?: string }): string {
-  const reason = String(row.reason || "제품DB");
-  const status = String(row.currentStatus || "").trim();
-  const withStatus = (text: string) => status ? `${text} · ${status}` : text;
-  if (reason === "제품DB") {
-    const next = /판매중지/.test(status) ? " (정리 때 판매중지SKU로)" : /단종|비관리/.test(status) && !/해제/.test(status) ? " (정리 때 비관리SKU로)" : "";
-    return withStatus("제품DB") + next;
-  }
-  if (["비관리SKU", "판매중지SKU", "실적저조SKU", "그 외 재등록SKU"].includes(reason)) return withStatus(row.origin && row.origin !== reason ? `${row.origin} → ${reason}` : reason);
-  if (reason === "재등록완료 옛 SKU") return "실적저조SKU·교체이력 · 재등록완료 옛 SKU";
-  return reason;
-}
 type LatestOrderable = { fileMtime: string; orderable: Record<string, string> } | null;
-type Row = { skuId: string; productName: string; orderable: string; auto: boolean; autoKey: string; codes: string[]; sheetName: string; autoLabel?: string };
+type Row = { skuId: string; productName: string; orderable: string; auto: boolean; autoKey: string; codes: string[]; sheetName: string; autoLabel?: string; autoTitle?: string };
 
 /**
  * 단종 신청 목록 (2026-10-20 사용자 요청으로 하나로 합침).
@@ -162,7 +147,7 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
 
   const orderableOf = (skuId: string, fallback: string) => latestOrderable ? latestOrderable.orderable[skuId] || "파일에 없음" : fallback || "미확인";
   const rows = new Map<string, Row>();
-  for (const row of autoRows) rows.set(row.skuId, { skuId: row.skuId, productName: row.productName, orderable: orderableOf(row.skuId, row.orderableStatus), auto: true, autoKey: row.key, codes: [], sheetName: "", autoLabel: autoSourceLabel(row) });
+  for (const row of autoRows) rows.set(row.skuId, { skuId: row.skuId, productName: row.productName, orderable: orderableOf(row.skuId, row.orderableStatus), auto: true, autoKey: row.key, codes: [], sheetName: "", autoLabel: autoSourceLabel(row), autoTitle: row.moveReason || "" });
   for (const entry of lookup || []) for (const match of entry.matches) {
     const existing = rows.get(match.skuId);
     if (existing) existing.codes.push(entry.code);
@@ -264,7 +249,7 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
                 return (
                   <tr key={row.skuId}>
                     <td>{row.skuId}</td>
-                    <td>{row.productName} <span style={{ fontSize: "12px", color: "#8a8379", whiteSpace: "nowrap" }}>({source})</span>
+                    <td>{row.productName} <span style={{ fontSize: "12px", color: "#8a8379", whiteSpace: "nowrap" }} title={row.autoTitle || undefined}>({source})</span>
                       {sentBefore[row.skuId] && (sentBefore[row.skuId].first < today || sentBefore[row.skuId].days > 1) && (
                         <span style={{ display: "inline-block", marginLeft: "4px", fontSize: "11px", fontWeight: 800, color: "#7a3b2e", background: "#f2dfd8", borderRadius: "8px", padding: "1px 6px", whiteSpace: "nowrap" }} title="예전에 사이트에서 단종으로 보낸 기록이 있어요">
                           이미 단종 보냄 · 처음 {sentBefore[row.skuId].first.slice(5).replace("-", ".")}{sentBefore[row.skuId].days > 1 ? ` · ${sentBefore[row.skuId].days}번` : ""}
