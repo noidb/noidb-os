@@ -200,7 +200,7 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
     if (!window.confirm(`단종 신청 목록 ${list.length}건을 비웁니다.\n쿠팡에 단종 신청을 마친 뒤에 눌러 주세요.`)) return;
     setBusy("clear");
     try {
-      // 2026-10-22: 목록을 비우기 전에, 목록의 모든 SKU를 '거래처단종'으로 적는다(제품DB·비관리SKU·재등록SKU 어디에 있든).
+      // 2026-10-22: 목록을 비우기 전에, 목록의 모든 SKU를 '거래처단종'으로 적는다(제품DB·비관리SKU·실적저조SKU 어디에 있든).
       // 예전에는 목록만 비워서 단종으로 보낸 SKU가 '과재고' 그대로 남는 일이 있었다.
       let markNote = "";
       const allCodes = [...new Set([...codes, ...autoRows.map(row => row.skuId)])];

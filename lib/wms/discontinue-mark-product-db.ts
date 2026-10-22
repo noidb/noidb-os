@@ -1,7 +1,7 @@
 import { fetchSheetRows, fetchSpreadsheetTabs, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
 import { pickStorageTabTitle } from "./warehouse-recheck-cleanup";
 import { logDiscontinue } from "./discontinue-log";
-const REREGISTRATION_TAB = "재등록SKU";
+import { pickLowPerformanceTab } from "./retired-sku-tabs";
 import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
 import { normalizeSkuId } from "./sku-normalize";
 import type { DiscontinueMarkResult } from "./discontinue-mark-message";
@@ -56,7 +56,7 @@ export async function markDiscontinuedInProductDb(skuIds: readonly string[], pat
   try {
     const tabs = await fetchSpreadsheetTabs().catch(() => []);
     const storageTitle = pickStorageTabTitle(tabs.map(tab => tab.title));
-    const targets = [PRODUCT_DB_SHEET_NAME, storageTitle, tabs.some(tab => tab.title === REREGISTRATION_TAB) ? REREGISTRATION_TAB : null].filter((title): title is string => Boolean(title));
+    const targets = [PRODUCT_DB_SHEET_NAME, storageTitle, pickLowPerformanceTab(tabs.map(tab => tab.title))].filter((title): title is string => Boolean(title));
     let remaining = [...new Set(skuIds.map(id => normalizeSkuId(id)).filter(Boolean))];
     const found = new Set<string>();
     let marked = 0;

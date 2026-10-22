@@ -119,8 +119,14 @@ function isSalesStopped(item: ProductCatalogItem): boolean {
   return String(item.currentStatus || "").includes("판매중지");
 }
 
-/** 모델 묶음으로 보여 주는 목록(판매저조 단종 SKU·판매중지 상품). */
-const MODEL_LIST_STATUSES = new Set(["reregister", "stopped"]);
+/** 2026-10-22: 옛 SKU 탭(API가 붙여 줌). 제품DB 줄이면 "". */
+function sourceTabOf(item: ProductCatalogItem): string {
+  return String((item as ProductCatalogItem & { sourceTab?: string }).sourceTab || "");
+}
+const TAB_LOW = "실적저조SKU", TAB_LOW_LEGACY = "재등록SKU", TAB_OTHER = "그 외 재등록SKU", TAB_STOPPED = "판매중지SKU";
+
+/** 모델 묶음으로 보여 주는 목록(실적저조·그 외 재등록·판매중지 탭). */
+const MODEL_LIST_STATUSES = new Set(["reregister", "other-rereg", "stopped"]);
 
 function isRocketRegistered(item: ProductCatalogItem): boolean {
   return /^R/i.test(String(item.barcode || "").trim());
@@ -415,6 +421,19 @@ export default function ProductCatalogPage() {
     return { reregisterModelKeys: target, excludedModelKeys: excluded };
   }, [items, manualExclusions]);
 
+  // 2026-10-22: 탭별 모델 묶음(같은 모델의 제품DB 옵션도 함께 보여 모델 전체를 재등록한다).
+  const { otherModelKeys, stoppedModelKeys } = useMemo(() => {
+    const other = new Set<string>(), stopped = new Set<string>();
+    for (const item of items) {
+      const key = namedModelGroupKey(item);
+      if (!key) continue;
+      const tab = sourceTabOf(item);
+      if (tab === TAB_OTHER) other.add(key);
+      if (tab === TAB_STOPPED || (!tab && isSalesStopped(item))) stopped.add(key);
+    }
+    return { otherModelKeys: other, stoppedModelKeys: stopped };
+  }, [items]);
+
   const isReregistrationTarget = useCallback((item: ProductCatalogItem) => {
     const key = namedModelGroupKey(item);
     if (!manualExclusions || (key && excludedModelKeys.has(key))) return false;
@@ -542,18 +561,21 @@ export default function ProductCatalogPage() {
       const searchable = [item.modelName, item.modelSku, item.skuId, item.barcode, item.productName, item.optionLabel].map(clean).join(" ");
       const matchesQuery = !needle || searchable.includes(needle);
       const reregistration = isReregistrationTarget(item);
-      const rocketPending = !isRocketRegistered(item);
+      const inDb = !sourceTabOf(item);
+      const rocketPending = inDb && !isRocketRegistered(item);
+      const modelKey = namedModelGroupKey(item) || "";
       const matchesStatus = status === "all"
-        || (status === "pending" && !item.skuId)
-        || (status === "issued" && Boolean(item.skuId))
+        || (status === "pending" && inDb && !item.skuId)
+        || (status === "issued" && inDb && Boolean(item.skuId))
         || (status === "wims" && Boolean(wims))
         || (status === "reregister" && reregistration)
-        || (status === "stopped" && isSalesStopped(item) && !excludedModelKeys.has(namedModelGroupKey(item) || ""))
+        || (status === "other-rereg" && otherModelKeys.has(modelKey) && !excludedModelKeys.has(modelKey))
+        || (status === "stopped" && stoppedModelKeys.has(modelKey) && !excludedModelKeys.has(modelKey))
         || (status === "rocket-pending" && rocketPending);
       return matchesQuery && matchesStatus;
     }).sort((a, b) => (Number(b.cumulativeInbound) || 0) - (Number(a.cumulativeInbound) || 0)
       || Number(isReregistrationTarget(b)) - Number(isReregistrationTarget(a)));
-  }, [items, rocketItems, query, snapshot, status, isReregistrationTarget, excludedModelKeys]);
+  }, [items, rocketItems, query, snapshot, status, isReregistrationTarget, excludedModelKeys, otherModelKeys, stoppedModelKeys]);
 
   /** 모델명 기준 전체 모델 묶음(검색·상태 필터와 무관). */
   const allModelGroups = useMemo(() => {
@@ -610,16 +632,21 @@ export default function ProductCatalogPage() {
   const rejectedGroups = useMemo(() => stagedGroups.filter(stage => stage.kind === "rejected"), [stagedGroups]);
   const progressGroups = useMemo(() => stagedGroups.filter(stage => stage.kind === "progress"), [stagedGroups]);
 
-  const summary = useMemo(() => ({
-    total: items.length,
-    issued: items.filter(item => item.skuId).length,
-    pending: items.filter(item => !item.skuId).length,
-    models: new Set(items.map(item => item.modelName).filter(Boolean)).size,
+  const summary = useMemo(() => {
+    const dbItems = items.filter(item => !sourceTabOf(item));
+    const countModels = (keys: Set<string>) => [...keys].filter(key => !excludedModelKeys.has(key) && !stagedKeys.has(key)).length;
+    return {
+    total: dbItems.length,
+    issued: dbItems.filter(item => item.skuId).length,
+    pending: dbItems.filter(item => !item.skuId).length,
+    models: new Set(dbItems.map(item => item.modelName).filter(Boolean)).size,
+    otherModels: countModels(otherModelKeys),
     reregisterModels: [...reregisterModelKeys].filter(key => !excludedModelKeys.has(key) && !stagedKeys.has(key)).length,
     reregisterCandidates: items.filter(item => isReregistrationTarget(item)).length,
-    rocketPending: items.filter(item => !isRocketRegistered(item)).length,
-    stoppedModels: new Set(items.filter(isSalesStopped).map(item => namedModelGroupKey(item)).filter((key): key is string => Boolean(key) && !excludedModelKeys.has(key!) && !stagedKeys.has(key!))).size,
-  }), [items, isReregistrationTarget, reregisterModelKeys, excludedModelKeys, stagedKeys]);
+    rocketPending: dbItems.filter(item => !isRocketRegistered(item)).length,
+    stoppedModels: countModels(stoppedModelKeys),
+  };
+  }, [items, isReregistrationTarget, reregisterModelKeys, excludedModelKeys, stagedKeys, otherModelKeys, stoppedModelKeys]);
 
   const reregistrationGroups = useMemo(() => {
     const matchedKeys = new Set<string>();
@@ -1082,7 +1109,7 @@ export default function ProductCatalogPage() {
                     const sku = isRocketPendingItem(item) ? "" : item.modelSku || "미확인";
                     return <div key={`${item.skuId}|${item.modelSku}|${item.optionLabel}|${itemIndex}`} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px 12px", color: wmsColors.muted }}>
                       {itemLink ? <a href={itemLink} target="_blank" rel="noreferrer" title="제품링크 열기" style={{ color: wmsColors.ink, fontWeight: 800, whiteSpace: "nowrap", textDecoration: "underline", textUnderlineOffset: 2 }}>{sku}</a> : <b style={{ color: wmsColors.ink, whiteSpace: "nowrap" }}>{sku}</b>}
-                      {isRocketPendingItem(item) ? <>{field("Wing 옵션ID", item.skuId.replace(/^wing:/, ""))}{field("옵션", item.optionLabel || "미확인")}{field("Wing 판매상태", item.orderableStatus || "미확인")}</> : <>{field("SKU ID", item.skuId || "미확인")}{field("바코드", item.barcode || "미확인")}{field("옵션", item.optionLabel || "미확인")}{field("누적입고", item.cumulativeInbound ? `${(Number(item.cumulativeInbound) || 0).toLocaleString()}개` : "미확인")}{field("발주가능상태", item.orderableStatus || "미확인")}{field("DB 상태", item.currentStatus || "미입력")}</>}{item.skuId && !isRocketPendingItem(item) && <Link href={`/wms/products/${encodeURIComponent(item.skuId)}`} style={{ color: wmsColors.slate, fontWeight: 700, whiteSpace: "nowrap", textDecoration: "underline", textUnderlineOffset: 2 }}>상세 보기</Link>}
+                      {isRocketPendingItem(item) ? <>{field("Wing 옵션ID", item.skuId.replace(/^wing:/, ""))}{field("옵션", item.optionLabel || "미확인")}{field("Wing 판매상태", item.orderableStatus || "미확인")}</> : <>{field("SKU ID", item.skuId || "미확인")}{field("바코드", item.barcode || "미확인")}{field("옵션", item.optionLabel || "미확인")}{field("누적입고", item.cumulativeInbound ? `${(Number(item.cumulativeInbound) || 0).toLocaleString()}개` : "미확인")}{field("발주가능상태", item.orderableStatus || "미확인")}{field("DB 상태", item.currentStatus || "미입력")}{sourceTabOf(item) && field("탭", sourceTabOf(item) === TAB_LOW_LEGACY ? TAB_LOW : sourceTabOf(item))}</>}{item.skuId && !isRocketPendingItem(item) && <Link href={`/wms/products/${encodeURIComponent(item.skuId)}`} style={{ color: wmsColors.slate, fontWeight: 700, whiteSpace: "nowrap", textDecoration: "underline", textUnderlineOffset: 2 }}>상세 보기</Link>}
                     </div>;
                   })}</div>
                   {photos?.error && <div style={{ color: wmsColors.warnText, fontSize: 11, marginTop: 7 }}>{photos.error}</div>}
@@ -1123,8 +1150,8 @@ export default function ProductCatalogPage() {
       </div>
 
       <div style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: 16, marginBottom: 16 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
-          {[["전체 행", summary.total], ["판매저조 단종 모델", summary.reregisterModels], ["판매중지 모델", summary.stoppedModels], ["로켓 등록 증빙 확인", summary.rocketPending]].map(([label, value]) => (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
+          {[["제품DB 행", summary.total], ["실적저조 모델", summary.reregisterModels], ["그 외 재등록 모델", summary.otherModels], ["판매중지 모델", summary.stoppedModels], ["로켓 등록 증빙 확인", summary.rocketPending]].map(([label, value]) => (
             <div key={String(label)} style={{ background: wmsColors.surface, borderRadius: 10, padding: "10px 12px" }}><div style={{ color: wmsColors.muted, fontSize: 11 }}>{label}</div><strong style={{ color: wmsColors.ink, fontSize: 20 }}>{value}</strong></div>
           ))}
         </div>
@@ -1133,7 +1160,7 @@ export default function ProductCatalogPage() {
           {query && <button type="button" onClick={() => { setQuery(""); try { window.sessionStorage.setItem(VIEW_KEY, JSON.stringify({ status, query: "" })); } catch {} }} title="검색어를 지웁니다." style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>검색 초기화</button>}
           <button type="button" onClick={() => void loadCatalog()} disabled={loading} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "새로 읽는 중…" : "제품DB 새로고침"}</button>
           <select value={status} onChange={event => setStatus(event.target.value)} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 10px", background: "#fff" }}>
-            <option value="all">전체 상태</option><option value="reregister">판매저조 단종 SKU (재등록SKU 탭)</option><option value="stopped">제품DB 판매중지 상품</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="rocket-new">Wing 등록검토 (Wing에만 있음)</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
+            <option value="all">전체 상태</option><option value="reregister">실적저조 SKU (실적저조SKU 탭)</option><option value="other-rereg">그 외 재등록 SKU (그 외 재등록SKU 탭)</option><option value="stopped">판매중지 SKU (판매중지SKU 탭)</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="rocket-new">Wing 등록검토 (Wing에만 있음)</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
           </select>
         </div>
       </div>
@@ -1178,7 +1205,7 @@ export default function ProductCatalogPage() {
       {loading && !items.length ? <p style={{ color: wmsColors.muted }}>상품 연결 대장을 읽는 중입니다.</p> : (
         <div style={{ display: "grid", gap: 10 }}>
           {(MODEL_LIST_STATUSES.has(status) || reregistrationGroups.length > 0) && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 2 }}>
-            <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>{status === "reregister" ? "판매저조 단종 SKU · 재등록 작업 묶음" : status === "stopped" ? "제품DB 판매중지 상품" : status === "rocket-new" ? "Wing 등록검토 · Wing에만 있는 상품" : "모델별 목록"} · {reregistrationGroups.length}개 모델</div>
+            <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>{status === "reregister" ? "실적저조 SKU · 재등록 작업 묶음" : status === "other-rereg" ? "그 외 재등록 SKU · 재등록 작업 묶음" : status === "stopped" ? "판매중지 SKU · 재등록 작업 묶음" : status === "rocket-new" ? "Wing 등록검토 · Wing에만 있는 상품" : "모델별 목록"} · {reregistrationGroups.length}개 모델</div>
             {status === "rocket-new" && <p style={{ margin: "6px 0 10px", fontSize: 12, color: wmsColors.ink }}>쿠팡 Wing에만 있고 로켓(Supplier Hub)에는 없는 상품입니다. 로켓에 같은 상품이나 같은 모델이 있는 것은 중복 반려를 막으려고 뺐어요. 오래돼 등록하지 않을 상품은 "삭제"로 목록에서 빼세요(쿠팡·Wing 상품은 그대로). 사진검색은 MYBOX 사진 폴더 전체에서 모델명으로 찾아서 처음 한 번은 오래 걸릴 수 있어요.</p>}
             {!manualExclusions && <p style={{ fontSize: 12 }}>재등록 제외 목록을 확인하는 중입니다. 확인 전에는 등록 준비를 할 수 없습니다.</p>}
             {manualExclusions && Object.values(manualExclusions).filter(entry => !query || clean(entry.modelName).includes(clean(query))).length > 0 && <div style={{ margin: "8px 0 12px", padding: 12, border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff" }}>

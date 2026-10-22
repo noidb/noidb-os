@@ -540,7 +540,7 @@ export default function ShipmentReceiptsPage() {
       setReleaseInput([...asRereg, ...asNormal].join("\n"));
       const notes = [
         added.length ? `${added.length}개를 단종해제 대상에 넣었습니다.` : "",
-        asRereg.length ? `재등록 대상(재등록SKU 탭·교체이력·재등록구분)이라 해제가 아니라 신규 재등록할 SKU: ${asRereg.join(", ")}` : "",
+        asRereg.length ? `재등록 대상(실적저조SKU·그 외 재등록SKU·판매중지SKU 탭·교체이력·재등록구분)이라 해제가 아니라 신규 재등록할 SKU: ${asRereg.join(", ")}` : "",
         asNormal.length ? `발주가능상태가 이미 정상이라 해제할 필요가 없는 SKU: ${asNormal.join(", ")}` : "",
       ].filter(Boolean);
       if (added.length) setMessage(notes.join(" "));
@@ -1740,7 +1740,7 @@ export default function ShipmentReceiptsPage() {
                 </h2>
                 <p className={styles.meta}>
                   {section.help} {section.kind === "release" ? "표를 드래그해서 복사하거나, 많으면 엑셀 파일로 받으세요." : "아래 버튼으로 단종신청 엑셀과 공문을 만드세요."}
-                  {section.kind === "release" && payload?.statusLists?.reregisteredExcluded?.length ? ` 재등록 대상 SKU(재등록SKU 탭·판매량저조영구정지 등) ${payload.statusLists.reregisteredExcluded.length}건은 해제가 아니라 신규 재등록 대상이라 뺐습니다.` : ""}
+                  {section.kind === "release" && payload?.statusLists?.reregisteredExcluded?.length ? ` 재등록 대상 SKU(실적저조SKU·그 외 재등록SKU·판매중지SKU 탭 등) ${payload.statusLists.reregisteredExcluded.length}건은 해제가 아니라 신규 재등록 대상이라 뺐습니다.` : ""}
                 </p>
                 {section.rows.length > 0 ? (<>
                 <div className={`${styles.tableWrap} ${styles.copyScroll}`}>

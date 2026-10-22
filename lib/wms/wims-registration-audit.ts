@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { fetchSheetRows } from "./google-sheets";
+import { fetchSheetRows, fetchSpreadsheetTabs } from "./google-sheets";
+import { LEGACY_REREGISTRATION_TAB, pickLowPerformanceTab } from "./retired-sku-tabs";
 import { backupSheetWithinSpreadsheet, fetchExistingSheetRows, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
 import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
 import { collectRetiredSkuIds, fetchSkuReplacementHistory as readReregistrationHistory } from "./sku-retirement";
@@ -392,7 +393,11 @@ export async function applyWimsRejectionDecision(
   return { applied: true, decision, sheetRowNumber, backupSheetName: backup.sheetName };
 }
 
-const REREGISTRATION_SKU_SHEET_NAME = "재등록SKU";
+/** 실적저조SKU 탭(예전 이름 재등록SKU). 탭 이름이 바뀌어도 찾도록 실행할 때 고른다. */
+async function reregistrationSkuSheetName(): Promise<string> {
+  const tabs = await fetchSpreadsheetTabs().catch(() => []);
+  return pickLowPerformanceTab(tabs.map(tab => tab.title)) || LEGACY_REREGISTRATION_TAB;
+}
 
 export interface ReregistrationSkuRestore {
   tabRow: number;
@@ -514,6 +519,7 @@ export async function applyWimsRegistrationAudit(
   const historyRows = await readReregistrationHistory(sheetRows);
   const rechecked = buildWimsRegistrationAuditFromRows(wimsRows, sheetRows, historyRows);
   if (rechecked.dryRunToken !== audit.dryRunToken) throw new Error("제품DB가 백업 중 변경되었습니다. 다시 대조해주세요.");
+  const REREGISTRATION_SKU_SHEET_NAME = await reregistrationSkuSheetName();
   const skuTabRows = await fetchExistingSheetRows(REREGISTRATION_SKU_SHEET_NAME);
   const restores = buildReregistrationSkuRestores(skuTabRows);
   const cellUpdates = buildWimsRegistrationCellUpdates(sheetRows, rechecked, includeReviewing, restores);
@@ -528,7 +534,7 @@ export async function applyWimsRegistrationAudit(
       await updateSheetCells(REREGISTRATION_SKU_SHEET_NAME, skuTabUpdates);
       verifyWrittenRows(skuTabRows, await fetchSheetRows(REREGISTRATION_SKU_SHEET_NAME), skuTabUpdates);
     } catch (error) {
-      throw new Error("제품DB 승인 반영은 완료됐지만 재등록SKU 탭 완료 표시에 실패했습니다: " + (error instanceof Error ? error.message : String(error)));
+      throw new Error("제품DB 승인 반영은 완료됐지만 실적저조SKU 탭 완료 표시에 실패했습니다: " + (error instanceof Error ? error.message : String(error)));
     }
   }
   return { applied: true, audit: rechecked, backupSheetName: backup.sheetName, writtenRowCount: new Set(cellUpdates.map(cell => cell.row)).size, writtenCellCount: cellUpdates.length };

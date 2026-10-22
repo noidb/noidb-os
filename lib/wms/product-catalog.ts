@@ -166,3 +166,18 @@ export async function fetchProductCatalog(options: FetchProductCatalogOptions = 
   const items = rowsToObjects(rows).map(mapCatalogRow).filter(item => options.includePending ? hasCatalogIdentity(item) : item.skuId);
   return { configured: true, items };
 }
+
+/** 사진선택 목록에서 어느 탭의 줄인지(제품DB면 없음). 2026-10-22 옛 SKU 탭 분리. */
+export type CatalogItemWithTab = ProductCatalogItem & { sourceTab?: string };
+
+/**
+ * 옛 SKU 탭(실적저조SKU·그 외 재등록SKU·판매중지SKU)의 줄을 제품DB와 같은 방식으로 읽는다.
+ * 탭 열은 제품DB 열과 같다. 진행상태가 '완료'이거나 새 SKU ID가 적힌 줄(재등록 끝남)은 뺀다.
+ */
+export async function fetchCatalogItemsFromTab(title: string): Promise<CatalogItemWithTab[]> {
+  const rows = await fetchSheetRows(title, { valueRenderOption: "FORMULA" });
+  return rowsToObjects(rows)
+    .filter(row => !String(row["진행상태"] ?? "").includes("완료") && !String(row["새 SKU ID"] ?? "").trim())
+    .map(row => ({ ...mapCatalogRow(row), sourceTab: title }))
+    .filter(hasCatalogIdentity);
+}

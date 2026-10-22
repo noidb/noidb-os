@@ -2661,7 +2661,9 @@ function reregistrationEligibility_(db, model) {
   // 사용할 수 없게 되는 경우가 있으므로, 모델 내 하나라도 판매중지면 전체
   // 모델 옵션을 재등록 대상으로 본다. 옵션 행 자체의 대응은 아래 모델SKU
   // 근거로 계속 개별 검증한다.
-  const stopped = items.some(item => String(item.values[columns['현재상태']] || '').trim() === '판매중지');
+  // 2026-10-22: 판매중지·실적저조 옛 SKU는 제품DB가 아니라 판매중지SKU·실적저조SKU·그 외 재등록SKU 탭에 있다.
+  // 그 탭에 같은 모델 줄이 있으면 재등록 대상이다(저장할 때 그 줄을 제품DB로 가져와 기존처럼 덮어쓴다).
+  const stopped = items.some(item => item.tab || String(item.values[columns['현재상태']] || '').trim() === '판매중지');
   const retry = items.every(item => String(item.values[columns['현재상태']] || '').trim() === '재등록파일생성' && emptyIds(item.values));
   const keys = items.map(item => String(item.values[columns['모델SKU']] || '').trim().toUpperCase());
   const uniqueOptions = keys.every((key, index) => key && keys.indexOf(key) === index);
@@ -2921,12 +2923,17 @@ function registrationCellData_(value) {
 }
 
 function reregisterModel_(ss, db, model, newRows, operationId) {
-  const plan = planReregistration_(db, model, newRows);
+  let plan = planReregistration_(db, model, newRows);
   // Confirm the Sheets service and permission before creating any backup.
   Sheets.Spreadsheets.get(ss.getId(), { fields: 'spreadsheetId' });
   backupProductDbSheet_(ss, db, '동일모델재등록');
+  // 판매중지SKU·실적저조SKU·그 외 재등록SKU 탭에 있던 옛 줄은 백업 뒤 제품DB 맨 아래로 옮긴 다음 기존 방식대로 덮어쓴다.
+  const pulled = plan.items.some(item => item.sheetRow < 0) ? moveReregistrationTabRowsToDb_(ss, db, model) : 0;
   const rechecked = planReregistration_(db, model, newRows);
-  if (JSON.stringify(plan) !== JSON.stringify(rechecked)) throw new Error('제품DB가 확인 중 변경되었습니다. 다시 저장해주세요.');
+  if (pulled) {
+    if (rechecked.items.some(item => item.sheetRow < 0) || rechecked.items.length !== plan.items.length) throw new Error('탭에서 옮긴 옛 줄을 제품DB에서 다시 찾지 못했습니다. 백업과 제품DB를 확인해주세요.');
+    plan = rechecked;
+  } else if (JSON.stringify(plan) !== JSON.stringify(rechecked)) throw new Error('제품DB가 확인 중 변경되었습니다. 다시 저장해주세요.');
   const requests = [];
   const sheetId = db.getSheetId();
   plan.items.forEach(item => item.changes.forEach(change => requests.push({ updateCells: {
@@ -3030,8 +3037,59 @@ function readReregistrationDb_(db, model) {
   const formulas = range.getFormulas();
   const items = values.map((row, index) => ({ sheetRow: index + 2, values: row, formulas: formulas[index] }))
     .filter(item => wanted && String(item.values[columns['모델명/품번']] || '').trim().toLowerCase() === wanted.toLowerCase());
+  readReregistrationTabRows_(db.getParent(), wanted, headers).forEach((row, index) => {
+    items.push({ sheetRow: -(index + 1), values: row.values, formulas: row.formulas, tab: row.tab });
+  });
   return { headers: headers, columns: columns, width: width, items: items,
     casingMismatch: items.some(item => String(item.values[columns['모델명/품번']] || '').trim() !== wanted) };
+}
+
+// 2026-10-22: 제품DB에서 빠진 옛 SKU 탭. 같은 모델 줄은 재등록할 때 제품DB로 다시 가져온다.
+const REREGISTRATION_SOURCE_TABS_ = ['판매중지SKU', '실적저조SKU', '그 외 재등록SKU', '재등록SKU'];
+
+/** 옛 SKU 탭에서 모델명이 같은 줄을 제품DB 열 순서로 맞춰 읽는다(시트는 바꾸지 않음). */
+function readReregistrationTabRows_(ss, model, dbHeaders) {
+  const wanted = String(model || '').trim().toLowerCase();
+  const found = [];
+  if (!wanted || !ss) return found;
+  REREGISTRATION_SOURCE_TABS_.forEach(name => {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet || sheet.getLastRow() < 2) return;
+    const width = sheet.getLastColumn();
+    const headers = sheet.getRange(1, 1, 1, width).getDisplayValues()[0].map(value => String(value || '').trim());
+    const modelCol = headers.indexOf('모델명/품번');
+    if (modelCol < 0) return;
+    const range = sheet.getRange(2, 1, sheet.getLastRow() - 1, width);
+    const values = range.getValues();
+    const formulas = range.getFormulas();
+    values.forEach((row, index) => {
+      if (String(row[modelCol] || '').trim().toLowerCase() !== wanted) return;
+      const at = dbHeaders.map(header => headers.indexOf(header));
+      found.push({ tab: { name: name, row: index + 2 },
+        values: at.map(column => column < 0 ? '' : row[column]),
+        formulas: at.map(column => column < 0 ? '' : formulas[index][column]) });
+    });
+  });
+  return found;
+}
+
+/** 옛 SKU 탭의 같은 모델 줄을 제품DB 맨 아래에 붙이고 탭에서 지운다. 옮긴 줄 수를 돌려준다. */
+function moveReregistrationTabRowsToDb_(ss, db, model) {
+  const width = db.getLastColumn();
+  const dbHeaders = db.getRange(1, 1, 1, width).getDisplayValues()[0].map(value => String(value || '').trim());
+  const rows = readReregistrationTabRows_(ss, model, dbHeaders);
+  if (!rows.length) return 0;
+  const start = db.getLastRow() + 1;
+  ensureSheetSize_(db, start + rows.length - 1, width);
+  db.getRange(start, 1, rows.length, width).setValues(rows.map(row => row.values.map((value, i) => row.formulas[i] || value)));
+  const byTab = {};
+  rows.forEach(row => { (byTab[row.tab.name] = byTab[row.tab.name] || []).push(row.tab.row); });
+  Object.keys(byTab).forEach(name => {
+    const sheet = ss.getSheetByName(name);
+    byTab[name].sort((a, b) => b - a).forEach(row => sheet.deleteRow(row));
+  });
+  SpreadsheetApp.flush();
+  return rows.length;
 }
 
 function isReregistrationPackage_(values, columns) {

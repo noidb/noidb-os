@@ -5,12 +5,12 @@ import { PRODUCT_DB_SHEET_NAME } from "@/lib/wms/product-catalog";
 import { pickStorageTabTitle, planWarehouseRecheckCleanup, RECHECK_TAB, STORAGE_TAB } from "@/lib/wms/warehouse-recheck-cleanup";
 import { mutateWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { collectRetiredSkuIds } from "@/lib/wms/sku-retirement";
+import { LEGACY_REREGISTRATION_TAB, OTHER_REREGISTRATION_TAB, STOPPED_TAB, pickLowPerformanceTab } from "@/lib/wms/retired-sku-tabs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 const headers = { "Cache-Control": "private, no-store" };
-const REREGISTRATION_TAB = "재등록SKU";
 
 async function load() {
   const tabs = await fetchSpreadsheetTabs();
@@ -18,13 +18,19 @@ async function load() {
   const storageTitle = pickStorageTabTitle(tabs.map(tab => tab.title));
   const storageTab = storageTitle ? tabs.find(tab => tab.title === storageTitle) : undefined;
   if (!recheckTab && !storageTab) throw new Error(`'${RECHECK_TAB}'·'${STORAGE_TAB}' 탭을 찾지 못했습니다.`);
+  // 실적저조SKU(예전 이름 재등록SKU)·그 외 재등록SKU·판매중지SKU(2026-10-22 탭 나눔)
+  const REREGISTRATION_TAB = pickLowPerformanceTab(tabs.map(tab => tab.title)) || LEGACY_REREGISTRATION_TAB;
   const reregTab = tabs.find(tab => tab.title === REREGISTRATION_TAB);
-  const [recheck, productDb, storage, rereg, history] = await Promise.all([
+  const otherTab = tabs.find(tab => tab.title === OTHER_REREGISTRATION_TAB);
+  const stoppedTab = tabs.find(tab => tab.title === STOPPED_TAB);
+  const [recheck, productDb, storage, rereg, history, otherRows, stoppedRows] = await Promise.all([
     recheckTab ? fetchSheetRows(RECHECK_TAB, { valueRenderOption: "FORMULA" }) : Promise.resolve([] as string[][]),
     fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" }),
     storageTab ? fetchSheetRows(storageTab.title, { valueRenderOption: "FORMULA" }) : Promise.resolve(null),
     reregTab ? fetchSheetRows(REREGISTRATION_TAB, { valueRenderOption: "FORMULA" }) : Promise.resolve([] as string[][]),
     tabs.some(tab => tab.title === "_SKU교체이력") ? fetchSheetRows("_SKU교체이력") : Promise.resolve([] as string[][]),
+    otherTab ? fetchSheetRows(OTHER_REREGISTRATION_TAB, { valueRenderOption: "FORMULA" }) : Promise.resolve(null),
+    stoppedTab ? fetchSheetRows(STOPPED_TAB, { valueRenderOption: "FORMULA" }) : Promise.resolve(null),
   ]);
   // 재등록으로 교체된 옛 SKU(_SKU교체이력): 재고가 있어도 제품DB로 되돌리지 않는다(2026-10-22 사용자 확정).
   const retiredSkuIds = collectRetiredSkuIds(history);
@@ -33,7 +39,7 @@ async function load() {
   const reregisteredSkuIds = new Set(reregSkuCol < 0 ? [] : rereg.slice(1).map(row => String(row[reregSkuCol] ?? "").trim()).filter(id => /^\d{1,20}$/.test(id)));
   const productDbTab = tabs.find(tab => tab.title === PRODUCT_DB_SHEET_NAME);
   return { recheckTab, storageTab, productDbTab, plan: planWarehouseRecheckCleanup(recheck, productDb, storage, reregisteredSkuIds, (rereg[0] || []).map(value => String(value ?? "")),
-    new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10), reregTab ? rereg : undefined, retiredSkuIds), reregTab };
+    new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10), reregTab ? rereg : undefined, retiredSkuIds, { other: otherRows, stopped: stoppedRows }), reregTab, REREGISTRATION_TAB };
 }
 const summary = (plan: Awaited<ReturnType<typeof load>>["plan"]) => ({ token: plan.token, pending: plan.pending, moves: plan.moves, unknown: plan.unknown, problems: plan.problems });
 
@@ -48,7 +54,7 @@ export async function POST(request: NextRequest) {
   if (!isSameOriginActionRequest(request)) return NextResponse.json({ ok: false, error: "사이트 화면에서 다시 진행해 주세요." }, { status: 403, headers });
   try {
     const body = await request.json() as { token?: unknown };
-    const { recheckTab, storageTab, productDbTab, plan, reregTab } = await load();
+    const { recheckTab, storageTab, productDbTab, plan, reregTab, REREGISTRATION_TAB } = await load();
     if (plan.problems.length) throw new Error(plan.problems.join(" "));
     if (body.token !== plan.token) throw new Error("미리보기 뒤에 구글시트가 바뀌었습니다. 다시 미리보기 후 실행해 주세요.");
     if (!plan.moves.length) throw new Error("옮길 행이 없습니다.");
@@ -68,7 +74,9 @@ export async function POST(request: NextRequest) {
     const backups = plan.deleteRows.length && recheckTab ? [await backupSheetWithinSpreadsheet(RECHECK_TAB)] : [];
     if (plan.appendStorage.length || plan.deleteStorageRows.length) backups.push(await backupSheetWithinSpreadsheet(storageTab!.title));
     if (plan.appendProductDb.length || plan.clearStatusRows.length || plan.deleteProductDbRows.length) backups.push(await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME));
-    if (plan.appendRereg.length && !reregTab) throw new Error("'재등록SKU' 탭을 찾지 못했습니다.");
+    if (plan.appendRereg.length && !reregTab) throw new Error("'실적저조SKU' 탭을 찾지 못했습니다.");
+    if (plan.appendOtherRereg.length) backups.push(await backupSheetWithinSpreadsheet(OTHER_REREGISTRATION_TAB));
+    if (plan.appendStopped.length) backups.push(await backupSheetWithinSpreadsheet(STOPPED_TAB));
     if (plan.appendRereg.length || plan.deleteReregRows.length) backups.push(await backupSheetWithinSpreadsheet(REREGISTRATION_TAB));
     if (plan.deleteProductDbRows.length && !productDbTab) throw new Error("제품DB 탭을 찾지 못했습니다.");
     // 2) 제품DB 기존 행 현재상태 비우기(행 번호가 바뀌기 전에) → 3) 보관·제품DB에서 옮겨 갈 행 지우기 → 4) 붙이기 → 5) 창고재확인에서 지우기
@@ -84,6 +92,8 @@ export async function POST(request: NextRequest) {
     if (plan.deleteReregRows.length && reregTab) await deleteSheetRows(reregTab.sheetId, plan.deleteReregRows);
     // 현재상태에 '재등록'이 들어간 제품DB 행 → 재등록SKU 탭에도 한 줄(2026-10-22)
     if (plan.appendRereg.length) await appendSheetRowsKeepingFormulas(REREGISTRATION_TAB, plan.appendRereg);
+    if (plan.appendOtherRereg.length) await appendSheetRowsKeepingFormulas(OTHER_REREGISTRATION_TAB, plan.appendOtherRereg);
+    if (plan.appendStopped.length) await appendSheetRowsKeepingFormulas(STOPPED_TAB, plan.appendStopped);
     await appendSheetRowsKeepingFormulas(PRODUCT_DB_SHEET_NAME, plan.appendProductDb);
     if (recheckTab) await deleteSheetRows(recheckTab.sheetId, plan.deleteRows);
     // 5) 발주가능상태가 정상이 아닌 제품DB 이동 SKU → 단종해제 대상
@@ -94,7 +104,7 @@ export async function POST(request: NextRequest) {
       for (const move of release) checks[move.skuId] = { decision: "release", productName: move.productName, at };
       workspace.supplyStatusChecks = checks;
     });
-    return NextResponse.json({ ok: true, moved: plan.moves.length, toRereg: plan.appendRereg.length, fromRereg: plan.deleteReregRows.length, toStorage: plan.appendStorage.length, fromStorage: plan.deleteStorageRows.length, fromProductDb: plan.deleteProductDbRows.length, toProductDb: plan.appendProductDb.length + plan.clearStatusRows.length,
+    return NextResponse.json({ ok: true, moved: plan.moves.length, toRereg: plan.appendRereg.length, toOtherRereg: plan.appendOtherRereg.length, toStopped: plan.appendStopped.length, fromRereg: plan.deleteReregRows.length, toStorage: plan.appendStorage.length, fromStorage: plan.deleteStorageRows.length, fromProductDb: plan.deleteProductDbRows.length, toProductDb: plan.appendProductDb.length + plan.clearStatusRows.length,
       release: release.length, unknown: plan.unknown.length, pending: plan.pending, backups: backups.map(item => item.sheetName) }, { headers });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "구글시트 정리를 하지 못했습니다." }, { status: 400, headers });

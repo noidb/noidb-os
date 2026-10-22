@@ -47,7 +47,7 @@ export function lastClearedBatch(cleared: Record<string, string> = {}): { at: st
   return { at, keys: Object.entries(cleared).filter(([, value]) => value === at).map(([key]) => key) };
 }
 
-export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier"> & { storageTab?: boolean })[], options: {
+export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier"> & { storageTab?: boolean; sourceTab?: string })[], options: {
   releaseFromScreen?: Record<string, { productName: string; at?: string; manual?: boolean }>;
   cleared?: StatusListCleared;
   memoReleaseSkuIds?: readonly string[];
@@ -69,7 +69,7 @@ export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuI
     if (item.storageTab && orderable === "정상" && !squash(item.currentStatus).includes("재고있음")) {
       discontinue.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable, reason: "비관리SKU", key: itemKey(item, "비관리SKU") });
     } else if (isDiscontinueStatus(item.currentStatus) && orderable === "정상") {
-      discontinue.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable, reason: "제품DB", key: itemKey(item) });
+      discontinue.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable, reason: item.sourceTab || "제품DB", key: itemKey(item) });
     } else if (!isDiscontinueStatus(item.currentStatus) && isReleaseStatus(item.currentStatus) && orderable !== "정상") {
       release.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable || "미확인", reason: "제품DB", key: itemKey(item) });
     }
