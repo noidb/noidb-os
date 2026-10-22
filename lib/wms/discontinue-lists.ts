@@ -69,6 +69,9 @@ export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuI
     // 예전에 목록을 비웠어도 쿠팡이 아직 정상이면 다시 보인다(서류가 안 들어간 것이므로).
     if (item.storageTab && orderable === "정상" && !squash(item.currentStatus).includes("재고있음")) {
       discontinue.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable, reason: "비관리SKU", key: itemKey(item, "비관리SKU"), origin: item.origin });
+    } else if (item.sourceTab && orderable === "정상") {
+      // 2026-10-23: 판매중지SKU·실적저조SKU·그 외 재등록SKU(제품DB로 갈 수 없는 옛 SKU)는 현재상태와 상관없이 쿠팡이 '정상'이면 단종 대상.
+      discontinue.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable, reason: item.sourceTab, key: itemKey(item, item.sourceTab), origin: item.sourceTab === "판매중지SKU" ? "제품DB" : undefined });
     } else if (isDiscontinueStatus(item.currentStatus) && orderable === "정상") {
       discontinue.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable, reason: item.sourceTab || "제품DB", key: itemKey(item), origin: item.sourceTab ? "제품DB" : undefined });
     } else if (!isDiscontinueStatus(item.currentStatus) && isReleaseStatus(item.currentStatus) && orderable !== "정상") {
@@ -98,7 +101,8 @@ export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuI
     }
     // 2026-10-22: 직접 추가한 SKU, 제품DB로 이미 목록에 있던 SKU를 다시 고른 경우도 비운 뒤 새로 고른 것으로 본다.
     const pickedAgain = (item: StatusListItem) => {
-      if (list === discontinue && item.reason === "비관리SKU") return true;
+      // 옛 SKU 탭(비관리SKU·판매중지SKU·실적저조SKU·그 외 재등록SKU)에 있는데 아직 정상이면 서류가 안 들어간 것 → 다시 보인다.
+      if (list === discontinue && ["비관리SKU", "판매중지SKU", "실적저조SKU", "그 외 재등록SKU"].includes(item.reason)) return true;
       const at = list === release ? options.releaseFromScreen?.[item.skuId]?.at : undefined;
       return Boolean(at && at > (doneAt.get(item.skuId) || ""));
     };

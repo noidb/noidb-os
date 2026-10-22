@@ -20,7 +20,7 @@ function autoSourceLabel(row: { reason?: string; currentStatus?: string; origin?
     const next = /판매중지/.test(status) ? " (정리 때 판매중지SKU로)" : /단종|비관리/.test(status) && !/해제/.test(status) ? " (정리 때 비관리SKU로)" : "";
     return withStatus("제품DB") + next;
   }
-  if (reason === "비관리SKU" || reason === "판매중지SKU") return withStatus(row.origin && row.origin !== reason ? `${row.origin} → ${reason}` : reason);
+  if (["비관리SKU", "판매중지SKU", "실적저조SKU", "그 외 재등록SKU"].includes(reason)) return withStatus(row.origin && row.origin !== reason ? `${row.origin} → ${reason}` : reason);
   if (reason === "재등록완료 옛 SKU") return "실적저조SKU·교체이력 · 재등록완료 옛 SKU";
   return reason;
 }
@@ -241,7 +241,7 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
     <section>
       <h2 className={styles.listTitle}>단종 신청 목록 {list.length > 0 && <span>{list.length}건</span>}</h2>
       <p className={styles.meta}>
-        제품DB·비관리SKU 탭 현재상태가 판매중지·단종·거래처단종·가품중단인데 발주가능상태가 아직 정상인 SKU와, 아래 칸에 직접 넣은 바코드·SKU를 한 표로 보여 줘요. 같은 SKU는 한 번만 들어가요.
+        발주가능상태가 아직 정상인 SKU 중 비관리SKU(재고있음 제외)·판매중지SKU·실적저조SKU·그 외 재등록SKU에 있는 것, 제품DB 현재상태가 판매중지·단종·거래처단종·가품중단인 것, 아래 칸에 직접 넣은 바코드·SKU를 한 표로 보여 줘요. 같은 SKU는 한 번만 들어가요.
       </p>
       {list.length > 0 ? (
         <div className={`${styles.tableWrap} ${styles.copyScroll}`}>

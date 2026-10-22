@@ -97,3 +97,20 @@ console.log("PASS 판매중지SKU 탭 정상 SKU → 단종 대상");
   assert.deepEqual(lists.discontinue.map(item => item.skuId), [], "새 제외 규칙이 단종 대상에 끼어들지 않음");
   console.log("PASS 단종해제 대상: 판매중지·같은 링크·실적저조 목록은 화면에서 골라도 뺌");
 }
+
+// 2026-10-23: 단종 대상 = 옛 SKU 탭(판매중지·실적저조·그 외 재등록·비관리(재고있음 제외))에서 아직 정상인 SKU 전부
+{
+  const base = { optionLabel: "", reregistrationTier: "", productName: "x", orderableStatus: "정상" };
+  const lists = buildStatusLists([
+    { ...base, skuId: "1", currentStatus: "재고있음", sourceTab: "판매중지SKU" },
+    { ...base, skuId: "2", currentStatus: "과재고", sourceTab: "실적저조SKU" },
+    { ...base, skuId: "3", currentStatus: "재등록대상", sourceTab: "그 외 재등록SKU" },
+    { ...base, skuId: "4", currentStatus: "거래처단종", storageTab: true },
+    { ...base, skuId: "5", currentStatus: "재고있음", storageTab: true },
+    { ...base, skuId: "6", currentStatus: "과재고" },
+    { ...base, skuId: "7", currentStatus: "단종" },
+    { ...base, skuId: "8", currentStatus: "과재고", sourceTab: "실적저조SKU", orderableStatus: "일시중단" },
+  ], { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [], cleared: { discontinue: { [JSON.stringify(["2", "과재고", "정상", "실적저조SKU"])]: "2026-10-22" } } });
+  assert.deepEqual(lists.discontinue.map(item => [item.skuId, item.reason]), [["1", "판매중지SKU"], ["2", "실적저조SKU"], ["3", "그 외 재등록SKU"], ["4", "비관리SKU"], ["7", "제품DB"]]);
+  console.log("PASS 단종 대상: 옛 SKU 탭의 정상 SKU 전부(비관리 재고있음·제품DB 정상 판매 제외)");
+}

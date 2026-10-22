@@ -1,7 +1,7 @@
 import { fetchSheetRows, fetchSpreadsheetTabs } from "./google-sheets";
 import { pickStorageTabTitle } from "./warehouse-recheck-cleanup";
 import type { ProductCatalogItem } from "./product-catalog";
-import { STOPPED_TAB } from "./retired-sku-tabs";
+import { OTHER_REREGISTRATION_TAB, STOPPED_TAB, pickLowPerformanceTab } from "./retired-sku-tabs";
 
 type StatusSourceItem = Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier"> & { productLink?: string } & { /** 비관리SKU 탭에서 온 줄 */ storageTab?: boolean; /** 판매중지SKU 탭처럼 제품DB 밖 탭에서 온 줄(목록의 사유 칸에 탭 이름) */ sourceTab?: string; /** 비관리SKU '원본 위치'의 탭 이름(예: 제품DB) — 어디서 옮겨 왔는지 */ origin?: string };
 const squash = (value: unknown) => String(value ?? "").replace(/\s+/g, "");
@@ -15,12 +15,15 @@ export async function loadStatusSourceItems(catalogItems: readonly ProductCatalo
   const titles = await fetchSpreadsheetTabs().then(tabs => tabs.map(tab => tab.title)).catch(() => [] as string[]);
   const title = titles.length ? pickStorageTabTitle(titles) : "보관";
   // 2026-10-22: 판매중지 SKU는 제품DB가 아니라 판매중지SKU 탭에 있다. 쿠팡이 아직 '정상'이면 계속 단종 대상에 잡히게 함께 읽는다.
-  const [rows, stoppedRows] = await Promise.all([
+  // 2026-10-23: 실적저조SKU·그 외 재등록SKU도 읽는다 — 옛 SKU 탭에 있는데 쿠팡이 아직 '정상'이면 단종 대상.
+  const lowTab = pickLowPerformanceTab(titles);
+  const retiredTabs = [STOPPED_TAB, lowTab, OTHER_REREGISTRATION_TAB].filter((tab): tab is string => Boolean(tab) && titles.includes(tab!));
+  const [rows, ...retiredRows] = await Promise.all([
     title ? fetchSheetRows(title).catch(() => null) : Promise.resolve(null),
-    titles.includes(STOPPED_TAB) ? fetchSheetRows(STOPPED_TAB).catch(() => null) : Promise.resolve(null),
+    ...retiredTabs.map(tab => fetchSheetRows(tab).catch(() => null)),
   ]);
   const known = new Set(catalogItems.map(item => item.skuId));
-  const stopped = (stoppedRows?.length ? readRows(stoppedRows, known, { sourceTab: STOPPED_TAB }) : null) || [];
+  const stopped = retiredTabs.flatMap((tab, index) => (retiredRows[index]?.length ? readRows(retiredRows[index]!, known, { sourceTab: tab === lowTab ? "실적저조SKU" : tab }) : null) || []);
   if (!rows || !rows.length) return { items: [...catalogItems, ...stopped], storageLoaded: false };
   const storage = readRows(rows, known, { storageTab: true });
   if (!storage) return { items: [...catalogItems, ...stopped], storageLoaded: false };
