@@ -30,6 +30,19 @@ export async function loadStatusSourceItems(catalogItems: readonly ProductCatalo
   return { items: [...catalogItems, ...stopped, ...storage], storageLoaded: true };
 }
 
+/**
+ * 비관리SKU 줄이 원래 있던 탭(2026-10-23 사용자 확인: 비관리SKU는 원래 제품DB에서 온 것).
+ * '원본 위치'가 지금 쓰는 탭(제품DB·실적저조SKU 등)이면 그대로, 실적저조(재등록SKU) 탭에서 중복으로 옮긴 줄(보관사유 '재등록완료(새 SKU …)')은 실적저조SKU,
+ * 비었거나 예전 임시 탭(_중복옛SKU 등)이면 제품DB.
+ */
+export function storageOrigin(raw: string, moveReason: string): string {
+  const tab = raw.split("!")[0].trim();
+  if (tab === "재등록SKU" || tab === "실적저조SKU") return "실적저조SKU";
+  if (["제품DB", "판매중지SKU", "그 외 재등록SKU", "창고재확인"].includes(tab)) return tab;
+  if (/^재등록완료\(새 SKU/.test(moveReason)) return "실적저조SKU";
+  return "제품DB";
+}
+
 function readRows(rows: string[][], known: Set<string>, mark: Pick<StatusSourceItem, "storageTab" | "sourceTab">): StatusSourceItem[] | null {
   const headers = rows[0];
   const col = (...names: string[]) => headers.findIndex(header => names.some(name => squash(header) === squash(name)));
@@ -49,7 +62,7 @@ function readRows(rows: string[][], known: Set<string>, mark: Pick<StatusSourceI
     if (!/^\d{1,20}$/.test(skuId) || known.has(skuId)) continue;
     known.add(skuId);
     const get = (index: number) => index >= 0 ? String(row[index] ?? "").trim() : "";
-    out.push({ skuId, currentStatus: get(idx.status), orderableStatus: get(idx.orderable), productName: get(idx.name), optionLabel: get(idx.option), reregistrationTier: get(idx.tier), origin: get(idx.origin).split("!")[0].trim() || undefined, productLink: get(idx.link), moveReason: get(idx.moveReason) || undefined, ...mark });
+    out.push({ skuId, currentStatus: get(idx.status), orderableStatus: get(idx.orderable), productName: get(idx.name), optionLabel: get(idx.option), reregistrationTier: get(idx.tier), origin: mark.storageTab ? storageOrigin(get(idx.origin), get(idx.moveReason)) : undefined, productLink: get(idx.link), moveReason: get(idx.moveReason) || undefined, ...mark });
   }
   return out;
 }

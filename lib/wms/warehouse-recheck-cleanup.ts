@@ -236,7 +236,7 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       if (!storage) { problems.push(`'${STORAGE_TAB}' 탭을 찾지 못했습니다.`); return; }
       // 보관 탭에 이미 같은 SKU가 있으면 다시 붙이지 않고 창고재확인에서만 지운다(중간에 실패한 뒤 다시 실행해도 중복되지 않게).
       const already = Boolean(skuId) && storageSkus.has(skuId);
-      if (!already) { appendStorage.push(mapRow(headers, row, stHeaders, { "현재상태": "거래처단종" })); if (skuId) storageSkus.add(skuId); }
+      if (!already) { appendStorage.push(mapRow(headers, row, stHeaders, { "현재상태": "거래처단종", "원본위치": `${RECHECK_TAB}!${rowNumber}` })); if (skuId) storageSkus.add(skuId); }
       moves.push({ source: "창고재확인", rowNumber, skuId, productName, result, orderableStatus: orderableHere, target: "보관", mode: already ? "delete-only" : "append", release: false });
       deleteRows.push(rowNumber);
     } else if (key.includes("재고있음") && blockReason(skuId, [result, ...row])) {
@@ -340,7 +340,7 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
     const stNameCol = find(stHeaders, "상품명");
     for (const item of reregPlan.leaving) {
       if (!storage) { problems.push(`'${STORAGE_TAB}' 탭을 찾지 못했습니다.`); break; }
-      appendStorage.push(mapRow(rrHeaders, item.row, stHeaders, { "현재상태": item.status, "보관사유": item.reason }));
+      appendStorage.push(mapRow(rrHeaders, item.row, stHeaders, { "현재상태": item.status, "보관사유": item.reason, "원본위치": `${LOW_PERFORMANCE_TAB}!${item.rowNumber}` }));
       deleteReregRows.push(item.rowNumber);
       const name = find(rrHeaders, "상품명");
       moves.push({ source: "재등록SKU", rowNumber: item.rowNumber, skuId: item.skuId, productName: name >= 0 ? String(item.row[name] ?? "").trim() : "", result: item.pair ? `같은 제품 새 SKU ${item.pair} 정상 입고 중 → 비관리(중복등록)` : `현재상태 ${item.status} → 단종이 재등록보다 우선`, orderableStatus: "", target: "보관", mode: "append", release: false, pair: item.pair });
@@ -434,7 +434,7 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       const reason = status;
       const already = Boolean(skuId) && inStorage.has(skuId);
       // 현재상태(이유 포함)는 그대로 옮기고, 보관사유 칸이 있으면 그 글을 함께 남긴다.
-      if (!already) { appendStorage.push(mapRow(pdHeaders, row, stHeaders, { "보관사유": reason })); if (skuId) inStorage.add(skuId); }
+      if (!already) { appendStorage.push(mapRow(pdHeaders, row, stHeaders, { "보관사유": reason, "원본위치": `제품DB!${rowNumber}` })); if (skuId) inStorage.add(skuId); }
       moves.push({ source: "제품DB", rowNumber, skuId, productName: pdName >= 0 ? String(row[pdName] ?? "").trim() : "", result: reason, orderableStatus: pd.orderable >= 0 ? String(row[pd.orderable] ?? "").trim() : "", target: STORAGE_LABEL, mode: already ? "delete-only" : "append", release: false });
       deleteProductDbRows.push(rowNumber);
     });
