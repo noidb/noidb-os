@@ -136,3 +136,12 @@ console.log("rerun ok");
   if ([...p.keepIds].join() !== "100" || p.leaving.map(l => l.skuId).join() !== "101") throw new Error("옵션 다른 짝 실패: " + [...p.keepIds].join() + " / " + p.leaving.map(l => l.skuId).join());
   console.log("옵션 다르면 짝 아님 OK");
 }
+
+// 2026-10-22 비관리SKU에서 현재상태 '재등록대상' → 재등록SKU(재등록완료는 그대로)
+{
+  const stH = ["현재상태", "모델SKU", "SKU ID", "상품명", "보관사유"];
+  const rrH = ["현재상태", "모델SKU", "SKU ID", "상품명", "기존 현재상태", "기록일", "진행상태"];
+  const plan = planWarehouseRecheckCleanup([], [["현재상태", "SKU ID"]], [stH, ["재등록대상", "mp1RG", "100", "십자가 1P", "x"], ["재등록완료", "y", "101", "옛", ""]], new Set(), rrH, "2026-10-22", [rrH]);
+  if (plan.deleteStorageRows.join() !== "2" || plan.appendRereg.length !== 1 || plan.appendRereg[0].join("|") !== "|mp1RG|100|십자가 1P||2026-10-22|대기") throw new Error("비관리→재등록 실패: " + JSON.stringify(plan.appendRereg) + plan.deleteStorageRows.join());
+  console.log("비관리 재등록대상 → 재등록SKU OK");
+}

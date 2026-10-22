@@ -192,6 +192,7 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
   });
   // 보관 탭: 현재상태(또는 창고 확인결과)에 '재고있음'이 들어간 행(예: 재고있음, 제품DB로 이동(재고있음)) → 제품DB로(현재상태 비움), 보관 탭에서 삭제
   const deleteStorageRows: number[] = [];
+  const appendRereg: string[][] = [];
   if (storage && !problems.length) {
     const st = { sku: find(stHeaders, "SKU ID", "SKUID", "SKU"), status: find(stHeaders, "현재상태"), result: find(stHeaders, "창고 확인결과", "창고확인결과"), name: find(stHeaders, "상품명"), orderable: find(stHeaders, "발주가능상태") };
     const planned = new Set(appendProductDb.map(row => String(row[pd.sku] ?? "").trim()));
@@ -219,6 +220,15 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
         return;
       }
       if (storageSku) seenStorage.add(storageSku);
+      // 2026-10-22: 비관리SKU에서 현재상태에 '재등록'(재등록완료 제외)을 적은 줄 → 재등록SKU 탭으로(전체 정보 그대로, 진행상태 대기).
+      const storageStatus = st.status >= 0 ? String(row[st.status] ?? "").trim() : "";
+      if (storageSku && squash(storageStatus).includes("재등록") && !squash(storageStatus).includes("완료")) {
+        if (!reregHeaders.length) { problems.push("'재등록SKU' 탭을 찾지 못했습니다."); return; }
+        if (!reregisteredSkuIds.has(storageSku)) appendRereg.push(mapRow(stHeaders, row, [...reregHeaders], { "현재상태": "", "기존현재상태": "", "기록일": today, "진행상태": "대기", "보관사유": "" }));
+        moves.push({ source: "보관", rowNumber, skuId: storageSku, productName: storageName, result: storageStatus, orderableStatus: storageOrderable, target: "재등록SKU", mode: reregisteredSkuIds.has(storageSku) ? "delete-only" : "append", release: false });
+        deleteStorageRows.push(rowNumber);
+        return;
+      }
       // 2026-10-21 사용자 요청: 현재상태를 '재고있음'으로만 바꿔 둬도(글자만 들어 있으면) 제품DB로 옮긴다.
       const marked = [st.status, st.result].some(column => column >= 0 && squash(row[column]).includes("재고있음"));
       if (!marked) {
@@ -259,7 +269,6 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
   }
   // 제품DB: 현재상태 비관리(중복등록)·'단종'이 들어간 모든 상태(거래처단종·단종(중복등록) 등) → 보관 탭, 제품DB에서 지움
   const deleteProductDbRows: number[] = [];
-  const appendRereg: string[][] = [];
   if (!problems.length && pd.status >= 0) {
     const stSku = find(stHeaders, "SKU ID", "SKUID", "SKU");
     const inStorage = new Set<string>();
