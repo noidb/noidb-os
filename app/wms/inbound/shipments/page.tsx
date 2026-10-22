@@ -783,11 +783,11 @@ export default function ShipmentReceiptsPage() {
     );
   };
   // 단종해제 대상 SKU 엑셀 파일(SKU ID·상품명) — 누를 때만 만든다.
-  async function downloadReleaseFile() {
+  async function downloadReleaseFile(scope: "fresh" | "all") {
     setError("");
     setRoutingKeys((current) => ({ ...current, "release-file": true }));
     try {
-      const response = await fetch("/api/wms/logistics/status-list-file", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const response = await fetch("/api/wms/logistics/status-list-file", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope }) });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "엑셀 파일을 만들지 못했습니다.");
       const link = document.createElement("a");
@@ -796,7 +796,7 @@ export default function ShipmentReceiptsPage() {
       document.body.append(link);
       link.click();
       link.remove();
-      setMessage(`단종해제 대상 엑셀을 만들었습니다(${data.count}건).`);
+      setMessage(`단종해제 대상 엑셀을 만들었습니다(${scope === "fresh" ? "신청 전" : "전체"} ${data.count}건).`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "엑셀 파일을 만들지 못했습니다.");
     } finally {
@@ -1814,17 +1814,22 @@ export default function ShipmentReceiptsPage() {
                     </tbody>
                   </table>
                 </div>
-                <div className={section.kind === "release" ? styles.tripleButtons : styles.pairButtons}>
-                  {section.kind === "release" && (
-                    <button
-                      type="button"
-                      className={`softSageButton ${styles.fullButton}`}
-                      disabled={routingKeys["release-file"]}
-                      onClick={() => void downloadReleaseFile()}
-                    >
-                      {routingKeys["release-file"] ? "만드는 중…" : "엑셀 파일 만들기"}
-                    </button>
-                  )}
+                {section.kind === "release" && (() => {
+                  // 2026-10-23 사용자 요청: 신청 전 SKU만 / 신청완료까지 전체를 나눠서 받는다.
+                  const requested = payload?.statusListRequested?.release || {};
+                  const freshCount = section.rows.filter((row) => !requested[row.skuId]).length;
+                  return (
+                    <div className={styles.pairButtons}>
+                      <button type="button" className={`softSageButton ${styles.fullButton}`} disabled={routingKeys["release-file"] || !freshCount} onClick={() => void downloadReleaseFile("fresh")}>
+                        {routingKeys["release-file"] ? "만드는 중…" : `신청 전만 엑셀 (${freshCount}개)`}
+                      </button>
+                      <button type="button" className={`softApricotButton ${styles.fullButton}`} disabled={routingKeys["release-file"] || !section.rows.length} onClick={() => void downloadReleaseFile("all")}>
+                        {routingKeys["release-file"] ? "만드는 중…" : `전체 엑셀 (${section.rows.length}개)`}
+                      </button>
+                    </div>
+                  );
+                })()}
+                <div className={styles.pairButtons}>
                   {section.kind === "release" && (() => {
                     const requested = payload?.statusListRequested?.release || {};
                     const freshIds = section.rows.filter((row) => !requested[row.skuId]).map((row) => row.skuId);
