@@ -24,6 +24,9 @@ export type StatusListCleared = { discontinue?: Record<string, string>; release?
 
 const squash = (value: string) => value.replace(/\s+/g, "");
 const matches = (value: string, list: readonly string[]) => list.some(item => squash(item) === squash(value));
+/** 2026-10-22: 현재상태에 다른 글이 붙어도(예: 누적입고100이상/재고있음, 단종(중복등록)) 잡는다. '단종해제'는 단종이 아니다. */
+const isDiscontinueStatus = (value: string) => matches(value, DISCONTINUE_CURRENT_STATUSES) || (squash(value).includes("단종") && !squash(value).includes("해제"));
+const isReleaseStatus = (value: string) => matches(value, RELEASE_CURRENT_STATUSES) || /재고있음|과재고/.test(squash(value));
 const itemKey = (item: Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus">, extra = "") =>
   JSON.stringify([item.skuId, squash(item.currentStatus), squash(item.orderableStatus), extra]);
 const displayName = (item: Pick<ProductCatalogItem, "productName" | "optionLabel">) => [item.productName, item.optionLabel].filter(Boolean).join(", ");
@@ -60,9 +63,9 @@ export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId
   for (const item of items) {
     if (!item.skuId) continue;
     const orderable = item.orderableStatus.trim();
-    if (matches(item.currentStatus, DISCONTINUE_CURRENT_STATUSES) && orderable === "정상") {
+    if (isDiscontinueStatus(item.currentStatus) && orderable === "정상") {
       discontinue.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable, reason: "제품DB", key: itemKey(item) });
-    } else if (matches(item.currentStatus, RELEASE_CURRENT_STATUSES) && orderable !== "정상") {
+    } else if (!isDiscontinueStatus(item.currentStatus) && isReleaseStatus(item.currentStatus) && orderable !== "정상") {
       release.set(item.skuId, { skuId: item.skuId, productName: displayName(item), currentStatus: item.currentStatus.trim(), orderableStatus: orderable || "미확인", reason: "제품DB", key: itemKey(item) });
     }
   }

@@ -1732,7 +1732,7 @@ export default function ShipmentReceiptsPage() {
               />
             )}
             {[
-              { kind: "release" as const, title: "단종해제 대상 SKU", rows: releaseList, help: "제품DB 현재상태가 과재고·정상전환대상·제품DB로 이동(재고있음)·재고있음인데 발주가능상태가 정상이 아닌 SKU, 메모로 주신 SKU, 화면에서 단종해제를 누르거나 직접 추가한 SKU예요.", done: "단종해제 신청 완료 · 목록 비우기" },
+              { kind: "release" as const, title: "단종해제 대상 SKU", rows: releaseList, help: "제품DB 현재상태가 '과재고'·'재고있음'이 들어가거나 정상전환대상인데 발주가능상태가 정상이 아닌 SKU, 메모로 주신 SKU, 화면에서 단종해제를 누르거나 직접 추가한 SKU예요.", done: "단종해제 신청 완료 · 목록 비우기" },
             ].map((section) => (
               <section key={section.kind}>
                 <h2 className={styles.listTitle}>

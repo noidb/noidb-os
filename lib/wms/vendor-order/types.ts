@@ -81,6 +81,8 @@ export interface VendorOrderDraftLine {
   memo: string;
   /** 발주결과처리에서 전송 완료 품목에 남기는 별도 결과 메모. 원본 발주 메모와 전송 이미지에는 사용하지 않는다. */
   resultMemo?: string;
+  /** 상품별 '주문완료'를 누른 시각(2026-10-22). 거래처에 카톡으로 보낸 날짜를 상품마다 남긴다. */
+  orderedAt?: string;
   /** 자동 집계가 아니라 사용자가 화면에서 직접 추가한 라인인지 */
   isManuallyAdded: boolean;
   isStockReplenishment?: boolean;

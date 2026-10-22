@@ -32,14 +32,13 @@ import {
 } from "@/lib/wms/vendor-order/types";
 import type { PickingWave } from "@/lib/wms/picking-wave/types";
 import { fetchLiveCatalogLookup, type LiveCatalogLookup } from "@/lib/wms/picking-wave/live-catalog";
-import { WMS_MOBILE_WIDTH, wmsColors, wmsSageButton as wmsPrimaryButton, wmsSecondaryButton, wmsGhostButton, wmsSageButton as wmsSlateDarkButton, wmsWarnButton, wmsOuterCard } from "@/lib/wms/ui-tokens";
+import { WMS_MOBILE_WIDTH, wmsColors, wmsGreenDarkButton, wmsSageButton as wmsPrimaryButton, wmsSecondaryButton, wmsGhostButton, wmsSageButton as wmsSlateDarkButton, wmsWarnButton, wmsOuterCard } from "@/lib/wms/ui-tokens";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import { deriveArchivedVendorOrderWorkspace } from "@/lib/wms/vendor-order/derive-drafts";
 import { useReceivingDelays } from "@/lib/wms/vendor-order/use-receiving-delays";
 import { receivingDelayDate, type ReceivingDelaySummary } from "@/lib/wms/vendor-order/receiving-delay";
 import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 import { planVendorReassignment } from "@/lib/wms/vendor-order/reassign-vendor";
-import VendorOrderExportPanel from "./ExportPanel";
 import VendorOrderCardPreview from "./VendorOrderCardPreview";
 import { getVendorOrderCardImage } from "@/lib/wms/vendor-order/card-image";
 import ProductSearchAddSheet from "./ProductSearchAddSheet";
@@ -973,6 +972,22 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     } finally { saveInFlight.current = false; setSaving(false); setStatusSavingVendor(null); }
   }
 
+  /** 상품별 주문완료(2026-10-22): 그 상품에 주문 날짜를 남기고, 그 거래처 작성중 상품이 모두 주문되면 발주중(전송완료)으로 넘긴다. */
+  async function markLineOrdered(line: VendorOrderDraftLine, ordered: boolean) {
+    const vendorName = line.vendorName || UNASSIGNED_VENDOR_NAME;
+    const now = new Date().toISOString();
+    const nextLines = linesRef.current.map(item => item.id === line.id ? { ...item, orderedAt: ordered ? now : undefined } : item);
+    linesRef.current = nextLines;
+    setLines(nextLines);
+    const vendorLines = nextLines.filter(item => (item.vendorName || UNASSIGNED_VENDOR_NAME) === vendorName && item.shortageQuantity > 0 && !excludedLineIds.has(item.id) && !removedLineIds.has(item.id));
+    const allOrdered = ordered && vendorLines.length > 0 && vendorLines.every(item => item.orderedAt);
+    setStatusSavingVendor(vendorName);
+    try {
+      const saved = await persistAll(allOrdered ? { vendorName, status: "sent" } : undefined, nextLines, vendorName);
+      if (saved) setCompletionMessage(allOrdered ? `${vendorName} 상품을 모두 주문완료해 발주중으로 넘겼습니다.` : ordered ? `SKU ${line.skuId} 주문완료로 표시했습니다.` : `SKU ${line.skuId} 주문완료를 취소했습니다.`);
+    } finally { setStatusSavingVendor(null); }
+  }
+
   async function markSent(vendorName: string) {
     setStatusSavingVendor(vendorName);
     try {
@@ -1092,7 +1107,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
             const canAddToVendor = !isPreview && !workspaceMoved && !historyView && statusSavingVendor !== group.vendorName;
             const lineElements = group.lines.filter(lineMatchesSearch).map(line => (
                     <div key={line.id} data-line-id={line.id} style={{ display: "grid", gridTemplateColumns: "30px minmax(0,1fr)", gap: "6px", alignItems: "start", position: "relative" }}>
-                    {bare && <span style={{ position: "absolute", top: 6, left: 40, zIndex: 2, background: status === "sent" ? "#f4f1ec" : "#e3ede6", color: status === "sent" ? "#4b4744" : "#3f574b", border: `1px solid ${status === "sent" ? "#ddd5ca" : "#b9cbbc"}`, borderRadius: "8px", padding: "2px 8px", fontSize: "11px", fontWeight: 800 }}>{status === "sent" ? `발주 ${new Date(entry.draft?.sentAt || entry.draft?.createdAt || line.createdAt).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric" })}` : "작성중"}</span>}
+                    {bare && <span style={{ position: "absolute", top: 6, left: 40, zIndex: 2, background: status === "sent" || line.orderedAt ? "#e3ede6" : "#f2dfd8", color: status === "sent" || line.orderedAt ? "#3f574b" : "#7a3b2e", border: `1px solid ${status === "sent" || line.orderedAt ? "#b9cbbc" : "#e2c4b9"}`, borderRadius: "8px", padding: "2px 8px", fontSize: "11px", fontWeight: 800 }}>{orderedDate(line, status === "sent" ? entry.draft?.sentAt || entry.draft?.createdAt || line.createdAt : "") ? `주문완료 ${orderedDate(line, status === "sent" ? entry.draft?.sentAt || entry.draft?.createdAt || line.createdAt : "")}` : "주문 전"}</span>}
                     {isAddedToday(line) && <span style={{ position: "absolute", top: 6, right: 6, zIndex: 2, background: "#60766a", color: "#fff", borderRadius: "8px", padding: "2px 8px", fontSize: "11px", fontWeight: 800 }}>새로 추가</span>}
                     {status !== "sent" || processingSent ? <input type="checkbox" aria-label={`${line.productName} 선택`} checked={selectedLineIds.has(line.id)} disabled={saving || isPreview || workspaceMoved || Boolean(getVendorLineDeletionBlockReason(line, entry.draft, true))} title={getVendorLineDeletionBlockReason(line, entry.draft, true) || "삭제할 상품 선택"} onChange={() => setSelectedLineIds(prev => { const next = new Set(prev); if (next.has(line.id)) next.delete(line.id); else next.add(line.id); return next; })} style={{ width: "24px", height: "24px", marginTop: "12px" }} /> : <div />}
                     <VendorOrderLineCard
@@ -1128,6 +1143,8 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                       partialCompletion={partialCompletionSkus.has(line.skuId)}
                       deleteBlockReason={getVendorLineDeletionBlockReason(line, draftsByVendor[group.vendorName], true)}
                       onRemove={() => removeLine(line)}
+                      onOrdered={editable ? (ordered => void markLineOrdered(line, ordered)) : undefined}
+                      orderBusy={saving || statusSavingVendor === group.vendorName}
                       canQueueDiscontinue={editable || processingSent}
                       onQueueDiscontinue={() => processingSent ? queueSentLineForDiscontinue(line) : queueLineForDiscontinue(line)}
                       onQueueReorder={() => queueLineForReorder(line, processingSent)}
@@ -1193,20 +1210,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                   </div>
                 )}
 
-                {!historical && !historyView && !isPreview && status !== "sent" && (
-                  <VendorOrderExportPanel
-                    wave={historical && entry.draft ? deriveArchivedVendorOrderWorkspace(entry.draft.waveId, [entry.draft], group.lines) || wave : wave}
-                    vendorName={group.vendorName}
-                    orderDate={entry.draft?.createdAt || group.lines[0]?.createdAt || wave.createdAt}
-                    lines={group.lines}
-                    status={status}
-                    readOnly={historical || historyView}
-                    busy={saving || workspaceMoved || photoWorkCount > 0 || Boolean(statusSavingVendor) || editConflicts.some(conflict => conflict.vendorName === group.vendorName)}
-                    statusSaving={statusSavingVendor === group.vendorName}
-                    onBeforeExport={async () => { const saved = await persistAll(undefined, undefined, group.vendorName); if (!saved) throw new Error("발주서를 저장하지 못했습니다."); return await checkCompletion(linesRef.current.filter(line => (line.vendorName || UNASSIGNED_VENDOR_NAME) === group.vendorName), true); }}
-                    onMarkSent={() => markSent(group.vendorName)}
-                  />
-                )}
+                {/* 2026-10-22: '카톡으로 보냈어요 · 발주중으로 넘기기'는 상품별 '주문완료' 버튼으로 바꿨다(마지막 상품까지 주문하면 자동으로 발주중). */}
                 </fieldset>}
               </div>
             );
@@ -1360,6 +1364,12 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
  * 등록할 수 있고(기존 ImageEditSheet/Drive 업로드 구조 재사용), 거래처는 자동완성 후보와 함께
  * 직접 입력할 수 있으며 필요하면 제품DB에도 별도로 저장할 수 있다.
  */
+/** 주문완료 날짜(월.일) — 상품별 주문완료 시각, 없으면 발주중으로 넘긴 날짜(예전 발주). 주문 전이면 "". */
+function orderedDate(line: VendorOrderDraftLine, sentAt?: string): string {
+  const at = line.orderedAt || sentAt || "";
+  return at ? new Date(at).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric" }) : "";
+}
+
 function VendorOrderLineCard({
   line,
   orderDate,
@@ -1381,6 +1391,8 @@ function VendorOrderLineCard({
   onChangeVendor,
   onStep,
   onRemove,
+  onOrdered,
+  orderBusy = false,
   deleteBlockReason,
   partialCompletion,
   onAddOptions,
@@ -1413,6 +1425,9 @@ function VendorOrderLineCard({
   onChangeVendor: (vendorName: string) => Promise<void>;
   onStep: (delta: number) => void;
   onRemove: () => void;
+  /** 작성중 상품의 주문완료/취소(2026-10-22) */
+  onOrdered?: (ordered: boolean) => void;
+  orderBusy?: boolean;
   deleteBlockReason?: string | null;
   partialCompletion?: boolean;
   onAddOptions?: () => void;
@@ -1765,8 +1780,11 @@ function VendorOrderLineCard({
         </div>
       )}
 
-      {deletionAvailable && !processingSent && <div style={{ marginTop: 12 }}>
-        <button type="button" onClick={onRemove} disabled={Boolean(deleteBlockReason) || optionsBusy} style={{ ...wmsWarnButton, width: "100%", minHeight: 44, fontSize: 13, opacity: deleteBlockReason ? .5 : 1 }}>상품 삭제</button>
+      {(deletionAvailable || onOrdered) && !processingSent && <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: onOrdered && deletionAvailable ? "repeat(2, minmax(0, 1fr))" : "minmax(0, 1fr)", gap: 8 }}>
+        {onOrdered && (line.orderedAt
+          ? <button type="button" onClick={() => { if (window.confirm(`SKU ${line.skuId} 주문완료를 취소할까요?`)) onOrdered(false); }} disabled={orderBusy} style={{ ...wmsSecondaryButton, width: "100%", minHeight: 44, fontSize: 13 }}>주문완료 취소</button>
+          : <button type="button" onClick={() => onOrdered(true)} disabled={orderBusy} title="거래처에 카톡으로 보낸 상품이면 누르세요. 이 거래처 상품을 모두 누르면 발주중으로 넘어갑니다." style={{ ...wmsGreenDarkButton, width: "100%", minHeight: 44, fontSize: 13, borderRadius: 8 }}>{orderBusy ? "저장 중..." : "주문완료"}</button>)}
+        {deletionAvailable && <button type="button" onClick={onRemove} disabled={Boolean(deleteBlockReason) || optionsBusy} style={{ ...wmsWarnButton, width: "100%", minHeight: 44, fontSize: 13, opacity: deleteBlockReason ? .5 : 1 }}>상품 삭제</button>}
         {deleteBlockReason && <p style={{ fontSize: 12, color: wmsColors.muted }}>{deleteBlockReason}</p>}
       </div>}
       {imageEditOpen && (

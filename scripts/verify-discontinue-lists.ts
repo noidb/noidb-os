@@ -47,3 +47,11 @@ console.log("PASS discontinue/release lists from 제품DB, memo merge, dedupe, c
   assert.deepEqual(r.release.map(x => x.skuId), ["40117827"]);
   console.log("재고있음 auto release OK");
 }
+
+// 2026-10-22 현재상태에 글이 붙어도: 누적입고100이상/재고있음·과재고/○○ → 단종해제, 단종(중복등록) → 단종, 단종해제요청 → 단종 아님
+{
+  const r = buildStatusLists([item("1", "누적입고100이상/재고있음", "불가"), item("2", "과재고/메모", "일시중단"), item("3", "단종(중복등록)", "정상"), item("4", "단종해제요청/재고있음", "불가"), item("5", "누적입고100이상", "불가")], { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [] });
+  assert.deepEqual(r.release.map(x => x.skuId), ["1", "2", "4"]);
+  assert.deepEqual(r.discontinue.map(x => x.skuId), ["3"]);
+  console.log("contains rule OK");
+}
