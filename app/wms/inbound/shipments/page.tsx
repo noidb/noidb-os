@@ -62,7 +62,7 @@ type ApiPayload = {
   /** 쉽먼트별 내역과 처음 가져온 시각(2026-10-15) */
   shipmentDetails?: Record<string, { firstSeenAt: string; totalDelivered: number | null; totalReceived: number | null; lines: Array<{ purchaseOrderNumber: string; skuId: string; productName: string; deliveredQuantity: number; receivedQuantity: number }> }>;
   /** 공급상태가 정상이 아닌 SKU 확인 결과(단종확인·단종해제) */
-  supplyStatusChecks?: Record<string, { decision: "discontinued" | "release"; productName: string; at: string; releasedListClearedAt?: string }>;
+  supplyStatusChecks?: Record<string, { decision: "discontinued" | "release"; productName: string; at: string; releasedListClearedAt?: string; /** 단종해제 SKU 직접 추가로 넣음 */ manual?: boolean }>;
 };
 type FollowUpPayload = LogisticsFollowUpResponse;
 type StatusListRow = { skuId: string; productName: string; currentStatus: string; orderableStatus: string; reason: string; key: string };
@@ -185,6 +185,8 @@ export default function ShipmentReceiptsPage() {
   const initialLoad = useRef(false);
   const followUpStale = useRef(false);
   const [routingKeys, setRoutingKeys] = useState<Record<string, boolean>>({});
+  // 단종해제 SKU 직접 추가 입력칸(2026-10-22)
+  const [releaseInput, setReleaseInput] = useState("");
   // 2026-10-11: '마케팅 제외'는 그 줄만 잠깐 막고, 성공하면 화면에서 바로 뺀다(전체 새로 불러오기 없음).
   const [skuExcludePending, setSkuExcludePending] = useState<Record<string, boolean>>({});
   const [skuExcludedNow, setSkuExcludedNow] = useState<Record<string, boolean>>({});
@@ -496,6 +498,55 @@ export default function ShipmentReceiptsPage() {
       setMessage(`${label} 목록을 되살렸습니다. 이미 쿠팡에서 정상으로 바뀐 SKU는 목록에 나오지 않습니다.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "되살리지 못했습니다.");
+    } finally {
+      setRoutingKeys((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    }
+  }
+
+  /** 단종해제 대상에 SKU 직접 추가(2026-10-22) — 붙여넣은 SKU ID를 넣고, 목록에 안 뜬 SKU는 이유를 알려 준다. */
+  async function addReleaseSkus() {
+    if (fixture) return;
+    const skuIds = [...new Set(releaseInput.split(/[^0-9]+/).filter((id) => id.length >= 5 && id.length <= 20))];
+    if (!skuIds.length) { setError("SKU ID(숫자)를 한 줄에 하나씩 넣어 주세요."); return; }
+    const key = "supply:add-release";
+    setRoutingKeys((current) => ({ ...current, [key]: true }));
+    setError("");
+    try {
+      const response = await fetch("/api/wms/logistics/supply-status-check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "add-release", skuIds }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "추가하지 못했습니다.");
+      // 서버가 제품DB 기준으로 다시 계산한 목록을 받아, 빠진 SKU의 이유를 알려 준다.
+      const reload = await fetch("/api/wms/logistics/receipts?view=board", { cache: "no-store" });
+      const reloadData = await reload.json();
+      if (!reload.ok) throw new Error("추가는 했지만 목록을 다시 불러오지 못했습니다. 새로고침해 주세요.");
+      const next = asPayload(reloadData);
+      setPayload(next);
+      if (next.followUp) setFollowUp(next.followUp);
+      void saveLastView("logistics-receipts-board", reloadData);
+      followUpStale.current = true;
+      const shown = new Set((next.statusLists?.release || []).map((row) => row.skuId));
+      const reregistered = new Set(next.statusLists?.reregisteredExcluded || []);
+      const added = skuIds.filter((id) => shown.has(id));
+      const asRereg = skuIds.filter((id) => !shown.has(id) && reregistered.has(id));
+      const asNormal = skuIds.filter((id) => !shown.has(id) && !reregistered.has(id));
+      setReleaseInput([...asRereg, ...asNormal].join("\n"));
+      const notes = [
+        added.length ? `${added.length}개를 단종해제 대상에 넣었습니다.` : "",
+        asRereg.length ? `재등록 대상(재등록SKU 탭·교체이력·재등록구분)이라 해제가 아니라 신규 재등록할 SKU: ${asRereg.join(", ")}` : "",
+        asNormal.length ? `발주가능상태가 이미 정상이라 해제할 필요가 없는 SKU: ${asNormal.join(", ")}` : "",
+      ].filter(Boolean);
+      if (added.length) setMessage(notes.join(" "));
+      else setError(notes.join(" "));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "추가하지 못했습니다.");
     } finally {
       setRoutingKeys((current) => {
         const next = { ...current };
@@ -887,7 +938,7 @@ export default function ShipmentReceiptsPage() {
     ...serverRelease,
     ...Object.entries(supplyChecks)
       .filter(([skuId, check]) => check.decision === "release" && !check.releasedListClearedAt && !serverRelease.some((row) => row.skuId === skuId))
-      .map(([skuId, check]) => ({ skuId, productName: check.productName, currentStatus: "", orderableStatus: "", reason: "입고결과", key: skuId })),
+      .map(([skuId, check]) => ({ skuId, productName: check.productName, currentStatus: "", orderableStatus: "", reason: check.manual ? "직접 추가" : "입고결과", key: skuId })),
   ].sort((a, b) => a.skuId.localeCompare(b.skuId));
   const discontinueList: StatusListRow[] = payload?.statusLists?.discontinue || [];
   type FollowUpKind = "marketing" | "discontinue" | "reorder";
@@ -1681,8 +1732,8 @@ export default function ShipmentReceiptsPage() {
               />
             )}
             {[
-              { kind: "release" as const, title: "단종해제 대상 SKU", rows: releaseList, help: "제품DB 현재상태가 과재고·정상전환대상·제품DB로 이동(재고있음)인데 발주가능상태가 정상이 아닌 SKU, 메모로 주신 SKU, 화면에서 단종해제를 누른 SKU예요.", done: "단종해제 신청 완료 · 목록 비우기" },
-            ].filter((section) => section.rows.length > 0).map((section) => (
+              { kind: "release" as const, title: "단종해제 대상 SKU", rows: releaseList, help: "제품DB 현재상태가 과재고·정상전환대상·제품DB로 이동(재고있음)·재고있음인데 발주가능상태가 정상이 아닌 SKU, 메모로 주신 SKU, 화면에서 단종해제를 누르거나 직접 추가한 SKU예요.", done: "단종해제 신청 완료 · 목록 비우기" },
+            ].map((section) => (
               <section key={section.kind}>
                 <h2 className={styles.listTitle}>
                   {section.title} <span>{section.rows.length}건</span>
@@ -1691,6 +1742,7 @@ export default function ShipmentReceiptsPage() {
                   {section.help} {section.kind === "release" ? "표를 드래그해서 복사하거나, 많으면 엑셀 파일로 받으세요." : "아래 버튼으로 단종신청 엑셀과 공문을 만드세요."}
                   {section.kind === "release" && payload?.statusLists?.reregisteredExcluded?.length ? ` 재등록 대상 SKU(재등록SKU 탭·판매량저조영구정지 등) ${payload.statusLists.reregisteredExcluded.length}건은 해제가 아니라 신규 재등록 대상이라 뺐습니다.` : ""}
                 </p>
+                {section.rows.length > 0 ? (<>
                 <div className={`${styles.tableWrap} ${styles.copyScroll}`}>
                   <table className={`${styles.table} ${styles.copyTable}`} aria-label={section.title}>
                     <thead>
@@ -1801,6 +1853,30 @@ export default function ShipmentReceiptsPage() {
                     {section.kind === "release" ? "목록 비우기" : section.done}
                   </button>
                 </div>
+                </>) : <p className={styles.empty}>단종해제할 SKU가 없습니다.</p>}
+                {section.kind === "release" && !fixture && (
+                  <>
+                    <label className={styles.meta} style={{ display: "block", marginTop: "8px", fontWeight: 700 }}>
+                      SKU 직접 추가 <span style={{ fontWeight: 400 }}>· 재고가 있어 해제할 SKU ID를 한 줄에 하나씩 붙여넣으세요.</span>
+                    </label>
+                    <textarea
+                      value={releaseInput}
+                      onChange={(event) => setReleaseInput(event.target.value)}
+                      rows={3}
+                      placeholder={"40117827"}
+                      style={{ width: "100%", boxSizing: "border-box", border: "1px solid #d8d3cc", borderRadius: "8px", padding: "8px", fontSize: "13px", fontFamily: "inherit" }}
+                    />
+                    <button
+                      type="button"
+                      className={`softSageButton ${styles.fullButton}`}
+                      disabled={!releaseInput.trim() || routingKeys["supply:add-release"]}
+                      onClick={() => void addReleaseSkus()}
+                      style={{ width: "100%", minHeight: "40px", fontSize: "14px", fontWeight: 800, borderRadius: "8px" }}
+                    >
+                      {routingKeys["supply:add-release"] ? "추가하는 중…" : "단종해제 대상에 추가"}
+                    </button>
+                  </>
+                )}
               </section>
             ))}
             {(["release", "discontinue"] as const).map((kind) => {

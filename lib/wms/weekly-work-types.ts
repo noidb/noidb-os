@@ -79,7 +79,7 @@ export interface WeeklyWorkspace {
   logisticsReceiptRoutes?: Record<string, import("./logistics-receipts").LogisticsReceiptRoute>;
   logisticsFollowUp?: import("./logistics-follow-up-types").LogisticsFollowUpState;
   /** 공급상태가 정상이 아닌 SKU 확인 결과(사용자 2026-10-08): 단종확인 또는 단종해제 대상. SKU별. */
-  supplyStatusChecks?: Record<string, { decision: "discontinued" | "release"; productName: string; at: string; releasedListClearedAt?: string }>;
+  supplyStatusChecks?: Record<string, { decision: "discontinued" | "release"; productName: string; at: string; releasedListClearedAt?: string; /** 단종해제 SKU 직접 추가로 넣음 */ manual?: boolean }>;
   /** 단종·단종해제 대상 목록에서 '신청 완료 · 목록 비우기'로 처리한 항목(키 → 시각). */
   statusListCleared?: import("./discontinue-lists").StatusListCleared;
   /** 단종해제 대상 중 '단종해제 신청 완료'를 누른 SKU(SKU → 신청 시각, 2026-10-20). 쿠팡 승인 전까지 목록에 남기고 색만 다르게 보인다. */

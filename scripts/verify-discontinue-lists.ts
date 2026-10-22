@@ -25,3 +25,25 @@ console.log("PASS discontinue/release lists from 제품DB, memo merge, dedupe, c
   if (lastClearedBatch({}) !== null) throw new Error("빈 기록 실패");
   console.log("lastClearedBatch OK");
 }
+
+// 2026-10-22 단종해제 SKU 직접 추가: 제품DB에 '불가'로만 있는 SKU, 예전에 비웠던 SKU도 다시 넣으면 보인다
+{
+  const db = [item("40117827", "", "불가"), item("5", "제품DB로 이동 (재고있음)", "불가"), item("6", "", "정상")];
+  const base = buildStatusLists(db, { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [] });
+  const key5 = base.release.find(x => x.skuId === "5")!.key;
+  const added = buildStatusLists(db, { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [],
+    cleared: { release: { [key5]: "2026-10-20T00:00:00Z" } },
+    releaseFromScreen: { "40117827": { productName: "", at: "2026-10-22T05:00:00Z", manual: true }, "5": { productName: "", at: "2026-10-22T05:00:00Z", manual: true }, "6": { productName: "", at: "2026-10-22T05:00:00Z", manual: true } } });
+  assert.deepEqual(added.release.map(x => x.skuId), ["40117827", "5"], "직접 추가 SKU는 보이고, 비웠던 SKU도 다시 보이고, 이미 정상은 뺌");
+  assert.equal(added.release.find(x => x.skuId === "40117827")!.reason, "직접 추가");
+  const stale = buildStatusLists(db, { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [], cleared: { release: { [key5]: "2026-10-20T00:00:00Z" } } });
+  assert.equal(stale.release.some(x => x.skuId === "5"), false, "다시 고르지 않으면 비운 SKU는 계속 숨김");
+  console.log("manual release add OK");
+}
+
+// 2026-10-22 현재상태 '재고있음'도 발주가능상태가 정상이 아니면 단종해제 대상
+{
+  const r = buildStatusLists([item("40117827", "재고있음", "정상전환대상"), item("2", "재고있음", "정상")], { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [] });
+  assert.deepEqual(r.release.map(x => x.skuId), ["40117827"]);
+  console.log("재고있음 auto release OK");
+}

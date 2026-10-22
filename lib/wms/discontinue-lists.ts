@@ -7,7 +7,8 @@ import type { ProductCatalogItem } from "./product-catalog";
  *   + 사용자가 메모로 준 SKU + 입고결과 화면에서 '단종해제'를 누른 SKU
  */
 export const DISCONTINUE_CURRENT_STATUSES = ["판매중지", "단종", "거래처단종", "가품중단"];
-export const RELEASE_CURRENT_STATUSES = ["과재고", "발주가능상태 정상전환대상", "제품DB로 이동(재고있음)"];
+/** 2026-10-22: 보관 탭에서 '재고있음'으로 바꿔 제품DB로 옮겨진 줄도 단종해제 대상에 자동으로 넣는다. */
+export const RELEASE_CURRENT_STATUSES = ["과재고", "발주가능상태 정상전환대상", "제품DB로 이동(재고있음)", "재고있음"];
 /** 사용자가 메모장에 모아 둔 단종해제 SKU(2026-10-08). */
 export const MEMO_RELEASE_SKU_IDS: readonly string[] = [
   "58963350", "58963352", "59263874", "38921463", "37667186", "38921545", "38813805",
@@ -44,7 +45,7 @@ export function lastClearedBatch(cleared: Record<string, string> = {}): { at: st
 }
 
 export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier">[], options: {
-  releaseFromScreen?: Record<string, { productName: string; at?: string }>;
+  releaseFromScreen?: Record<string, { productName: string; at?: string; manual?: boolean }>;
   cleared?: StatusListCleared;
   memoReleaseSkuIds?: readonly string[];
   memoDiscontinueSkuIds?: readonly string[];
@@ -75,7 +76,7 @@ export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId
     discontinue.delete(skuId);
   };
   for (const skuId of options.memoReleaseSkuIds ?? MEMO_RELEASE_SKU_IDS) addRelease(skuId, "", "메모");
-  for (const [skuId, check] of Object.entries(options.releaseFromScreen || {})) addRelease(skuId, check.productName, "입고결과");
+  for (const [skuId, check] of Object.entries(options.releaseFromScreen || {})) addRelease(skuId, check.productName, check.manual ? "직접 추가" : "입고결과");
   // 한 번 '목록 비우기'로 처리한 SKU는 현재상태·발주가능상태·탭(제품DB↔보관)이 바뀌어도 다시 띄우지 않는다
   // (사용자 요청 2026-10-19 — 처리한 79건이 다시 떠서 하나하나 다시 확인해야 했음). 기록 키의 첫 칸이 SKU ID다.
   // 단, 비운 뒤에 입고결과 화면에서 새로 '단종해제'를 누른 SKU는 사용자가 직접 다시 고른 것이므로 보인다.
@@ -86,11 +87,12 @@ export function buildStatusLists(items: readonly Pick<ProductCatalogItem, "skuId
       if (skuId && String(at || "") > (doneAt.get(skuId) || "")) doneAt.set(skuId, String(at || ""));
       else if (skuId && !doneAt.has(skuId)) doneAt.set(skuId, "");
     }
+    // 2026-10-22: 직접 추가한 SKU, 제품DB로 이미 목록에 있던 SKU를 다시 고른 경우도 비운 뒤 새로 고른 것으로 본다.
     const pickedAgain = (item: StatusListItem) => {
-      const at = item.reason === "입고결과" ? options.releaseFromScreen?.[item.skuId]?.at : undefined;
+      const at = list === release ? options.releaseFromScreen?.[item.skuId]?.at : undefined;
       return Boolean(at && at > (doneAt.get(item.skuId) || ""));
     };
-    return [...list.values()].filter(item => !cleared[item.key] && (!doneAt.has(item.skuId) || pickedAgain(item))).sort((a, b) => a.skuId.localeCompare(b.skuId));
+    return [...list.values()].filter(item => pickedAgain(item) || (!cleared[item.key] && !doneAt.has(item.skuId))).sort((a, b) => a.skuId.localeCompare(b.skuId));
   };
   // 재등록SKU 탭·교체이력의 옛 SKU, 제품DB 재등록구분이 판매량저조영구정지·영구제외·재등록완료인 SKU는
   // 단종해제 대상이 아니다(신규 재등록 대상, 사용자 확인 2026-10-08) → 단종해제에서 뺀다.

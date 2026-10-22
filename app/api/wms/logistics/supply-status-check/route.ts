@@ -94,6 +94,12 @@ export async function POST(request: NextRequest) {
         if (body.action === "mark-requested") { for (const skuId of skuIds) if (!requested[skuId]) requested[skuId] = at; }
         else for (const skuId of skuIds) delete requested[skuId];
         workspace.statusListRequested = { ...(workspace.statusListRequested || {}), [kind]: requested };
+      } else if (body.action === "add-release") {
+        // 단종해제 대상에 SKU 직접 추가(2026-10-22): 입고결과에 없는 SKU도 번호만 붙여넣어 넣는다.
+        // 화면에서 '단종해제'를 누른 것과 같은 기록이라 엑셀·신청완료·삭제가 똑같이 동작한다.
+        const skuIds = Array.isArray(body.skuIds) ? [...new Set(body.skuIds.filter((id): id is string => typeof id === "string" && /^\d{1,20}$/.test(id)))].slice(0, 2000) : [];
+        if (!skuIds.length) throw new Error("추가할 SKU ID(숫자)를 확인해 주세요.");
+        for (const skuId of skuIds) current[skuId] = { decision: "release", productName: current[skuId]?.decision === "release" ? current[skuId].productName : "", at, manual: true };
       } else if (body.action === "clear-release") {
         for (const [skuId, check] of Object.entries(current)) if (check.decision === "release" && !check.releasedListClearedAt) current[skuId] = { ...check, releasedListClearedAt: at };
       } else {
