@@ -139,6 +139,9 @@ export async function appendSheetRow(sheetName: string, values: Array<string | n
   if (!response.ok) throw new Error(`[${sheetName}] 이력 추가 실패: ${data?.error?.message || response.status}`);
 }
 
+/** 탭마다 남길 자동 백업 수(새로 만든 것 포함) */
+export const BACKUP_KEEP = 5;
+
 /** 같은 스프레드시트 안에 원본 탭 전체를 숨김 백업 탭으로 원자 복제한다. 원본 행은 건드리지 않는다. */
 export async function backupSheetWithinSpreadsheet(sheetName: string): Promise<SheetBackupResult> {
   const accessToken = await getWmsGoogleAccessToken();
@@ -170,6 +173,22 @@ export async function backupSheetWithinSpreadsheet(sheetName: string): Promise<S
   });
   const data = await response.json().catch(() => ({} as any));
   if (!response.ok) throw new Error(`Google Sheet 전체 백업 실패: ${data?.error?.message || response.status}`);
+  // 2026-10-23 사용자 요청: 백업이 쌓여 시트 칸 한도(1,000만 칸)에 가까워지지 않게, 같은 탭의 자동 백업은 최근 BACKUP_KEEP개만 남긴다.
+  // 이름이 '_백업_<탭>_YYYYMMDD_HHMMSS…'인 것만 대상(직접 이름 붙인 백업은 그대로). 지우기에 실패해도 백업 자체는 성공으로 둔다.
+  try {
+    const prefix = `_백업_${sheetName}_`;
+    const old = (metadata.sheets || []).map((sheet: any) => sheet.properties)
+      .filter((properties: any) => typeof properties?.title === "string" && properties.title.startsWith(prefix) && /^\d{8}_\d{6}/.test(properties.title.slice(prefix.length)))
+      .sort((a: any, b: any) => String(b.title).localeCompare(String(a.title)))
+      .slice(BACKUP_KEEP - 1);
+    if (old.length) {
+      await fetch(`${SHEETS_API_BASE}/${spreadsheetId}:batchUpdate`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ requests: old.map((properties: any) => ({ deleteSheet: { sheetId: Number(properties.sheetId) } })) }),
+      });
+    }
+  } catch { /* 오래된 백업 정리는 다음 백업 때 다시 */ }
   return { sheetName: backupSheetName, sheetId: backupSheetId, sourceSheetId: Number(source.sheetId) };
 }
 

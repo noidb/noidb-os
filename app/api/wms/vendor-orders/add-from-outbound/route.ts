@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
 import { fetchProductCatalog, type ProductCatalogItem } from "@/lib/wms/product-catalog";
+import { lookupCodesAnyTab } from "@/lib/wms/product-row-lookup";
 import { mutatePickingWaveStore } from "@/lib/wms/picking-wave/server-store";
 import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraftLine } from "@/lib/wms/vendor-order/types";
@@ -37,6 +38,13 @@ export async function POST(request: NextRequest) {
     if (!bySku.size) throw new Error("거래처발주할 SKU를 골라 주세요.");
     const catalog = await fetchProductCatalog().catch(() => ({ configured: false, items: [] as ProductCatalogItem[] }));
     const catalogBySku = new Map(catalog.items.map(item => [normalizeSkuId(item.skuId), item]));
+    // 2026-10-23: 제품DB에 없는 SKU(비관리SKU·판매중지SKU 등 옛 SKU 탭으로 옮긴 것)는 메모에 어느 탭인지 남긴다.
+    const missing = [...bySku.keys()].filter(skuId => !catalogBySku.has(skuId));
+    const tabOf = new Map<string, string>();
+    if (missing.length) {
+      const found = await lookupCodesAnyTab(missing).catch(() => []);
+      for (const entry of found) { const sheet = entry.matches.find(match => match.sheetName)?.sheetName; if (sheet) tabOf.set(normalizeSkuId(entry.code), sheet); }
+    }
     const now = new Date().toISOString();
     const operationId = `outbound-${expectedDate}-${randomUUID()}`;
     const lines: VendorOrderDraftLine[] = [...bySku.entries()].map(([skuId, entry]) => {
@@ -49,7 +57,7 @@ export async function POST(request: NextRequest) {
         actualShortageQuantity: entry.quantity, shortageQuantity: toVendorOrderQuantity(entry.quantity, "", vendorName), currentStock: row?.currentStock || "",
         // 쿠팡 발주번호를 넣지 않는다: 직접 고른 줄로 다뤄 같은 거래처로 그대로 묶이게 한다(번호는 메모에 남김).
         relatedPurchaseOrderNumbers: [],
-        memo: `${expectedDate} 출고분 재고부족`, isManuallyAdded: true, sourceType: "picking-shortage",
+        memo: `${expectedDate} 출고분 재고부족${row ? "" : ` · 제품DB에 없음${tabOf.get(skuId) ? `(${tabOf.get(skuId)} 탭 옛 SKU)` : ""}`}`, isManuallyAdded: true, sourceType: "picking-shortage",
         createdAt: now, updatedAt: now,
       };
     });

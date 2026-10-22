@@ -45,6 +45,7 @@ type ApiPayload = {
   statusListLastCleared?: Partial<Record<"discontinue" | "release", { at: string; count: number } | null>>;
   /** 단종해제 신청 완료를 누른 SKU(SKU → 신청 시각) */
   statusListRequested?: Partial<Record<"discontinue" | "release", Record<string, string>>>;
+  sheetHealth?: { unreadTabs: string[]; duplicateSkus: { skuId: string; tabs: string[] }[] } | null;
   /** 이미 거래처에 보낸 발주(입고대기·입고지연) — SKU별 */
   openVendorOrders?: Record<string, { quantity: number; vendors: string[]; sentOn: string; delayed: boolean }>;
   /** 마케팅 후보 줄별: 그 입고예정일 뒤에 같은 SKU로 나온 쿠팡 추가 발주(초도가 이미 팔린 신호) */
@@ -1718,6 +1719,16 @@ export default function ShipmentReceiptsPage() {
             </article>
             {/* 2026-10-20: AI상품등록 9번의 상품공급상태 최신파일 반영을 여기로 옮김 — 반영하면 아래 단종·단종해제 목록을 다시 계산한다. */}
             {/* 2026-10-21: 상품공급상태 최신파일 반영은 작업센터 '자주 하는 일' 1번으로 옮겨 여기서는 뺐다(반영하면 제품DB가 바뀌어 이 화면을 열 때 목록에 그대로 반영됨). */}
+            {/* 2026-10-23: 탭을 못 읽었거나(이름 바뀜 등) 같은 SKU가 두 탭에 있으면 목록이 틀릴 수 있어 위에 알린다. */}
+            {!fixture && payload?.sheetHealth?.unreadTabs?.length ? (
+              <p className={`${styles.notice} ${styles.error}`}>못 읽은 구글시트 탭: {payload.sheetHealth.unreadTabs.join(", ")} — 이 탭의 SKU가 아래 목록에서 빠졌을 수 있어요. 탭 이름이 바뀌지 않았는지 확인해 주세요.</p>
+            ) : null}
+            {!fixture && payload?.sheetHealth?.duplicateSkus?.length ? (
+              <details className={`${styles.notice} ${styles.error}`}>
+                <summary>두 탭에 같이 있는 SKU {payload.sheetHealth.duplicateSkus.length}개 — 한 탭에서 지워 주세요</summary>
+                {payload.sheetHealth.duplicateSkus.map((item) => <div key={item.skuId}>{item.skuId} · {item.tabs.join(" / ")}</div>)}
+              </details>
+            ) : null}
             {/* 2026-10-20 사용자 요청: 단종 대상 SKU와 바코드·SKU 직접 입력을 '단종 신청 목록' 하나로 합침(서류·완료 한 번). */}
             {!fixture && (
               <DiscontinueByCode

@@ -10,7 +10,10 @@ const squash = (value: unknown) => String(value ?? "").replace(/\s+/g, "");
  * 단종·단종해제 목록에 쓸 행: 제품DB 탭 + 보관 탭(2026-10-08 — 보관 탭의 거래처단종이 빠졌던 문제).
  * 같은 SKU가 두 탭에 있으면 제품DB 값을 쓴다. 보관 탭을 못 읽으면 제품DB만 쓴다.
  */
-export async function loadStatusSourceItems(catalogItems: readonly ProductCatalogItem[]): Promise<{ items: StatusSourceItem[]; storageLoaded: boolean; tabsBySku: Record<string, string[]> }> {
+/** 시트 상태 점검 결과(2026-10-23) */
+export type SheetHealth = { unreadTabs: string[]; duplicateSkus: { skuId: string; tabs: string[] }[] };
+
+export async function loadStatusSourceItems(catalogItems: readonly ProductCatalogItem[]): Promise<{ items: StatusSourceItem[]; storageLoaded: boolean; tabsBySku: Record<string, string[]>; health: SheetHealth }> {
   // 보관 탭 = '비관리SKU'(예전 '_보관_비관리SKU_20261008', 2026-10-19): 제품DB에서 옮긴 거래처단종·단종도 단종 대상에 계속 잡히게 한다.
   const titles = await fetchSpreadsheetTabs().then(tabs => tabs.map(tab => tab.title)).catch(() => [] as string[]);
   const title = titles.length ? pickStorageTabTitle(titles) : "보관";
@@ -30,12 +33,21 @@ export async function loadStatusSourceItems(catalogItems: readonly ProductCatalo
   for (const item of catalogItems) note(item.skuId, "제품DB");
   retiredTabs.forEach((tab, index) => skuIdsOf(retiredRows[index]).forEach(skuId => note(skuId, tab === lowTab ? "실적저조SKU" : tab)));
   skuIdsOf(rows).forEach(skuId => note(skuId, "비관리SKU"));
+  // 2026-10-23: 못 읽은 탭(이름이 바뀌었거나 읽기 실패)과 두 탭에 같이 있는 SKU를 화면에 알린다 — 조용히 빠지지 않게.
+  const unreadTabs: string[] = [];
+  if (!title || !rows?.length) unreadTabs.push(`비관리SKU${title ? "" : "(탭 없음)"}`);
+  if (!lowTab) unreadTabs.push("실적저조SKU(탭 없음)");
+  for (const tab of [STOPPED_TAB, OTHER_REREGISTRATION_TAB]) if (!titles.includes(tab)) unreadTabs.push(`${tab}(탭 없음)`);
+  retiredTabs.forEach((tab, index) => { if (!retiredRows[index]?.length) unreadTabs.push(tab === lowTab ? "실적저조SKU" : tab); });
+  if (!titles.length) unreadTabs.splice(0, unreadTabs.length, "탭 목록을 읽지 못함");
+  const duplicateSkus = Object.entries(tabsBySku).filter(([, tabs]) => tabs.length > 1).map(([skuId, tabs]) => ({ skuId, tabs }));
+  const health: SheetHealth = { unreadTabs, duplicateSkus };
   const known = new Set(catalogItems.map(item => item.skuId));
   const stopped = retiredTabs.flatMap((tab, index) => (retiredRows[index]?.length ? readRows(retiredRows[index]!, known, { sourceTab: tab === lowTab ? "실적저조SKU" : tab }) : null) || []);
-  if (!rows || !rows.length) return { items: [...catalogItems, ...stopped], storageLoaded: false, tabsBySku };
+  if (!rows || !rows.length) return { items: [...catalogItems, ...stopped], storageLoaded: false, tabsBySku, health };
   const storage = readRows(rows, known, { storageTab: true });
-  if (!storage) return { items: [...catalogItems, ...stopped], storageLoaded: false, tabsBySku };
-  return { items: [...catalogItems, ...stopped, ...storage], storageLoaded: true, tabsBySku };
+  if (!storage) return { items: [...catalogItems, ...stopped], storageLoaded: false, tabsBySku, health };
+  return { items: [...catalogItems, ...stopped, ...storage], storageLoaded: true, tabsBySku, health };
 }
 
 /**

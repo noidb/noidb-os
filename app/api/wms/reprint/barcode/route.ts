@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchProductCatalog } from "@/lib/wms/product-catalog";
+import { findProductRowAnyTab } from "@/lib/wms/product-row-lookup";
 import { buildPurchaseOrderIndex, getCachedPurchaseOrderIndex } from "@/lib/wms/purchase-order-source/index";
 import type { PurchaseOrderSourceRecord } from "@/lib/wms/purchase-order-source/types";
 import { buildBatchBarcodeWorkbook, buildSingleBarcodeWorkbook } from "@/lib/wms/shipment-output-files";
@@ -10,6 +11,15 @@ export const dynamic = "force-dynamic";
 
 function resultKey(record: PurchaseOrderSourceRecord) {
   return `${normalizeSkuId(record.skuId)}\u0000${record.barcode.trim()}`;
+}
+
+/** 2026-10-23: 제품DB에 없으면 어느 탭(비관리SKU·판매중지SKU 등)에 있는지 알려 준다. */
+async function matchError(skuId: string, count: number): Promise<string> {
+  if (count === 0) {
+    const where = await findProductRowAnyTab(skuId).catch(() => null);
+    if (where && where.sheetName !== "제품DB") return `SKU ${skuId}는 제품DB가 아니라 '${where.sheetName}' 탭에 있는 옛 SKU라 재출력하지 않았습니다.`;
+  }
+  return `제품DB의 SKU ${skuId} 매칭이 ${count}건이라 재출력을 차단했습니다.`;
 }
 
 export async function GET(request: NextRequest) {
@@ -90,7 +100,7 @@ export async function POST(request: NextRequest) {
         const signatures = new Set(records.map(record => [record.barcode, record.productName, record.optionName].join("\u0000")));
         if (signatures.size !== 1) return NextResponse.json({ error: `발주서 ${purchaseOrderNumber}의 SKU ${skuId} 정보가 서로 다릅니다.` }, { status: 409 });
         const catalogMatches = catalogBySku.get(skuId) || [];
-        if (catalogMatches.length !== 1) return NextResponse.json({ error: `제품DB의 SKU ${skuId} 매칭이 ${catalogMatches.length}건이라 재출력을 차단했습니다.` }, { status: 409 });
+        if (catalogMatches.length !== 1) return NextResponse.json({ error: await matchError(skuId, catalogMatches.length) }, { status: 409 });
         resolved.push({ record: records[0], catalog: catalogMatches[0], quantity });
       }
       const buffer = await buildBatchBarcodeWorkbook(resolved);
@@ -113,7 +123,7 @@ export async function POST(request: NextRequest) {
     const catalogResult = await fetchProductCatalog();
     if (!catalogResult.configured) return NextResponse.json({ error: "제품DB 연결을 확인해 주세요." }, { status: 503 });
     const catalogMatches = catalogResult.items.filter(item => normalizeSkuId(item.skuId) === skuId);
-    if (catalogMatches.length !== 1) return NextResponse.json({ error: `제품DB의 SKU 매칭이 ${catalogMatches.length}건이라 재출력을 차단했습니다.` }, { status: 409 });
+    if (catalogMatches.length !== 1) return NextResponse.json({ error: await matchError(skuId, catalogMatches.length) }, { status: 409 });
     const buffer = await buildSingleBarcodeWorkbook(records[0], catalogMatches[0], quantity);
     const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date()).replaceAll("-", "");
     const fileName = encodeURIComponent(`바코드재출력_${skuId}_${quantity}장_${date}.xlsx`);

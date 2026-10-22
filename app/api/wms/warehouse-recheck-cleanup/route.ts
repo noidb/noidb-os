@@ -50,9 +50,31 @@ async function load() {
   const reregSkuCol = (rereg[0] || []).findIndex(header => String(header ?? "").replace(/\s+/g, "") === "SKUID");
   const reregisteredSkuIds = new Set(reregSkuCol < 0 ? [] : rereg.slice(1).map(row => String(row[reregSkuCol] ?? "").trim()).filter(id => /^\d{1,20}$/.test(id)));
   const productDbTab = tabs.find(tab => tab.title === PRODUCT_DB_SHEET_NAME);
-  return { recheckTab, storageTab, productDbTab, plan: planWarehouseRecheckCleanup(recheck, productDb, storage, reregisteredSkuIds, (rereg[0] || []).map(value => String(value ?? "")),
-    new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10), reregTab ? rereg : undefined, retiredSkuIds, { other: otherRows, stopped: stoppedRows }), reregTab, otherTab, stoppedTab, REREGISTRATION_TAB, fill };
+  const plan = planWarehouseRecheckCleanup(recheck, productDb, storage, reregisteredSkuIds, (rereg[0] || []).map(value => String(value ?? "")),
+    new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10), reregTab ? rereg : undefined, retiredSkuIds, { other: otherRows, stopped: stoppedRows });
+  // 2026-10-23: 탭 이름이 바뀌어 못 찾으면 엉뚱하게 옮기지 않도록 정리를 멈춘다.
+  const missing = [!storageTab && STORAGE_TAB, !reregTab && "실적저조SKU", !otherTab && OTHER_REREGISTRATION_TAB, !stoppedTab && STOPPED_TAB].filter((name): name is string => Boolean(name));
+  if (missing.length) plan.problems.push(`'${missing.join("', '")}' 탭을 찾지 못했습니다. 탭 이름이 바뀌지 않았는지 확인해 주세요(정리를 멈췄습니다).`);
+  // 실행 중 줄 번호 확인용(지우기 직전에 그 줄의 SKU가 미리보기 때와 같은지 본다)
+  const snapshot: Record<string, string[][]> = { [PRODUCT_DB_SHEET_NAME]: productDb, [REREGISTRATION_TAB]: rereg, [RECHECK_TAB]: recheck, ...(storage && storageTab ? { [storageTab.title]: storage } : {}) };
+  return { recheckTab, storageTab, productDbTab, plan, reregTab, otherTab, stoppedTab, REREGISTRATION_TAB, fill, snapshot };
 }
+/**
+ * 2026-10-23: 줄을 지우기 직전에 그 줄들의 SKU ID가 미리보기 때와 같은지 확인한다.
+ * 실행 중에 누가 시트에서 줄을 넣고 빼거나 정렬하면 엉뚱한 줄이 지워질 수 있어서, 다르면 멈춘다.
+ */
+async function assertSameSkus(title: string, before: string[][] | undefined, rowNumbers: readonly number[]) {
+  if (!before?.length || !rowNumbers.length) return;
+  const now = await fetchSheetRows(title, { valueRenderOption: "FORMULA" });
+  const skuCol = (rows: string[][]) => (rows[0] || []).findIndex(header => String(header ?? "").replace(/\s+/g, "") === "SKUID");
+  const a = skuCol(before), b = skuCol(now);
+  if (a < 0 || b < 0) return;
+  for (const row of rowNumbers) {
+    const was = String(before[row - 1]?.[a] ?? "").trim(), is = String(now[row - 1]?.[b] ?? "").trim();
+    if (was !== is) throw new Error(`'${title}' ${row}번째 줄이 미리보기 뒤에 바뀌었습니다(${was || "빈 줄"} → ${is || "빈 줄"}). 엉뚱한 줄을 지우지 않도록 멈췄습니다. 다시 미리보기 후 실행해 주세요(그 전 작업은 백업 탭에 있어요).`);
+  }
+}
+
 const summary = ({ plan, fill }: Awaited<ReturnType<typeof load>>) => ({ token: plan.token, pending: plan.pending, moves: plan.moves, unknown: plan.unknown, problems: plan.problems,
   fill: { cost: fill.updates.filter(item => item.field.startsWith("원가")).length, dimension: fill.updates.filter(item => item.field === "치수").length,
     cells: fill.updates.map(item => ({ tab: item.title, row: item.row, skuId: item.skuId, model: item.model, field: item.field, value: item.value })), conflicts: fill.conflicts } });
@@ -68,7 +90,7 @@ export async function POST(request: NextRequest) {
   if (!isSameOriginActionRequest(request)) return NextResponse.json({ ok: false, error: "사이트 화면에서 다시 진행해 주세요." }, { status: 403, headers });
   try {
     const body = await request.json() as { token?: unknown };
-    const { recheckTab, storageTab, productDbTab, plan, reregTab, otherTab, stoppedTab, REREGISTRATION_TAB, fill } = await load();
+    const { recheckTab, storageTab, productDbTab, plan, reregTab, otherTab, stoppedTab, REREGISTRATION_TAB, fill, snapshot } = await load();
     if (plan.problems.length) throw new Error(plan.problems.join(" "));
     if (body.token !== plan.token) throw new Error("미리보기 뒤에 구글시트가 바뀌었습니다. 다시 미리보기 후 실행해 주세요.");
     if (!plan.moves.length && !fill.updates.length) throw new Error("옮길 행이 없습니다.");
@@ -107,11 +129,20 @@ export async function POST(request: NextRequest) {
       const statusCol = pdHeaders.findIndex(header => String(header).replace(/\s+/g, "") === "현재상태") + 1;
       await updateSheetCells(PRODUCT_DB_SHEET_NAME, plan.clearStatusRows.map(row => ({ row, col: statusCol, value: "" })));
     }
-    if (plan.deleteStorageRows.length && storageTab) await deleteSheetRows(storageTab.sheetId, plan.deleteStorageRows);
-    if (plan.deleteProductDbRows.length && productDbTab) await deleteSheetRows(productDbTab.sheetId, plan.deleteProductDbRows);
+    if (plan.deleteStorageRows.length && storageTab) {
+      await assertSameSkus(storageTab.title, snapshot[storageTab.title], plan.deleteStorageRows);
+      await deleteSheetRows(storageTab.sheetId, plan.deleteStorageRows);
+    }
+    if (plan.deleteProductDbRows.length && productDbTab) {
+      await assertSameSkus(PRODUCT_DB_SHEET_NAME, snapshot[PRODUCT_DB_SHEET_NAME], plan.deleteProductDbRows);
+      await deleteSheetRows(productDbTab.sheetId, plan.deleteProductDbRows);
+    }
     if (plan.appendStorage.length && storageTab) await appendSheetRowsKeepingFormulas(storageTab.title, plan.appendStorage);
     // 재등록SKU에서 비관리SKU로 옮긴 줄(단종·중복등록)은 재등록SKU 탭에서 지운다 — 비관리SKU에 붙인 뒤에.
-    if (plan.deleteReregRows.length && reregTab) await deleteSheetRows(reregTab.sheetId, plan.deleteReregRows);
+    if (plan.deleteReregRows.length && reregTab) {
+      await assertSameSkus(REREGISTRATION_TAB, snapshot[REREGISTRATION_TAB], plan.deleteReregRows);
+      await deleteSheetRows(reregTab.sheetId, plan.deleteReregRows);
+    }
     // 현재상태에 '재등록'이 들어간 제품DB 행 → 재등록SKU 탭에도 한 줄(2026-10-22)
     if (plan.appendRereg.length) await appendSheetRowsKeepingFormulas(REREGISTRATION_TAB, plan.appendRereg);
     if (plan.appendOtherRereg.length) await appendSheetRowsKeepingFormulas(OTHER_REREGISTRATION_TAB, plan.appendOtherRereg);
@@ -133,7 +164,10 @@ export async function POST(request: NextRequest) {
       await moveSheetRows(target.sheetId, regroup.moves);
       regrouped += regroup.models.length;
     }
-    if (recheckTab) await deleteSheetRows(recheckTab.sheetId, plan.deleteRows);
+    if (recheckTab && plan.deleteRows.length) {
+      await assertSameSkus(RECHECK_TAB, snapshot[RECHECK_TAB], plan.deleteRows);
+      await deleteSheetRows(recheckTab.sheetId, plan.deleteRows);
+    }
     // 5) 발주가능상태가 정상이 아닌 제품DB 이동 SKU → 단종해제 대상
     const release = plan.moves.filter(move => move.release && /^\d{1,20}$/.test(move.skuId));
     if (release.length) await mutateWeeklyWorkspace(workspace => {

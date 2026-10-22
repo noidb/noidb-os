@@ -225,6 +225,7 @@ async function responseBoard() {
       return [kind, batch && recent && batch.keys.length > 1 ? { at: batch.at, count: batch.keys.length } : null];
     })),
     statusListRequested: stored.statusListRequested || {},
+    sheetHealth: statusSource?.health || null,
     statusLists: statusSource ? withCurrentTab(buildStatusLists(statusSource.items, {
       releaseFromScreen: Object.fromEntries(Object.entries(stored.supplyStatusChecks || {}).filter(([, check]) => check.decision === "release" && !check.releasedListClearedAt)),
       cleared: stored.statusListCleared,

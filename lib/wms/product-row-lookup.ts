@@ -86,7 +86,8 @@ export interface CodeLookupResult {
 export async function lookupCodesAnyTab(codes: string[]): Promise<CodeLookupResult[]> {
   const all = await fetchSpreadsheetTabs();
   const rank = (tab: { title: string; hidden?: boolean }) => tab.title === PRODUCT_DB_SHEET_NAME ? 0 : (tab.title.includes("보관") || tab.title.includes("비관리SKU")) ? 1 : !tab.hidden && !tab.title.startsWith("_") ? 2 : 3;
-  const ordered = [...all].sort((a, b) => rank(a) - rank(b)).map(tab => tab.title);
+  // 2026-10-23: '_백업_' 탭은 읽지 않는다(백업이 쌓이면 느려지고, 지운 옛 줄이 잡힐 수 있음).
+  const ordered = [...all].filter(tab => !tab.title.startsWith("_백업_")).sort((a, b) => rank(a) - rank(b)).map(tab => tab.title);
   if (!ordered.includes(PRODUCT_DB_SHEET_NAME)) ordered.unshift(PRODUCT_DB_SHEET_NAME);
   const values = await batchGet(ordered, "FORMATTED_VALUE");
   if (!(values.get(PRODUCT_DB_SHEET_NAME) || []).length) throw new Error("제품DB를 읽을 수 없습니다.");
