@@ -81,3 +81,19 @@ console.log("PASS 판매중지SKU 탭 정상 SKU → 단종 대상");
   assert.deepEqual(p.deleteProductDbRows, [2], "재등록파일생성 새 줄은 그대로");
   console.log("PASS 같은 링크 옵션 → 판매중지SKU (제품DB·실적저조SKU)");
 }
+
+// 2026-10-23: 단종해제 대상에는 판매중지·실적저조 둘 다 아닌 SKU만 (화면에서 고른 것도 뺌)
+{
+  const link = (id: string) => `https://www.coupang.com/vp/products/${id}?itemId=1`;
+  const base = { optionLabel: "", reregistrationTier: "" };
+  const items = [
+    { ...base, skuId: "900", currentStatus: "과재고", orderableStatus: "일시중단", productName: "정상 해제 대상", productLink: link("1") },
+    { ...base, skuId: "901", currentStatus: "과재고", orderableStatus: "일시중단", productName: "판매중지 링크와 같은 링크", productLink: link("2") },
+    { ...base, skuId: "902", currentStatus: "판매중지", orderableStatus: "불가", productName: "판매중지", productLink: link("2"), sourceTab: "판매중지SKU" },
+    { ...base, skuId: "41093260", currentStatus: "재고있음", orderableStatus: "일시중단", productName: "실적저조 목록", storageTab: true },
+  ];
+  const lists = buildStatusLists(items, { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [], releaseFromScreen: { "902": { productName: "판매중지" }, "41093260": { productName: "실적저조", manual: true } } });
+  assert.deepEqual(lists.release.map(item => item.skuId), ["900"]);
+  assert.deepEqual(lists.discontinue.map(item => item.skuId), [], "새 제외 규칙이 단종 대상에 끼어들지 않음");
+  console.log("PASS 단종해제 대상: 판매중지·같은 링크·실적저조 목록은 화면에서 골라도 뺌");
+}

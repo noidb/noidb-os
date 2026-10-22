@@ -3,7 +3,7 @@ import { pickStorageTabTitle } from "./warehouse-recheck-cleanup";
 import type { ProductCatalogItem } from "./product-catalog";
 import { STOPPED_TAB } from "./retired-sku-tabs";
 
-type StatusSourceItem = Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier"> & { /** 비관리SKU 탭에서 온 줄 */ storageTab?: boolean; /** 판매중지SKU 탭처럼 제품DB 밖 탭에서 온 줄(목록의 사유 칸에 탭 이름) */ sourceTab?: string; /** 비관리SKU '원본 위치'의 탭 이름(예: 제품DB) — 어디서 옮겨 왔는지 */ origin?: string };
+type StatusSourceItem = Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier"> & { productLink?: string } & { /** 비관리SKU 탭에서 온 줄 */ storageTab?: boolean; /** 판매중지SKU 탭처럼 제품DB 밖 탭에서 온 줄(목록의 사유 칸에 탭 이름) */ sourceTab?: string; /** 비관리SKU '원본 위치'의 탭 이름(예: 제품DB) — 어디서 옮겨 왔는지 */ origin?: string };
 const squash = (value: unknown) => String(value ?? "").replace(/\s+/g, "");
 
 /**
@@ -37,7 +37,7 @@ function readRows(rows: string[][], known: Set<string>, mark: Pick<StatusSourceI
     status: col("현재상태") >= 0 ? col("현재상태") : loose(header => header.includes("상태") && !header.includes("발주")),
     orderable: col("발주가능상태") >= 0 ? col("발주가능상태") : loose(header => header.includes("발주가능")),
     name: col("상품명") >= 0 ? col("상품명") : loose(header => header.includes("상품명") || header.includes("제품명")),
-    option: col("옵션", "색상옵션명"), tier: col("재등록구분"), origin: col("원본 위치"),
+    option: col("옵션", "색상옵션명"), tier: col("재등록구분"), origin: col("원본 위치"), link: col("제품링크"),
   };
   if (idx.sku < 0) return null;
   const out: StatusSourceItem[] = [];
@@ -46,7 +46,7 @@ function readRows(rows: string[][], known: Set<string>, mark: Pick<StatusSourceI
     if (!/^\d{1,20}$/.test(skuId) || known.has(skuId)) continue;
     known.add(skuId);
     const get = (index: number) => index >= 0 ? String(row[index] ?? "").trim() : "";
-    out.push({ skuId, currentStatus: get(idx.status), orderableStatus: get(idx.orderable), productName: get(idx.name), optionLabel: get(idx.option), reregistrationTier: get(idx.tier), origin: get(idx.origin).split("!")[0].trim() || undefined, ...mark });
+    out.push({ skuId, currentStatus: get(idx.status), orderableStatus: get(idx.orderable), productName: get(idx.name), optionLabel: get(idx.option), reregistrationTier: get(idx.tier), origin: get(idx.origin).split("!")[0].trim() || undefined, productLink: get(idx.link), ...mark });
   }
   return out;
 }

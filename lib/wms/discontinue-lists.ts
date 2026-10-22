@@ -1,4 +1,5 @@
 import type { ProductCatalogItem } from "./product-catalog";
+import { LOW_PERFORMANCE_SKU_IDS } from "./retired-sku-tabs";
 
 /**
  * 단종 대상·단종해제 대상 목록(사용자 확정 2026-10-08). 제품DB에서 매번 새로 계산한다.
@@ -47,7 +48,7 @@ export function lastClearedBatch(cleared: Record<string, string> = {}): { at: st
   return { at, keys: Object.entries(cleared).filter(([, value]) => value === at).map(([key]) => key) };
 }
 
-export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier"> & { storageTab?: boolean; sourceTab?: string; origin?: string })[], options: {
+export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuId" | "currentStatus" | "orderableStatus" | "productName" | "optionLabel" | "reregistrationTier"> & { storageTab?: boolean; sourceTab?: string; origin?: string; productLink?: string })[], options: {
   releaseFromScreen?: Record<string, { productName: string; at?: string; manual?: boolean }>;
   cleared?: StatusListCleared;
   memoReleaseSkuIds?: readonly string[];
@@ -108,7 +109,14 @@ export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuI
   // 그중 재등록이 끝난 옛 SKU는 발주가능상태가 '불가'여야 정상이므로, 아직 '정상'이면 단종 대상에 넣는다.
   const reregistered = new Set<string>(options.reregisteredSkuIds || []);
   for (const item of items) if (/판매량저조|영구|재등록완료/.test(item.reregistrationTier || "")) reregistered.add(item.skuId);
-  const excluded = [...release.keys()].filter(skuId => reregistered.has(skuId)).sort();
+  // 2026-10-23 사용자 확인: 단종해제 대상은 판매중지·실적저조 둘 다 아닌 SKU만.
+  // 실적저조 목록(쿠팡 해제 거절), 현재상태 판매중지·판매중지SKU 탭, 판매중지 옵션과 같은 링크(노출상품ID)인 SKU는 화면에서 고른 것이라도 뺀다.
+  const linkId = (item: { productLink?: string }) => String(item.productLink || "").match(/\/products\/(\d+)/)?.[1] || "";
+  const isStopped = (item: (typeof items)[number]) => item.sourceTab === "판매중지SKU" || /판매중지/.test(item.currentStatus || "");
+  const deadLinks = new Set(items.filter(isStopped).map(linkId).filter(Boolean));
+  const notRelease = new Set<string>([...reregistered, ...LOW_PERFORMANCE_SKU_IDS]);
+  for (const item of items) if (isStopped(item) || (linkId(item) && deadLinks.has(linkId(item)))) notRelease.add(item.skuId);
+  const excluded = [...release.keys()].filter(skuId => notRelease.has(skuId)).sort();
   for (const skuId of excluded) release.delete(skuId);
   const addDiscontinue = (skuId: string, reason: string) => {
     if (discontinue.has(skuId)) return;
