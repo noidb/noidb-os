@@ -145,3 +145,22 @@ console.log("rerun ok");
   if (plan.deleteStorageRows.join() !== "2" || plan.appendRereg.length !== 1 || plan.appendRereg[0].join("|") !== "|mp1RG|100|십자가 1P||2026-10-22|대기") throw new Error("비관리→재등록 실패: " + JSON.stringify(plan.appendRereg) + plan.deleteStorageRows.join());
   console.log("비관리 재등록대상 → 재등록SKU OK");
 }
+
+// ★2026-10-22 절대 규칙: 판매중지·실적저조·교체된 옛 SKU는 '재고있음'이어도 제품DB로 안 감 → 재등록SKU
+{
+  const stH = ["현재상태", "SKU ID", "상품명", "발주가능상태", "보관사유"];
+  const pdH = ["현재상태", "SKU ID", "상품명", "발주가능상태"];
+  const rrH = ["현재상태", "SKU ID", "상품명", "발주가능상태", "보관사유", "기존 현재상태", "기록일", "진행상태"];
+  const st = [stH, ["재고있음", "300", "판매중지품", "불가", "판매중지"], ["재고있음", "301", "실적저조품", "불가", "실적저조 강제중단"], ["재고있음", "302", "옛 SKU", "정상", ""], ["재고있음", "303", "보통", "불가", "단종"]];
+  const pd = [pdH, ["", "302", "옛 SKU", "정상"]];
+  const recheck = [["SKU ID", "상품명", "창고 확인결과", "발주가능상태"], ["304", "링크죽음", "재고있음(판매중지)", "불가"]];
+  const plan = planWarehouseRecheckCleanup(recheck, pd, st, new Set(), rrH, "2026-10-22", [rrH], new Set(["302"]));
+  const toPd = [...plan.appendProductDb.map(row => row[1]), ...plan.clearStatusRows.map(String)];
+  if (toPd.join() !== "303") throw new Error("제품DB로 가면 안 되는 SKU가 감: " + toPd.join());
+  const rr = plan.appendRereg.map(row => row[1]).sort().join();
+  if (rr !== "300,301,302,304") throw new Error("재등록SKU로 못 감: " + rr);
+  if (plan.appendRereg.find(row => row[1] === "300")![0] !== "재고있음") throw new Error("현재상태 재고있음 메모는 그대로 둬야 함");
+  if (!plan.deleteProductDbRows.includes(2)) throw new Error("제품DB에 있던 옛 SKU 302는 제품DB에서도 지워야 함");
+  if (plan.moves.some(move => move.release && ["300", "301", "302", "304"].includes(move.skuId))) throw new Error("단종해제 대상에 넣으면 안 됨");
+  console.log("판매중지·실적저조·옛 SKU 제품DB 차단 OK");
+}

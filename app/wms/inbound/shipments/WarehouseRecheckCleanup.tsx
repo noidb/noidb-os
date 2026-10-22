@@ -54,7 +54,7 @@ export default function WarehouseRecheckCleanup({ onDone, embedded = false, auto
   return (
     <section>
       {!embedded && <h2 className={styles.listTitle}>구글시트 정리</h2>}
-      {!embedded && <p className={styles.meta}>제품DB: 현재상태에 '단종'이 들어간 행(거래처단종·단종(중복등록) 등)·비관리(중복등록) → 비관리SKU(적어 둔 이유도 함께). 현재상태에 '재등록'이 들어간 행·재등록SKU 탭에 있는 SKU → 재등록SKU 탭. 보관: 현재상태에 '재고있음'이 들어간 행 → 제품DB(현재상태 비움, 발주가능상태가 정상이 아니면 단종해제 대상).</p>}
+      {!embedded && <p className={styles.meta}>제품DB: 현재상태에 '단종'이 들어간 행(거래처단종·단종(중복등록) 등)·비관리(중복등록) → 비관리SKU(적어 둔 이유도 함께). 현재상태에 '재등록'이 들어간 행·재등록SKU 탭에 있는 SKU → 재등록SKU 탭. 보관: 현재상태에 '재고있음'이 들어간 행 → 제품DB(현재상태 비움, 발주가능상태가 정상이 아니면 단종해제 대상). 단, 판매중지·실적저조·교체된 옛 SKU는 재고있음이어도 제품DB로 가지 않고 재등록SKU로.</p>}
       {!preview ? (
         embedded ? <p className={styles.meta}>{busy === "preview" ? "정리할 행 읽는 중…" : "정리할 행을 읽지 못했습니다. 다시 눌러 주세요."}</p> : (
         <button type="button" className={`softSageButton ${styles.fullButton}`} disabled={Boolean(busy)} onClick={() => void load()}>

@@ -62,6 +62,17 @@ function mapRow(sourceHeaders: string[], source: string[], targetHeaders: string
   });
 }
 
+/**
+ * ★절대 규칙(사용자 확정 2026-10-22): 판매중지(링크 죽음)·실적저조(판매량저조) 강제발주중단 SKU는
+ * 발주가능상태·재고와 상관없이 재등록 없이는 절대 제품DB로 가지 않는다. 재고가 있으면 재등록SKU로.
+ */
+export const NEVER_PRODUCT_DB_PATTERN = /판매중지|실적저조|판매량저조|강제(발주)?중단/;
+export function neverProductDbReason(texts: readonly unknown[], retired?: string): string {
+  const hit = texts.map(text => squash(text)).find(text => NEVER_PRODUCT_DB_PATTERN.test(text));
+  if (hit) return hit.match(NEVER_PRODUCT_DB_PATTERN)![0];
+  return retired || "";
+}
+
 export const REREG_EXTRA_HEADERS = ["기존 현재상태", "기록일", "진행상태", "새 SKU ID", "완료일"];
 
 /**
@@ -132,8 +143,8 @@ export function planReregistrationTab(reregRows: string[][], productDb: string[]
   return { rebuild: undefined, leaving, keepIds };
 }
 
-export function planWarehouseRecheckCleanup(recheck: string[][], productDb: string[][], storage: string[][] | null, reregisteredSkuIds: ReadonlySet<string> = new Set(), reregHeaders: readonly string[] = [], today = "", reregRows?: string[][]): CleanupPlan & { reregRebuild?: { headers: string[]; rows: string[][]; filled: number }; deleteReregRows: number[]; appendRereg: string[][]; appendStorage: string[][]; appendProductDb: string[][]; clearStatusRows: number[]; deleteRows: number[]; deleteStorageRows: number[]; deleteProductDbRows: number[] } {
-  const token = createHash("sha256").update(JSON.stringify([recheck, storage, productDb, [...reregisteredSkuIds].sort(), reregHeaders, today, reregRows || null])).digest("hex").slice(0, 32);
+export function planWarehouseRecheckCleanup(recheck: string[][], productDb: string[][], storage: string[][] | null, reregisteredSkuIds: ReadonlySet<string> = new Set(), reregHeaders: readonly string[] = [], today = "", reregRows?: string[][], retiredSkuIds: ReadonlySet<string> = new Set()): CleanupPlan & { reregRebuild?: { headers: string[]; rows: string[][]; filled: number }; deleteReregRows: number[]; appendRereg: string[][]; appendStorage: string[][]; appendProductDb: string[][]; clearStatusRows: number[]; deleteRows: number[]; deleteStorageRows: number[]; deleteProductDbRows: number[] } {
+  const token = createHash("sha256").update(JSON.stringify([recheck, storage, productDb, [...reregisteredSkuIds].sort(), reregHeaders, today, reregRows || null, [...retiredSkuIds].sort()])).digest("hex").slice(0, 32);
   const problems: string[] = [];
   const reregPlan = reregRows && reregRows.length ? planReregistrationTab(reregRows, productDb, storage) : null;
   const deleteReregRows: number[] = [];
@@ -163,6 +174,8 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
   const moves: CleanupMove[] = [], unknown: CleanupPlan["unknown"] = [];
   const appendStorage: string[][] = [], appendProductDb: string[][] = [], clearStatusRows: number[] = [], deleteRows: number[] = [];
   let pending = 0;
+  const appendRereg: string[][] = [];
+  const forcedRereg = new Set<string>(); // 판매중지·실적저조·옛 SKU라 재등록SKU로 보내는 SKU(제품DB에 있으면 제품DB에서도 지움)
   if (!problems.length && hasRecheck) recheck.slice(1).forEach((row, index) => {
     const rowNumber = index + 2;
     const result = String(row[col.result] ?? "").trim();
@@ -179,6 +192,14 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       if (!already) { appendStorage.push(mapRow(headers, row, stHeaders, { "현재상태": "거래처단종" })); if (skuId) storageSkus.add(skuId); }
       moves.push({ source: "창고재확인", rowNumber, skuId, productName, result, orderableStatus: orderableHere, target: "보관", mode: already ? "delete-only" : "append", release: false });
       deleteRows.push(rowNumber);
+    } else if (key.includes("재고있음") && neverProductDbReason([result, ...row], retiredSkuIds.has(skuId) ? "SKU교체이력(옛 SKU)" : "")) {
+      // 판매중지·실적저조·교체된 옛 SKU: 재고가 있어도 제품DB가 아니라 재등록SKU로.
+      if (!reregHeaders.length) { problems.push("'재등록SKU' 탭을 찾지 못했습니다."); return; }
+      const why = neverProductDbReason([result, ...row], retiredSkuIds.has(skuId) ? "SKU교체이력(옛 SKU)" : "");
+      const already = reregisteredSkuIds.has(skuId) || forcedRereg.has(skuId);
+      if (!already) { appendRereg.push(mapRow(headers, row, [...reregHeaders], { "현재상태": result, "기존현재상태": result, "기록일": today, "진행상태": "대기" })); forcedRereg.add(skuId); }
+      moves.push({ source: "창고재확인", rowNumber, skuId, productName, result: `${result} · ${why} → 제품DB 못 감`, orderableStatus: orderableHere, target: "재등록SKU", mode: already ? "delete-only" : "append", release: false });
+      deleteRows.push(rowNumber);
     } else if (key.includes("재고있음")) {
       const existing = productDbRowBySku.get(skuId);
       const orderable = orderableHere || (existing && pd.orderable >= 0 ? String(productDb[existing - 1]?.[pd.orderable] ?? "").trim() : "");
@@ -192,7 +213,6 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
   });
   // 보관 탭: 현재상태(또는 창고 확인결과)에 '재고있음'이 들어간 행(예: 재고있음, 제품DB로 이동(재고있음)) → 제품DB로(현재상태 비움), 보관 탭에서 삭제
   const deleteStorageRows: number[] = [];
-  const appendRereg: string[][] = [];
   if (storage && !problems.length) {
     const st = { sku: find(stHeaders, "SKU ID", "SKUID", "SKU"), status: find(stHeaders, "현재상태"), result: find(stHeaders, "창고 확인결과", "창고확인결과"), name: find(stHeaders, "상품명"), orderable: find(stHeaders, "발주가능상태") };
     const planned = new Set(appendProductDb.map(row => String(row[pd.sku] ?? "").trim()));
@@ -245,6 +265,16 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       }
       const skuId = storageSku;
       const productName = st.name >= 0 ? String(row[st.name] ?? "").trim() : "";
+      // ★판매중지·실적저조·교체된 옛 SKU: '재고있음'이어도 제품DB로 보내지 않고 재등록SKU로(현재상태 '재고있음'은 메모로 그대로).
+      const never = neverProductDbReason(row, skuId && retiredSkuIds.has(skuId) ? "SKU교체이력(옛 SKU)" : "");
+      if (never) {
+        if (!reregHeaders.length) { problems.push("'재등록SKU' 탭을 찾지 못했습니다."); return; }
+        const already = forcedRereg.has(skuId);
+        if (!already) { appendRereg.push(mapRow(stHeaders, row, [...reregHeaders], { "기존현재상태": storageStatus, "기록일": today, "진행상태": "대기" })); forcedRereg.add(skuId); }
+        moves.push({ source: "보관", rowNumber, skuId, productName, result: `${storageStatus || "재고있음"} · ${never} → 제품DB 못 감`, orderableStatus: storageOrderable, target: "재등록SKU", mode: already ? "delete-only" : "append", release: false });
+        deleteStorageRows.push(rowNumber);
+        return;
+      }
       const existing = productDbRowBySku.get(skuId);
       const orderableHere = st.orderable >= 0 ? String(row[st.orderable] ?? "").trim() : "";
       const orderable = orderableHere || (existing && pd.orderable >= 0 ? String(productDb[existing - 1]?.[pd.orderable] ?? "").trim() : "");
@@ -288,10 +318,10 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
         return;
       }
       const markedRereg = squash(status).includes("재등록");
-      const reregistered = Boolean(skuId) && (reregisteredSkuIds.has(skuId) || markedRereg);
+      const reregistered = Boolean(skuId) && (reregisteredSkuIds.has(skuId) || markedRereg || forcedRereg.has(skuId));
       if (reregistered && !keep.has(rowNumber)) {
         // 재등록 대상 → 재등록SKU 탭(보관 탭이 아님). 이미 탭에 있으면 제품DB에서만 지운다.
-        const already = reregisteredSkuIds.has(skuId) || reregPlanned.has(skuId);
+        const already = reregisteredSkuIds.has(skuId) || reregPlanned.has(skuId) || forcedRereg.has(skuId);
         if (!already) {
           if (!reregHeaders.length) { problems.push("'재등록SKU' 탭을 찾지 못했습니다."); return; }
           appendRereg.push(mapRow(pdHeaders, row, [...reregHeaders], { "기존현재상태": status, "기록일": today, "진행상태": "대기" }));
