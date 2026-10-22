@@ -51,7 +51,7 @@ async function load() {
   const reregisteredSkuIds = new Set(reregSkuCol < 0 ? [] : rereg.slice(1).map(row => String(row[reregSkuCol] ?? "").trim()).filter(id => /^\d{1,20}$/.test(id)));
   const productDbTab = tabs.find(tab => tab.title === PRODUCT_DB_SHEET_NAME);
   return { recheckTab, storageTab, productDbTab, plan: planWarehouseRecheckCleanup(recheck, productDb, storage, reregisteredSkuIds, (rereg[0] || []).map(value => String(value ?? "")),
-    new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10), reregTab ? rereg : undefined, retiredSkuIds, { other: otherRows, stopped: stoppedRows }), reregTab, REREGISTRATION_TAB, fill };
+    new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10), reregTab ? rereg : undefined, retiredSkuIds, { other: otherRows, stopped: stoppedRows }), reregTab, otherTab, stoppedTab, REREGISTRATION_TAB, fill };
 }
 const summary = ({ plan, fill }: Awaited<ReturnType<typeof load>>) => ({ token: plan.token, pending: plan.pending, moves: plan.moves, unknown: plan.unknown, problems: plan.problems,
   fill: { cost: fill.updates.filter(item => item.field.startsWith("원가")).length, dimension: fill.updates.filter(item => item.field === "치수").length,
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
   if (!isSameOriginActionRequest(request)) return NextResponse.json({ ok: false, error: "사이트 화면에서 다시 진행해 주세요." }, { status: 403, headers });
   try {
     const body = await request.json() as { token?: unknown };
-    const { recheckTab, storageTab, productDbTab, plan, reregTab, REREGISTRATION_TAB, fill } = await load();
+    const { recheckTab, storageTab, productDbTab, plan, reregTab, otherTab, stoppedTab, REREGISTRATION_TAB, fill } = await load();
     if (plan.problems.length) throw new Error(plan.problems.join(" "));
     if (body.token !== plan.token) throw new Error("미리보기 뒤에 구글시트가 바뀌었습니다. 다시 미리보기 후 실행해 주세요.");
     if (!plan.moves.length && !fill.updates.length) throw new Error("옮길 행이 없습니다.");
@@ -117,12 +117,21 @@ export async function POST(request: NextRequest) {
     if (plan.appendOtherRereg.length) await appendSheetRowsKeepingFormulas(OTHER_REREGISTRATION_TAB, plan.appendOtherRereg);
     if (plan.appendStopped.length) await appendSheetRowsKeepingFormulas(STOPPED_TAB, plan.appendStopped);
     await appendSheetRowsKeepingFormulas(PRODUCT_DB_SHEET_NAME, plan.appendProductDb);
-    // 2026-10-23: 제품DB 맨 아래에 붙인 줄을 같은 모델 묶음 옆으로 옮긴다(모델명이 같은 줄끼리 붙어 있게).
+    // 2026-10-23: 맨 아래에 붙인 줄을 같은 모델 묶음 옆으로 옮긴다(모델명이 같은 줄끼리 붙어 있게).
+    // 제품DB뿐 아니라 비관리SKU·실적저조SKU·그 외 재등록SKU·판매중지SKU도 같은 규칙(사용자 요청 2026-10-23).
     let regrouped = 0;
-    if (plan.appendProductDb.length && productDbTab) {
-      const regroup = planModelRegroup(await fetchSheetRows(PRODUCT_DB_SHEET_NAME));
-      await moveSheetRows(productDbTab.sheetId, regroup.moves);
-      regrouped = regroup.models.length;
+    const regroupTargets: { title: string; sheetId?: number; appended: number }[] = [
+      { title: PRODUCT_DB_SHEET_NAME, sheetId: productDbTab?.sheetId, appended: plan.appendProductDb.length },
+      { title: storageTab?.title || "", sheetId: storageTab?.sheetId, appended: plan.appendStorage.length },
+      { title: REREGISTRATION_TAB, sheetId: reregTab?.sheetId, appended: plan.appendRereg.length },
+      { title: OTHER_REREGISTRATION_TAB, sheetId: otherTab?.sheetId, appended: plan.appendOtherRereg.length },
+      { title: STOPPED_TAB, sheetId: stoppedTab?.sheetId, appended: plan.appendStopped.length },
+    ];
+    for (const target of regroupTargets) {
+      if (!target.appended || !target.title || target.sheetId === undefined) continue;
+      const regroup = planModelRegroup(await fetchSheetRows(target.title));
+      await moveSheetRows(target.sheetId, regroup.moves);
+      regrouped += regroup.models.length;
     }
     if (recheckTab) await deleteSheetRows(recheckTab.sheetId, plan.deleteRows);
     // 5) 발주가능상태가 정상이 아닌 제품DB 이동 SKU → 단종해제 대상
