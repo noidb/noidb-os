@@ -101,19 +101,21 @@ export function PickBar({ expectedDate, picks }: { expectedDate: string; picks: 
 
 const won = (value: number) => `${value.toLocaleString("ko-KR")}원`;
 
-/** 두 보기에서 똑같이 쓰는 상품 정보 줄(이름·옵션 / SKU·번호 / 바코드 / 매입가 / 제품링크). */
+/** 두 보기에서 똑같이 쓰는 상품 정보 줄(이름·옵션 / SKU·번호 / 바코드 / 매입가). 상품명을 누르면 제품링크가 열린다. */
 export function ProductInfo({ name, option, skuId, warehouseNumber, barcode, priceMin, priceMax, productLink, extra }: {
   name: string; option?: string; skuId: string; warehouseNumber?: string; barcode: string; priceMin?: number; priceMax?: number; productLink?: string; extra?: React.ReactNode;
 }) {
   const price = priceMax ? (priceMin && priceMin !== priceMax ? `${priceMin.toLocaleString("ko-KR")}~${won(priceMax)}` : won(priceMax)) : "";
   return (
     <div style={{ minWidth: 0 }}>
-      <div style={{ fontSize: "13px", fontWeight: 700, lineHeight: 1.35 }}>{name}{option ? ` · ${option}` : ""}</div>
+      {/* 2026-10-22: 제품링크 줄 대신 상품명을 누르면 제품 페이지가 열린다. */}
+      {productLink
+        ? <a href={productLink} target="_blank" rel="noreferrer" title="제품링크 열기" style={{ display: "block", fontSize: "13px", fontWeight: 700, lineHeight: 1.35, color: "inherit", textDecoration: "underline", textDecorationColor: "#c7b9a8", textUnderlineOffset: "3px" }}>{name}{option ? ` · ${option}` : ""}</a>
+        : <div style={{ fontSize: "13px", fontWeight: 700, lineHeight: 1.35 }}>{name}{option ? ` · ${option}` : ""}</div>}
       <div style={{ fontSize: "12px", color: wmsColors.muted, marginTop: "3px", lineHeight: 1.45 }}>SKU {skuId || "-"}{warehouseNumber ? ` · 번호 ${warehouseNumber}` : ""}</div>
       {extra ? <div style={{ fontSize: "12px", color: wmsColors.muted, lineHeight: 1.45, whiteSpace: "nowrap" }}>{extra}</div> : null}
       <div style={{ fontSize: "12px", fontFamily: "monospace", marginTop: "2px", lineHeight: 1.45, overflowWrap: "anywhere" }}>{barcode}</div>
       {price && <div style={{ fontSize: "12px", fontWeight: 700, marginTop: "2px" }}>매입가 {price}</div>}
-      {productLink && <a href={productLink} target="_blank" rel="noreferrer" style={{ fontSize: "12px", color: wmsColors.slateDark, display: "inline-block", marginTop: "3px" }}>제품링크 ↗</a>}
     </div>
   );
 }

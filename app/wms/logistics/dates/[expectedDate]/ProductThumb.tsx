@@ -12,13 +12,16 @@ import { wmsColors } from "@/lib/wms/ui-tokens";
  * 모델명으로 찾는 /api/wms/product-image/from-drive로 대신 띄운다. 둘 다 실패하면 "이미지 없음".
  * 누르면 큰 이미지를 새 탭으로 연다.
  */
-export default function ProductThumb({ catalog, skuId, alt }: { catalog?: ProductCatalogItem; skuId: string; alt: string }) {
+/** 발주제품보기 목록용 큰 사진 크기(2026-10-22): PC는 116px, 좁은 화면은 84px까지 줄어든다. */
+export const LARGE_THUMB = "clamp(84px, 24vw, 116px)";
+
+export default function ProductThumb({ catalog, skuId, alt, size = "64px" }: { catalog?: ProductCatalogItem; skuId: string; alt: string; size?: string }) {
   const driveFallbackUrl = `/api/wms/product-image/from-drive?model=${encodeURIComponent(catalog?.modelSku || catalog?.modelName || skuId)}`;
   const [src, setSrc] = useState(() => getWmsDisplayImageUrl(catalog?.imageUrl) || driveFallbackUrl);
   const [failed, setFailed] = useState(false);
 
   if (failed) {
-    return <div style={{ width: "64px", height: "64px", borderRadius: "10px", background: "#f2f2f2", fontSize: "11px", color: wmsColors.muted, display: "grid", placeItems: "center" }}>이미지 없음</div>;
+    return <div style={{ width: size, height: size, borderRadius: "10px", background: "#f2f2f2", fontSize: "11px", color: wmsColors.muted, display: "grid", placeItems: "center" }}>이미지 없음</div>;
   }
   return (
     <a href={src} target="_blank" rel="noreferrer" style={{ lineHeight: 0 }}>
@@ -28,7 +31,7 @@ export default function ProductThumb({ catalog, skuId, alt }: { catalog?: Produc
         alt={alt}
         loading="lazy"
         onError={() => { if (src !== driveFallbackUrl) setSrc(driveFallbackUrl); else setFailed(true); }}
-        style={{ width: "64px", height: "64px", objectFit: "cover", borderRadius: "10px", display: "block", background: "#f2f2f2" }}
+        style={{ width: size, height: size, objectFit: "cover", borderRadius: "10px", display: "block", background: "#f2f2f2" }}
       />
     </a>
   );

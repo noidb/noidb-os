@@ -13,9 +13,10 @@ import { createHash } from "node:crypto";
  * 보관 탭 = '_보관_비관리SKU_20261008'(사용자 확인 2026-10-19). 거래처단종은 이 탭으로 옮긴다.
  * 제품DB(사용자 확정 2026-10-19): 현재상태가 비관리(중복등록)·거래처단종·단종인 행은 보관 탭으로 옮기고 제품DB에서 지운다.
  *   판매중지·가품중단은 옮기지 않는다. 보관 탭에 같은 SKU가 이미 있으면 새로 붙이지 않고 제품DB에서만 지운다.
- * 재등록SKU 탭(사용자 확정 2026-10-22): 그 탭에 있는 옛 SKU는 현재상태와 상관없이 제품DB에서 보관 탭으로 옮긴다(새 SKU로 재등록할 대상).
+ * 재등록SKU 탭(사용자 확정 2026-10-22): 그 탭에 있는 옛 SKU는 현재상태와 상관없이 제품DB에서 지운다(새 SKU로 재등록할 대상).
+ *   보관 탭이 아니라 재등록SKU 탭으로 옮긴다(사용자 정정 2026-10-22) — 이미 재등록SKU 탭에 있으면 제품DB에서만 지운다.
  *   보관 탭에서 '재고있음'으로 바꿔 둬도 재등록SKU 탭에 있으면 제품DB로 되돌리지 않는다.
- * 제품DB 현재상태에 '재등록'이 들어간 행(예: 재등록/소재수정후, 2026-10-22): 재등록SKU 탭에 한 줄 넣고(진행상태 대기) 위와 같이 보관으로 옮긴다.
+ * 제품DB 현재상태에 '재등록'이 들어간 행(예: 재등록/소재수정후, 2026-10-22): 재등록SKU 탭에 한 줄 넣고(진행상태 대기) 제품DB에서 지운다.
  */
 export const RECHECK_TAB = "창고재확인";
 export const STORAGE_TAB = "_보관_비관리SKU_20261008";
@@ -40,7 +41,7 @@ export function isProductDbToStorageStatus(status: unknown): boolean {
 const squash = (value: unknown) => String(value ?? "").replace(/\s+/g, "");
 const find = (headers: string[], ...names: string[]) => headers.findIndex(header => names.some(name => squash(header) === squash(name)));
 
-export interface CleanupMove { source: "창고재확인" | "보관" | "제품DB"; rowNumber: number; skuId: string; productName: string; result: string; orderableStatus: string; target: "보관" | "제품DB"; mode: "append" | "clear-status" | "delete-only"; productDbRow?: number; release: boolean }
+export interface CleanupMove { source: "창고재확인" | "보관" | "제품DB"; rowNumber: number; skuId: string; productName: string; result: string; orderableStatus: string; target: "보관" | "제품DB" | "재등록SKU"; mode: "append" | "clear-status" | "delete-only"; productDbRow?: number; release: boolean }
 export interface CleanupPlan {
   token: string;
   pending: number;
@@ -144,14 +145,21 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       const skuId = String(row[pd.sku] ?? "").trim();
       const markedRereg = squash(status).includes("재등록");
       const reregistered = Boolean(skuId) && (reregisteredSkuIds.has(skuId) || markedRereg);
-      if (markedRereg && skuId && !reregisteredSkuIds.has(skuId) && !reregPlanned.has(skuId)) {
-        if (!reregHeaders.length) { problems.push("'재등록SKU' 탭을 찾지 못했습니다."); return; }
-        appendRereg.push(mapRow(pdHeaders, row, [...reregHeaders], { "기존현재상태": status, "기록일": today, "진행상태": "대기" }));
-        reregPlanned.add(skuId);
+      if (reregistered && !keep.has(rowNumber)) {
+        // 재등록 대상 → 재등록SKU 탭(보관 탭이 아님). 이미 탭에 있으면 제품DB에서만 지운다.
+        const already = reregisteredSkuIds.has(skuId) || reregPlanned.has(skuId);
+        if (!already) {
+          if (!reregHeaders.length) { problems.push("'재등록SKU' 탭을 찾지 못했습니다."); return; }
+          appendRereg.push(mapRow(pdHeaders, row, [...reregHeaders], { "기존현재상태": status, "기록일": today, "진행상태": "대기" }));
+          reregPlanned.add(skuId);
+        }
+        moves.push({ source: "제품DB", rowNumber, skuId, productName: pdName >= 0 ? String(row[pdName] ?? "").trim() : "", result: status || "재등록SKU 탭에 있음", orderableStatus: pd.orderable >= 0 ? String(row[pd.orderable] ?? "").trim() : "", target: "재등록SKU", mode: already ? "delete-only" : "append", release: false });
+        deleteProductDbRows.push(rowNumber);
+        return;
       }
-      if ((!isProductDbToStorageStatus(status) && !reregistered) || keep.has(rowNumber)) return;
+      if (!isProductDbToStorageStatus(status) || keep.has(rowNumber)) return;
       if (!storage) { problems.push(`'${STORAGE_TAB}' 탭을 찾지 못했습니다.`); return; }
-      const reason = reregistered ? (status ? `재등록SKU(${status})` : "재등록SKU") : status;
+      const reason = status;
       const already = Boolean(skuId) && inStorage.has(skuId);
       // 현재상태(이유 포함)는 그대로 옮기고, 보관사유 칸이 있으면 그 글을 함께 남긴다.
       if (!already) { appendStorage.push(mapRow(pdHeaders, row, stHeaders, { "보관사유": reason })); if (skuId) inStorage.add(skuId); }

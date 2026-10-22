@@ -52,20 +52,20 @@ console.log("rerun ok");
   console.log("PASS 보관 '재고있음' → 제품DB");
 }
 
-// 2026-10-22 재등록SKU 탭에 있는 옛 SKU는 현재상태와 상관없이 제품DB → 보관, 보관의 재고있음이라도 제품DB로 되돌리지 않음
+// 2026-10-22 재등록SKU 탭에 있는 옛 SKU는 현재상태와 상관없이 제품DB에서 지움(이미 탭에 있음), 보관의 재고있음이라도 제품DB로 되돌리지 않음
 {
   const pdH = ["현재상태", "SKU ID", "상품명", "발주가능상태"];
   const stH = ["현재상태", "SKU ID", "상품명", "발주가능상태", "보관사유"];
   const pd = [pdH, ["과재고", "111", "옛반지", "일시중단"], ["", "222", "그대로", "정상"]];
   const st = [stH, ["재고있음", "333", "재등록옛", "불가", ""]];
   const plan = planWarehouseRecheckCleanup([], pd, st, new Set(["111", "333"]));
-  if (plan.deleteProductDbRows.join() !== "2") throw new Error("재등록SKU 행을 보관으로 옮기지 않음");
-  if (plan.appendStorage[0]?.[4] !== "재등록SKU(과재고)") throw new Error("보관사유 실패");
+  if (plan.deleteProductDbRows.join() !== "2") throw new Error("재등록SKU 행을 제품DB에서 지우지 않음");
+  if (plan.appendStorage.length || plan.appendRereg.length || plan.moves[0]?.target !== "재등록SKU" || plan.moves[0]?.mode !== "delete-only") throw new Error("이미 재등록SKU에 있으면 제품DB에서만 지워야 함");
   if (plan.deleteStorageRows.length || plan.appendProductDb.length) throw new Error("재등록 SKU가 제품DB로 되돌아감");
   console.log("reregistered → storage OK");
 }
 
-// 2026-10-22 현재상태에 '재등록'이 들어간 제품DB 행 → 재등록SKU 탭에 한 줄 + 보관으로
+// 2026-10-22 현재상태에 '재등록'이 들어간 제품DB 행 → 재등록SKU 탭에 한 줄, 보관으로는 안 감
 {
   const pdH = ["현재상태", "모델명/품번", "모델SKU", "SKU ID", "이미지", "상품명", "제품링크"];
   const stH = ["현재상태", "SKU ID", "상품명", "보관사유"];
@@ -74,6 +74,7 @@ console.log("rerun ok");
   const plan = planWarehouseRecheckCleanup([], pd, [stH], new Set(["502"]), rrH, "2026-10-22");
   if (plan.deleteProductDbRows.join() !== "2,3") throw new Error("재등록 행 제품DB에서 지우기 실패");
   if (plan.appendRereg.length !== 1 || plan.appendRereg[0].join("|") !== "501|wr1|wr1S|재등록/소재수정후|2026-10-22|대기|||=IMAGE(\"u\",4,80,80)|반지|http://x") throw new Error("재등록SKU 줄 실패: " + JSON.stringify(plan.appendRereg));
-  if (plan.appendStorage.map(r => r[3]).join() !== "재등록SKU(재등록/소재수정후),재등록SKU(소재수정후 재등록)") throw new Error("보관사유 실패");
+  if (plan.appendStorage.length) throw new Error("재등록 대상은 보관으로 가면 안 됨");
+  if (plan.moves.map(m => m.target).join() !== "재등록SKU,재등록SKU") throw new Error("옮길 곳 실패");
   console.log("재등록 키워드 → 재등록SKU+보관 OK");
 }

@@ -7,7 +7,7 @@ import type { InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { loadShipmentPrintGroupsByDate } from "@/lib/wms/load-shipment-print-groups";
 import type { ShipmentPrintGroup } from "@/lib/wms/shipment-print-client";
-import ProductThumb from "../ProductThumb";
+import ProductThumb, { LARGE_THUMB } from "../ProductThumb";
 import { initialQueryFromUrl, OrderedProductsSwitch, PickBar, PickButton, ProductInfo, useOutboundPicks } from "../OrderedProductsShared";
 import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 import { WMS_MOBILE_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
@@ -173,9 +173,9 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
                     const unitPrice = unitPriceByPoSku.get(priceKey(row.purchaseOrderNumber, row.skuId)) || 0;
                     const isPicked = Boolean(picks.picked[row.skuId]);
                     return (
-                      <li key={`${row.purchaseOrderNumber}-${row.skuId}-${row.sourceRowNumber}`} style={{ display: "grid", gridTemplateColumns: "24px 64px minmax(0, 1fr) auto", gap: "10px", alignItems: "start", padding: "10px", borderRadius: "14px", background: isPicked ? "#fbf1ee" : "#fff", border: `1px solid ${isPicked ? "#dfbdb2" : "#e5dace"}` }}>
+                      <li key={`${row.purchaseOrderNumber}-${row.skuId}-${row.sourceRowNumber}`} style={{ display: "grid", gridTemplateColumns: `24px ${LARGE_THUMB} minmax(0, 1fr) auto`, gap: "10px", alignItems: "start", padding: "10px", borderRadius: "14px", background: isPicked ? "#fbf1ee" : "#fff", border: `1px solid ${isPicked ? "#dfbdb2" : "#e5dace"}` }}>
                         <span style={{ fontSize: "12px", color: wmsColors.muted, textAlign: "center" }}>{order}</span>
-                        <ProductThumb key={row.skuId} catalog={catalog} skuId={row.skuId} alt={row.productName} />
+                        <ProductThumb key={row.skuId} catalog={catalog} skuId={row.skuId} alt={row.productName} size={LARGE_THUMB} />
                         <ProductInfo name={row.productName} option={row.optionLabel} skuId={row.skuId} warehouseNumber={row.warehouseNumber} barcode={row.barcode} priceMax={unitPrice} productLink={catalog?.productLink} />
                         <div style={{ display: "grid", justifyItems: "end", gap: "6px" }}>
                           <div style={{ fontSize: "20px", fontWeight: 800, minWidth: "36px", textAlign: "right" }}>{row.quantity}<span style={{ fontSize: "11px", fontWeight: 600 }}>개</span></div>

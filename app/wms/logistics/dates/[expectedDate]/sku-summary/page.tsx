@@ -6,7 +6,7 @@ import { readLocalInvoiceGroupSnapshot } from "@/lib/wms/invoice-group/local-rep
 import type { InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
-import ProductThumb from "../ProductThumb";
+import ProductThumb, { LARGE_THUMB } from "../ProductThumb";
 import { initialQueryFromUrl, OrderedProductsSwitch, PickBar, PickButton, ProductInfo, useOutboundPicks } from "../OrderedProductsShared";
 import { WMS_MOBILE_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
 import type { SkuSummaryPurchaseOrder, SkuSummaryRow } from "@/app/api/wms/logistics/sku-summary/route";
@@ -117,8 +117,8 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
               const display = resolveDisplayNameAndOption(row.productName, row.optionName);
               const rowKey = row.skuId || row.barcode;
               return (
-                <li key={rowKey} style={{ display: "grid", gridTemplateColumns: "64px minmax(0, 1fr) auto", gap: "10px", alignItems: "start", padding: "10px", borderRadius: "14px", background: picks.picked[row.skuId] ? "#fbf1ee" : "#fff", border: `1px solid ${picks.picked[row.skuId] ? "#dfbdb2" : "#e5dace"}` }}>
-                  <ProductThumb key={row.skuId} catalog={catalog} skuId={row.skuId} alt={display.name} />
+                <li key={rowKey} style={{ display: "grid", gridTemplateColumns: `${LARGE_THUMB} minmax(0, 1fr) auto`, gap: "10px", alignItems: "start", padding: "10px", borderRadius: "14px", background: picks.picked[row.skuId] ? "#fbf1ee" : "#fff", border: `1px solid ${picks.picked[row.skuId] ? "#dfbdb2" : "#e5dace"}` }}>
+                  <ProductThumb key={row.skuId} catalog={catalog} skuId={row.skuId} alt={display.name} size={LARGE_THUMB} />
                   <ProductInfo
                     name={display.name}
                     option={display.option}
