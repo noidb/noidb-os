@@ -51,3 +51,16 @@ console.log("rerun ok");
   assert.deepEqual(plan.moves.map(m => [m.skuId, m.target, m.result]), [["9001", "제품DB", "재고있음"]]);
   console.log("PASS 보관 '재고있음' → 제품DB");
 }
+
+// 2026-10-22 재등록SKU 탭에 있는 옛 SKU는 현재상태와 상관없이 제품DB → 보관, 보관의 재고있음이라도 제품DB로 되돌리지 않음
+{
+  const pdH = ["현재상태", "SKU ID", "상품명", "발주가능상태"];
+  const stH = ["현재상태", "SKU ID", "상품명", "발주가능상태", "보관사유"];
+  const pd = [pdH, ["과재고", "111", "옛반지", "일시중단"], ["", "222", "그대로", "정상"]];
+  const st = [stH, ["재고있음", "333", "재등록옛", "불가", ""]];
+  const plan = planWarehouseRecheckCleanup([], pd, st, new Set(["111", "333"]));
+  if (plan.deleteProductDbRows.join() !== "2") throw new Error("재등록SKU 행을 보관으로 옮기지 않음");
+  if (plan.appendStorage[0]?.[4] !== "재등록SKU(과재고)") throw new Error("보관사유 실패");
+  if (plan.deleteStorageRows.length || plan.appendProductDb.length) throw new Error("재등록 SKU가 제품DB로 되돌아감");
+  console.log("reregistered → storage OK");
+}

@@ -9,6 +9,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 const headers = { "Cache-Control": "private, no-store" };
+const REREGISTRATION_TAB = "재등록SKU";
 
 async function load() {
   const tabs = await fetchSpreadsheetTabs();
@@ -16,13 +17,18 @@ async function load() {
   const storageTitle = pickStorageTabTitle(tabs.map(tab => tab.title));
   const storageTab = storageTitle ? tabs.find(tab => tab.title === storageTitle) : undefined;
   if (!recheckTab && !storageTab) throw new Error(`'${RECHECK_TAB}'·'${STORAGE_TAB}' 탭을 찾지 못했습니다.`);
-  const [recheck, productDb, storage] = await Promise.all([
+  const reregTab = tabs.find(tab => tab.title === REREGISTRATION_TAB);
+  const [recheck, productDb, storage, rereg] = await Promise.all([
     recheckTab ? fetchSheetRows(RECHECK_TAB, { valueRenderOption: "FORMULA" }) : Promise.resolve([] as string[][]),
     fetchSheetRows(PRODUCT_DB_SHEET_NAME, { valueRenderOption: "FORMULA" }),
     storageTab ? fetchSheetRows(storageTab.title, { valueRenderOption: "FORMULA" }) : Promise.resolve(null),
+    reregTab ? fetchSheetRows(REREGISTRATION_TAB) : Promise.resolve([] as string[][]),
   ]);
+  // 재등록SKU 탭의 옛 SKU → 제품DB에서 보관으로(2026-10-22)
+  const reregSkuCol = (rereg[0] || []).findIndex(header => String(header ?? "").replace(/\s+/g, "") === "SKUID");
+  const reregisteredSkuIds = new Set(reregSkuCol < 0 ? [] : rereg.slice(1).map(row => String(row[reregSkuCol] ?? "").trim()).filter(id => /^\d{1,20}$/.test(id)));
   const productDbTab = tabs.find(tab => tab.title === PRODUCT_DB_SHEET_NAME);
-  return { recheckTab, storageTab, productDbTab, plan: planWarehouseRecheckCleanup(recheck, productDb, storage) };
+  return { recheckTab, storageTab, productDbTab, plan: planWarehouseRecheckCleanup(recheck, productDb, storage, reregisteredSkuIds) };
 }
 const summary = (plan: Awaited<ReturnType<typeof load>>["plan"]) => ({ token: plan.token, pending: plan.pending, moves: plan.moves, unknown: plan.unknown, problems: plan.problems });
 

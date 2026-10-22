@@ -13,6 +13,8 @@ import { createHash } from "node:crypto";
  * 보관 탭 = '_보관_비관리SKU_20261008'(사용자 확인 2026-10-19). 거래처단종은 이 탭으로 옮긴다.
  * 제품DB(사용자 확정 2026-10-19): 현재상태가 비관리(중복등록)·거래처단종·단종인 행은 보관 탭으로 옮기고 제품DB에서 지운다.
  *   판매중지·가품중단은 옮기지 않는다. 보관 탭에 같은 SKU가 이미 있으면 새로 붙이지 않고 제품DB에서만 지운다.
+ * 재등록SKU 탭(사용자 확정 2026-10-22): 그 탭에 있는 옛 SKU는 현재상태와 상관없이 제품DB에서 보관 탭으로 옮긴다(새 SKU로 재등록할 대상).
+ *   보관 탭에서 '재고있음'으로 바꿔 둬도 재등록SKU 탭에 있으면 제품DB로 되돌리지 않는다.
  */
 export const RECHECK_TAB = "창고재확인";
 export const STORAGE_TAB = "_보관_비관리SKU_20261008";
@@ -55,8 +57,8 @@ function mapRow(sourceHeaders: string[], source: string[], targetHeaders: string
   });
 }
 
-export function planWarehouseRecheckCleanup(recheck: string[][], productDb: string[][], storage: string[][] | null): CleanupPlan & { appendStorage: string[][]; appendProductDb: string[][]; clearStatusRows: number[]; deleteRows: number[]; deleteStorageRows: number[]; deleteProductDbRows: number[] } {
-  const token = createHash("sha256").update(JSON.stringify([recheck, storage, productDb])).digest("hex").slice(0, 32);
+export function planWarehouseRecheckCleanup(recheck: string[][], productDb: string[][], storage: string[][] | null, reregisteredSkuIds: ReadonlySet<string> = new Set()): CleanupPlan & { appendStorage: string[][]; appendProductDb: string[][]; clearStatusRows: number[]; deleteRows: number[]; deleteStorageRows: number[]; deleteProductDbRows: number[] } {
+  const token = createHash("sha256").update(JSON.stringify([recheck, storage, productDb, [...reregisteredSkuIds].sort()])).digest("hex").slice(0, 32);
   const problems: string[] = [];
   const headers = (recheck[0] || []).map(value => String(value ?? ""));
   const col = { result: find(headers, "창고 확인결과", "창고확인결과"), sku: find(headers, "SKU ID", "SKUID", "SKU"), name: find(headers, "상품명"), orderable: find(headers, "발주가능상태") };
@@ -112,6 +114,7 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       const marked = [st.status, st.result].some(column => column >= 0 && squash(row[column]).includes("재고있음"));
       if (!marked) return;
       const skuId = st.sku >= 0 ? String(row[st.sku] ?? "").trim() : "";
+      if (skuId && reregisteredSkuIds.has(skuId)) return;
       const productName = st.name >= 0 ? String(row[st.name] ?? "").trim() : "";
       const existing = productDbRowBySku.get(skuId);
       const orderableHere = st.orderable >= 0 ? String(row[st.orderable] ?? "").trim() : "";
@@ -135,13 +138,15 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
     productDb.slice(1).forEach((row, index) => {
       const rowNumber = index + 2;
       const status = String(row[pd.status] ?? "").trim();
-      if (!isProductDbToStorageStatus(status) || keep.has(rowNumber)) return;
-      if (!storage) { problems.push(`'${STORAGE_TAB}' 탭을 찾지 못했습니다.`); return; }
       const skuId = String(row[pd.sku] ?? "").trim();
+      const reregistered = Boolean(skuId) && reregisteredSkuIds.has(skuId);
+      if ((!isProductDbToStorageStatus(status) && !reregistered) || keep.has(rowNumber)) return;
+      if (!storage) { problems.push(`'${STORAGE_TAB}' 탭을 찾지 못했습니다.`); return; }
+      const reason = reregistered ? (status ? `재등록SKU(${status})` : "재등록SKU") : status;
       const already = Boolean(skuId) && inStorage.has(skuId);
       // 현재상태(이유 포함)는 그대로 옮기고, 보관사유 칸이 있으면 그 글을 함께 남긴다.
-      if (!already) { appendStorage.push(mapRow(pdHeaders, row, stHeaders, { "보관사유": status })); if (skuId) inStorage.add(skuId); }
-      moves.push({ source: "제품DB", rowNumber, skuId, productName: pdName >= 0 ? String(row[pdName] ?? "").trim() : "", result: status, orderableStatus: pd.orderable >= 0 ? String(row[pd.orderable] ?? "").trim() : "", target: STORAGE_LABEL, mode: already ? "delete-only" : "append", release: false });
+      if (!already) { appendStorage.push(mapRow(pdHeaders, row, stHeaders, { "보관사유": reason })); if (skuId) inStorage.add(skuId); }
+      moves.push({ source: "제품DB", rowNumber, skuId, productName: pdName >= 0 ? String(row[pdName] ?? "").trim() : "", result: reason, orderableStatus: pd.orderable >= 0 ? String(row[pd.orderable] ?? "").trim() : "", target: STORAGE_LABEL, mode: already ? "delete-only" : "append", release: false });
       deleteProductDbRows.push(rowNumber);
     });
   }
