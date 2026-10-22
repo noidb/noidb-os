@@ -186,18 +186,32 @@ function columnIndexToLetter(index: number): string {
 }
 
 /**
- * 지정한 셀들만 정확히 골라서 업데이트한다 (values:batchUpdate, valueInputOption=RAW).
+ * 지정한 셀들만 정확히 골라서 업데이트한다 (values:batchUpdate, 기본 RAW · =IMAGE() 사진 수식만 USER_ENTERED).
  * 시트 전체나 범위를 덮어쓰지 않고, 호출한 쪽이 명시한 (행, 열) 좌표의 셀만 건드린다.
  * 이 함수는 어디서도 자동으로 호출되지 않으며, 사용자가 화면에서 저장을 눌렀을 때만 호출된다.
  */
 export async function updateSheetCells(sheetName: string, updates: SheetCellUpdate[]): Promise<void> {
   if (updates.length === 0) return;
+  // 2026-10-22: =IMAGE() 사진 수식은 RAW로 쓰면 앞에 '가 붙은 글자로 들어가 사진이 안 뜬다 → 수식으로 쓴다(USER_ENTERED).
+  // 그 밖의 값은 앞자리 0·바코드 등이 바뀌지 않게 지금처럼 RAW로 쓴다.
+  const isImageFormula = (update: SheetCellUpdate) => typeof update.value === "string" && /^=IMAGE\(/i.test(update.value.trim());
+  const formulas = updates.filter(isImageFormula);
+  const plain = updates.filter(update => !isImageFormula(update));
+  if (formulas.length && plain.length) {
+    await updateSheetCells(sheetName, plain);
+    await writeSheetCells(sheetName, formulas, "USER_ENTERED");
+    return;
+  }
+  await writeSheetCells(sheetName, updates, formulas.length ? "USER_ENTERED" : "RAW");
+}
+
+async function writeSheetCells(sheetName: string, updates: SheetCellUpdate[], valueInputOption: "RAW" | "USER_ENTERED"): Promise<void> {
   const accessToken = await getWmsGoogleAccessToken();
   const spreadsheetId = getWmsSpreadsheetId();
   const url = `${SHEETS_API_BASE}/${spreadsheetId}/values:batchUpdate`;
 
   const body = {
-    valueInputOption: "RAW",
+    valueInputOption,
     data: updates.map(update => ({
       range: `'${sheetName}'!${columnIndexToLetter(update.col)}${update.row}`,
       values: [[update.value]],
