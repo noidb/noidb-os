@@ -1,3 +1,4 @@
+import { logDiscontinue } from "@/lib/wms/discontinue-log";
 import { NextRequest, NextResponse } from "next/server";
 import { readSavedStatusList } from "@/lib/wms/status-list-cache";
 import { readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
@@ -46,6 +47,7 @@ export async function POST(request: NextRequest) {
       const skuId = String(body.skuId || "").trim();
       if (!/^\d+$/.test(skuId)) throw new Error("단종 신청 목록에 넣을 SKU ID를 확인해 주세요.");
       const { added } = await appendDiscontinueCodes([skuId]);
+      await logDiscontinue([skuId], body.sourceLineId ? "거래처발주(보낸 발주) 단종으로 이동" : "거래처발주(작성중) 단종으로 이동");
       if (!body.sourceLineId) return NextResponse.json({ success: true, added: added.length > 0 });
       const store = await readPickingWaveStore();
       const source = store.vendorOrderLines.find(line => line.id === body.sourceLineId);
@@ -59,6 +61,7 @@ export async function POST(request: NextRequest) {
       const source = store?.vendorOrderLines.find(line => line.id === body.sourceLineId);
       if (source?.sentResolution?.kind === "discontinue") return NextResponse.json({ success: true, line: source, reused: true });
       if (body.sourceLineId && (!source || source.updatedAt !== body.expectedUpdatedAt || isVendorLineResolved(source) || store!.deletedVendorLineIds[source.id] || store!.deletedVendorDraftIds[source.draftId] || !store!.vendorOrderDrafts.some(d => d.id === source.draftId && d.status === "sent"))) throw new Error("단종으로 이동할 원본 발주서를 다시 확인해 주세요.");
+      await logDiscontinue([String(source?.skuId || body.skuId || "")], "거래처발주 단종 대기");
       const record = await queueDiscontinueCandidate(source ? { ...body, skuId: source.skuId, purchaseOrderNumber: source.relatedPurchaseOrderNumbers.join(","), fallbackProductName: source.productName, fallbackOptionLabel: source.optionLabel } : body);
       const saved = source ? await mutatePickingWaveStore({ action: "resolveSentVendorLine", lineId: source.id, expectedUpdatedAt: source.updatedAt, kind: "discontinue", destinationId: record.id, now: new Date().toISOString() }) : null;
       return NextResponse.json({ success: true, record, line: saved?.vendorOrderLines.find(line => line.id === source!.id) });

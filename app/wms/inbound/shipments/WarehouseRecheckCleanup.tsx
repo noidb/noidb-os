@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import styles from "./shipments.module.css";
 
-type Move = { source: "창고재확인" | "보관" | "제품DB"; rowNumber: number; skuId: string; productName: string; result: string; orderableStatus: string; target: "보관" | "제품DB" | "재등록SKU"; mode: "append" | "clear-status" | "delete-only"; release: boolean };
+type Move = { source: "창고재확인" | "보관" | "제품DB" | "재등록SKU"; rowNumber: number; skuId: string; productName: string; result: string; orderableStatus: string; target: "보관" | "제품DB" | "재등록SKU"; mode: "append" | "clear-status" | "delete-only" | "fill"; release: boolean; pair?: string };
 type Preview = { token: string; pending: number; moves: Move[]; unknown: Array<{ rowNumber: number; skuId: string; productName: string; result: string }>; problems: string[] };
 
 /** 창고재확인 탭 정리: 미리보기로 옮길 행을 확인한 뒤 실행해야 시트가 바뀐다. */
@@ -45,6 +45,7 @@ export default function WarehouseRecheckCleanup({ onDone, embedded = false, auto
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "정리하지 못했습니다.");
       setPreview(null);
+      if (data.reregRebuilt) { onDone(`재등록SKU 탭을 제품DB와 같은 열로 맞췄어요(${data.reregRebuilt}줄 · 제품DB/비관리SKU 정보로 채운 줄 ${data.reregFilled}줄). 정리행 미리보기를 한 번 더 눌러 나머지를 정리해 주세요.`); return; }
       onDone(`정리 완료: 비관리SKU로 ${data.toStorage}건(제품DB에서 ${data.fromProductDb}건) · 제품DB로 ${data.toProductDb}건(비관리SKU 탭에서 ${data.fromStorage}건)${data.toRereg ? ` · 재등록SKU 탭에 ${data.toRereg}건 추가` : ""}${data.release ? ` · 단종해제 대상 ${data.release}건 추가` : ""}. 새로고침하면 단종해제 목록에 반영돼요.`);
     } catch (cause) { onDone(cause instanceof Error ? cause.message : "정리하지 못했습니다.", true); }
     finally { setBusy(""); }
@@ -79,7 +80,7 @@ export default function WarehouseRecheckCleanup({ onDone, embedded = false, auto
                       <td>{move.skuId}</td>
                       <td>{move.productName}</td>
                       <td>{move.result}</td>
-                      <td>{move.target === "보관" ? "비관리SKU" : move.target}{move.mode === "clear-status" ? ` (제품DB에 이미 있음 · ${move.source === "보관" ? "비관리SKU" : move.source}에서 지움)` : move.mode === "delete-only" ? (move.source === "보관" && move.target !== "재등록SKU" ? " (중복 · 비관리SKU에서만 지움)" : move.target === "재등록SKU" ? ` (재등록SKU에 이미 있음 · ${move.source === "보관" ? "비관리SKU" : move.source}에서만 지움)` : " (비관리SKU에 이미 있음 · 제품DB에서만 지움)") : ""}</td>
+                      <td>{move.target === "보관" ? "비관리SKU" : move.target}{move.mode === "fill" ? " (제품DB 정보 채우기)" : move.mode === "clear-status" ? ` (제품DB에 이미 있음 · ${move.source === "보관" ? "비관리SKU" : move.source}에서 지움)` : move.mode === "delete-only" ? (move.source === "보관" && move.target !== "재등록SKU" ? " (중복 · 비관리SKU에서만 지움)" : move.target === "재등록SKU" ? ` (재등록SKU에 이미 있음 · ${move.source === "보관" ? "비관리SKU" : move.source}에서만 지움)` : " (비관리SKU에 이미 있음 · 제품DB에서만 지움)") : ""}</td>
                       <td className={move.release ? styles.statusCell : undefined}>{move.orderableStatus}{move.release ? " → 단종해제" : ""}</td>
                     </tr>
                   ))}

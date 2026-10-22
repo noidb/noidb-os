@@ -44,6 +44,14 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
   onDone: (text: string, isError: boolean) => void;
 }) {
   const [text, setText] = useState("");
+  // 2026-10-22: 예전에 단종으로 보낸 기록(_WMS단종기록·단종해제이력) — 다시 떠도 재고를 처음부터 다시 확인하지 않게 표시한다.
+  const [sentBefore, setSentBefore] = useState<Record<string, { first: string; days: number }>>({});
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/wms/logistics/discontinue-log", { cache: "no-store" }).then(response => response.json()).then(data => { if (alive && data?.ok) setSentBefore(data.sent || {}); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  const today = new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
   const [busy, setBusy] = useState<"make" | "mark" | "clear" | null>(null);
   const [lookup, setLookup] = useState<Lookup[] | null>(null);
   const [lookupState, setLookupState] = useState<"idle" | "loading" | "error">("idle");
@@ -192,11 +200,21 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
     if (!window.confirm(`단종 신청 목록 ${list.length}건을 비웁니다.\n쿠팡에 단종 신청을 마친 뒤에 눌러 주세요.`)) return;
     setBusy("clear");
     try {
+      // 2026-10-22: 목록을 비우기 전에, 목록의 모든 SKU를 '거래처단종'으로 적는다(제품DB·비관리SKU·재등록SKU 어디에 있든).
+      // 예전에는 목록만 비워서 단종으로 보낸 SKU가 '과재고' 그대로 남는 일이 있었다.
+      let markNote = "";
+      const allCodes = [...new Set([...codes, ...autoRows.map(row => row.skuId)])];
+      if (allCodes.length) {
+        const response = await fetch("/api/wms/logistics/discontinue-file-by-code", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ codes: allCodes, markOnly: true, path: "단종 신청 완료(목록 비우기)" }) });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok || data.productDb?.warning) { onDone(`현재상태를 거래처단종으로 적지 못해 목록을 비우지 않았습니다. ${data.error || data.productDb?.warning || ""}`, true); return; }
+        markNote = discontinueMarkMessage(data.productDb);
+      }
       if (autoRows.length && !(await onClearAuto(autoRows.map(row => row.key)))) return;
       setText("");
       setLookup(null);
       saveDraft("", 0);
-      onDone(`단종 신청 완료 · 목록 ${list.length}건을 비웠습니다.`, false);
+      onDone(`단종 신청 완료 · 목록 ${list.length}건을 비웠습니다.${markNote}`, false);
     } finally { setBusy(null); }
   }
 
@@ -229,7 +247,13 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
                 return (
                   <tr key={row.skuId}>
                     <td>{row.skuId}</td>
-                    <td>{row.productName} <span style={{ fontSize: "12px", color: "#8a8379", whiteSpace: "nowrap" }}>({source})</span></td>
+                    <td>{row.productName} <span style={{ fontSize: "12px", color: "#8a8379", whiteSpace: "nowrap" }}>({source})</span>
+                      {sentBefore[row.skuId] && (sentBefore[row.skuId].first < today || sentBefore[row.skuId].days > 1) && (
+                        <span style={{ display: "inline-block", marginLeft: "4px", fontSize: "11px", fontWeight: 800, color: "#7a3b2e", background: "#f2dfd8", borderRadius: "8px", padding: "1px 6px", whiteSpace: "nowrap" }} title="예전에 사이트에서 단종으로 보낸 기록이 있어요">
+                          이미 단종 보냄 · 처음 {sentBefore[row.skuId].first.slice(5).replace("-", ".")}{sentBefore[row.skuId].days > 1 ? ` · ${sentBefore[row.skuId].days}번` : ""}
+                        </span>
+                      )}
+                    </td>
                     <td className={`${styles.orderableCol} ${done ? styles.orderableDone : ""}`} title={done ? "쿠팡에서 처리 완료" : undefined}>{row.orderable}{done ? " ✓" : ""}</td>
                     <td className={styles.deleteCol}>
                       {/* 2026-10-21: 이미 처리했거나 단종인 SKU는 어느 출처든 여기서 뺀다(자동 목록에서 뺀 SKU는 다시 뜨지 않음). */}

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
 import { mutateWeeklyWorkspace, readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { clearedSkuId, lastClearedBatch } from "@/lib/wms/discontinue-lists";
+import { logDiscontinue } from "@/lib/wms/discontinue-log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -113,6 +114,8 @@ export async function POST(request: NextRequest) {
       workspace.supplyStatusChecks = current;
       return { current, cleared: workspace.statusListCleared || {}, requested: workspace.statusListRequested || {} };
     });
+    if (body.action === "discontinued" && typeof body.skuId === "string") await logDiscontinue([body.skuId], "입고결과 단종확인");
+    if (body.action === "clear-list" && body.kind === "discontinue" && Array.isArray(body.keys)) await logDiscontinue(body.keys.filter((key): key is string => typeof key === "string").map(clearedSkuId), "단종 대상 목록 신청완료");
     return NextResponse.json({ ok: true, supplyStatusChecks: checks.current, statusListCleared: checks.cleared, statusListRequested: checks.requested }, { headers });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "저장하지 못했습니다." }, { status: 400, headers });

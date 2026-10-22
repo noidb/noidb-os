@@ -332,3 +332,17 @@ export async function deleteSheetRows(sheetId: number, rowNumbers: number[]): Pr
   const data = await response.json().catch(() => ({} as any));
   if (!response.ok) throw new Error(`행 삭제 실패: ${data?.error?.message || response.status}`);
 }
+
+/** 탭의 열이 count보다 적으면 오른쪽에 열을 늘린다(2026-10-22 재등록SKU 탭 형식 맞추기). */
+export async function ensureSheetColumns(sheetId: number, currentCount: number, count: number): Promise<void> {
+  if (!currentCount || currentCount >= count) return;
+  const accessToken = await getWmsGoogleAccessToken();
+  const spreadsheetId = getWmsSpreadsheetId();
+  const response = await fetch(`${SHEETS_API_BASE}/${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ requests: [{ appendDimension: { sheetId, dimension: "COLUMNS", length: count - currentCount } }] }),
+  });
+  const data = await response.json().catch(() => ({} as any));
+  if (!response.ok) throw new Error(`열 늘리기 실패: ${data?.error?.message || response.status}`);
+}

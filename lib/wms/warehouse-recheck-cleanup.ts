@@ -44,7 +44,7 @@ export function isProductDbToStorageStatus(status: unknown): boolean {
 const squash = (value: unknown) => String(value ?? "").replace(/\s+/g, "");
 const find = (headers: string[], ...names: string[]) => headers.findIndex(header => names.some(name => squash(header) === squash(name)));
 
-export interface CleanupMove { source: "창고재확인" | "보관" | "제품DB"; rowNumber: number; skuId: string; productName: string; result: string; orderableStatus: string; target: "보관" | "제품DB" | "재등록SKU"; mode: "append" | "clear-status" | "delete-only"; productDbRow?: number; release: boolean }
+export interface CleanupMove { source: "창고재확인" | "보관" | "제품DB" | "재등록SKU"; rowNumber: number; skuId: string; productName: string; result: string; orderableStatus: string; target: "보관" | "제품DB" | "재등록SKU"; mode: "append" | "clear-status" | "delete-only" | "fill"; productDbRow?: number; release: boolean; pair?: string }
 export interface CleanupPlan {
   token: string;
   pending: number;
@@ -62,9 +62,89 @@ function mapRow(sourceHeaders: string[], source: string[], targetHeaders: string
   });
 }
 
-export function planWarehouseRecheckCleanup(recheck: string[][], productDb: string[][], storage: string[][] | null, reregisteredSkuIds: ReadonlySet<string> = new Set(), reregHeaders: readonly string[] = [], today = ""): CleanupPlan & { appendRereg: string[][]; appendStorage: string[][]; appendProductDb: string[][]; clearStatusRows: number[]; deleteRows: number[]; deleteStorageRows: number[]; deleteProductDbRows: number[] } {
-  const token = createHash("sha256").update(JSON.stringify([recheck, storage, productDb, [...reregisteredSkuIds].sort(), reregHeaders, today])).digest("hex").slice(0, 32);
+export const REREG_EXTRA_HEADERS = ["기존 현재상태", "기록일", "진행상태", "새 SKU ID", "완료일"];
+
+/**
+ * 재등록SKU 탭 정리(사용자 확정 2026-10-22)
+ * - 탭에 제품DB 열이 다 없으면 먼저 '형식 맞추기'만 한다: 제품DB 열 + 재등록 열(기존 현재상태·기록일·진행상태·새 SKU ID·완료일).
+ *   각 줄은 제품DB·비관리SKU에 있는 같은 SKU의 전체 정보로 채운다(없으면 있던 값 유지).
+ * - 현재상태에 '단종'·'비관리'가 적힌 줄 → 단종이 재등록보다 우선, 비관리SKU로 옮긴다.
+ * - 같은 제품(모델SKU가 같거나, 모델명·옵션·상품명이 같음)의 다른 SKU가 제품DB에 '정상'으로 있으면
+ *   이미 재등록돼 입고 중 → 비관리SKU에 '비관리(중복등록)'으로 옮긴다. 호수·옵션이 다른 같은 모델은 상관없다.
+ */
+export function planReregistrationTab(reregRows: string[][], productDb: string[][], storage: string[][] | null) {
+  const headers = (reregRows[0] || []).map(value => String(value ?? ""));
+  const pdHeaders = (productDb[0] || []).map(value => String(value ?? ""));
+  const has = (list: string[], name: string) => list.some(header => squash(header) === squash(name));
+  const needsRebuild = headers.length > 0 && pdHeaders.length > 0 && pdHeaders.some(header => header && !has(headers, header));
+  const skuCol = find(headers, "SKU ID", "SKUID");
+  const pdSku = find(pdHeaders, "SKU ID", "SKUID");
+  const stHeaders = (storage?.[0] || []).map(value => String(value ?? ""));
+  const stSku = find(stHeaders, "SKU ID", "SKUID", "SKU");
+  const fullBySku = new Map<string, { headers: string[]; row: string[] }>();
+  if (storage && stSku >= 0) for (const row of storage.slice(1)) { const id = String(row[stSku] ?? "").trim(); if (id && !fullBySku.has(id)) fullBySku.set(id, { headers: stHeaders, row }); }
+  if (pdSku >= 0) for (const row of productDb.slice(1)) { const id = String(row[pdSku] ?? "").trim(); if (id) fullBySku.set(id, { headers: pdHeaders, row }); }
+  if (needsRebuild) {
+    const extras = [...REREG_EXTRA_HEADERS, ...headers.filter(header => header && !has(pdHeaders, header) && !REREG_EXTRA_HEADERS.some(extra => squash(extra) === squash(header)))];
+    const newHeaders = [...pdHeaders, ...extras];
+    const rows: string[][] = [];
+    let filled = 0;
+    for (const row of reregRows.slice(1)) {
+      const id = skuCol >= 0 ? String(row[skuCol] ?? "").trim() : "";
+      if (!id && !row.some(cell => String(cell ?? "").trim())) continue;
+      const full = id ? fullBySku.get(id) : undefined;
+      if (full) filled++;
+      rows.push(newHeaders.map(header => {
+        const own = headers.findIndex(value => squash(value) === squash(header));
+        const ownValue = own >= 0 ? String(row[own] ?? "") : "";
+        if (REREG_EXTRA_HEADERS.some(extra => squash(extra) === squash(header))) return ownValue;
+        const src = full ? full.headers.findIndex(value => squash(value) === squash(header)) : -1;
+        const value = full && src >= 0 ? String(full.row[src] ?? "") : "";
+        return value || ownValue;
+      }));
+    }
+    return { rebuild: { headers: newHeaders, rows, filled }, leaving: [] as Array<{ rowNumber: number; skuId: string; row: string[]; status: string; reason: string; pair?: string }>, keepIds: new Set<string>(rows.map(row => String(row[find(newHeaders, "SKU ID", "SKUID")] ?? "").trim()).filter(Boolean)) };
+  }
+  // 같은 제품 짝 찾기: 제품DB에서 발주가능상태 '정상'인 SKU만 짝이 된다.
+  const pd = { msku: find(pdHeaders, "모델SKU"), model: find(pdHeaders, "모델명/품번", "모델명"), color: find(pdHeaders, "색상"), name: find(pdHeaders, "상품명"), orderable: find(pdHeaders, "발주가능상태") };
+  const key = (value: unknown) => String(value ?? "").replace(/[\s,+\-_()/]/g, "").toLowerCase();
+  const active = productDb.slice(1).filter(row => pd.orderable >= 0 && String(row[pd.orderable] ?? "").trim() === "정상");
+  const rr = { status: find(headers, "현재상태"), msku: find(headers, "모델SKU"), model: find(headers, "모델명/품번", "모델명"), color: find(headers, "색상"), name: find(headers, "상품명"), state: find(headers, "진행상태"), newSku: find(headers, "새 SKU ID") };
+  const leaving: Array<{ rowNumber: number; skuId: string; row: string[]; status: string; reason: string; pair?: string }> = [];
+  const keepIds = new Set<string>();
+  reregRows.slice(1).forEach((row, index) => {
+    const id = skuCol >= 0 ? String(row[skuCol] ?? "").trim() : "";
+    if (!id) return;
+    const status = rr.status >= 0 ? String(row[rr.status] ?? "").trim() : "";
+    if (isProductDbToStorageStatus(status)) { leaving.push({ rowNumber: index + 2, skuId: id, row, status, reason: status }); return; }
+    const msku = rr.msku >= 0 ? key(row[rr.msku]) : "";
+    const model = rr.model >= 0 ? key(row[rr.model]) : "";
+    const color = rr.color >= 0 ? key(row[rr.color]) : "";
+    const name = rr.name >= 0 ? key(row[rr.name]) : "";
+    const pair = active.find(other => String(other[pdSku] ?? "").trim() !== id && (
+      (msku && pd.msku >= 0 && key(other[pd.msku]) === msku) ||
+      (model && color && name && pd.model >= 0 && pd.color >= 0 && pd.name >= 0 && key(other[pd.model]) === model && key(other[pd.color]) === color && key(other[pd.name]) === name)));
+    if (pair) { const pairId = String(pair[pdSku] ?? "").trim(); leaving.push({ rowNumber: index + 2, skuId: id, row, status: "비관리(중복등록)", reason: `재등록완료(새 SKU ${pairId})`, pair: pairId }); return; }
+    keepIds.add(id);
+  });
+  return { rebuild: undefined, leaving, keepIds };
+}
+
+export function planWarehouseRecheckCleanup(recheck: string[][], productDb: string[][], storage: string[][] | null, reregisteredSkuIds: ReadonlySet<string> = new Set(), reregHeaders: readonly string[] = [], today = "", reregRows?: string[][]): CleanupPlan & { reregRebuild?: { headers: string[]; rows: string[][]; filled: number }; deleteReregRows: number[]; appendRereg: string[][]; appendStorage: string[][]; appendProductDb: string[][]; clearStatusRows: number[]; deleteRows: number[]; deleteStorageRows: number[]; deleteProductDbRows: number[] } {
+  const token = createHash("sha256").update(JSON.stringify([recheck, storage, productDb, [...reregisteredSkuIds].sort(), reregHeaders, today, reregRows || null])).digest("hex").slice(0, 32);
   const problems: string[] = [];
+  const reregPlan = reregRows && reregRows.length ? planReregistrationTab(reregRows, productDb, storage) : null;
+  const deleteReregRows: number[] = [];
+  if (reregPlan?.rebuild) {
+    // 1단계: 재등록SKU 탭 형식부터 맞춘다(다른 정리는 다음 실행에서). 줄 번호가 바뀌므로 한 번에 하나만.
+    const rb = reregPlan.rebuild;
+    const at = (name: string) => find(rb.headers, name);
+    const moves: CleanupMove[] = rb.rows.map((row, index) => ({ source: "재등록SKU", rowNumber: index + 2, skuId: String(row[at("SKU ID")] ?? "").trim(), productName: String(row[at("상품명")] ?? "").trim(), result: "제품DB 열로 형식 맞추고 정보 채우기", orderableStatus: String(row[at("발주가능상태")] ?? "").trim(), target: "재등록SKU", mode: "fill", release: false }));
+    return { token, pending: 0, moves, unknown: [], problems, reregRebuild: rb, deleteReregRows, appendRereg: [], appendStorage: [], appendProductDb: [], clearStatusRows: [], deleteRows: [], deleteStorageRows: [], deleteProductDbRows: [] };
+  }
+  // 재등록SKU 탭에 남는 SKU(단종·중복으로 빠지는 줄 제외)
+  reregisteredSkuIds = reregPlan ? reregPlan.keepIds : reregisteredSkuIds;
+  const leavingRereg = new Map((reregPlan?.leaving || []).map(item => [item.skuId, item]));
   const headers = (recheck[0] || []).map(value => String(value ?? ""));
   const col = { result: find(headers, "창고 확인결과", "창고확인결과"), sku: find(headers, "SKU ID", "SKUID", "SKU"), name: find(headers, "상품명"), orderable: find(headers, "발주가능상태") };
   const hasRecheck = recheck.length > 1;
@@ -118,6 +198,11 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       const rowNumber = index + 2;
       // 2026-10-22: 재등록SKU 탭에 이미 있는 SKU는 보관 탭에 중복으로 두지 않는다 → 보관에서 지운다.
       const storageSku = st.sku >= 0 ? String(row[st.sku] ?? "").trim() : "";
+      if (storageSku && leavingRereg.has(storageSku)) {
+        // 재등록SKU에서 비관리로 오는 SKU: 예전 줄은 지우고 재등록SKU의 전체 정보로 새로 붙인다(아래).
+        deleteStorageRows.push(rowNumber);
+        return;
+      }
       if (storageSku && reregisteredSkuIds.has(storageSku)) {
         moves.push({ source: "보관", rowNumber, skuId: storageSku, productName: st.name >= 0 ? String(row[st.name] ?? "").trim() : "", result: "재등록SKU 탭에 있음", orderableStatus: st.orderable >= 0 ? String(row[st.orderable] ?? "").trim() : "", target: "재등록SKU", mode: "delete-only", release: false });
         deleteStorageRows.push(rowNumber);
@@ -157,6 +242,19 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       deleteStorageRows.push(rowNumber);
     });
   }
+  // 재등록SKU → 비관리SKU: 단종이 적힌 줄, 같은 제품이 제품DB에 정상으로 입고 중인 줄(2026-10-22)
+  if (reregPlan && !problems.length) {
+    const rrHeaders = (reregRows![0] || []).map(value => String(value ?? ""));
+    const stNameCol = find(stHeaders, "상품명");
+    for (const item of reregPlan.leaving) {
+      if (!storage) { problems.push(`'${STORAGE_TAB}' 탭을 찾지 못했습니다.`); break; }
+      appendStorage.push(mapRow(rrHeaders, item.row, stHeaders, { "현재상태": item.status, "보관사유": item.reason }));
+      deleteReregRows.push(item.rowNumber);
+      const name = find(rrHeaders, "상품명");
+      moves.push({ source: "재등록SKU", rowNumber: item.rowNumber, skuId: item.skuId, productName: name >= 0 ? String(item.row[name] ?? "").trim() : "", result: item.pair ? `같은 제품 새 SKU ${item.pair} 정상 입고 중 → 비관리(중복등록)` : `현재상태 ${item.status} → 단종이 재등록보다 우선`, orderableStatus: "", target: "보관", mode: "append", release: false, pair: item.pair });
+      void stNameCol;
+    }
+  }
   // 제품DB: 현재상태 비관리(중복등록)·'단종'이 들어간 모든 상태(거래처단종·단종(중복등록) 등) → 보관 탭, 제품DB에서 지움
   const deleteProductDbRows: number[] = [];
   const appendRereg: string[][] = [];
@@ -173,6 +271,11 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       const rowNumber = index + 2;
       const status = String(row[pd.status] ?? "").trim();
       const skuId = String(row[pd.sku] ?? "").trim();
+      if (skuId && leavingRereg.has(skuId) && !keep.has(rowNumber)) {
+        moves.push({ source: "제품DB", rowNumber, skuId, productName: pdName >= 0 ? String(row[pdName] ?? "").trim() : "", result: "재등록SKU에서 비관리SKU로 옮기는 SKU", orderableStatus: pd.orderable >= 0 ? String(row[pd.orderable] ?? "").trim() : "", target: STORAGE_LABEL, mode: "delete-only", release: false });
+        deleteProductDbRows.push(rowNumber);
+        return;
+      }
       const markedRereg = squash(status).includes("재등록");
       const reregistered = Boolean(skuId) && (reregisteredSkuIds.has(skuId) || markedRereg);
       if (reregistered && !keep.has(rowNumber)) {
@@ -197,5 +300,5 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       deleteProductDbRows.push(rowNumber);
     });
   }
-  return { token, pending, moves, unknown, problems: [...new Set(problems)], appendRereg, appendStorage, appendProductDb, clearStatusRows: [...new Set(clearStatusRows)], deleteRows, deleteStorageRows, deleteProductDbRows };
+  return { token, pending, moves, unknown, problems: [...new Set(problems)], deleteReregRows, appendRereg, appendStorage, appendProductDb, clearStatusRows: [...new Set(clearStatusRows)], deleteRows, deleteStorageRows, deleteProductDbRows };
 }

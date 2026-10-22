@@ -1,4 +1,7 @@
-import { fetchSheetRows, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
+import { fetchSheetRows, fetchSpreadsheetTabs, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
+import { pickStorageTabTitle } from "./warehouse-recheck-cleanup";
+import { logDiscontinue } from "./discontinue-log";
+const REREGISTRATION_TAB = "재등록SKU";
 import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
 import { normalizeSkuId } from "./sku-normalize";
 import type { DiscontinueMarkResult } from "./discontinue-mark-message";
@@ -43,14 +46,37 @@ export function planDiscontinueMark(rows: readonly (readonly unknown[])[], skuId
   return plan;
 }
 
-/** 파일 만들기는 이미 끝났으므로, 여기서 실패해도 오류로 막지 않고 안내만 돌려준다. */
-export async function markDiscontinuedInProductDb(skuIds: readonly string[]): Promise<DiscontinueMarkResult> {
+/**
+ * 파일 만들기는 이미 끝났으므로, 여기서 실패해도 오류로 막지 않고 안내만 돌려준다.
+ * 2026-10-22: 제품DB에 없으면(이미 비관리SKU·재등록SKU로 옮겨진 SKU) 그 탭에서도 찾아 적는다 —
+ * 예전에는 제품DB만 봐서, 단종으로 보낸 SKU가 '과재고' 그대로 다른 탭에 남는 일이 있었다.
+ * 재등록SKU 탭에 거래처단종이 적힌 줄은 구글시트 정리 때 비관리SKU로 옮겨진다(단종이 재등록보다 우선).
+ */
+export async function markDiscontinuedInProductDb(skuIds: readonly string[], path = "단종 처리"): Promise<DiscontinueMarkResult> {
   try {
-    const rows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME);
-    const plan = planDiscontinueMark(rows, skuIds);
-    if (plan.problem) return { marked: 0, kept: [], notInDb: plan.notInDb.length, warning: plan.problem };
-    await updateSheetCells(PRODUCT_DB_SHEET_NAME, plan.updates);
-    return { marked: plan.marked.length, kept: plan.kept, notInDb: plan.notInDb.length };
+    const tabs = await fetchSpreadsheetTabs().catch(() => []);
+    const storageTitle = pickStorageTabTitle(tabs.map(tab => tab.title));
+    const targets = [PRODUCT_DB_SHEET_NAME, storageTitle, tabs.some(tab => tab.title === REREGISTRATION_TAB) ? REREGISTRATION_TAB : null].filter((title): title is string => Boolean(title));
+    let remaining = [...new Set(skuIds.map(id => normalizeSkuId(id)).filter(Boolean))];
+    const found = new Set<string>();
+    let marked = 0;
+    const kept: { skuId: string; status: string }[] = [];
+    let warning = "";
+    for (const title of targets) {
+      const rows = await fetchSheetRows(title).catch(() => null);
+      if (!rows) continue;
+      const plan = planDiscontinueMark(rows, remaining);
+      if (plan.problem) { if (title === PRODUCT_DB_SHEET_NAME) warning = plan.problem; continue; }
+      await updateSheetCells(title, plan.updates);
+      marked += plan.marked.length;
+      kept.push(...plan.kept);
+      const here = new Set(remaining.filter(id => !plan.notInDb.includes(id)));
+      for (const id of here) found.add(id);
+      // 제품DB에서 찾은 SKU는 다른 탭은 정리 때 맞춰지므로, 제품DB에 없는 것만 다음 탭에서 찾는다.
+      if (title === PRODUCT_DB_SHEET_NAME) remaining = remaining.filter(id => !here.has(id));
+    }
+    await logDiscontinue(skuIds, path, `현재상태 거래처단종 ${marked}건`);
+    return { marked, kept, notInDb: remaining.filter(id => !found.has(id)).length, ...(warning ? { warning } : {}) };
   } catch (error) {
     return { marked: 0, kept: [], notInDb: 0, warning: `제품DB 현재상태를 적지 못했습니다(${error instanceof Error ? error.message : "알 수 없는 오류"}). 다시 만들거나 직접 적어 주세요.` };
   }

@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
       bundle.file(pdfName, pdf);
       const zipName = `단종신청_엑셀_공문_${date.compact}.zip`;
       // 단종서류를 만든 SKU는 제품DB 현재상태를 거래처단종으로 적는다(2026-10-19).
-      const productDb = await markDiscontinuedInProductDb(items.map(item => item.skuId));
+      const productDb = await markDiscontinuedInProductDb(items.map(item => item.skuId), "단종서류 만들기(주간업무)");
       const warnings = [driveHeaders, pdfSaved].map(headers => decodeURIComponent(headers["X-NOIDB-Drive-Save-Warning"] || "")).filter(Boolean);
       return new NextResponse(await bundle.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }), { headers: {
         "Content-Type": "application/zip", "Cache-Control": "no-store",

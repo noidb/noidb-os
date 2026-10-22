@@ -101,3 +101,27 @@ console.log("rerun ok");
   if (plan.deleteProductDbRows.join() !== "3" || plan.appendStorage.length) throw new Error("제품DB 단종 줄은 비관리SKU에 이미 있어 제품DB에서만 지움");
   console.log("한 SKU 한 탭 OK");
 }
+
+// 2026-10-22 재등록SKU 탭 형식 맞추기 → 그다음 단종·중복등록 줄은 비관리SKU로
+{
+  const pdH = ["현재상태", "모델명/품번", "모델SKU", "SKU ID", "이미지", "상품명", "색상", "원가", "발주가능상태"];
+  const stH = [...pdH, "보관사유"];
+  const pd = [pdH, ["", "we1", "we1RG", "900", "=IMAGE(\"n\")", "귀걸이, 로즈골드", "로즈골드", "100", "정상"], ["", "ws1", "ws1BB10", "910", "", "피어싱, 블랙10mm", "블랙10mm", "50", "정상"]];
+  const st = [stH, ["과재고", "we1", "we1RG", "800", "=IMAGE(\"o\")", "귀걸이, 로즈골드", "로즈골드", "90", "일시중단", "재등록SKU(과재고)"]];
+  const oldRr = [["SKU ID", "모델명/품번", "모델SKU", "기존 현재상태", "기록일", "진행상태", "새 SKU ID", "완료일", "이미지", "상품명", "제품링크"], ["800", "we1", "we1RG", "과재고", "2026-10-08", "대기"], ["801", "wx", "wxS", "", "2026-10-08", "대기"]];
+  const plan = planWarehouseRecheckCleanup([], pd, st, new Set(["800", "801"]), oldRr[0], "2026-10-22", oldRr);
+  if (!plan.reregRebuild || plan.moves.some(m => m.mode !== "fill")) throw new Error("먼저 형식 맞추기만 해야 함");
+  const h = plan.reregRebuild.headers;
+  if (h.slice(0, pdH.length).join() !== pdH.join() || !h.includes("진행상태") || !h.includes("제품링크")) throw new Error("제목줄 실패: " + h.join());
+  const r800 = plan.reregRebuild.rows[0];
+  if (r800[h.indexOf("원가")] !== "90" || r800[h.indexOf("이미지")] !== "=IMAGE(\"o\")" || r800[h.indexOf("기록일")] !== "2026-10-08") throw new Error("정보 채우기 실패: " + r800.join("|"));
+  if (plan.reregRebuild.filled !== 1) throw new Error("채운 줄 수");
+  // 2단계: 새 형식. 800은 같은 모델SKU의 정상 SKU 900 → 중복등록, 802는 현재상태 거래처단종 → 비관리, 803은 그대로
+  const newRr = [h, ...[["800", "we1RG", "we1", "과재고"], ["802", "zz1", "zz", "거래처단종"], ["803", "qq1", "qq", "과재고"]].map(([sku, msku, model, status]) => h.map(col => col === "SKU ID" ? sku : col === "모델SKU" ? msku : col === "모델명/품번" ? model : col === "현재상태" ? status : col === "진행상태" ? "대기" : ""))];
+  const plan2 = planWarehouseRecheckCleanup([], pd, st, new Set(["800", "802", "803"]), h, "2026-10-22", newRr);
+  if (plan2.deleteReregRows.join() !== "2,3") throw new Error("재등록SKU에서 뺄 줄 실패: " + plan2.deleteReregRows.join());
+  const reasons = plan2.appendStorage.map(row => row[row.length - 1] + "/" + row[0]).join();
+  if (reasons !== "재등록완료(새 SKU 900)/비관리(중복등록),거래처단종/거래처단종") throw new Error("비관리로 옮김 실패: " + reasons);
+  if (plan2.deleteStorageRows.join() !== "2") throw new Error("예전 비관리 줄(800)은 새 줄로 바꿔야 함");
+  console.log("재등록SKU 형식 맞추기·단종/중복 비관리 OK");
+}

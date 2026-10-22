@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
     const fileName = `단종신청_${date.compact}_${items.length}건.zip`;
     const base64 = (await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" })).toString("base64");
     // 단종서류를 만든 SKU는 제품DB 현재상태를 거래처단종으로 적는다(2026-10-19).
-    const productDb = await markDiscontinuedInProductDb(items.map(item => item.skuId));
+    const productDb = await markDiscontinuedInProductDb(items.map(item => item.skuId), "단종서류 만들기");
     return NextResponse.json({ ok: true, fileName, base64, count: items.length, notFound, productDb }, { headers });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "단종신청 파일을 만들지 못했습니다." }, { status: 400, headers });
