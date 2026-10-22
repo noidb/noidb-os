@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
-import { appendSheetRowsKeepingFormulas, backupSheetWithinSpreadsheet, deleteSheetRows, ensureSheetColumns, fetchSheetRows, fetchSpreadsheetTabs, updateSheetCells } from "@/lib/wms/google-sheets";
+import { appendSheetRowsKeepingFormulas, backupSheetWithinSpreadsheet, deleteSheetRows, ensureSheetColumns, fetchSheetRows, fetchSpreadsheetTabs, moveSheetRows, updateSheetCells } from "@/lib/wms/google-sheets";
+import { planModelRegroup } from "@/lib/wms/model-regroup";
 import { PRODUCT_DB_SHEET_NAME } from "@/lib/wms/product-catalog";
 import { pickStorageTabTitle, planWarehouseRecheckCleanup, RECHECK_TAB, STORAGE_TAB } from "@/lib/wms/warehouse-recheck-cleanup";
 import { mutateWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
@@ -116,6 +117,13 @@ export async function POST(request: NextRequest) {
     if (plan.appendOtherRereg.length) await appendSheetRowsKeepingFormulas(OTHER_REREGISTRATION_TAB, plan.appendOtherRereg);
     if (plan.appendStopped.length) await appendSheetRowsKeepingFormulas(STOPPED_TAB, plan.appendStopped);
     await appendSheetRowsKeepingFormulas(PRODUCT_DB_SHEET_NAME, plan.appendProductDb);
+    // 2026-10-23: 제품DB 맨 아래에 붙인 줄을 같은 모델 묶음 옆으로 옮긴다(모델명이 같은 줄끼리 붙어 있게).
+    let regrouped = 0;
+    if (plan.appendProductDb.length && productDbTab) {
+      const regroup = planModelRegroup(await fetchSheetRows(PRODUCT_DB_SHEET_NAME));
+      await moveSheetRows(productDbTab.sheetId, regroup.moves);
+      regrouped = regroup.models.length;
+    }
     if (recheckTab) await deleteSheetRows(recheckTab.sheetId, plan.deleteRows);
     // 5) 발주가능상태가 정상이 아닌 제품DB 이동 SKU → 단종해제 대상
     const release = plan.moves.filter(move => move.release && /^\d{1,20}$/.test(move.skuId));
@@ -125,7 +133,7 @@ export async function POST(request: NextRequest) {
       for (const move of release) checks[move.skuId] = { decision: "release", productName: move.productName, at };
       workspace.supplyStatusChecks = checks;
     });
-    return NextResponse.json({ ok: true, moved: plan.moves.length, filled: fill.updates.length, toRereg: plan.appendRereg.length, toOtherRereg: plan.appendOtherRereg.length, toStopped: plan.appendStopped.length, fromRereg: plan.deleteReregRows.length, toStorage: plan.appendStorage.length, fromStorage: plan.deleteStorageRows.length, fromProductDb: plan.deleteProductDbRows.length, toProductDb: plan.appendProductDb.length + plan.clearStatusRows.length,
+    return NextResponse.json({ ok: true, moved: plan.moves.length, filled: fill.updates.length, regrouped, toRereg: plan.appendRereg.length, toOtherRereg: plan.appendOtherRereg.length, toStopped: plan.appendStopped.length, fromRereg: plan.deleteReregRows.length, toStorage: plan.appendStorage.length, fromStorage: plan.deleteStorageRows.length, fromProductDb: plan.deleteProductDbRows.length, toProductDb: plan.appendProductDb.length + plan.clearStatusRows.length,
       release: release.length, unknown: plan.unknown.length, pending: plan.pending, backups: backups.map(item => item.sheetName) }, { headers });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "구글시트 정리를 하지 못했습니다." }, { status: 400, headers });

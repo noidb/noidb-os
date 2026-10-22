@@ -138,3 +138,15 @@ console.log("PASS 판매중지SKU 탭 정상 SKU → 단종 대상");
   assert.equal(tabs[0].rows[2][2], "3cm", "대소문자·공백 무시하고 같은 모델");
   console.log("PASS 같은 모델 빈 원가·치수 채우기(전 탭, 있는 값은 그대로)");
 }
+
+// 2026-10-23: 제품DB 같은 모델 줄 붙이기
+{
+  const { planModelRegroup } = require("../lib/wms/model-regroup") as typeof import("../lib/wms/model-regroup");
+  const rows = [["모델명/품번"], ["a"], ["B"], ["a "], ["c"], ["b"], [""], ["a"]];
+  const { moves } = planModelRegroup(rows);
+  const order = rows.map((_, i) => i);
+  for (const m of moves) { const block = order.splice(m.startIndex, m.endIndex - m.startIndex); order.splice(m.destinationIndex, 0, ...block); }
+  assert.deepEqual(order.slice(1).map(i => String(rows[i][0]).trim().toLowerCase()), ["a", "a", "a", "b", "b", "c", ""]);
+  assert.deepEqual(planModelRegroup([["모델명/품번"], ["a"], ["a"], ["b"]]).moves, []);
+  console.log("PASS 같은 모델 줄 붙이기(처음 나오는 자리로, 나머지 순서 유지)");
+}

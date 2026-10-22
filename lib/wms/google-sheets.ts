@@ -303,6 +303,50 @@ export async function appendSheetRowsKeepingFormulas(sheetName: string, rows: st
   });
   const data = await response.json().catch(() => ({} as any));
   if (!response.ok) throw new Error(`[${sheetName}] 행 추가 실패: ${data?.error?.message || response.status}`);
+  // 2026-10-23: 다른 탭·다른 줄에서 옮겨 온 줄의 같은 줄 수식(공급가 =ROUND(O375*0.58,0), 마진 =P375-N375 등)이
+  // 예전 줄 번호를 가리켜 엉뚱한 값·#REF!가 되던 문제 → 붙인 줄 번호로 바꿔 다시 쓴다.
+  const startRow = Number(String(data?.updates?.updatedRange || "").match(/![A-Z]+(\d+)/)?.[1] || 0);
+  if (!startRow) return;
+  const fixes: { range: string; values: string[][] }[] = [];
+  safe.forEach((row, offset) => row.forEach((value, col) => {
+    const next = retargetSameRowFormula(value, startRow + offset);
+    if (next !== null) fixes.push({ range: `'${sheetName}'!${columnLetter(col + 1)}${startRow + offset}`, values: [[next]] });
+  }));
+  if (!fixes.length) return;
+  const fix = await fetch(`${SHEETS_API_BASE}/${spreadsheetId}/values:batchUpdate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ valueInputOption: "USER_ENTERED", data: fixes }),
+  });
+  if (!fix.ok) throw new Error(`[${sheetName}] 붙인 줄의 수식 줄 번호를 맞추지 못했습니다(${fix.status}).`);
+}
+
+/**
+ * 같은 줄만 가리키는 수식(같은 탭 셀, 모두 같은 줄 번호)이면 그 줄 번호를 row로 바꾼 수식을, 아니면 null.
+ * 예) =ROUND(O375*0.58,0) → =ROUND(O1932*0.58,0). 다른 탭 참조·여러 줄 범위·#REF!·IMAGE("…")는 건드리지 않는다.
+ */
+export function retargetSameRowFormula(value: unknown, row: number): string | null {
+  const text = String(value ?? "");
+  if (!text.startsWith("=") || text.includes("!") || /"/.test(text)) return null;
+  const refs = [...text.matchAll(/(?<![A-Za-z0-9_$])\$?([A-Z]{1,3})\$?(\d+)(?![0-9(])/g)];
+  if (!refs.length) return null;
+  const rows = new Set(refs.map(match => match[2]));
+  if (rows.size !== 1 || rows.has(String(row))) return null;
+  return text.replace(/(?<![A-Za-z0-9_$])(\$?[A-Z]{1,3}\$?)(\d+)(?![0-9(])/g, (_, col) => `${col}${row}`);
+}
+
+/** 줄 묶음을 차례로 옮긴다(moveDimension — 서식·수식·사진이 줄과 같이 간다). moves는 시트 0-based 행 번호. */
+export async function moveSheetRows(sheetId: number, moves: readonly { startIndex: number; endIndex: number; destinationIndex: number }[]): Promise<void> {
+  if (!moves.length) return;
+  const requests = moves.map(move => ({ moveDimension: { source: { sheetId, dimension: "ROWS", startIndex: move.startIndex, endIndex: move.endIndex }, destinationIndex: move.destinationIndex } }));
+  const response = await fetch(`${SHEETS_API_BASE}/${getWmsSpreadsheetId()}:batchUpdate`, { method: "POST", headers: { Authorization: `Bearer ${await getWmsGoogleAccessToken()}`, "Content-Type": "application/json" }, body: JSON.stringify({ requests }) });
+  if (!response.ok) throw new Error(`줄 순서를 옮기지 못했습니다(${response.status}).`);
+}
+
+function columnLetter(index: number): string {
+  let out = "";
+  for (let n = index; n > 0; n = Math.floor((n - 1) / 26)) out = String.fromCharCode(65 + ((n - 1) % 26)) + out;
+  return out;
 }
 
 /** 지정한 행(1-based, 헤더 포함 시트 행 번호)들을 아래부터 지운다. */
