@@ -2,6 +2,7 @@ import {NextRequest,NextResponse} from 'next/server';
 import {readPickingWaveStore,mutatePickingWaveStore} from '@/lib/wms/picking-wave/server-store';
 import {simpleReceivingPlan,completeReceivingPlan} from '@/lib/wms/simple-vendor-receiving';
 import {loadReceivingCostPlan,applyReceivingCostPlan} from '@/lib/wms/simple-receiving-cost';
+import {updateCostForSameModel} from '@/lib/wms/product-catalog-write';
 import {hasNoidbActionSession,isSameOriginActionRequest} from '@/lib/wms/noidb-action-auth';
 import {createInboundTransactionStore} from '@/lib/wms/inbound-import-store';
 export const runtime='nodejs';export const dynamic='force-dynamic';export const maxDuration=180;
@@ -36,7 +37,10 @@ export async function POST(request:NextRequest){
    return json({success:true,line:snapshot.vendorOrderLines.find(line=>line.id===before.id)});
   }
   if(body.action==='cost-preview'){const p=await loadReceivingCostPlan(body.lineId);return json({success:true,preview:{token:p.token,skuId:p.skuId,before:p.before,after:p.after,vat:p.vat,quantity:p.quantity,unitPrice:p.unitPrice,alreadyApplied:p.alreadyApplied}});}
-  if(body.action==='cost-apply')return json({success:true,...await applyReceivingCostPlan(body.lineId,String(body.token||''))});
+  if(body.action==='cost-apply'){const applied=await applyReceivingCostPlan(body.lineId,String(body.token||''));
+  // 2026-10-23: 같은 모델(전 탭) 원가도 같은 값으로 맞춘다. 실패해도 이 SKU 원가 저장은 끝난 것이라 안내만.
+  const sameModel=applied.skuId&&applied.after?await updateCostForSameModel(String(applied.skuId),String(applied.after)).catch(error=>({success:false,error:String(error)})):null;
+  return json({success:true,...applied,sameModel});}
   const input={quantity:body.quantity,unitPrice:body.unitPrice,usedImmediately:body.usedImmediately};const before=await lineFor(body.lineId);const preview=simpleReceivingPlan(before,input);
   if(body.action==='preview')return json({success:true,preview});
   if(body.token!==preview.token)throw new Error('확인 후 발주 품목이 변경되었습니다. 다시 확인해 주세요.');

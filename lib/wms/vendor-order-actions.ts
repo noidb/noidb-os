@@ -3,6 +3,7 @@ import { readWeeklyWorkspace, mutateWeeklyWorkspace } from "./weekly-work-store"
 import { normalizeSkuId } from "./product-catalog";
 import { findProductRowAnyTab, notFoundAnyTabMessage } from "./product-row-lookup";
 import { calculateReceivingCost } from "./receiving-cost";
+import { updateCostForSameModel } from "./product-catalog-write";
 import { resolveDisplayNameAndOption } from "./display-name";
 import { summarizeReceivingDelayRows, validateReceivingDelayChange, type ReceivingDelaySummary } from "./vendor-order/receiving-delay";
 export type { ReceivingDelaySummary } from "./vendor-order/receiving-delay";
@@ -374,5 +375,7 @@ export async function applyReceivingCost(input: {
     await writeProductField(skuId, "원가(부가세포함)", String(costVatIncluded), previousCost, true).catch(() => undefined);
     throw error;
   }
+  // 2026-10-23: 같은 모델(전 탭) 원가도 같은 값으로 맞춘다(이 SKU 저장은 끝났으니 실패해도 막지 않음).
+  await updateCostForSameModel(skuId, String(costVatIncluded)).catch(() => undefined);
   return { applied: true, vat, costVatIncluded };
 }

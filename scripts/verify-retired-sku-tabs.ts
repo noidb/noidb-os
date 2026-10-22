@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { planWarehouseRecheckCleanup } from "../lib/wms/warehouse-recheck-cleanup";
 import { LOW_PERFORMANCE_SKU_IDS, pickLowPerformanceTab } from "../lib/wms/retired-sku-tabs";
 import { buildStatusLists } from "../lib/wms/discontinue-lists";
+import { applySameModelFill, planSameModelFill } from "../lib/wms/same-model-fill";
 
 // 2026-10-22 탭 나눔: 실적저조SKU(예전 재등록SKU) · 그 외 재등록SKU · 판매중지SKU
 assert.equal(pickLowPerformanceTab(["제품DB", "재등록SKU"]), "재등록SKU");
@@ -113,4 +114,27 @@ console.log("PASS 판매중지SKU 탭 정상 SKU → 단종 대상");
   ], { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [], cleared: { discontinue: { [JSON.stringify(["2", "과재고", "정상", "실적저조SKU"])]: "2026-10-22" } } });
   assert.deepEqual(lists.discontinue.map(item => [item.skuId, item.reason]), [["1", "판매중지SKU"], ["2", "실적저조SKU"], ["3", "그 외 재등록SKU"], ["4", "비관리SKU"], ["7", "제품DB"]]);
   console.log("PASS 단종 대상: 옛 SKU 탭의 정상 SKU 전부(비관리 재고있음·제품DB 정상 판매 제외)");
+}
+
+// 2026-10-23: 같은 모델 빈 원가·치수 채우기
+{
+  const H = ["모델명/품번", "SKU ID", "치수", "원가(부가세포함)"];
+  const tabs = [
+    { title: "제품DB", rows: [H, ["We001", "1", "3cm", "2,750"], ["we001", "2", "", ""], ["we002", "3", "", "=A1"], ["we003", "4", "", "1,100"]] },
+    { title: "비관리SKU", rows: [H, [" we001 ", "5", "", "2090"], ["we003", "6", "1cm", ""], ["we004", "7", "", ""]] },
+  ];
+  const plan = planSameModelFill(tabs);
+  const cell = (title: string, row: number, field: string) => plan.updates.find(u => u.title === title && u.row === row && u.field === field)?.value;
+  assert.equal(cell("제품DB", 3, "원가(부가세포함)"), undefined, "값이 여러 가지(2,750/2090)면 채우지 않음");
+  assert.equal(cell("제품DB", 3, "치수"), "3cm");
+  assert.equal(cell("비관리SKU", 2, "치수"), "3cm");
+  assert.equal(cell("비관리SKU", 2, "원가(부가세포함)"), undefined, "값이 있는 칸은 그대로");
+  assert.equal(cell("제품DB", 5, "치수"), "1cm", "다른 탭 값으로 채움");
+  assert.equal(cell("비관리SKU", 3, "원가(부가세포함)"), "1100");
+  assert.equal(cell("제품DB", 4, "치수"), undefined, "같은 모델에 값이 없으면 그대로");
+  assert.equal(plan.updates.some(u => u.title === "비관리SKU" && u.row === 4), false);
+  assert.deepEqual(plan.conflicts.map(c => [c.model, c.field]), [["we001", "원가(부가세포함)"]]);
+  applySameModelFill(tabs, plan);
+  assert.equal(tabs[0].rows[2][2], "3cm", "대소문자·공백 무시하고 같은 모델");
+  console.log("PASS 같은 모델 빈 원가·치수 채우기(전 탭, 있는 값은 그대로)");
 }

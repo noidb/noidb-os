@@ -5,6 +5,7 @@ import { PRODUCT_DB_SHEET_NAME } from "@/lib/wms/product-catalog";
 import { pickStorageTabTitle, planWarehouseRecheckCleanup, RECHECK_TAB, STORAGE_TAB } from "@/lib/wms/warehouse-recheck-cleanup";
 import { mutateWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { collectRetiredSkuIds } from "@/lib/wms/sku-retirement";
+import { applySameModelFill, planSameModelFill } from "@/lib/wms/same-model-fill";
 import { LEGACY_REREGISTRATION_TAB, OTHER_REREGISTRATION_TAB, STOPPED_TAB, pickLowPerformanceTab } from "@/lib/wms/retired-sku-tabs";
 
 export const runtime = "nodejs";
@@ -32,6 +33,16 @@ async function load() {
     otherTab ? fetchSheetRows(OTHER_REREGISTRATION_TAB, { valueRenderOption: "FORMULA" }) : Promise.resolve(null),
     stoppedTab ? fetchSheetRows(STOPPED_TAB, { valueRenderOption: "FORMULA" }) : Promise.resolve(null),
   ]);
+  // 2026-10-23: 전 탭에서 같은 모델(모델명/품번)의 빈 원가·치수를 채운다(값이 있는 칸은 그대로). 채운 값으로 정리 계획도 세운다.
+  const fillTabs = [
+    { title: PRODUCT_DB_SHEET_NAME, rows: productDb },
+    ...(storage && storageTab ? [{ title: storageTab.title, rows: storage }] : []),
+    ...(reregTab ? [{ title: REREGISTRATION_TAB, rows: rereg }] : []),
+    ...(otherRows && otherTab ? [{ title: OTHER_REREGISTRATION_TAB, rows: otherRows }] : []),
+    ...(stoppedRows && stoppedTab ? [{ title: STOPPED_TAB, rows: stoppedRows }] : []),
+  ];
+  const fill = planSameModelFill(fillTabs);
+  applySameModelFill(fillTabs, fill);
   // 재등록으로 교체된 옛 SKU(_SKU교체이력): 재고가 있어도 제품DB로 되돌리지 않는다(2026-10-22 사용자 확정).
   const retiredSkuIds = collectRetiredSkuIds(history);
   // 재등록SKU 탭의 옛 SKU → 제품DB에서 보관으로(2026-10-22)
@@ -39,13 +50,15 @@ async function load() {
   const reregisteredSkuIds = new Set(reregSkuCol < 0 ? [] : rereg.slice(1).map(row => String(row[reregSkuCol] ?? "").trim()).filter(id => /^\d{1,20}$/.test(id)));
   const productDbTab = tabs.find(tab => tab.title === PRODUCT_DB_SHEET_NAME);
   return { recheckTab, storageTab, productDbTab, plan: planWarehouseRecheckCleanup(recheck, productDb, storage, reregisteredSkuIds, (rereg[0] || []).map(value => String(value ?? "")),
-    new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10), reregTab ? rereg : undefined, retiredSkuIds, { other: otherRows, stopped: stoppedRows }), reregTab, REREGISTRATION_TAB };
+    new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10), reregTab ? rereg : undefined, retiredSkuIds, { other: otherRows, stopped: stoppedRows }), reregTab, REREGISTRATION_TAB, fill };
 }
-const summary = (plan: Awaited<ReturnType<typeof load>>["plan"]) => ({ token: plan.token, pending: plan.pending, moves: plan.moves, unknown: plan.unknown, problems: plan.problems });
+const summary = ({ plan, fill }: Awaited<ReturnType<typeof load>>) => ({ token: plan.token, pending: plan.pending, moves: plan.moves, unknown: plan.unknown, problems: plan.problems,
+  fill: { cost: fill.updates.filter(item => item.field.startsWith("원가")).length, dimension: fill.updates.filter(item => item.field === "치수").length,
+    cells: fill.updates.map(item => ({ tab: item.title, row: item.row, skuId: item.skuId, model: item.model, field: item.field, value: item.value })), conflicts: fill.conflicts } });
 
 /** 미리보기: 시트는 바꾸지 않는다. */
 export async function GET() {
-  try { return NextResponse.json({ ok: true, ...summary((await load()).plan) }, { headers }); }
+  try { return NextResponse.json({ ok: true, ...summary(await load()) }, { headers }); }
   catch (error) { return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "구글시트를 읽지 못했습니다." }, { status: 400, headers }); }
 }
 
@@ -54,10 +67,17 @@ export async function POST(request: NextRequest) {
   if (!isSameOriginActionRequest(request)) return NextResponse.json({ ok: false, error: "사이트 화면에서 다시 진행해 주세요." }, { status: 403, headers });
   try {
     const body = await request.json() as { token?: unknown };
-    const { recheckTab, storageTab, productDbTab, plan, reregTab, REREGISTRATION_TAB } = await load();
+    const { recheckTab, storageTab, productDbTab, plan, reregTab, REREGISTRATION_TAB, fill } = await load();
     if (plan.problems.length) throw new Error(plan.problems.join(" "));
     if (body.token !== plan.token) throw new Error("미리보기 뒤에 구글시트가 바뀌었습니다. 다시 미리보기 후 실행해 주세요.");
-    if (!plan.moves.length) throw new Error("옮길 행이 없습니다.");
+    if (!plan.moves.length && !fill.updates.length) throw new Error("옮길 행이 없습니다.");
+    // 0-a) 같은 모델 빈 원가·치수 채우기(줄 번호가 바뀌기 전에, 탭 백업 후)
+    const fillBackups: string[] = [];
+    for (const title of [...new Set(fill.updates.map(item => item.title))]) {
+      fillBackups.push((await backupSheetWithinSpreadsheet(title)).sheetName);
+      await updateSheetCells(title, fill.updates.filter(item => item.title === title).map(item => ({ row: item.row, col: item.col, value: item.value })));
+    }
+    if (!plan.moves.length) return NextResponse.json({ ok: true, moved: 0, filled: fill.updates.length, toRereg: 0, toStorage: 0, fromStorage: 0, fromProductDb: 0, toProductDb: 0, release: 0, unknown: plan.unknown.length, pending: plan.pending, backups: fillBackups }, { headers });
     // 0) 재등록SKU 탭 형식 맞추기(이번 실행은 이것만): 백업 → 기존 줄 지우기 → 제목줄 → 전체 정보 줄 붙이기
     if (plan.reregRebuild && reregTab) {
       const rb = plan.reregRebuild;
@@ -72,6 +92,7 @@ export async function POST(request: NextRequest) {
     }
     // 1) 백업
     const backups = plan.deleteRows.length && recheckTab ? [await backupSheetWithinSpreadsheet(RECHECK_TAB)] : [];
+    backups.unshift(...fillBackups.map(sheetName => ({ sheetName })) as typeof backups);
     if (plan.appendStorage.length || plan.deleteStorageRows.length) backups.push(await backupSheetWithinSpreadsheet(storageTab!.title));
     if (plan.appendProductDb.length || plan.clearStatusRows.length || plan.deleteProductDbRows.length) backups.push(await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME));
     if (plan.appendRereg.length && !reregTab) throw new Error("'실적저조SKU' 탭을 찾지 못했습니다.");
@@ -104,7 +125,7 @@ export async function POST(request: NextRequest) {
       for (const move of release) checks[move.skuId] = { decision: "release", productName: move.productName, at };
       workspace.supplyStatusChecks = checks;
     });
-    return NextResponse.json({ ok: true, moved: plan.moves.length, toRereg: plan.appendRereg.length, toOtherRereg: plan.appendOtherRereg.length, toStopped: plan.appendStopped.length, fromRereg: plan.deleteReregRows.length, toStorage: plan.appendStorage.length, fromStorage: plan.deleteStorageRows.length, fromProductDb: plan.deleteProductDbRows.length, toProductDb: plan.appendProductDb.length + plan.clearStatusRows.length,
+    return NextResponse.json({ ok: true, moved: plan.moves.length, filled: fill.updates.length, toRereg: plan.appendRereg.length, toOtherRereg: plan.appendOtherRereg.length, toStopped: plan.appendStopped.length, fromRereg: plan.deleteReregRows.length, toStorage: plan.appendStorage.length, fromStorage: plan.deleteStorageRows.length, fromProductDb: plan.deleteProductDbRows.length, toProductDb: plan.appendProductDb.length + plan.clearStatusRows.length,
       release: release.length, unknown: plan.unknown.length, pending: plan.pending, backups: backups.map(item => item.sheetName) }, { headers });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "구글시트 정리를 하지 못했습니다." }, { status: 400, headers });

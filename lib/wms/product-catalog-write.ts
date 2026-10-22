@@ -1,6 +1,8 @@
 import { uploadImageToDriveOAuth } from "./google-drive-user";
-import { updateSheetCells } from "./google-sheets";
-import { FIELD_HEADER_CANDIDATES, normalizeSkuId } from "./product-catalog";
+import { fetchSheetRows, fetchSpreadsheetTabs, updateSheetCells } from "./google-sheets";
+import { FIELD_HEADER_CANDIDATES, PRODUCT_DB_SHEET_NAME, normalizeSkuId } from "./product-catalog";
+import { OTHER_REREGISTRATION_TAB, STOPPED_TAB, pickLowPerformanceTab } from "./retired-sku-tabs";
+import { pickStorageTabTitle } from "./warehouse-recheck-cleanup";
 import { findProductRowAnyTab, notFoundAnyTabMessage } from "./product-row-lookup";
 import { readWeeklyFile } from "./weekly-work-files";
 
@@ -80,11 +82,13 @@ async function sheetImageUrl(url: string, skuId: string, dryRun: boolean): Promi
 }
 
 /**
- * 영수증 단가로 원가를 고칠 때, 같은 탭에서 '모델명/품번'이 같은 행 전부의 원가(부가세포함)를 한 번에 바꾼다
- * (사용자 요청 2026-10-21 — 같은 모델 색상·옵션 SKU를 하나씩 바꿀 수 없음). 모델명이 비어 있으면 그 SKU 한 행만 바꾼다.
- * 원가 칸이 수식인 행은 건너뛴다. 구글시트 쓰기는 한 번에 모아서 보낸다.
+ * 영수증 단가로 원가를 고칠 때, '모델명/품번'이 같은 줄 전부의 원가(부가세포함)를 한 번에 바꾼다
+ * (사용자 요청 2026-10-21 — 같은 모델 색상·옵션 SKU를 하나씩 바꿀 수 없음).
+ * 2026-10-23: 같은 탭만 바꿔서 제품DB·비관리SKU·실적저조SKU 등에 흩어진 같은 모델이 일부만 바뀌던 문제 →
+ * 전 탭(제품DB·비관리SKU·실적저조SKU·그 외 재등록SKU·판매중지SKU)에서 모델명이 같은(대소문자·앞뒤 공백 무시) 줄을 모두 바꾼다.
+ * SKU ID가 아직 없는 줄(승인대기)도 바꾼다. 모델명이 비어 있으면 그 SKU 한 줄만. 원가 칸이 수식인 줄은 건너뛴다.
  */
-export async function updateCostForSameModel(skuId: string, costVatIncluded: string): Promise<{ success: boolean; sheetName?: string; modelName?: string; skuIds: string[]; skippedFormulaSkuIds: string[]; error?: string }> {
+export async function updateCostForSameModel(skuId: string, costVatIncluded: string): Promise<{ success: boolean; sheetName?: string; modelName?: string; skuIds: string[]; skippedFormulaSkuIds: string[]; tabs?: string[]; error?: string }> {
   const targetSkuId = normalizeSkuId(skuId);
   const cost = String(costVatIncluded || "").trim();
   if (!targetSkuId) return { success: false, skuIds: [], skippedFormulaSkuIds: [], error: "SKU ID가 비어 있습니다." };
@@ -96,26 +100,37 @@ export async function updateCostForSameModel(skuId: string, costVatIncluded: str
     return { success: false, skuIds: [], skippedFormulaSkuIds: [], error: error instanceof Error ? error.message : "제품DB를 읽을 수 없습니다." };
   }
   if (!match) return { success: false, skuIds: [], skippedFormulaSkuIds: [], error: notFoundAnyTabMessage(skuId) };
-  const { headers, headerRowIndex, rows, sheetName, rowNumber } = match;
-  const skuColumn = headers.indexOf("SKU ID");
-  const costColumn = headers.findIndex(h => FIELD_HEADER_CANDIDATES.costVatIncluded.includes(h));
-  const modelColumn = headers.findIndex(h => FIELD_HEADER_CANDIDATES.modelName.includes(h));
-  if (costColumn < 0) return { success: false, sheetName, skuIds: [], skippedFormulaSkuIds: [], error: `${sheetName} 탭에 '원가(부가세포함)' 열이 없습니다.` };
-  const modelName = modelColumn >= 0 ? String(match.values[modelColumn] ?? "").trim() : "";
-  const targets = modelName
-    ? rows.map((row, index) => ({ row, index })).filter(entry => entry.index > headerRowIndex && String(entry.row?.[modelColumn] ?? "").trim() === modelName && normalizeSkuId(entry.row?.[skuColumn]))
-    : [{ row: rows[rowNumber - 1], index: rowNumber - 1 }];
-  const skuIds: string[] = [], skippedFormulaSkuIds: string[] = [];
-  const cellUpdates: { row: number; col: number; value: string }[] = [];
-  for (const { row, index } of targets) {
-    const id = normalizeSkuId(row?.[skuColumn]);
-    const before = String(row?.[costColumn] ?? "");
-    if (before.startsWith("=")) { skippedFormulaSkuIds.push(id); continue; }
-    skuIds.push(id);
-    if (before.trim() !== cost) cellUpdates.push({ row: index + 1, col: costColumn + 1, value: cost });
+  const modelColumnOf = (headers: string[]) => headers.findIndex(h => FIELD_HEADER_CANDIDATES.modelName.includes(h));
+  const modelName = (() => { const col = modelColumnOf(match.headers); return col >= 0 ? String(match.values[col] ?? "").trim() : ""; })();
+  const key = modelName.toLowerCase();
+  const titles = await fetchSpreadsheetTabs().then(tabs => tabs.map(tab => tab.title)).catch(() => [] as string[]);
+  const storage = pickStorageTabTitle(titles);
+  const tabNames = [...new Set([match.sheetName, PRODUCT_DB_SHEET_NAME, storage, pickLowPerformanceTab(titles), OTHER_REREGISTRATION_TAB, STOPPED_TAB]
+    .filter((title): title is string => Boolean(title) && (title === match.sheetName || titles.includes(title!))))];
+  const skuIds: string[] = [], skippedFormulaSkuIds: string[] = [], changedTabs: string[] = [];
+  for (const title of key ? tabNames : [match.sheetName]) {
+    const rows = title === match.sheetName ? match.rows : await fetchSheetRows(title, { valueRenderOption: "FORMULA" }).catch(() => null);
+    if (!rows?.length) continue;
+    const headerRowIndex = title === match.sheetName ? match.headerRowIndex : 0;
+    const headers = (rows[headerRowIndex] || []).map(value => String(value ?? "").trim());
+    const skuColumn = headers.indexOf("SKU ID");
+    const costColumn = headers.findIndex(h => FIELD_HEADER_CANDIDATES.costVatIncluded.includes(h));
+    const modelColumn = modelColumnOf(headers);
+    if (costColumn < 0) { if (title === match.sheetName) return { success: false, sheetName: title, skuIds: [], skippedFormulaSkuIds: [], error: `${title} 탭에 '원가(부가세포함)' 열이 없습니다.` }; continue; }
+    const targets = key
+      ? rows.map((row, index) => ({ row, index })).filter(entry => entry.index > headerRowIndex && modelColumn >= 0 && String(entry.row?.[modelColumn] ?? "").trim().toLowerCase() === key)
+      : [{ row: rows[match.rowNumber - 1], index: match.rowNumber - 1 }];
+    const cellUpdates: { row: number; col: number; value: string }[] = [];
+    for (const { row, index } of targets) {
+      const id = normalizeSkuId(row?.[skuColumn]) || `${title} ${index + 1}행`;
+      const before = String(row?.[costColumn] ?? "");
+      if (before.startsWith("=")) { skippedFormulaSkuIds.push(id); continue; }
+      skuIds.push(id);
+      if (before.replace(/[,\s]/g, "") !== cost) cellUpdates.push({ row: index + 1, col: costColumn + 1, value: cost });
+    }
+    if (cellUpdates.length) { await updateSheetCells(title, cellUpdates); changedTabs.push(title); }
   }
-  await updateSheetCells(sheetName, cellUpdates);
-  return { success: true, sheetName, modelName, skuIds, skippedFormulaSkuIds };
+  return { success: true, sheetName: match.sheetName, modelName, skuIds, skippedFormulaSkuIds, tabs: changedTabs };
 }
 
 export async function updateProductCatalogFields(
