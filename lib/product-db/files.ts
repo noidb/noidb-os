@@ -292,20 +292,11 @@ export async function collectProductDbFiles(
       files: [],
       skipped: ["모델명 없음"],
       readyFiles: [],
-      missingFiles: ["모델명", "원본", "썸네일", "추가이미지", "상세", "라벨", "견적서"],
+      missingFiles: ["모델명", "썸네일", "추가이미지", "상세", "라벨", "견적서"],
     };
   }
 
-  const photos = input.photos?.filter(u => u?.startsWith("data:image/")) ?? [];
-  if (photos.length) {
-    photos.forEach((url, index) => {
-      const name = `원본_${String(index + 1).padStart(2, "0")}.jpg`;
-      pushToFolder(files, "원본", name, dataUrlToBlob(url));
-      readyFiles.push(`원본/${name}`);
-    });
-  } else {
-    missingFiles.push("원본_01.jpg");
-  }
+  // 2026-10-23 사용자 요청: 상품 생성 때 '원본' 폴더(원본_01.jpg …)는 저장하지 않는다.
 
   if (input.allOptionsImage?.startsWith("data:image/")) {
     const name = `${model}-00.jpg`;
