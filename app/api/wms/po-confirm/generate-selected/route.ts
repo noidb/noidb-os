@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
+import { syncCoupangSupplyPricesSafely } from "@/lib/wms/coupang-supply-price-sync";
 import {
   buildSelectedPoConfirmWorkbook,
   type ConfirmedQuantitiesByPoInput,
@@ -49,6 +50,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "업로드한 파일 내용이 비어 있습니다." }, { status: 400 });
     }
 
+    // 2026-10-23: 원발주서 매입가 → 구글시트 최근쿠팡공급가(파일 만들기와 같이 진행, 실패해도 발주확정은 계속)
+    const supplyPriceSync = syncCoupangSupplyPricesSafely();
     const result = await buildSelectedPoConfirmWorkbook({
       selectedPoNumbers,
       confirmedQuantitiesByPo,
@@ -74,6 +77,7 @@ export async function POST(request: NextRequest) {
         "X-Row-Counts-By-Po": encodeURIComponent(JSON.stringify(result.rowCountsByPo)),
         "X-Matched-Sku-Count": String(result.matchedSkuCount),
         "X-Shortage-Row-Count": String(result.shortageRowCount),
+        "X-Supply-Price-Sync": await supplyPriceSync,
         "X-Reason-Applied-Count": String(result.reasonAppliedCount),
       },
     });

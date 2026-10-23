@@ -495,7 +495,7 @@ function verifyWrittenRows(before: string[][], after: string[][], updates: Sheet
   const affectedRows = new Set(updates.map(update => update.row));
   for (const rowNumber of affectedRows) {
     const expected = [...(before[rowNumber - 1] || [])];
-    for (const update of updates.filter(item => item.row === rowNumber)) expected[update.col - 1] = update.value;
+    for (const update of updates.filter(item => item.row === rowNumber)) expected[update.col - 1] = String(update.value);
     const actual = after[rowNumber - 1] || [];
     const width = Math.max(expected.length, actual.length);
     for (let index = 0; index < width; index += 1) {

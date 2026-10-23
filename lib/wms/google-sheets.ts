@@ -63,7 +63,8 @@ export interface SheetCellUpdate {
   row: number;
   /** 1-based 열 번호 (A=1, B=2, ...) */
   col: number;
-  value: string;
+  /** 숫자를 넣으면 시트에 숫자로 들어간다(쉼표 서식 등 그대로 적용). */
+  value: string | number;
 }
 
 export interface SheetBackupResult {
