@@ -54,6 +54,12 @@
 .task h2 { margin: 0 0 8px; font-size: 17px; }
 .task > p { font-size: 12px; color: #77716a; line-height: 1.6; }
 .task > a, .task > button { margin-top: 12px; }
+/* 2026-10-23 사용자 요청: 작업 메뉴 카드가 단조롭지 않게 사이트 원래 색(세이지·샌드·클레이핑크·웜그레이)을 위쪽 띠로 넣고, 할 일 건수는 클레이핑크 배지로 보여 준다. */
+.taskSage { border-top: 4px solid #60766a; }
+.taskSand { border-top: 4px solid #cdb99f; }
+.taskClay { border-top: 4px solid #d9b8ab; }
+.taskGray { border-top: 4px solid #cfc7bb; }
+.countBadge { display: inline-block; margin-left: 8px; padding: 1px 9px; border-radius: 999px; border: 1px solid #d9b8ab; background: #f2dfd8; color: #8a5a4b; font-size: 12px; font-weight: 800; line-height: 1.5; }
 .reprint { grid-column: 1 / -1; background: #e3ece6; border-color: #b7c8bb; }
 .footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; border-top: 1px solid #e5dace; padding-top: 16px; }
 .footer a { color: #77716a; font-size: 12px; text-decoration: none; padding: 8px 0; }

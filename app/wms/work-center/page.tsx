@@ -311,22 +311,22 @@ export default function WmsWorkCenterPage() {
       <div className={styles.tasks}>
         {/* 2026-10-21: '발주서작업' 칸은 위 '자주 하는 일' 2번(발주서작업 버튼)과 겹쳐서 뺐다. */}
         {/* 2026-10-20 사용자 요청: 하는 시점에 맞춰 수시 처리(거래처 발주·단종·단종해제)와 입고결과 처리(미납분 재발주·쿠폰광고)로 나눔. */}
-        <section className={styles.task}>
+        <section className={`${styles.task} ${styles.taskSage}`}>
           <h2>거래처발주</h2>
           <p>거래처별 발주서를 확인하고 카톡으로 보내 답변을 처리합니다.</p>
-          <Link className={styles.taskButtonGrayWhite} href="/wms/vendor-orders/manage">거래처발주{counts?.vendor ? ` ${counts.vendor}건` : ""}</Link>
+          <Link className={styles.taskButtonGrayWhite} href="/wms/vendor-orders/manage">거래처발주{counts?.vendor ? <span className={styles.countBadge}>{counts.vendor}건</span> : null}</Link>
         </section>
-        <section className={styles.task}>
+        <section className={`${styles.task} ${styles.taskSand}`}>
           <h2>단종/해제 관리</h2>
           <p>단종 신청과 단종해제를 언제든 진행합니다.</p>
-          <Link className={styles.taskButtonGrayWhite} href="/wms/vendor-orders?tab=anytime">단종/해제 관리{counts?.anytime ? ` ${counts.anytime}건` : ""}</Link>
+          <Link className={styles.taskButtonGrayWhite} href="/wms/vendor-orders?tab=anytime">단종/해제 관리{counts?.anytime ? <span className={styles.countBadge}>{counts.anytime}건</span> : null}</Link>
         </section>
-        <section className={styles.task}>
+        <section className={`${styles.task} ${styles.taskClay}`}>
           <h2>입고결과 처리</h2>
           <p>입고결과를 가져온 뒤 미납분 재발주요청과 쿠폰·광고를 처리합니다.</p>
-          <Link className={styles.taskButtonBeige} href="/wms/vendor-orders?tab=results">입고결과 처리{counts?.results ? ` ${counts.results}건` : ""}</Link>
+          <Link className={styles.taskButtonBeige} href="/wms/vendor-orders?tab=results">입고결과 처리{counts?.results ? <span className={styles.countBadge}>{counts.results}건</span> : null}</Link>
         </section>
-        <section className={styles.task}>
+        <section className={`${styles.task} ${styles.taskGray}`}>
           <h2>입고결과 누적</h2>
           <p>SKU별 누적 입고 수량을 월별로 조회합니다.</p>
           <Link className={styles.taskButtonGrayWhite} href="/wms/inbound/cumulative">누적 조회</Link>

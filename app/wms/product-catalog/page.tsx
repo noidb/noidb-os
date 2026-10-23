@@ -1023,7 +1023,8 @@ export default function ProductCatalogPage() {
   function startPhotoDrag(model: string, event: React.PointerEvent<HTMLElement>) {
     if (event.button !== 0 || (event.pointerType !== "mouse" && event.pointerType !== "pen")) return;
     const target = event.target as HTMLElement;
-    if (target.closest("input, label, a, select, textarea, [data-no-drag]")) return;
+    // 2026-10-23: 체크칸(label·input)에서도 끌기를 시작할 수 있게 했다. 5px 미만이면 그냥 클릭(체크 켜기/끄기)으로 남고, 끌었을 때만 드래그로 처리한다(끝난 뒤 클릭 한 번은 막음).
+    if (target.closest("a, select, textarea, [data-no-drag]")) return;
     if (target.closest("button") && !target.closest("[data-photo-zoom]")) return;
     const container = event.currentTarget;
     const startX = event.clientX + window.scrollX;
@@ -1765,7 +1766,8 @@ function Thumbnail({ photoId, file, alt, onBroken }: { photoId: string; file: Fi
   if (broken) return <div style={{ width: 100, height: 100, display: "flex", alignItems: "center", justifyContent: "center", background: wmsColors.surface, color: wmsColors.warnText, fontSize: 11 }}>미리보기 오류</div>;
   if (!url) return <div style={{ width: 100, height: 100, display: "flex", alignItems: "center", justifyContent: "center", background: wmsColors.surface, color: wmsColors.muted, fontSize: 11 }}>불러오는 중…</div>;
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src={url} alt={alt} onError={() => {
+  // 2026-10-23: draggable={false} — 선택된 사진 위에서 끌기를 시작해도 브라우저 기본 '이미지 끌기'가 가로채지 않게 한다(드래그 해제용).
+  return <img src={url} alt={alt} draggable={false} onError={() => {
     thumbnailCache.delete(photoId);
     if (fallback === 0) {
       setFallback(1);
@@ -1774,5 +1776,5 @@ function Thumbnail({ photoId, file, alt, onBroken }: { photoId: string; file: Fi
       setFallback(2);
       setUrl(URL.createObjectURL(file));
     } else { setBroken(true); onBroken(); }
-  }} style={{ width: 100, height: 100, objectFit: "contain" }} />;
+  }} style={{ width: 100, height: 100, objectFit: "contain", userSelect: "none", WebkitUserDrag: "none" } as React.CSSProperties} />;
 }

@@ -80,6 +80,12 @@ export default function DailyRoutine() {
   ];
 
   const buttonStyle = { minHeight: 38, padding: "6px 8px", fontSize: 13, textDecoration: "none" } as const;
+  // 2026-10-23 사용자 요청: 화면이 단조롭지 않게 사이트 원래 색(세이지·샌드·클레이핑크)을 번호 배지와 왼쪽 띠에 돌려 쓴다.
+  const accents = [
+    { bar: "#60766a", badgeBg: "#60766a", badgeBorder: "#60766a", badgeText: "#fff" },
+    { bar: "#cdb99f", badgeBg: "#e9ddcf", badgeBorder: "#cdb99f", badgeText: "#6b5a3f" },
+    { bar: "#d9b8ab", badgeBg: "#f2dfd8", badgeBorder: "#d9b8ab", badgeText: "#8a5a4b" },
+  ] as const;
   return (
     <section aria-label="자주 하는 일" style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: "14px 16px", margin: "0 0 18px" }}>
       <h2 style={{ margin: "0 0 10px", fontSize: 18, color: wmsColors.ink, paddingLeft: 10, borderLeft: "4px solid #60766a" }}>자주 하는 일</h2>
@@ -94,13 +100,13 @@ export default function DailyRoutine() {
               ? <button type="button" className="softSageButton" style={buttonStyle} onClick={() => { setRunKey((value) => value + 1); setOpen(item.id); }}>{item.label}</button>
               : <button type="button" className={isOpen ? "softApricotButton" : "softSageButton"} style={buttonStyle} aria-expanded={isOpen} onClick={() => { if (!isOpen) mark(item.id); setOpen(isOpen ? null : item.id); }}>{isOpen ? "접기" : item.label}</button>;
           return (
-            <article key={item.id} style={{ border: "1px solid #e5dace", background: "#fbf8f4", borderRadius: 10, padding: "10px 12px" }}>
+            <article key={item.id} style={{ border: "1px solid #e5dace", borderLeft: `5px solid ${accents[index % accents.length].bar}`, background: "#fbf8f4", borderRadius: 10, padding: "10px 12px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "28px minmax(0, 1fr) minmax(150px, 220px)", gap: 10, alignItems: "center" }}>
-                <span style={{ width: 26, height: 26, borderRadius: 999, background: "#fff", border: "1px solid #60766a", color: "#60766a", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800 }}>{index + 1}</span>
+                <span style={{ width: 26, height: 26, borderRadius: 999, background: accents[index % accents.length].badgeBg, border: `1px solid ${accents[index % accents.length].badgeBorder}`, color: accents[index % accents.length].badgeText, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800 }}>{index + 1}</span>
                 <div style={{ minWidth: 0 }}>
                   <strong style={{ display: "block", fontSize: 15, color: wmsColors.ink }}>{item.title}</strong>
                   <span style={{ display: "block", fontSize: 12, color: wmsColors.muted }}>{item.summary}</span>
-                  <span style={{ display: "block", fontSize: 12, marginTop: 2, color: doneAt[item.id] ? "#3f574b" : wmsColors.muted, fontWeight: doneAt[item.id] ? 700 : 400 }}>
+                  <span style={{ display: "block", fontSize: 12, marginTop: 2, color: doneAt[item.id] ? "#4d6a5a" : wmsColors.muted, fontWeight: doneAt[item.id] ? 700 : 400 }}>
                     {!loaded ? "마지막 처리 확인 중…" : doneAt[item.id] ? `마지막 처리 ${timeLabel(doneAt[item.id])}` : "마지막 처리 기록 없음"}
                   </span>
                 </div>
