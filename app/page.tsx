@@ -431,6 +431,8 @@ export default function Home() {
   const [modelReregisterable, setModelReregisterable] = useState(false);
   const [pendingReplacementCleanup, setPendingReplacementCleanup] = useState<PendingReplacementCleanup | null>(null);
   const [reregistrationMessage, setReregistrationMessage] = useState("");
+  const [dimensionOcrBusy, setDimensionOcrBusy] = useState(false);
+  const [dimensionOcrMessage, setDimensionOcrMessage] = useState("");
   const [titleBackup, setTitleBackup] = useState("");
   const [tagsBackup, setTagsBackup] = useState("");
   const [reregisterModelName, setReregisterModelName] = useState("");
@@ -839,6 +841,45 @@ export default function Home() {
   const updateSizes = (value: string) => {
     sizesUserEditedRef.current = true;
     setProduct(prev => ({ ...prev, sizes: value }));
+  };
+
+  const fillDimensionFromExistingDetail = async () => {
+    const source = detailPreview || (preparedDetail ? await readFile(preparedDetail.file) : "");
+    if (!source) {
+      setDimensionOcrMessage("기존 상세페이지를 먼저 불러온 뒤 다시 눌러주세요.");
+      return;
+    }
+    setDimensionOcrBusy(true);
+    setDimensionOcrMessage("상세페이지에서 치수를 읽고 있습니다...");
+    try {
+      const { createWorker } = await import("tesseract.js");
+      const worker = await createWorker("kor+eng", 1);
+      const { data } = await worker.recognize(source);
+      await worker.terminate();
+
+      const lines = String(data.text || "").replace(/\r/g, "").split("\n")
+        .map(line => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+      const sizeAt = lines.findIndex(line => /사이즈|size/i.test(line));
+      if (sizeAt < 0) {
+        setDimensionOcrMessage("상세페이지에서 ‘사이즈’ 항목을 찾지 못했습니다. 치수 부분이 잘 보이게 만든 뒤 다시 시도해주세요.");
+        return;
+      }
+      const dimensionWords = /(?:\d\s*(?:mm|cm|m|호|인치)|가로|세로|폭|길이|두께|지름|총|펜던트|체인|큐빅|사이즈)/i;
+      const picked = lines.slice(sizeAt, sizeAt + 3).map((line, index) =>
+        index === 0 ? line.replace(/^.*?(?:사이즈|size)\s*[:：]?\s*/i, "").trim() : line
+      ).filter(line => dimensionWords.test(line));
+      const dimension = [...new Set(picked)].join(", ");
+      if (!dimension) {
+        setDimensionOcrMessage("치수 값이 선명하게 인식되지 않았습니다. 상세페이지의 사이즈 부분을 확인해주세요.");
+        return;
+      }
+      update("dimension", dimension);
+      setDimensionOcrMessage(`인식 완료: ${dimension}`);
+    } catch (error) {
+      setDimensionOcrMessage(`치수 인식 실패: ${error instanceof Error ? error.message : "다시 시도해주세요."}`);
+    } finally {
+      setDimensionOcrBusy(false);
+    }
   };
 
   const linkExistingReplacement = async () => {
@@ -2678,6 +2719,16 @@ export default function Home() {
           <Field label="치수">
             <input value={product.dimension} onChange={e => update("dimension", e.target.value)}
               placeholder="예: 폭 8mm, 길이 42cm" />
+            {reregisterModelName && (
+              <>
+                <button type="button" className="secondaryButton" disabled={dimensionOcrBusy || (!detailPreview && !preparedDetail)}
+                  onClick={() => void fillDimensionFromExistingDetail()}
+                  title="기존 상세페이지의 ‘사이즈’ 항목을 읽어 치수 칸에 넣습니다.">
+                  {dimensionOcrBusy ? "치수 읽는 중..." : "기존 상세페이지에서 치수 자동입력"}
+                </button>
+                {dimensionOcrMessage && <small className="modelAvailable">{dimensionOcrMessage}</small>}
+              </>
+            )}
           </Field>
           <Field label="모델번호 숫자">
             <input value={product.modelNo} readOnly={Boolean(reregisterModelName)} onChange={e => update("modelNo", e.target.value)} />
