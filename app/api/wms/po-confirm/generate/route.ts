@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
-import { syncCoupangSupplyPricesSafely } from "@/lib/wms/coupang-supply-price-sync";
 import {
   buildConfirmedOrderFile,
   buildConfirmedOrderFileFromUpload,
@@ -54,8 +53,6 @@ export async function POST(request: NextRequest) {
 
     const confirmedQuantities = Array.isArray(body.confirmedQuantities) ? body.confirmedQuantities : [];
 
-    // 2026-10-23: 원발주서 매입가 → 구글시트 최근쿠팡공급가(파일 만들기와 같이 진행, 실패해도 발주확정은 계속)
-    const supplyPriceSync = syncCoupangSupplyPricesSafely();
     const result = body.uploadedFileBase64
       ? await buildConfirmedOrderFileFromUpload(decodeBase64(body.uploadedFileBase64), poNumber, confirmedQuantities)
       : await buildConfirmedOrderFile(poNumber, confirmedQuantities);
@@ -73,7 +70,6 @@ export async function POST(request: NextRequest) {
         "X-Unmatched-Sku-Ids": encodeURIComponent(result.unmatchedSkuIds.join(",")),
         "X-Source-File-Name": encodeURIComponent(result.sourceFileName),
         "X-Shortage-Row-Count": String(result.shortageRowCount),
-        "X-Supply-Price-Sync": await supplyPriceSync,
         "X-Reason-Applied-Count": String(result.reasonAppliedCount),
       },
     });

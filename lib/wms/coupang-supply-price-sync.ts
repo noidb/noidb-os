@@ -66,37 +66,3 @@ export function planSupplyPriceSync(rows: readonly (readonly unknown[])[], price
   });
   return { updates, changed };
 }
-
-/** 원발주서 폴더 전체를 읽어 구글시트에 반영한다. 실패해도 발주확정 등 본 작업은 막지 않도록 호출하는 쪽에서 감싼다. */
-export async function syncCoupangSupplyPrices(): Promise<{ skus: number; updated: number; tabs: string[] }> {
-  const [{ buildPurchaseOrderIndex }, sheets, { PRODUCT_DB_SHEET_NAME }, { STORAGE_TAB, pickStorageTabTitle }, retired] = await Promise.all([
-    import("./purchase-order-source"), import("./google-sheets"), import("./product-catalog"), import("./warehouse-recheck-cleanup"), import("./retired-sku-tabs"),
-  ]);
-  // 파일 목록은 새로 확인하고, 바뀌지 않은 파일은 저장해 둔 분석 결과를 쓴다(빠름).
-  const prices = latestPurchasePrices(await buildPurchaseOrderIndex(undefined, undefined, false));
-  if (!prices.size) return { skus: 0, updated: 0, tabs: [] };
-  const titles = (await sheets.fetchSpreadsheetTabs()).map(tab => tab.title);
-  const wanted = [PRODUCT_DB_SHEET_NAME, pickStorageTabTitle(titles) || STORAGE_TAB, ...retired.RETIRED_SKU_TABS];
-  const targets = [...new Set(wanted)].filter(title => titles.includes(title));
-  let updated = 0;
-  const touched: string[] = [];
-  for (const title of targets) {
-    const plan = planSupplyPriceSync(await sheets.fetchSheetRows(title, { valueRenderOption: "UNFORMATTED_VALUE" }), prices);
-    if (!plan.updates.length) continue;
-    await sheets.updateSheetCells(title, plan.updates);
-    updated += plan.changed.length;
-    touched.push(title);
-  }
-  return { skus: prices.size, updated, tabs: touched };
-}
-
-/** 발주확정 파일 만들 때 같이 돌린다. 실패해도 발주확정은 그대로 진행하고, 결과만 응답 머리글로 알린다. */
-export async function syncCoupangSupplyPricesSafely(): Promise<string> {
-  try {
-    const result = await syncCoupangSupplyPrices();
-    return `ok:${result.updated}`;
-  } catch (error) {
-    console.error("[최근쿠팡공급가 자동입력 실패]", error);
-    return `error:${encodeURIComponent(error instanceof Error ? error.message : "실패")}`;
-  }
-}

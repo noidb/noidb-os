@@ -9,6 +9,7 @@ export interface DriveFileInfo {
   name: string;
   mimeType: string;
   modifiedTime: string;
+  createdTime?: string;
   size?: string;
 }
 
@@ -97,7 +98,7 @@ export async function listDriveFolderFiles(folderId: string): Promise<DriveFileI
   do {
     const params = new URLSearchParams({
       q: `'${escapeDriveQuery(folderId.trim())}' in parents and trashed=false`,
-      fields: "nextPageToken,files(id,name,mimeType,modifiedTime,size)",
+      fields: "nextPageToken,files(id,name,mimeType,modifiedTime,createdTime,size)",
       orderBy: "modifiedTime desc,name",
       pageSize: "1000",
       spaces: "drive",
@@ -128,7 +129,7 @@ export async function searchDriveFilesByName(nameFragment: string): Promise<Driv
   if (!fragment) return [];
   const params = new URLSearchParams({
     q: `name contains '${escapeDriveQuery(fragment)}' and trashed=false`,
-    fields: "files(id,name,mimeType,modifiedTime,size)",
+    fields: "files(id,name,mimeType,modifiedTime,createdTime,size)",
     orderBy: "modifiedTime desc,name",
     pageSize: "100",
     spaces: "drive",

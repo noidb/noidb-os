@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
 import { appendSheetRowsKeepingFormulas, backupSheetWithinSpreadsheet, deleteSheetRows, ensureSheetColumns, fetchSheetRows, fetchSpreadsheetTabs, moveSheetRows, updateSheetCells } from "@/lib/wms/google-sheets";
 import { planModelRegroup } from "@/lib/wms/model-regroup";
-import { syncCoupangSupplyPricesSafely } from "@/lib/wms/coupang-supply-price-sync";
+import { syncProductDbTrackingSafely } from "@/lib/wms/product-db-tracking-sync";
 import { PRODUCT_DB_SHEET_NAME } from "@/lib/wms/product-catalog";
 import { pickStorageTabTitle, planWarehouseRecheckCleanup, RECHECK_TAB, STORAGE_TAB } from "@/lib/wms/warehouse-recheck-cleanup";
 import { mutateWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
@@ -179,9 +179,9 @@ export async function POST(request: NextRequest) {
       for (const move of release) checks[move.skuId] = { decision: "release", productName: move.productName, at };
       workspace.supplyStatusChecks = checks;
     });
-    // 2026-10-23: 원발주서 매입가 → 최근쿠팡공급가(줄 정리가 끝난 뒤 다시 읽어서 적는다)
-    const supplyPrice = await syncCoupangSupplyPricesSafely();
-    return NextResponse.json({ ok: true, supplyPrice, moved: plan.moves.length, filled: fill.updates.length, regrouped, toRereg: plan.appendRereg.length, toOtherRereg: plan.appendOtherRereg.length, toStopped: plan.appendStopped.length, fromRereg: plan.deleteReregRows.length, toStorage: plan.appendStorage.length, fromStorage: plan.deleteStorageRows.length, fromProductDb: plan.deleteProductDbRows.length, toProductDb: plan.appendProductDb.length + plan.clearStatusRows.length,
+    // 2026-10-23: 발주·입고 칸(최근쿠팡공급가·최근발주일·최근입고일·누적입고·미입고) — 줄 정리가 끝난 뒤 다시 읽어서 적는다
+    const tracking = await syncProductDbTrackingSafely(true);
+    return NextResponse.json({ ok: true, tracking, moved: plan.moves.length, filled: fill.updates.length, regrouped, toRereg: plan.appendRereg.length, toOtherRereg: plan.appendOtherRereg.length, toStopped: plan.appendStopped.length, fromRereg: plan.deleteReregRows.length, toStorage: plan.appendStorage.length, fromStorage: plan.deleteStorageRows.length, fromProductDb: plan.deleteProductDbRows.length, toProductDb: plan.appendProductDb.length + plan.clearStatusRows.length,
       release: release.length, unknown: plan.unknown.length, pending: plan.pending, backups: backups.map(item => item.sheetName) }, { headers });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "구글시트 정리를 하지 못했습니다." }, { status: 400, headers });

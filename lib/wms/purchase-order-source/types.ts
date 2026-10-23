@@ -32,6 +32,10 @@ export interface PurchaseOrderSourceDocument {
   postalCode: string;
   address: string;
   records: PurchaseOrderSourceRecord[];
+  /** 2026-10-23: 이 문서를 읽은 파일을 받은 시각(ISO). */
+  sourceFileTime?: string;
+  /** 2026-10-23: 이 발주가 들어 있는 파일 중 가장 먼저 받은 시각(ISO) — 제품DB 최근발주일. */
+  firstReceivedAt?: string;
 }
 
 export interface PurchaseOrderDuplicate {

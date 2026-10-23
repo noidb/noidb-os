@@ -34,6 +34,18 @@ async function parseInputs(inputs: PurchaseOrderBinaryInput[]): Promise<ParsedCo
   }
   return { documents, errors, entries: inputs.length };
 }
+
+/**
+ * 2026-10-23: 발주서 파일을 받은 시각(= 쿠팡 발주일과 같은 날, 신규발주서는 당일 받음)을 문서에 붙인다.
+ * "발주서리스트_20261020121615.zip"처럼 이름에 받은 시각이 있으면 그것을, 없으면 파일 생성 시각을 쓴다.
+ * 저장된 분석 결과(캐시)는 바꾸지 않고 복사본에만 붙인다.
+ */
+function withFileTime(container: ParsedContainer, name: string, fallbackIso: string): ParsedContainer {
+  const match = name.match(/(20\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
+  const fileTime = match ? `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}+09:00` : fallbackIso;
+  if (!fileTime) return container;
+  return { ...container, documents: container.documents.map(document => ({ ...document, sourceFileTime: fileTime })) };
+}
 /**
  * 2026-10-21: 송장·쉽먼트·바코드·출력세트를 만들 때마다 '최신 원본 검증'(fresh)으로 발주서 폴더의 모든 파일을
  * 하나씩 다시 내려받아 읽어서 '생성 중'이 매우 길었다. 파일 목록은 매번 새로 확인하고(fresh의 뜻은 그대로),
@@ -60,15 +72,15 @@ async function loadInputs(_fresh: boolean): Promise<{ containers: number; parsed
       .filter(file => /\.(zip|xlsx)$/i.test(file.name))
       // 오래된 파일 → 최신 파일 순으로 읽어, 같은 발주가 다시 내려받아진 경우 최신 파일이 마지막에 오게 한다.
       .sort((a, b) => String(a.modifiedTime || "").localeCompare(String(b.modifiedTime || "")));
-    const parsed = await inOrder(files, file => load(file.name, [file.id, file.name, file.modifiedTime, file.size], () => downloadDriveFile(file.id)));
+    const parsed = await inOrder(files, async file => withFileTime(await load(file.name, [file.id, file.name, file.modifiedTime, file.size], () => downloadDriveFile(file.id)), file.name, String(file.createdTime || file.modifiedTime || "")));
     return { containers: files.length, parsed };
   }
   const names = (await readdir(LOCAL_SOURCE_DIR)).filter(name => /\.(zip|xlsx)$/i.test(name));
   const infos = await Promise.all(names.map(async name => ({ name, info: await stat(path.join(LOCAL_SOURCE_DIR, name)) })));
   infos.sort((a, b) => a.info.mtimeMs - b.info.mtimeMs);
-  const parsed = await inOrder(infos, ({ name, info }) => {
+  const parsed = await inOrder(infos, async ({ name, info }) => {
     const filePath = path.join(LOCAL_SOURCE_DIR, name);
-    return load(name, [filePath, info.mtimeMs, info.size], () => readFile(filePath));
+    return withFileTime(await load(name, [filePath, info.mtimeMs, info.size], () => readFile(filePath)), name, new Date(info.birthtimeMs || info.mtimeMs).toISOString());
   });
   return { containers: names.length, parsed };
 }
@@ -107,16 +119,19 @@ export async function buildPurchaseOrderIndex(inputs?: PurchaseOrderBinaryInput[
   const conflicts: PurchaseOrderDuplicate[] = [];
   const resolvedConflicts: PurchaseOrderDuplicate[] = [];
   for (const [po, documents] of documentsByPo) {
-    if (documents.length === 1) { byPurchaseOrderNumber.set(po, documents[0]); continue; }
+    // 같은 발주가 여러 파일에 있으면 처음 받은 파일 시각을 발주를 받은 시각으로 본다.
+    const times = documents.map(item => item.sourceFileTime || "").filter(Boolean).sort((a, b) => Date.parse(a) - Date.parse(b));
+    const firstSeen = (document: PurchaseOrderSourceDocument) => times.length ? { ...document, firstReceivedAt: times[0] } : document;
+    if (documents.length === 1) { byPurchaseOrderNumber.set(po, firstSeen(documents[0])); continue; }
     const info = duplicate(po, documents);
     duplicateFiles.push(info);
     if (new Set(documents.map(signature)).size === 1) {
       identicalDuplicates.push(info);
-      byPurchaseOrderNumber.set(po, documents[0]);
+      byPurchaseOrderNumber.set(po, firstSeen(documents[0]));
     } else {
       // 같은 발주가 내용이 다른 파일로 여러 번 들어온 경우: 쿠팡에서 가장 최근에 내려받은 파일을 기준으로 쓴다.
       // (발주확정 후 다시 내려받으면 수량 등이 바뀌는 것이 정상이라 매번 막지 않는다.)
-      byPurchaseOrderNumber.set(po, documents[documents.length - 1]);
+      byPurchaseOrderNumber.set(po, firstSeen(documents[documents.length - 1]));
       resolvedConflicts.push(info);
     }
   }

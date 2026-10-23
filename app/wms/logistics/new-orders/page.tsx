@@ -44,6 +44,8 @@ export default function WmsNewOrdersPage() {
   const [orders, setOrders] = useState<SupplierHubPurchaseOrder[] | null>(null);
   const [fixtureMode, setFixtureMode] = useState(false);
   useEffect(() => { setFixtureMode(process.env.NODE_ENV === "development" && new URLSearchParams(window.location.search).get("logisticsFixture") === "1"); }, []);
+  // 2026-10-23: 화면을 열면 뒤에서 제품DB 발주·입고 칸(최근쿠팡공급가·최근발주일·미입고 등)을 맞춘다. 화면은 기다리지 않는다.
+  useEffect(() => { void fetch("/api/wms/product-db-tracking", { method: "POST" }).catch(() => undefined); }, []);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [importing, setImporting] = useState(false);

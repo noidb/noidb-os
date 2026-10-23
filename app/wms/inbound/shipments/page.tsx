@@ -416,6 +416,8 @@ export default function ShipmentReceiptsPage() {
     }
   }
 
+  // 2026-10-23: 화면을 열면 뒤에서 제품DB 발주·입고 칸(누적입고·미입고·최근입고일 등)을 맞춘다. 화면은 기다리지 않는다.
+  useEffect(() => { void fetch("/api/wms/product-db-tracking", { method: "POST" }).catch(() => undefined); }, []);
   useEffect(() => {
     const requestedTab = new URLSearchParams(window.location.search).get("tab");
     // 예전 '후속처리' 링크(tab=followup)는 입고결과 처리 탭으로 연다.

@@ -98,6 +98,8 @@ export interface WeeklyWorkspace {
   marketingExcludedSkuIds?: Array<{ skuId: string; productName: string; at: string }>;
   /** 입고결과 처리기록을 새로 시작한 기준. 값이 다르면 이전 처리기록을 한 번 비운다. */
   logisticsReceiptEpoch?: string;
+  /** 2026-10-23: 제품DB 누적입고 자동계산 기준값(SKU별, 9/13 이후 쉽먼트 입고를 더하기 전 시트 값). */
+  productDbInboundBaseline?: Record<string, number>;
   materialSnapshot?: WeeklySnapshot;
   statusCompletionIds?: string[];
   statusListSnapshot?: { requests: import("./vendor-order-actions").StatusRequestRecord[]; generations: import("./vendor-order-actions").StatusFileGenerationRecord[]; at: string };
