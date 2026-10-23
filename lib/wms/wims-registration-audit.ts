@@ -81,6 +81,8 @@ interface ParsedReregistrationHistory {
   byModelSku: Map<string, ReregistrationHistory>;
   byNormalizedModelSku: Map<string, ReregistrationHistory[]>;
   byBaseModel: Map<string, ReregistrationHistory[]>;
+  /** 2026-10-23: 재등록 줄은 승인 전까지 옛 SKU ID를 그대로 갖고 있어, 모델SKU 이름이 바뀌어도(we00193B → we00193BK) 옛 SKU ID로 이력을 찾는다. */
+  byPreviousSkuId: Map<string, ReregistrationHistory>;
   retiredSkuIds: Set<string>;
 }
 
@@ -128,10 +130,14 @@ function parseReregistrationHistory(rows: string[][]): ParsedReregistrationHisto
     byNormalizedModelSku.set(normalized, [...(byNormalizedModelSku.get(normalized) || []), history]);
     byBaseModel.set(history.baseModelKey, [...(byBaseModel.get(history.baseModelKey) || []), history]);
   }
-  return { byModelSku: histories, byNormalizedModelSku, byBaseModel, retiredSkuIds };
+  const byPreviousSkuId = new Map<string, ReregistrationHistory>();
+  for (const history of histories.values()) for (const id of history.previousSkuIds) byPreviousSkuId.set(id, history);
+  return { byModelSku: histories, byNormalizedModelSku, byBaseModel, byPreviousSkuId, retiredSkuIds };
 }
 
-function findReregistrationHistory(modelSku: string, history: ParsedReregistrationHistory): ReregistrationHistory | undefined {
+function findReregistrationHistory(modelSku: string, history: ParsedReregistrationHistory, previousSkuId = ""): ReregistrationHistory | undefined {
+  const bySku = previousSkuId ? history.byPreviousSkuId.get(identityKey(previousSkuId)) : undefined;
+  if (bySku) return bySku;
   const exact = history.byModelSku.get(identityKey(modelSku));
   if (exact) return exact;
   const normalized = history.byNormalizedModelSku.get(normalize(modelSku)) || [];
@@ -226,7 +232,7 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
     }
     const product = matches[0];
     const base = { wims, sheetRowNumber: product.sheetRowNumber, productDbModelSku: product.modelSku, productDbSkuId: product.skuId, productDbStatus: product.status, productDbProductName: product.productName, productDbBarcode: product.barcode };
-    const history = findReregistrationHistory(product.modelSku, reregistrations);
+    const history = findReregistrationHistory(product.modelSku, reregistrations, product.skuId);
     const isReregistration = ["재등록파일생성", "기존상품승인대기"].includes(product.status) || (PENDING.has(product.status) && Boolean(history));
     // 재등록 기록보다 먼저 등록된 WIMS 건은 이번 재등록과 무관한 예전 기록이라 조치 목록에 올리지 않는다.
     if (isReregistration && history && !isCurrentRegistration(wims, history)) {
@@ -246,8 +252,9 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
     if ((wims.modelSku && identityKey(product.modelSku) !== identityKey(wims.modelSku)
         && product.legacyKey !== legacyModelSkuKey(wims.modelSku))
       || modelMatches.some(match => match.sheetRowNumber !== product.sheetRowNumber)
-      || (product.skuId && wims.skuId && identityKey(product.skuId) !== identityKey(wims.skuId))
-      || (product.barcode && wims.barcode && identityKey(product.barcode) !== identityKey(wims.barcode))) {
+      // 2026-10-23: 재등록 줄은 승인 전까지 옛 SKU ID·바코드를 그대로 갖고 있다(승인 때 새 값으로 덮어씀) → 다른 게 정상이다.
+      || (!isReregistration && product.skuId && wims.skuId && identityKey(product.skuId) !== identityKey(wims.skuId))
+      || (!isReregistration && product.barcode && wims.barcode && identityKey(product.barcode) !== identityKey(wims.barcode))) {
       rows.push({ ...base, type: "conflict", message: "SKU ID·모델SKU·바코드가 서로 다른 제품을 가리켜 자동 반영하지 않습니다." });
     } else if (wims.status === "rejected") {
       rows.push({ ...base, type: "rejected", message: "WIMS 반려 건입니다. SKU·바코드를 자동 반영하지 않습니다." });
@@ -259,16 +266,19 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
         : "WIMS에서 실제 검수중인 등록 건입니다. 제품DB 현재상태는 유지합니다." });
     } else if (wims.status !== "approved" || !wims.skuId || !wims.barcode) {
       rows.push({ ...base, type: "unmatched", message: "검수완료 여부 또는 SKU·R바코드를 확인해야 합니다." });
-    } else if (product.skuId && identityKey(product.skuId) !== identityKey(wims.skuId)) {
+    } else if (!isReregistration && product.skuId && identityKey(product.skuId) !== identityKey(wims.skuId)) {
       rows.push({ ...base, type: "conflict", message: `제품DB SKU ${product.skuId}와 WIMS SKU ${wims.skuId}가 다릅니다.` });
-    } else if (product.barcode && identityKey(product.barcode) !== identityKey(wims.barcode)) {
+    } else if (!isReregistration && product.barcode && identityKey(product.barcode) !== identityKey(wims.barcode)) {
       rows.push({ ...base, type: "conflict", message: `불변 바코드가 다릅니다: 제품DB ${product.barcode} / WIMS ${wims.barcode}` });
     } else if (product.skuId && product.barcode && !PENDING.has(product.status)) {
       rows.push({ ...base, type: "already_linked", message: "제품DB에 같은 SKU·바코드가 이미 연결되어 있습니다." });
     } else if (!PENDING.has(product.status)) {
       rows.push({ ...base, type: "conflict", message: "제품DB 현재상태가 승인대기 또는 등록파일생성이 아니라 승인 결과를 자동 반영하지 않습니다." });
     } else {
-      rows.push({ ...base, type: "approved_candidate", proposedStatus: "완료", message: `기존 제품DB ${product.sheetRowNumber}행에 SKU·바코드를 채울 수 있습니다.` });
+      // 2026-10-23 사용자 요청: 승인되면 '완료' 대신 '정상'. 재등록 줄은 옛 SKU 정보를 새 값으로 덮어쓴다.
+      rows.push({ ...base, type: "approved_candidate", proposedStatus: "정상", message: isReregistration && product.skuId
+        ? `제품DB ${product.sheetRowNumber}행의 옛 SKU ${product.skuId} 정보를 새 SKU·바코드로 덮어씁니다.`
+        : `기존 제품DB ${product.sheetRowNumber}행에 SKU·바코드를 채울 수 있습니다.` });
     }
   }
 
@@ -452,6 +462,8 @@ export function buildWimsRegistrationCellUpdates(
     productName: headerIndex(headers, ["상품명"]),
   };
   if (Object.values(idx).some(index => index < 0)) throw new Error("최종 확인에서 제품DB 필수 열을 찾지 못했습니다.");
+  // 재등록 줄의 옛 SKU에 딸린 쿠팡 정보(새 SKU 값은 공급상태·쿠팡 데이터 반영 때 다시 채워짐)
+  const oldSkuColumns = ["발주가능상태", "제품링크", "노출상품ID", "옵션ID"].map(name => headerIndex(headers, [name])).filter(index => index >= 0);
   const cellUpdates: SheetCellUpdate[] = [];
   const approvedRows: number[] = [];
   const seen = new Set<number>();
@@ -476,11 +488,15 @@ export function buildWimsRegistrationCellUpdates(
     }
     cellUpdates.push(
       // 재등록SKU 옵션은 완료 대신 재등록 전 현재상태(과재고 등)로 되돌린다.
-      { row, col: idx.status + 1, value: restores.get(identityKey(candidate.productDbModelSku))?.originalStatus ?? "완료" },
+      { row, col: idx.status + 1, value: restores.get(identityKey(candidate.productDbModelSku))?.originalStatus || "정상" },
       { row, col: idx.skuId + 1, value: candidate.wims.skuId },
       { row, col: idx.barcode + 1, value: candidate.wims.barcode },
       { row, col: idx.productName + 1, value: candidate.wims.productName }
     );
+    // 승인 전까지 남겨 둔 옛 SKU 정보는 승인되는 이때 비운다(옛 링크·발주가능상태가 새 SKU로 오해되지 않게).
+    if (candidate.productDbSkuId && identityKey(candidate.productDbSkuId) !== identityKey(candidate.wims.skuId)) {
+      for (const col of oldSkuColumns) cellUpdates.push({ row, col: col + 1, value: "" });
+    }
     approvedRows.push(row);
   }
   // 승인된 재등록 건은 재등록구분(1차·2차)을 재등록완료로 바꿔 재등록 필요 목록에서 뺀다.

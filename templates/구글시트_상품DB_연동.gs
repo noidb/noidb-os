@@ -2669,7 +2669,9 @@ function reregistrationEligibility_(db, model) {
   // (제품DB에 살아 있는 옵션이 하나도 없을 때만 전체 재등록). 판매중지SKU 탭 줄은 링크가 죽은 것이라 모델 전체가 대상이다.
   const stopped = items.some(item => (item.tab && item.tab.name === '판매중지SKU') || String(item.values[columns['현재상태']] || '').trim() === '판매중지')
     || (items.length > 0 && items.every(item => item.tab));
-  const retry = items.every(item => String(item.values[columns['현재상태']] || '').trim() === '재등록파일생성' && emptyIds(item.values));
+  // 2026-10-23: 재등록 저장 때 옛 SKU ID 등을 비우지 않고 그대로 두므로(승인 때 덮어씀), 현재상태만으로 '다시 저장'을 판단한다.
+  const retry = items.every(item => String(item.values[columns['현재상태']] || '').trim() === '재등록파일생성');
+  void emptyIds;
   const keys = items.map(item => String(item.values[columns['모델SKU']] || '').trim().toUpperCase());
   const uniqueOptions = keys.every((key, index) => key && keys.indexOf(key) === index);
   const eligible = !data.casingMismatch && uniqueOptions && (stopped || retry) && items.every(item => !isReregistrationPackage_(item.values, columns));
@@ -2930,7 +2932,8 @@ function planReregistration_(db, model, newRows) {
       if (value !== undefined && value !== null && String(value).trim() !== '') change(name, value);
     });
     if (optionMatches[index].rename) change('모델SKU', source[dbColumn_('모델SKU')]);
-    ['SKU ID','바코드','발주가능상태','제품링크','노출상품ID','옵션ID'].forEach(name => change(name, ''));
+    // 2026-10-23 사용자 요청: SKU ID·바코드·발주가능상태·제품링크·노출상품ID·옵션ID는 비우지 않는다.
+    // 승인 전까지 옛 정보가 필요할 때가 있어 그대로 두고, 쿠팡 승인 연결 때 새 값으로 덮어쓴다.
     change('현재상태', '재등록파일생성');
     change('기본순서', maxOrder + 1);
     return { sheetRow: old.sheetRow, values: old.values, formulas: old.formulas, changes: changes };
@@ -3008,7 +3011,7 @@ function reregisterModel_(ss, db, model, newRows, operationId) {
     const item = plan.items[index];
     if (String(row[plan.columns['모델SKU']]).trim().toUpperCase() !== String(source[dbColumn_('모델SKU')]).trim().toUpperCase()
       || row[plan.columns['현재상태']] !== '재등록파일생성'
-      || ['SKU ID','바코드','발주가능상태','제품링크','노출상품ID','옵션ID'].some(name => String(row[plan.columns[name]] == null ? '' : row[plan.columns[name]]).trim())) {
+      ) {
       throw new Error('재등록 반영 결과 확인에 실패했습니다. 백업과 제품DB를 확인해주세요.');
     }
     const changed = {};

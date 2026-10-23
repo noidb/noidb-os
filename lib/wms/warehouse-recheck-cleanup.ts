@@ -409,6 +409,9 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       const rowNumber = index + 2;
       const status = String(row[pd.status] ?? "").trim();
       const skuId = String(row[pd.sku] ?? "").trim();
+      // 2026-10-23: 재등록·신규 등록 진행 중인 줄(등록파일생성·승인대기·재등록시도)은 승인 전까지 옛 SKU 정보를 그대로 갖고 있다.
+      // 옛 SKU가 실적저조·판매중지 목록에 있어도 다시 재등록 목록으로 보내지 않고 제품DB에 둔다.
+      if (/등록파일생성|승인대기|재등록시도/.test(squash(status))) return;
       if (skuId && leavingRereg.has(skuId) && !keep.has(rowNumber)) {
         moves.push({ source: "제품DB", rowNumber, skuId, productName: pdName >= 0 ? String(row[pdName] ?? "").trim() : "", result: "재등록SKU에서 비관리SKU로 옮기는 SKU", orderableStatus: pd.orderable >= 0 ? String(row[pd.orderable] ?? "").trim() : "", target: STORAGE_LABEL, mode: "delete-only", release: false });
         deleteProductDbRows.push(rowNumber);
