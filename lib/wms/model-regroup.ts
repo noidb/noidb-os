@@ -42,6 +42,11 @@ export function planModelRegroup(rows: readonly (readonly unknown[])[], modelHea
     const parts = [...(componentsOf.get(index) || [])].sort((a, b) => lines.indexOf(skuLines(rows[a]?.[skuCol])[0]) - lines.indexOf(skuLines(rows[b]?.[skuCol])[0]));
     target.push(index, ...parts);
   }
+  return movesToTarget(current, target, keyOf);
+}
+
+/** 현재 순서(current)를 목표 순서(target)로 바꾸는 줄 이동 목록. 두 목록은 같은 줄 번호를 담아야 한다. */
+function movesToTarget(current: readonly number[], target: readonly number[], keyOf: (index: number) => string): { moves: RegroupMove[]; models: string[] } {
   const moves: RegroupMove[] = [];
   const models = new Set<string>();
   const list = [...current];
@@ -58,6 +63,53 @@ export function planModelRegroup(rows: readonly (readonly unknown[])[], modelHea
     i += k - 1;
   }
   return { moves, models: [...models] };
+}
+
+/**
+ * 승인대기 옵션 아래로 같은 모델 줄 붙이기(사용자 요청 2026-10-23)
+ * 현재상태가 anchorStatuses(예: 기존상품승인대기)인 줄을 기준 줄로 잡고, 같은 모델(모델명/품번)의 다른 옵션 줄을
+ * 그 기준 줄 바로 아래로 옮긴다. 같은 모델의 기준 줄이 여러 개면 기준 줄끼리 먼저, 그 뒤에 나머지 옵션 순서.
+ * 줄 순서만 바꾸고 칸 내용은 건드리지 않는다. 세트 줄·세트 구성 줄은 옮기지 않는다. 다른 줄의 순서는 그대로.
+ */
+export function planAnchorModelRegroup(
+  rows: readonly (readonly unknown[])[], anchorStatuses: readonly string[],
+  modelHeader = "모델명/품번", modelSkuHeader = "모델SKU", statusHeader = "현재상태"
+): { moves: RegroupMove[]; models: string[] } {
+  const headers = (rows[0] || []).map(value => String(value ?? "").replace(/\s+/g, ""));
+  const modelCol = headers.indexOf(modelHeader.replace(/\s+/g, ""));
+  const statusCol = headers.indexOf(statusHeader.replace(/\s+/g, ""));
+  if (modelCol < 0 || statusCol < 0 || rows.length < 3) return { moves: [], models: [] };
+  const keyOf = (index: number) => String(rows[index]?.[modelCol] ?? "").trim().toLowerCase();
+  const current = rows.map((_, index) => index).slice(1);
+  const skuCol = headers.indexOf(modelSkuHeader.replace(/\s+/g, ""));
+  const attachedTo = findSetComponents(rows, current, skuCol);
+  const isSetRow = (index: number) => skuLines(rows[index]?.[skuCol]).length >= 2;
+  const movable = (index: number) => !attachedTo.has(index) && !isSetRow(index) && Boolean(keyOf(index));
+  const anchorSet = new Set(anchorStatuses.map(status => status.replace(/\s+/g, "")));
+  const isAnchor = (index: number) => anchorSet.has(String(rows[index]?.[statusCol] ?? "").replace(/\s+/g, ""));
+  const blocks = new Map<string, number[]>();
+  for (const index of current) {
+    if (!movable(index) || !isAnchor(index)) continue;
+    const key = keyOf(index);
+    if (!blocks.has(key)) blocks.set(key, []);
+  }
+  if (blocks.size === 0) return { moves: [], models: [] };
+  for (const [key, block] of blocks) {
+    const sameModel = current.filter(index => movable(index) && keyOf(index) === key);
+    block.push(...sameModel.filter(isAnchor), ...sameModel.filter(index => !isAnchor(index)));
+  }
+  const inBlock = new Set<number>([...blocks.values()].flat());
+  const emitted = new Set<string>();
+  const target: number[] = [];
+  for (const index of current) {
+    if (!inBlock.has(index)) { target.push(index); continue; }
+    const key = keyOf(index);
+    // 기준 줄이 처음 나오는 자리에서 그 모델 묶음을 한 번에 내놓는다(그보다 위에 있던 같은 모델 줄은 아래로 내려온다).
+    if (!isAnchor(index) || emitted.has(key)) continue;
+    emitted.add(key);
+    target.push(...blocks.get(key)!);
+  }
+  return movesToTarget(current, target, keyOf);
 }
 
 const skuLines = (value: unknown) => String(value ?? "").split(/\r?\n/).map(line => line.trim().toLowerCase()).filter(Boolean);

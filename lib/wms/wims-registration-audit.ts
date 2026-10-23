@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { fetchSheetRows, fetchSpreadsheetTabs } from "./google-sheets";
+import { fetchSheetRows, fetchSpreadsheetTabs, moveSheetRows } from "./google-sheets";
+import { planAnchorModelRegroup } from "./model-regroup";
 import { LEGACY_REREGISTRATION_TAB, pickLowPerformanceTab } from "./retired-sku-tabs";
 import { backupSheetWithinSpreadsheet, fetchExistingSheetRows, updateSheetCells, type SheetCellUpdate } from "./google-sheets";
 import { PRODUCT_DB_SHEET_NAME } from "./product-catalog";
@@ -44,6 +45,9 @@ export interface WimsRegistrationApplyResult {
   backupSheetName?: string;
   writtenRowCount: number;
   writtenCellCount: number;
+  /** 기존상품승인대기 옵션 아래로 같은 모델 줄을 붙인 모델 수(2026-10-23). 정렬을 못 했으면 regroupError에 이유. */
+  regroupedModelCount?: number;
+  regroupError?: string;
 }
 
 const PENDING = new Set(["신상승인대기", "기존상품승인대기", "등록파일생성", "재등록파일생성"]);
@@ -522,6 +526,23 @@ function verifyWrittenRows(before: string[][], after: string[][], updates: Sheet
   }
 }
 
+const APPROVAL_PENDING_ANCHOR_STATUSES = ["기존상품승인대기"];
+
+/**
+ * 제품DB에서 현재상태가 기존상품승인대기인 줄 바로 아래로 같은 모델의 다른 옵션 줄을 붙인다(사용자 요청 2026-10-23).
+ * 줄 위치만 옮기고 칸 내용은 바꾸지 않는다. 옮길 줄이 없으면 아무것도 하지 않는다.
+ */
+export async function regroupApprovalPendingModels(): Promise<{ movedModelCount: number; models: string[]; backupSheetName?: string }> {
+  const rows = await fetchSheetRows(PRODUCT_DB_SHEET_NAME);
+  const plan = planAnchorModelRegroup(rows, APPROVAL_PENDING_ANCHOR_STATUSES);
+  if (plan.moves.length === 0) return { movedModelCount: 0, models: [] };
+  const tab = (await fetchSpreadsheetTabs()).find(item => item.title === PRODUCT_DB_SHEET_NAME);
+  if (!tab) throw new Error("제품DB 탭을 찾지 못했습니다.");
+  const backup = await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME);
+  await moveSheetRows(tab.sheetId, plan.moves);
+  return { movedModelCount: plan.models.length, models: plan.models, backupSheetName: backup.sheetName };
+}
+
 export async function applyWimsRegistrationAudit(
   wimsRows: WimsRegistrationRow[], expectedDryRunToken: string, includeReviewing = false
 ): Promise<WimsRegistrationApplyResult> {
@@ -553,5 +574,10 @@ export async function applyWimsRegistrationAudit(
       throw new Error("제품DB 승인 반영은 완료됐지만 실적저조SKU 탭 완료 표시에 실패했습니다: " + (error instanceof Error ? error.message : String(error)));
     }
   }
-  return { applied: true, audit: rechecked, backupSheetName: backup.sheetName, writtenRowCount: new Set(cellUpdates.map(cell => cell.row)).size, writtenCellCount: cellUpdates.length };
+  // 줄 위치 정리는 값 반영·검증이 끝난 뒤에 한다. 실패해도 이미 반영된 값은 그대로 두고 이유만 알린다.
+  let regroupedModelCount = 0;
+  let regroupError: string | undefined;
+  try { regroupedModelCount = (await regroupApprovalPendingModels()).movedModelCount; }
+  catch (error) { regroupError = error instanceof Error ? error.message : String(error); }
+  return { applied: true, audit: rechecked, backupSheetName: backup.sheetName, writtenRowCount: new Set(cellUpdates.map(cell => cell.row)).size, writtenCellCount: cellUpdates.length, regroupedModelCount, regroupError };
 }

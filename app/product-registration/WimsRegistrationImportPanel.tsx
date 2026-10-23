@@ -144,6 +144,25 @@ export default function WimsRegistrationImportPanel() {
     }
   }
 
+  /** 이미 반영된 기존상품승인대기 옵션 아래로 같은 모델 줄을 붙인다(줄 위치만 이동). */
+  async function regroupPendingModels() {
+    if (applying) return;
+    setApplying(true);
+    setError("");
+    setMessage("");
+    try {
+      if (!await ensureNoidbActionSession()) return;
+      const response = await fetch("/api/wms/wims-registration/regroup", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "모델별 정렬에 실패했습니다.");
+      setMessage(data.movedModelCount > 0 ? `${data.movedModelCount}개 모델 정렬 완료 · 백업 ${data.backupSheetName}` : "정렬할 옵션이 없습니다. 이미 모델별로 붙어 있습니다.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "모델별 정렬에 실패했습니다.");
+    } finally {
+      setApplying(false);
+    }
+  }
+
   async function applyApprovedCandidates() {
     if (!snapshot || !audit || applying || (audit.approvedCandidateCount + audit.reviewingCandidateCount) === 0) return;
     if (!window.confirm("검수완료 " + audit.approvedCandidateCount + "건 연결 · 검수중 " + audit.reviewingCandidateCount + "건 승인대기 상태 반영\n\n전체 시트를 먼저 백업합니다. 검수중은 현재상태만 변경하고, 검수완료는 상품명·SKU ID·R바코드·현재상태를 반영합니다. 누적입고·창고번호·발주가능상태 등 다른 정보는 유지합니다.")) return;
@@ -155,7 +174,8 @@ export default function WimsRegistrationImportPanel() {
       const response = await fetch("/api/wms/wims-registration/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows: snapshot.rows, dryRunToken: audit.dryRunToken, confirmation: "WIMS 검수상태 반영", includeReviewing: true }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "WIMS 검수상태 반영에 실패했습니다.");
-      setMessage(data.applied ? `${data.writtenRowCount}건 검수상태 반영·재확인 완료 · 백업 ${data.backupSheetName}` : "반영할 상품이 없습니다.");
+      const regroupNote = data.regroupError ? ` · 모델별 정렬 실패: ${data.regroupError} (아래 '모델별 정렬' 버튼으로 다시 시도)` : data.regroupedModelCount > 0 ? ` · ${data.regroupedModelCount}개 모델 옵션을 승인대기 옵션 아래로 정렬` : "";
+      setMessage(data.applied ? `${data.writtenRowCount}건 검수상태 반영·재확인 완료 · 백업 ${data.backupSheetName}${regroupNote}` : "반영할 상품이 없습니다.");
       await compareProductDb();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "WIMS 검수상태 반영에 실패했습니다.");
@@ -287,6 +307,7 @@ export default function WimsRegistrationImportPanel() {
           </div>
           {auditing && <p style={{ fontSize: "11px", margin: "8px 0 0", color: wmsColors.muted }}>제품DB와 대조 중...</p>}
           {audit && (audit.approvedCandidateCount + audit.reviewingCandidateCount) > 0 && <button type="button" onClick={applyApprovedCandidates} disabled={applying} className="softBeigeButton" style={{ width: "100%", marginTop: "10px", fontSize: "15px" }}>{applying ? "백업 후 반영·검증 중..." : `검수상태 ${audit.approvedCandidateCount + audit.reviewingCandidateCount}건 반영`}</button>}
+          <button type="button" onClick={regroupPendingModels} disabled={applying} className="softSageButton" style={{ width: "100%", marginTop: "10px", fontSize: "15px" }}>{applying ? "처리 중..." : "승인대기 옵션 모델별 정렬"}</button>
           {audit && (
             <div style={{ marginTop: "13px" }}>
               <strong style={{ display: "block", fontSize: "13px" }}>지금 조치할 상품</strong>
