@@ -514,3 +514,45 @@ export async function loadPreparedDetail(model: string): Promise<PreparedDetail 
   const saved = await read<{ model: string; detail: PreparedDetail | null }>("prepared-detail");
   return saved?.model === model ? saved.detail : null;
 }
+
+/**
+ * 2026-10-23 사진선택에서 불필요한 사진을 MYBOX 동기화 폴더에서 바로 삭제한다(사용자 선택: 삭제대기 폴더 없이 바로 삭제).
+ * 동기화 폴더에서 지운 파일은 MYBOX에서도 지워진다. 윈도우 휴지통에는 남지 않는다.
+ * 사진 폴더는 원래 읽기 전용으로 연결돼 있어, 처음 삭제할 때 한 번 '수정 허용'을 받아야 한다
+ * — 그래서 이 함수는 반드시 버튼 클릭 직후(확인창 띄우기 전)에 불러야 한다.
+ */
+export async function requestPhotoDeletePermission() {
+  const root = await read<FileSystemDirectoryHandle>("root");
+  if (!root) throw new Error("먼저 ‘사진 원본 폴더 연결’을 눌러 MYBOX 동기화 폴더를 선택해주세요.");
+  if (await root.queryPermission({ mode: "readwrite" }) === "granted") return root;
+  if (await root.requestPermission({ mode: "readwrite" }) === "granted") return root;
+  throw new Error("사진을 삭제하려면 크롬 창에서 ‘수정 허용’을 눌러주세요.");
+}
+
+export async function deletePhotoFiles(root: FileSystemDirectoryHandle, ids: string[]) {
+  const deleted: string[] = [];
+  const failed: { id: string; reason: string }[] = [];
+  for (const id of ids) {
+    const segments = id.split("/");
+    if (segments[0] !== root.name || segments.length < 2) { failed.push({ id, reason: "연결 폴더 밖의 사진" }); continue; }
+    try {
+      const dir = await descend(root, segments.slice(1, -1));
+      await dir.removeEntry(segments[segments.length - 1]);
+      deleted.push(id);
+    } catch (error) {
+      // 이미 지워진 파일은 지운 것으로 본다.
+      if ((error as DOMException)?.name === "NotFoundError") deleted.push(id);
+      else failed.push({ id, reason: error instanceof Error ? error.message : "삭제 실패" });
+    }
+  }
+  if (deleted.length) {
+    // 전체 검색용 경로 목록에서도 빼서, 다른 모델 검색에 지운 사진이 다시 나오지 않게 한다.
+    const gone = new Set(deleted);
+    const saved = memoryIndex || await read<TreeIndex>(INDEX_KEY).catch(() => undefined);
+    if (saved) {
+      memoryIndex = { ...saved, files: saved.files.filter(file => !gone.has(file)) };
+      await write(INDEX_KEY, memoryIndex).catch(() => {});
+    }
+  }
+  return { deleted, failed };
+}

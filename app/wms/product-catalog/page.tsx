@@ -9,7 +9,7 @@ import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { MAX_SELECTED_PHOTOS, clearPhotoSearch, connectPhotoFolder, FOLDER_TIER_LABELS, loadPhotoSearch, loadSavedThumbnail, saveThumbnail, openPhotoFolders, openSavedPhotos, photoFolderName, photoFolderReady, savePhotoSearch, searchPhotoFolder, savePreparedPhotos, type FolderTier, type LocalPhoto } from "@/lib/image-search/browser-folder";
-import { loadPreparedDetail, savePreparedDetail } from "@/lib/image-search/browser-folder";
+import { deletePhotoFiles, loadPreparedDetail, requestPhotoDeletePermission, savePreparedDetail } from "@/lib/image-search/browser-folder";
 import { identifyPhoto, photoPriority, photoTier, type PhotoIdentity, type PhotoTier } from "@/lib/image-search/photo-kind";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 import type { ReregistrationExclusion } from "@/lib/wms/reregistration-exclusions";
@@ -408,6 +408,7 @@ export default function ProductCatalogPage() {
   /** 새로고침 뒤 폴더 권한이 아직 없을 때 "저장된 결과가 있다"는 안내용 (모델명 → 선택 사진 수). */
   const [savedHints, setSavedHints] = useState<Record<string, number>>({});
   const [viewer, setViewer] = useState<{ model: string; index: number } | null>(null);
+  const [deletingPhotos, setDeletingPhotos] = useState("");
   /** 모델별로 화면에 그리는 사진 수. 큰 원본 사진을 한 번에 수백 장 그리면 느려서 60장씩 늘린다. */
   const [shownCounts, setShownCounts] = useState<Record<string, number>>({});
   const [detailChoices, setDetailChoices] = useState<Record<string, string>>({});
@@ -955,6 +956,40 @@ export default function ProductCatalogPage() {
     });
   }
 
+  /**
+   * 2026-10-23 불필요한 사진을 MYBOX 동기화 폴더에서 바로 삭제한다(MYBOX에서도 지워짐).
+   * 수정 권한은 클릭 직후에만 받을 수 있어 확인창보다 먼저 요청한다.
+   */
+  async function deletePhotos(model: string, ids: string[]) {
+    const state = photoStatesRef.current[model];
+    const targets = (state?.hits || []).filter(hit => ids.includes(hit.id));
+    if (!targets.length || deletingPhotos) return;
+    let root: FileSystemDirectoryHandle;
+    try { root = await requestPhotoDeletePermission(); } catch (error) { window.alert(error instanceof Error ? error.message : "사진 삭제 권한을 받지 못했습니다."); return; }
+    const names = targets.slice(0, 5).map(hit => `· ${hit.fileName}`).join("\n") + (targets.length > 5 ? `\n외 ${targets.length - 5}장` : "");
+    if (!window.confirm(`사진 ${targets.length}장을 MYBOX에서 삭제합니다.\n\n${names}\n\n삭제할까요?`)) return;
+    setDeletingPhotos(model);
+    try {
+      const { deleted, failed } = await deletePhotoFiles(root, targets.map(hit => hit.id));
+      const gone = new Set(deleted);
+      setPhotoStates(current => {
+        const now = current[model];
+        if (!now) return current;
+        const hits = now.hits.filter(hit => !gone.has(hit.id));
+        const analysisId = gone.has(now.analysisId) ? (hits.find(hit => hit.selected)?.id || "") : now.analysisId;
+        return { ...current, [model]: { ...now, hits, analysisId, hiddenIds: (now.hiddenIds || []).filter(id => !gone.has(id)) } };
+      });
+      setViewer(current => {
+        if (!current || current.model !== model) return current;
+        const left = (photoStatesRef.current[model]?.hits || []).filter(hit => !gone.has(hit.id)).length;
+        return left ? { ...current, index: Math.min(current.index, left - 1) } : null;
+      });
+      if (failed.length) window.alert(`${failed.length}장은 삭제하지 못했습니다.\n${failed.slice(0, 5).map(item => `· ${item.id.split("/").pop()} (${item.reason})`).join("\n")}`);
+    } finally {
+      setDeletingPhotos("");
+    }
+  }
+
   // 분석용 사진은 따로 지정하지 않는다: 처음 선택한 사진이 자동으로 분석용이 된다(★).
   // 그 사진의 선택을 풀면 남은 선택 중 화면 순서상 첫 사진으로 넘어간다.
   function setPhotoSelected(model: string, photoId: string, selected: boolean) {
@@ -997,6 +1032,10 @@ export default function ProductCatalogPage() {
       if (event.key === "Escape") setViewer(null);
       else if (event.key === "ArrowLeft") moveViewer(-1);
       else if (event.key === "ArrowRight") moveViewer(1);
+      else if (event.key === "Delete") {
+        const hit = photoStatesRef.current[viewer.model]?.hits[viewer.index];
+        if (hit) void deletePhotos(viewer.model, [hit.id]);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1126,6 +1165,7 @@ export default function ProductCatalogPage() {
                        {hit.identity.kind !== "detail" && <label title={isAnalysis ? "AI 분석에 쓰는 사진 (처음 선택한 사진)" : "선택"} style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 3, padding: "5px 6px", border: `1px solid ${hit.selected ? wmsColors.slate : wmsColors.border}`, borderRadius: 6, background: hit.selected ? wmsColors.surface : "#fff", cursor: full || brokenPhotoIds.has(hit.id) || photos.hiddenIds?.includes(hit.id) ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={hit.selected} disabled={full || brokenPhotoIds.has(hit.id) || photos.hiddenIds?.includes(hit.id)} onChange={event => setPhotoSelected(group.modelName, hit.id, event.target.checked)} style={{ width: 20, height: 20, margin: 0, cursor: "inherit" }} />{isAnalysis && <span style={{ color: wmsColors.greenDark }}>★</span>}</label>}
                        {brokenPhotoIds.has(hit.id) && <div style={{ color: wmsColors.warnText }}>미리보기를 열지 못해 선택을 막았습니다.</div>}
                        <div>{hit.fileName}</div><div style={{ color: wmsColors.muted }}>{hit.identity.folder} · {hit.identity.width && hit.identity.height ? `${hit.identity.width}×${hit.identity.height}` : "크기 미확인"}</div>
+                       <button type="button" onClick={() => void deletePhotos(group.modelName, [hit.id])} disabled={Boolean(deletingPhotos)} title="이 사진을 MYBOX에서 삭제합니다" style={{ width: "100%", marginTop: 3, padding: "3px 0", border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 6, background: wmsColors.warnSoft, color: wmsColors.warnText, fontSize: 11, fontWeight: 700, cursor: deletingPhotos ? "wait" : "pointer" }}>삭제</button>
                        {photos.hiddenIds?.includes(hit.id) && <button type="button" onClick={() => hidePhoto(group.modelName, hit.id, false)} style={{ border: 0, background: "none", color: wmsColors.warnText, padding: 0, cursor: "pointer", textAlign: "left" }}>다시 사용</button>}
                     </div>;
                 };
@@ -1165,6 +1205,7 @@ export default function ProductCatalogPage() {
                   {photos && photos.hits.length > 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
                     <button type="button" onClick={() => selectAllPhotos(group.modelName)} disabled={photos.hits.filter(hit => hit.selected).length >= MAX_SELECTED_PHOTOS} style={{ border: `1px solid ${wmsColors.slate}`, borderRadius: 8, background: "#fff", padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.slate }}>전체 선택 (최대 {MAX_SELECTED_PHOTOS}장)</button>
                     <button type="button" onClick={() => clearPhotoSelection(group.modelName)} disabled={!photos.hits.some(hit => hit.selected)} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.ink }}>전체 해제</button>
+                    {(() => { const ids = photos.hits.filter(hit => hit.selected).map(hit => hit.id); return <button type="button" onClick={() => void deletePhotos(group.modelName, ids)} disabled={!ids.length || Boolean(deletingPhotos)} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 8, background: wmsColors.warnSoft, padding: "7px 12px", cursor: ids.length ? "pointer" : "not-allowed", fontWeight: 700, fontSize: 13, color: wmsColors.warnText, opacity: ids.length ? 1 : 0.55 }}>{deletingPhotos === group.modelName ? "삭제 중…" : `선택 사진 삭제 (${ids.length}장)`}</button>; })()}
                   </div>}
                   {photos && photos.hits.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
                      {primarySlice.map(item => renderHit(item))}
@@ -1422,6 +1463,7 @@ export default function ProductCatalogPage() {
           <span>{viewer.index + 1} / {viewerState.hits.length} · {viewerHit.fileName} · {viewerHit.identity.folder}</span>
           {viewerHit.identity.kind !== "detail" && <label style={{ display: "flex", gap: 6, alignItems: "center", padding: "6px 12px", borderRadius: 6, background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}><input type="checkbox" checked={viewerHit.selected} disabled={brokenPhotoIds.has(viewerHit.id) || viewerState.hiddenIds?.includes(viewerHit.id)} onChange={event => setPhotoSelected(viewer.model, viewerHit.id, event.target.checked)} style={{ width: 20, height: 20, margin: 0 }} />{viewerState.analysisId === viewerHit.id && <span style={{ color: wmsColors.greenDark }}>★</span>}</label>}
           <button type="button" onClick={() => downloadOriginal(viewerHit)} style={{ border: 0, borderRadius: 6, padding: "6px 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>이 파일 저장 ({(viewerHit.file.size / 1024 / 1024).toFixed(1)}MB)</button>
+          <button type="button" onClick={() => void deletePhotos(viewer.model, [viewerHit.id])} disabled={Boolean(deletingPhotos)} style={{ border: 0, borderRadius: 6, padding: "6px 12px", background: wmsColors.warnSoft, color: wmsColors.warnText, fontWeight: 700, cursor: deletingPhotos ? "wait" : "pointer" }}>{deletingPhotos ? "삭제 중…" : "이 사진 삭제 (Del)"}</button>
           <button type="button" onClick={() => setViewer(null)} style={{ border: 0, borderRadius: 6, padding: "6px 12px", cursor: "pointer" }}>닫기 (Esc)</button>
         </div>
       </div>}
