@@ -2731,15 +2731,15 @@ export default function Home() {
           <Field label="색상옵션">
             <input value={product.colors} onChange={e => update("colors", e.target.value)} />
           </Field>
-          <Field label="사이즈">
+          <Field label={<>사이즈{product.category === "목걸이" && <span className="requiredMark">(필수입력)</span>}</>}>
             <input value={product.sizes} onChange={e => updateSizes(e.target.value)} />
-            {product.category === "목걸이" && (
+            {product.category === "목걸이" && !product.sizes.trim() && (
               <small style={{ color: "#d92d20", fontWeight: 700 }}>
-                필수입력{product.sizes.trim() ? "" : " · 목걸이는 사이즈가 비어 있으면 쿠팡에서 반려됩니다."}
+                목걸이는 사이즈가 비어 있으면 쿠팡에서 반려됩니다.
               </small>
             )}
           </Field>
-          <Field label="치수">
+          <Field label={<>치수<span className="requiredMark">(필수입력)</span></>}>
             <input value={product.dimension} onChange={e => update("dimension", e.target.value)}
               placeholder="예: 폭 8mm, 길이 42cm" />
             {reregisterModelName && (
@@ -2809,7 +2809,6 @@ export default function Home() {
           </Field>
           <Field label="원가 (부가세포함)">
             <input inputMode="numeric" value={product.cost} onChange={e => { setCostExVatInput(""); update("cost", e.target.value); }} />
-            <small>구글시트 원가(부가세포함)와 같은 값입니다. 부가세 미포함: {product.cost ? Math.round(parseNumber(product.cost) / 1.1).toLocaleString() : "-"}원</small>
           </Field>
           <Field label="판매가">
             <input inputMode="numeric" value={product.price} onChange={e => update("price", e.target.value)} />
@@ -3414,7 +3413,7 @@ export default function Home() {
   );
 }
 
-function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
+function Field({ label, children, className }: { label: React.ReactNode; children: React.ReactNode; className?: string }) {
   return <label className={className ? `field ${className}` : "field"}><span>{label}</span>{children}</label>;
 }
 
