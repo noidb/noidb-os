@@ -59,7 +59,12 @@ function clean(value: string): string {
   return String(value || "").trim().toLowerCase();
 }
 
-type RocketPendingItem = ProductCatalogItem & { rocketPending: true; modelSource: string; exposedProductId?: string };
+type RocketPendingItem = ProductCatalogItem & { rocketPending: true; modelSource: string; exposedProductId?: string; wingProductId?: string };
+/** 검색칸이 찾는 값 — Wing 상품은 등록상품ID·노출상품ID로도 찾는다. */
+function searchTextOf(item: ProductCatalogItem): string {
+  const wing = item as Partial<RocketPendingItem>;
+  return [item.modelName, item.modelSku, item.skuId, item.barcode, item.productName, item.optionLabel, wing.wingProductId || "", wing.exposedProductId || ""].map(clean).join(" ");
+}
 function isRocketPendingItem(item: ProductCatalogItem): item is RocketPendingItem {
   return Boolean((item as Partial<RocketPendingItem>).rocketPending);
 }
@@ -556,19 +561,21 @@ export default function ProductCatalogPage() {
   }, [loadCatalog]);
 
   useEffect(() => {
-    if (status !== "rocket-new" || rocketItems) return;
+    // 전체 상태에서 검색할 때도 Wing 상품을 함께 찾는다(등록상품ID 검색 등).
+    if (rocketItems || (status !== "rocket-new" && !(status === "all" && query.trim()))) return;
     void loadRocketItems();
-  }, [status, rocketItems, loadRocketItems]);
+  }, [status, query, rocketItems, loadRocketItems]);
 
   const filteredItems = useMemo(() => {
     const needle = clean(query);
     if (status === "rocket-new") {
       return (rocketItems || []).filter(item => !needle
-        || [item.modelName, item.skuId, item.barcode, item.productName, item.optionLabel].map(clean).join(" ").includes(needle));
+        || searchTextOf(item).includes(needle));
     }
-    return items.filter(item => {
+    const wingMatches = status === "all" && needle ? (rocketItems || []).filter(item => searchTextOf(item).includes(needle)) : [];
+    return [...items.filter(item => {
       const wims = snapshot ? findWimsRow(item, snapshot.rows) : null;
-      const searchable = [item.modelName, item.modelSku, item.skuId, item.barcode, item.productName, item.optionLabel].map(clean).join(" ");
+      const searchable = searchTextOf(item);
       const matchesQuery = !needle || searchable.includes(needle);
       const reregistration = isReregistrationTarget(item);
       const inDb = !sourceTabOf(item);
@@ -583,7 +590,7 @@ export default function ProductCatalogPage() {
         || (status === "stopped" && stoppedModelKeys.has(modelKey) && !excludedModelKeys.has(modelKey))
         || (status === "rocket-pending" && rocketPending);
       return matchesQuery && matchesStatus;
-    }).sort((a, b) => (Number(b.cumulativeInbound) || 0) - (Number(a.cumulativeInbound) || 0)
+    }), ...wingMatches].sort((a, b) => (Number(b.cumulativeInbound) || 0) - (Number(a.cumulativeInbound) || 0)
       || Number(isReregistrationTarget(b)) - Number(isReregistrationTarget(a)));
   }, [items, rocketItems, query, snapshot, status, isReregistrationTarget, excludedModelKeys, otherModelKeys, stoppedModelKeys]);
 
@@ -621,7 +628,7 @@ export default function ProductCatalogPage() {
     }
     const needle = clean(query);
     const matchesQuery = (group: ModelGroup, rows: WimsRegistrationRow[]) => !needle
-      || group.items.some(item => [item.modelName, item.modelSku, item.skuId, item.barcode, item.productName, item.optionLabel].map(clean).join(" ").includes(needle))
+      || group.items.some(item => searchTextOf(item).includes(needle))
       || rows.some(row => [row.productName, row.modelSku].map(clean).join(" ").includes(needle));
     const staged: StagedGroup[] = [];
     const keys = new Set<string>();
@@ -694,7 +701,7 @@ export default function ProductCatalogPage() {
       const needle = clean(query);
       const list = status === "stopped" ? tabGroups.stopped : status === "other-rereg" ? tabGroups.other : tabGroups.low;
       return list.filter(group => !excludedModelKeys.has(group.key) && !stagedKeys.has(group.key)
-        && (!needle || group.items.some(item => [item.modelName, item.modelSku, item.skuId, item.barcode, item.productName, item.optionLabel].map(clean).join(" ").includes(needle))))
+        && (!needle || group.items.some(item => searchTextOf(item).includes(needle))))
         .sort((a, b) => b.topInbound - a.topInbound);
     }
     const matchedKeys = new Set<string>();
@@ -1244,7 +1251,7 @@ export default function ProductCatalogPage() {
           ))}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-          <input value={query} onChange={event => { setQuery(event.target.value); if (event.target.value.trim() && MODEL_LIST_STATUSES.has(status)) setStatus("all"); }} placeholder="모델명·모델SKU·SKU ID·바코드·상품명 검색" style={{ flex: "1 1 340px", minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px" }} />
+          <input value={query} onChange={event => { setQuery(event.target.value); if (event.target.value.trim() && MODEL_LIST_STATUSES.has(status)) setStatus("all"); }} placeholder="모델명·모델SKU·SKU ID·바코드·상품명·Wing 등록상품ID 검색" style={{ flex: "1 1 340px", minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px" }} />
           {query && <button type="button" onClick={() => { setQuery(""); try { window.sessionStorage.setItem(VIEW_KEY, JSON.stringify({ status, query: "" })); } catch {} }} title="검색어를 지웁니다." style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>검색 초기화</button>}
           <button type="button" onClick={() => void loadCatalog()} disabled={loading} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "새로 읽는 중…" : "제품DB 새로고침"}</button>
           <select value={status} onChange={event => setStatus(event.target.value)} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 10px", background: "#fff" }}>
@@ -1314,7 +1321,7 @@ export default function ProductCatalogPage() {
             }
             const quickNeedle = clean(quickQuery);
             const products = [...byProduct.entries()].filter(([, productItems]) => !quickNeedle || productItems.some(item =>
-              [item.productName, item.modelName, item.skuId, item.barcode, item.optionLabel].map(clean).join(" ").includes(quickNeedle)));
+              searchTextOf(item).includes(quickNeedle)));
             const shownProducts = quickNeedle ? products : products.slice(0, quickLimit);
             const selectedGroups = products.filter(([key]) => quickSelectedProducts.has(key));
             const selectedItems = selectedGroups.flatMap(([, productItems]) => productItems);
