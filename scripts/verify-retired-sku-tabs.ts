@@ -150,3 +150,22 @@ console.log("PASS 판매중지SKU 탭 정상 SKU → 단종 대상");
   assert.deepEqual(planModelRegroup([["모델명/품번"], ["a"], ["a"], ["b"]]).moves, []);
   console.log("PASS 같은 모델 줄 붙이기(처음 나오는 자리로, 나머지 순서 유지)");
 }
+
+// 2026-10-23: 세트 구성 줄은 세트 줄 바로 아래
+{
+  const { planModelRegroup } = require("../lib/wms/model-regroup") as typeof import("../lib/wms/model-regroup");
+  const apply = (rows: string[][]) => {
+    const order = rows.map((_, i) => i);
+    for (const m of planModelRegroup(rows).moves) { const block = order.splice(m.startIndex, m.endIndex - m.startIndex); order.splice(m.destinationIndex, 0, ...block); }
+    return order.slice(1).map(i => rows[i][1]);
+  };
+  const rows = [["모델명/품번", "모델SKU"], ["we00306", "we00306RG"], ["x", "x1"], ["wn00307", "wn00307RG"], ["wn00307", "wn00307RG\nwe00306RG"], ["x", "x2"], ["we00305", "we00305RG"]];
+  const result = apply(rows);
+  assert.deepEqual(result, ["x1", "x2", "wn00307RG\nwe00306RG", "wn00307RG", "we00306RG", "we00305RG"]);
+  // 다시 정리해도 그대로(왔다 갔다 하지 않음)
+  const again = [rows[0], ...result.map(sku => rows.find(r => r[1] === sku)!)];
+  assert.deepEqual(planModelRegroup(again).moves, []);
+  // 모델SKU 칸이 없으면 예전과 같다
+  assert.deepEqual(planModelRegroup([["모델명/품번"], ["a"], ["a"], ["b"]]).moves, []);
+  console.log("PASS 세트 구성 줄을 세트 줄 바로 아래로");
+}

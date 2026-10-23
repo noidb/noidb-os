@@ -158,8 +158,10 @@ export async function POST(request: NextRequest) {
       { title: OTHER_REREGISTRATION_TAB, sheetId: otherTab?.sheetId, appended: plan.appendOtherRereg.length },
       { title: STOPPED_TAB, sheetId: stoppedTab?.sheetId, appended: plan.appendStopped.length },
     ];
+    // 제품DB는 붙인 줄이 없어도 매번 정리한다 — 세트 구성 줄을 세트 줄 바로 아래로 붙이는 규칙(2026-10-23).
     for (const target of regroupTargets) {
-      if (!target.appended || !target.title || target.sheetId === undefined) continue;
+      const always = target.title === PRODUCT_DB_SHEET_NAME;
+      if ((!target.appended && !always) || !target.title || target.sheetId === undefined) continue;
       const regroup = planModelRegroup(await fetchSheetRows(target.title));
       await moveSheetRows(target.sheetId, regroup.moves);
       regrouped += regroup.models.length;
