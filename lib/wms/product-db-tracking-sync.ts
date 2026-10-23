@@ -4,7 +4,7 @@
  * - 최근쿠팡공급가(+이전쿠팡공급가·공급가차이·공급가확인): 원발주서 매입가(coupang-supply-price-sync.ts)
  * - 최근발주일: SKU가 들어 있는 원발주서 파일을 처음 받은 날(신규발주서는 발주 당일 받음). 더 늦은 날일 때만 바꾼다.
  * - 최근입고일: 마감된 쉽먼트에서 실제로 입고된(입고수량 > 0) 가장 늦은 입고예정일. 더 늦은 날일 때만 바꾼다.
- * - 누적입고: 기준값 + 9/13 이후 마감 쉽먼트 입고수량 합계. 기준값은 SKU가 입고결과에 처음 나올 때의 시트 값
+ * - 누적입고: 기준값 + 9/13 이후 마감 쉽먼트 입고수량 합계 + 8/22~9/20 입고상세 중 입고결과에 없는 발주(사용자 제공 파일, 2026-10-23). 기준값은 SKU가 입고결과에 처음 나올 때의 시트 값
  *   (그때까지 사이트가 적은 적이 없으므로 9/13 이후 입고는 들어 있지 않다). 다시 돌려도 같은 값이 나온다.
  * - 미입고: 아직 입고결과(마감)가 나오지 않은 발주의 수량 합계. 피킹에서 실제로 보낸 수량이 있으면 그 수량,
  *   아직 작업 전인 발주는 입고예정일이 오늘 이후일 때만 발주수량. 없으면 칸을 비운다.
@@ -23,9 +23,11 @@ export interface TrackingInput {
   /** 피킹에서 발주별로 실제로 보낸 수량 */
   shipped: Array<{ purchaseOrderNumber: string; skuId: string; quantity: number }>;
   today: string; // YYYY-MM-DD (KST)
+  /** 사이트 입고결과가 없는 기간(8/22~9/20 입고상세 파일) 줄: [발주번호, SKU, 수량, 입고일] */
+  gapRows?: ReadonlyArray<readonly [string, string, number, string]>;
 }
 
-export interface SkuTracking { lastOrderDate?: string; lastInboundDate?: string; receivedSince: number; pending: number }
+export interface SkuTracking { lastOrderDate?: string; lastInboundDate?: string; receivedSince: number; pending: number; receivedGap?: number }
 
 const kstDate = (iso: string) => {
   const time = Date.parse(iso);
@@ -49,6 +51,14 @@ export function computeSkuTracking(input: TrackingInput): Map<string, SkuTrackin
       item.receivedSince += Math.max(0, Number(line.receivedQuantity) || 0);
       if (line.receivedQuantity > 0 && /^\d{4}-\d{2}-\d{2}$/.test(expectedDate) && (!item.lastInboundDate || expectedDate > item.lastInboundDate)) item.lastInboundDate = expectedDate;
     }
+  }
+
+  // 9/13 이전 입고예정 쉽먼트 등 사이트 입고결과에 없는 입고(8/22~9/20 입고상세 파일). 입고결과에 있는 발주번호는 이미 위에서 셌으므로 뺀다.
+  for (const [po, skuId, quantity, date] of input.gapRows || []) {
+    if (closedPurchaseOrders.has(normalizeSkuId(po)) || !(quantity > 0)) continue;
+    const item = get(normalizeSkuId(skuId));
+    item.receivedGap = (item.receivedGap || 0) + quantity;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date) && (!item.lastInboundDate || date > item.lastInboundDate)) item.lastInboundDate = date;
   }
 
   const shipped = new Map<string, number>();
@@ -96,7 +106,8 @@ export function newInboundBaselines(rows: readonly (readonly unknown[])[], track
   rows.forEach((row, index) => {
     if (!index) return;
     const id = normalizeSkuId(String(row[sku] ?? ""));
-    if (!(tracking.get(id)?.receivedSince) || id in baseline || id in added) return;
+    const item = tracking.get(id);
+    if (!(item?.receivedSince || item?.receivedGap) || id in baseline || id in added) return;
     added[id] = numberOf(row[total]);
   });
   return added;
@@ -121,9 +132,10 @@ export function planTrackingSync(rows: readonly (readonly unknown[])[], tracking
       if (current !== String(next)) push(col.pending, next);
     }
     if (!item) return;
-    if (col.total >= 0 && item.receivedSince > 0 && id in baseline) {
+    const received = item.receivedSince + (item.receivedGap || 0);
+    if (col.total >= 0 && received > 0 && id in baseline) {
       const current = numberOf(row[col.total]);
-      const next = Math.max(current, baseline[id] + item.receivedSince);
+      const next = Math.max(current, baseline[id] + received);
       if (next !== current || String(row[col.total] ?? "").trim() === "") push(col.total, next);
     }
     if (col.order >= 0 && item.lastOrderDate && item.lastOrderDate > sheetDate(row[col.order])) push(col.order, sheetDateText(item.lastOrderDate));
@@ -143,7 +155,8 @@ export async function syncProductDbTracking(): Promise<{ rows: number; prices: n
   ]);
   const receipts = workspace.logisticsReceiptEpoch === receiptsLib.LOGISTICS_RECEIPT_EPOCH ? workspace.logisticsReceipts : undefined;
   const shipped = pickingStore.items.flatMap(item => (item.allocations || []).map(allocation => ({ purchaseOrderNumber: allocation.purchaseOrderNumber, skuId: item.productCode, quantity: allocation.fulfilledQuantity })));
-  const tracking = computeSkuTracking({ index, receipts, shipped, today: new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10) });
+  const gap = (await import("./data/inbound-gap-20260822-20260920.json")).default as unknown as { rows: Array<[string, string, number, string]> };
+  const tracking = computeSkuTracking({ index, receipts, shipped, gapRows: gap.rows, today: new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10) });
   const prices = latestPurchasePrices(index);
 
   const titles = tabList.map(tab => tab.title);

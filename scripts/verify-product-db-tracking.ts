@@ -41,4 +41,15 @@ assert.equal(plan.updates.some(u => u.row === 5), false, "관련 없는 줄은 �
 const after = rows.map(r => [...r]);
 for (const u of plan.updates) after[u.row - 1][u.col - 1] = u.value;
 assert.equal(planTrackingSync(after, tracking, added).updates.length, 0);
+// 8/22~9/20 입고상세: 입고결과에 있는 발주(901)는 빼고, 없는 발주(800)만 더한다
+{
+  const withGap = computeSkuTracking({ index, receipts, shipped: [], today: "2026-10-23", gapRows: [["800", "444", 3, "2026-09-05"], ["901", "111", 3, "2026-09-16"], ["800", "111", 2, "2026-09-02"]] });
+  assert.equal(withGap.get("444")!.receivedGap, 3); assert.equal(withGap.get("444")!.lastInboundDate, "2026-09-05");
+  assert.equal(withGap.get("111")!.receivedGap, 2); assert.equal(withGap.get("111")!.lastInboundDate, "2026-10-15");
+  const base = newInboundBaselines(rows, withGap, {});
+  assert.equal(base["444"], 2);
+  const p2 = planTrackingSync(rows, withGap, base);
+  assert.equal(p2.updates.find(u => u.row === 5 && u.col === 2)?.value, 5);
+  assert.equal(p2.updates.find(u => u.row === 2 && u.col === 2)?.value, 15);
+}
 console.log("PASS 제품DB 누적입고·미입고·최근발주일·최근입고일 자동입력(다시 돌려도 그대로)");
