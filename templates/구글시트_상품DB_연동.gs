@@ -2672,15 +2672,23 @@ function reregistrationEligibility_(db, model, options) {
   // 2026-10-23: 재등록 목록 탭에서 제품DB로 옮겨 온 줄(현재상태 '재등록대상')도 재등록 대상이다.
   // 저장 중 탭 줄을 옮긴 직후의 두 번째 확인(options.pulledFromTab)과, 그 뒤 저장이 중간에 멈춰 제품DB에 남은 줄을 다시 저장할 때 통과시킨다.
   const pendingFromTab = items.length > 0 && items.every(item => String(item.values[columns['현재상태']] || '').trim() === '재등록대상');
-  const stopped = items.some(item => (item.tab && item.tab.name === '판매중지SKU') || String(item.values[columns['현재상태']] || '').trim() === '판매중지')
-    || (items.length > 0 && items.every(item => item.tab))
+  // 2026-10-23 사용자 요청: 사진선택에서 재등록SKU 탭 3개(판매중지SKU·실적저조SKU·그 외 재등록SKU)로 찾아 가져온 모델은
+  // "판매중지 기본 옵션만 재등록할 수 있습니다" 검사에 걸리지 않고 무조건 재등록 가능하다.
+  // 같은 모델의 일부 옵션이 제품DB에 정상으로 남아 있어도, 패키지 검사 때문에 막히지 않는다.
+  const fromTab = items.some(item => item.tab);
+  const stopped = fromTab
+    || items.some(item => String(item.values[columns['현재상태']] || '').trim() === '판매중지')
     || pendingFromTab || Boolean(options && options.pulledFromTab);
   // 2026-10-23: 재등록 저장 때 옛 SKU ID 등을 비우지 않고 그대로 두므로(승인 때 덮어씀), 현재상태만으로 '다시 저장'을 판단한다.
   const retry = items.every(item => String(item.values[columns['현재상태']] || '').trim() === '재등록파일생성');
   void emptyIds;
   const keys = items.map(item => String(item.values[columns['모델SKU']] || '').trim().toUpperCase());
   const uniqueOptions = keys.every((key, index) => key && keys.indexOf(key) === index);
-  const eligible = !data.casingMismatch && uniqueOptions && (stopped || retry) && items.every(item => !isReregistrationPackage_(item.values, columns));
+  // 패키지 검사: 재등록 탭에서 온 줄은 건너뛴다. 탭 줄을 제품DB로 옮긴 직후의 두 번째 확인(pulledFromTab)도 건너뛴다
+  // (옮기기 전 첫 확인에서 제품DB에 원래 있던 줄은 이미 검사했다). 제품DB에 원래 있던 패키지 줄은 그대로 막는다.
+  const skipPackageCheck = Boolean(options && options.pulledFromTab);
+  const eligible = !data.casingMismatch && uniqueOptions && (stopped || retry)
+    && items.every(item => skipPackageCheck || item.tab || !isReregistrationPackage_(item.values, columns));
   return { duplicate: true, reregisterable: eligible, rowCount: items.length,
     reason: eligible ? (retry ? '재등록 파일 다시 저장 가능' : '모델 내 판매중지 옵션이 있어 전체 옵션 재등록 가능')
       : data.casingMismatch ? '기존 모델명과 대소문자까지 정확히 같아야 재등록할 수 있습니다.'

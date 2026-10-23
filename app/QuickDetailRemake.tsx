@@ -525,13 +525,14 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
           <button type="button" className="secondaryButton" disabled={cut.top === 0 && cut.bottom === 1} onClick={() => setCut(c => c && { ...c, top: 0, bottom: 1, history: [...c.history, { top: c.top, bottom: c.bottom }] })}>초기화</button>
           <button type="button" className="secondaryButton" onClick={() => setCut(null)}>닫기</button>
         </div>
-        <p className="detailMessage">{cut.mode === "top" ? "사용할 부분이 시작되는 위치를 이미지에서 클릭하세요. 그 위쪽은 버려집니다." : "사용할 부분이 끝나는 위치를 이미지에서 클릭하세요. 그 아래쪽은 버려집니다."}</p>
+        <p className="detailMessage">{cut.mode === "top" ? "사용할 부분이 시작되는 위치를 이미지에서 클릭하세요. 그 위쪽은 버려집니다. 클릭하면 바로 아래쪽 정하기로 넘어갑니다." : "사용할 부분이 끝나는 위치를 이미지에서 클릭하세요. 그 아래쪽은 버려집니다."}</p>
         <div className="pageCutScroll">
           <div className="pageCutFrame" onClick={event => {
             const rect = event.currentTarget.getBoundingClientRect();
             const ratio = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
             setCut(c => c && (c.mode === "top"
-              ? { ...c, top: Math.min(ratio, c.bottom - 0.01), history: [...c.history, { top: c.top, bottom: c.bottom }] }
+              // 2026-10-23 사용자 요청: 위쪽을 정하면 곧바로 아래쪽 모드로 넘어가 '아래쪽 자를 위치 정하기'를 따로 누르지 않아도 된다.
+              ? { ...c, top: Math.min(ratio, c.bottom - 0.01), mode: "bottom", history: [...c.history, { top: c.top, bottom: c.bottom }] }
               : { ...c, bottom: Math.max(ratio, c.top + 0.01), history: [...c.history, { top: c.top, bottom: c.bottom }] }));
           }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
