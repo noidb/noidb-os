@@ -1342,6 +1342,13 @@ export default function Home() {
     }
   };
 
+  // 페이지를 다시 열어도 마지막 대기목록을 자동으로 표시한다. 버튼은 수동 새로고침용으로 남긴다.
+  useEffect(() => {
+    void loadQuoteQueue();
+  // 최초 화면 진입 시 한 번만 불러온다.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const downloadQuoteGroup = async (group: { key: string; gender: string; category: string; skuCount: number; records: QuoteQueueRecord[] }) => {
     setQuoteQueueBusy(group.key);
     setExportMessage(`${group.gender} ${group.category} 최신 대기목록을 확인하고 있습니다...`);
