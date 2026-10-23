@@ -41,7 +41,7 @@ export function allColorRule(colors: ColorCode[], category = "귀걸이") {
 
 export function filenameFor(model: string, kind: string, color?: ColorCode, variant = 1) {
   const safeModel = model.trim() || "MODEL";
-  if (kind === "color" && color) return `${safeModel}-${color}.jpg`;
+  if (kind === "color" && color) return `${safeModel}${color}.jpg`;
   if (kind === "wear") return `${safeModel}-WEAR-${String(variant).padStart(2, "0")}.jpg`;
   if (kind === "all-colors") return `${safeModel}-ALL-${String(variant).padStart(2, "0")}.jpg`;
   if (kind === "detail") return `${safeModel}-DETAIL-${String(variant).padStart(2, "0")}.jpg`;

@@ -113,7 +113,7 @@ export default function VendorOrderManageListPage() {
       <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px", marginBottom: "24px" }}>
         <h1 style={{ fontSize: "20px", margin: 0 }}>거래처 발주관리</h1>
         <nav style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <a href="/wms/vendor-orders?tab=anytime" style={{ ...wmsGhostButton, minHeight: "44px", display: "inline-flex", alignItems: "center", textDecoration: "none" }}>← 거래처발주·단종관리</a>
+          <a href="/wms/work-center" style={{ ...wmsGhostButton, minHeight: "44px", display: "inline-flex", alignItems: "center", textDecoration: "none" }}>← 작업 메뉴</a>
           <button type="button" disabled={queueEditing || refreshing} onClick={() => void refreshManually()} style={{ ...wmsGhostButton, minHeight: "44px" }}>{refreshing ? "새로고침 중…" : "새로고침"}</button>
         </nav>
       </header>

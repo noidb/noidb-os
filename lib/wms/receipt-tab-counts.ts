@@ -8,9 +8,10 @@
 
 const KEY = "noidb:receipt-tab-counts:v1";
 
-export type ReceiptTabCounts = { anytime: number; results: number; at: string };
+// vendor = 거래처발주 대기, anytime = 단종/해제 관리 할 일, results = 입고결과 처리 할 일.
+export type ReceiptTabCounts = { vendor: number; anytime: number; results: number; at: string };
 
-export function saveReceiptTabCounts(counts: { anytime: number; results: number }): void {
+export function saveReceiptTabCounts(counts: { vendor: number; anytime: number; results: number }): void {
   try {
     window.localStorage.setItem(KEY, JSON.stringify({ ...counts, at: new Date().toISOString() }));
   } catch {
@@ -24,7 +25,7 @@ export function readReceiptTabCounts(): ReceiptTabCounts | null {
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<ReceiptTabCounts>;
     if (typeof value.anytime !== "number" || typeof value.results !== "number") return null;
-    return { anytime: value.anytime, results: value.results, at: String(value.at || "") };
+    return { vendor: typeof value.vendor === "number" ? value.vendor : 0, anytime: value.anytime, results: value.results, at: String(value.at || "") };
   } catch {
     return null;
   }

@@ -60,7 +60,7 @@ export default function LegacySkuCandidates({ names }: { names: string[] }) {
       if (!codes.length) { setMessage("고른 SKU는 이미 단종 신청 목록에 있습니다."); return; }
       const saved = await fetch("/api/wms/logistics/discontinue-code-draft", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: [...lines, ...codes].join("\n") }) }).then(response => response.json());
       if (!saved.ok) throw new Error("단종 신청 목록에 넣지 못했습니다.");
-      setMessage(`${codes.length}개를 단종 신청 목록에 넣었습니다. '거래처발주·단종관리'에서 단종신청 엑셀·공문을 만들어 주세요.`);
+      setMessage(`${codes.length}개를 단종 신청 목록에 넣었습니다. '단종/해제 관리'에서 단종신청 엑셀·공문을 만들어 주세요.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "단종 신청 목록에 넣지 못했습니다.");
     } finally { setBusy(false); }

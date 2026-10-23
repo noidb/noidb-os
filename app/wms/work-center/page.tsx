@@ -304,17 +304,22 @@ export default function WmsWorkCenterPage() {
       <InProgressOrdersSection live={live} />
       <ShipmentClosedGroupsBanner groups={live.groups} />
 
-      {/* 상단 메뉴 4개 — 예전 "오늘 할 일" 화면의 .tasks(태스크 카드) 패턴 재사용. 첫 카드는
-       *  .task:first-child 규칙으로 자동으로 전체폭이 된다(기존 CSS 그대로, 새로 안 건드림). */}
+      {/* 상단 메뉴 4개 — 예전 "오늘 할 일" 화면의 .tasks(태스크 카드) 패턴 재사용. 4칸은
+       *  2열 격자로 같은 크기(2×2)로 놓인다. */}
       {/* 2026-10-11 사용자 요청: 진행 중 발주 카드와 메뉴 카드가 똑같아 헷갈려서 제목·구분선으로 나눈다. */}
       <h2 className={styles.menuHeading}>작업 메뉴</h2>
       <div className={styles.tasks}>
         {/* 2026-10-21: '발주서작업' 칸은 위 '자주 하는 일' 2번(발주서작업 버튼)과 겹쳐서 뺐다. */}
         {/* 2026-10-20 사용자 요청: 하는 시점에 맞춰 수시 처리(거래처 발주·단종·단종해제)와 입고결과 처리(미납분 재발주·쿠폰광고)로 나눔. */}
         <section className={styles.task}>
-          <h2>거래처발주·단종관리</h2>
-          <p>거래처 발주, 단종 신청, 단종해제를 언제든 진행합니다.</p>
-          <Link className={styles.taskButtonGrayWhite} href="/wms/vendor-orders?tab=anytime">거래처발주·단종관리{counts?.anytime ? ` ${counts.anytime}건` : ""}</Link>
+          <h2>거래처발주</h2>
+          <p>거래처별 발주서를 확인하고 카톡으로 보내 답변을 처리합니다.</p>
+          <Link className={styles.taskButtonGrayWhite} href="/wms/vendor-orders/manage">거래처발주{counts?.vendor ? ` ${counts.vendor}건` : ""}</Link>
+        </section>
+        <section className={styles.task}>
+          <h2>단종/해제 관리</h2>
+          <p>단종 신청과 단종해제를 언제든 진행합니다.</p>
+          <Link className={styles.taskButtonGrayWhite} href="/wms/vendor-orders?tab=anytime">단종/해제 관리{counts?.anytime ? ` ${counts.anytime}건` : ""}</Link>
         </section>
         <section className={styles.task}>
           <h2>입고결과 처리</h2>

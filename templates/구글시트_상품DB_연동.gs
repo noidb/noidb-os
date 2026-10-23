@@ -802,7 +802,7 @@ function buildDbRowsFromInput_(inputRow) {
     const code = colorCode_(color);
     const rowSizes = useSize && sizes.length ? sizes : [sizes[0] || 'Free'];
     rowSizes.forEach((size, sizeIndex) => {
-      const sku = useSize ? `${model}-${code}${sizeCodes[sizeIndex]}` : `${model}-${code}`;
+      const sku = useSize ? `${model}${code}${sizeCodes[sizeIndex]}` : `${model}${code}`;
       const row = new Array(PRODUCT_DB_HEADERS.length).fill('');
       row[dbColumn_('거래처')] = supplier;
       row[dbColumn_('성별')] = gender;
@@ -1112,6 +1112,8 @@ function colorCode_(option) {
   if ((value.includes('화이트') || value.includes('white')) && codes.indexOf('WH') < 0) codes.push('WH');
   if ((value.includes('블랙') || value.includes('black')) && codes.indexOf('BK') < 0) codes.push('BK');
   if (codes.length) return codes.join('');
+  const others = [[/레드|빨강|red/, 'RD'], [/핑크|pink/, 'PK'], [/블루|파랑|blue/, 'BL'], [/그린|초록|green/, 'GR'], [/퍼플|보라|purple/, 'PP'], [/브라운|brown/, 'BR'], [/베이지|beige/, 'BE'], [/네이비|navy/, 'NV'], [/그레이|회색|gray|grey/, 'GY']];
+  for (let i = 0; i < others.length; i++) if (others[i][0].test(value)) return others[i][1];
   return value.replace(/[^a-z0-9가-힣]/g, '').slice(0, 2).toUpperCase() || 'OP';
 }
 

@@ -1153,13 +1153,14 @@ export default function ShipmentReceiptsPage() {
   };
   // 탭 옆 할 일 숫자(2026-10-20): 수시 처리 = 거래처 발주 대기·단종·단종해제(신청 전), 입고결과 처리 = 미납·마케팅·마무리 대기.
   const releaseFreshCount = releaseList.filter((row) => !payload?.statusListRequested?.release?.[row.skuId]).length;
-  const anytimeCount = (followUpData?.queues.vendor.length || 0) + discontinueList.length + releaseFreshCount + followUpQueueOf("discontinue").length;
+  const vendorCount = followUpData?.queues.vendor.length || 0;
+  const anytimeCount = discontinueList.length + releaseFreshCount + followUpQueueOf("discontinue").length;
   const resultsCount = resultLines.length + marketingLines.length + followUpQueueOf("reorder").length + followUpQueueOf("marketing").length;
   // 메인 작업 메뉴에 같은 숫자를 보여 주도록 이 브라우저에 기억해 둔다(개발용 예시자료는 저장하지 않음).
   useEffect(() => {
     if (fixture || !payload || !followUpData) return;
-    saveReceiptTabCounts({ anytime: anytimeCount, results: resultsCount });
-  }, [fixture, payload, followUpData, anytimeCount, resultsCount]);
+    saveReceiptTabCounts({ vendor: vendorCount, anytime: anytimeCount, results: resultsCount });
+  }, [fixture, payload, followUpData, vendorCount, anytimeCount, resultsCount]);
   // 후속처리(파일 만들기·처리완료)를 각 목록 바로 아래에서 끝내도록, 예전 '후속처리' 탭의 작업칸을 종류별로 그린다(2026-10-20).
   const renderFollowUpWork = (followUpKind: FollowUpKind) => {
     if (!followUpData) return null;
@@ -1534,9 +1535,9 @@ export default function ShipmentReceiptsPage() {
       {/* 2026-10-21 사용자 요청: 수시 처리는 쉽먼트 입고결과와 상관없어서, 위쪽 쉽먼트 버튼·가져온 시각·쉽먼트 경고를 숨긴다. */}
       {tab === "anytime" ? (
         <header className={styles.header}>
-          <h1 className={styles.title}>거래처발주·단종관리</h1>
+          <h1 className={styles.title}>단종/해제 관리</h1>
           {/* 2026-10-21: 불러오는 동안 빈 화면처럼 보여서 진행 표시를 둔다. */}
-          {!payload && !error && <p className={styles.meta} role="status">거래처 발주·단종 목록을 불러오는 중…</p>}
+          {!payload && !error && <p className={styles.meta} role="status">단종·단종해제 목록을 불러오는 중…</p>}
           {cachedViewAt && busy && <p className={styles.meta} role="status">마지막으로 본 목록({new Date(cachedViewAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })})입니다 · 최신 자료 확인 중…</p>}
         </header>
       ) : (<>
@@ -1698,27 +1699,7 @@ export default function ShipmentReceiptsPage() {
           ))}
         {tab === "anytime" && payload && (
           <>
-            <article className={styles.vendorArea}>
-              <div>
-                <h2>거래처 발주</h2>
-                <p>
-                  거래처별로 발주한 제품을 확인하고, 카드를 복사해 카톡으로 보내고, 답변에 따라 단종·지연·거래처 수정·재발주를 처리합니다.
-                </p>
-                {followUpData && <p className={styles.meta}>대기 {followUpData.queues.vendor.length}건</p>}
-              </div>
-              {fixture ? (
-                <span className={styles.linkButton}>
-                  개발용 예시자료에서는 관리 화면 연결 없음
-                </span>
-              ) : (
-                <Link
-                  className={styles.linkButton}
-                  href="/wms/vendor-orders/manage"
-                >
-                  거래처 발주 이어하기
-                </Link>
-              )}
-            </article>
+            {/* 2026-10-23 사용자 요청: 거래처 발주는 메인 1번 칸에서 바로 들어가고, 이 화면은 단종/해제만 둔다. */}
             {/* 2026-10-20: AI상품등록 9번의 상품공급상태 최신파일 반영을 여기로 옮김 — 반영하면 아래 단종·단종해제 목록을 다시 계산한다. */}
             {/* 2026-10-21: 상품공급상태 최신파일 반영은 작업센터 '자주 하는 일' 1번으로 옮겨 여기서는 뺐다(반영하면 제품DB가 바뀌어 이 화면을 열 때 목록에 그대로 반영됨). */}
             {/* 2026-10-23: 탭을 못 읽었거나(이름 바뀜 등) 같은 SKU가 두 탭에 있으면 목록이 틀릴 수 있어 위에 알린다. */}

@@ -68,7 +68,7 @@ export function collectProductImageFiles(input: ImageOnlyInput): ProductDbFile[]
     const skus = colors ? buildSkuRows({ model: input.model, product: { category: input.category, colors, sizes: input.sizesCsv } }).map(row => row.sku) : Object.keys(input.skuImages || {});
     for (const sku of skus) {
       const dataUrl = input.skuImages?.[sku];
-      if (sku.startsWith(`${input.model}-`) && dataUrl?.startsWith("data:image/")) pushFlat(files, `${sku}.jpg`, dataUrlToBlob(dataUrl));
+      if (sku.startsWith(input.model) && dataUrl?.startsWith("data:image/")) pushFlat(files, `${sku}.jpg`, dataUrlToBlob(dataUrl));
     }
   } else {
     for (const [option, dataUrl] of Object.entries(input.optionThumbs || {})) {
