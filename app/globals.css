@@ -630,6 +630,15 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 .existingDetailUseButton{border:1px solid #b9cbbc;border-radius:8px;padding:9px 18px;background:#e3ede6;color:#3f574b;font-weight:800;cursor:pointer}
 .existingDetailUseButton:hover:not(:disabled){background:#d3e3d9}
 .existingDetailUseButton:disabled{opacity:.6;cursor:default}
+/* 2026-10-23 치수 자동입력 버튼: 자동 상품명 사용 버튼과 같은 모양, 연핑크, 글자 길이에 맞춤 */
+.dimensionAutoButton{background:#f2dfd8;border-color:#dfbdb2;color:#7f4032;align-self:flex-start}
+.dimensionAutoButton:hover:not(:disabled){background:#ecd2c9}
+/* 검색태그: 한 행 전체를 쓰고 길면 줄바꿈해서 전부 보이게 */
+.formGrid .fullRowField{grid-column:1/-1}
+.field textarea.searchTagsArea{width:100%;padding:12px;border:1px solid #d1d5db;border-radius:10px;background:#fff;resize:none;overflow:hidden;line-height:1.5;min-height:46px;font-size:15px}
+/* 부가세 미포함 입력 · 원가(부가세포함) · 판매가 한 줄 배치 */
+.formGrid .priceRow{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,1fr);gap:14px;align-items:start}
+@media(max-width:760px){.formGrid .priceRow{grid-template-columns:1fr}}
 
 /* 상단 도구 버튼: 한 줄 4칸, 같은 높이·모양으로 정리 */
 .heroUtilityActions{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;max-width:585px}

@@ -2728,7 +2728,7 @@ export default function Home() {
               placeholder="예: 폭 8mm, 길이 42cm" />
             {reregisterModelName && (
               <>
-                <button type="button" className="secondaryButton" disabled={dimensionOcrBusy || (!detailPreview && !preparedDetail)}
+                <button type="button" className="existingDetailUseButton compactFieldButton dimensionAutoButton" disabled={dimensionOcrBusy || (!detailPreview && !preparedDetail)}
                   onClick={() => void fillDimensionFromExistingDetail()}
                   title="기존 상세페이지의 ‘사이즈’ 항목을 읽어 치수 칸에 넣습니다.">
                   {dimensionOcrBusy ? "치수 읽는 중..." : "기존 상세페이지에서 치수 자동입력"}
@@ -2770,8 +2770,10 @@ export default function Home() {
                 else { update("coupangTitle", titleBackup); setTitleBackup(""); }
               }}>{product.coupangTitle ? "자동 상품명 사용" : titleBackup ? "직접 입력값 복구" : "자동 상품명 사용 중"}</button>
           </Field>
-          <Field label="검색태그">
-            <input value={product.searchTags || generatedTags} onChange={e => update("searchTags", e.target.value)} />
+          <Field label="검색태그" className="fullRowField">
+            <textarea className="searchTagsArea" rows={1} value={product.searchTags || generatedTags}
+              ref={el => { if (el) { el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; } }}
+              onChange={e => update("searchTags", e.target.value.replace(/[\r\n]+/g, ""))} />
             <small>쉼표로 구분해 직접 수정할 수 있습니다.</small>
             <button className="existingDetailUseButton compactFieldButton" type="button" disabled={!product.searchTags && !tagsBackup}
               onClick={() => {
@@ -2779,12 +2781,9 @@ export default function Home() {
                 else { update("searchTags", tagsBackup); setTagsBackup(""); }
               }}>{product.searchTags ? "자동 검색태그 사용" : tagsBackup ? "직접 입력값 복구" : "자동 검색태그 사용 중"}</button>
           </Field>
-          <Field label="원가 (부가세포함)">
-            <input inputMode="numeric" value={product.cost} onChange={e => { setCostExVatInput(""); update("cost", e.target.value); }} />
-            <small>구글시트 원가(부가세포함)와 같은 값입니다. 부가세 미포함: {product.cost ? Math.round(parseNumber(product.cost) / 1.1).toLocaleString() : "-"}원</small>
-          </Field>
-          <Field label="부가세 미포함으로 입력 (×1.1 자동 계산)">
-            <input inputMode="numeric" placeholder="거래처 단가(미포함)를 넣으면 왼쪽 원가가 자동으로 채워집니다"
+          <div className="priceRow">
+          <Field label="부가세 미포함 입력 (×1.1)">
+            <input inputMode="numeric" placeholder="단가(미포함) 입력 시 원가 자동"
               value={costExVatInput}
               onChange={e => {
                 const digits = e.target.value.replace(/[^\d]/g, "");
@@ -2792,9 +2791,14 @@ export default function Home() {
                 update("cost", digits ? String(costWithVat(parseNumber(digits))) : "");
               }} />
           </Field>
+          <Field label="원가 (부가세포함)">
+            <input inputMode="numeric" value={product.cost} onChange={e => { setCostExVatInput(""); update("cost", e.target.value); }} />
+            <small>구글시트 원가(부가세포함)와 같은 값입니다. 부가세 미포함: {product.cost ? Math.round(parseNumber(product.cost) / 1.1).toLocaleString() : "-"}원</small>
+          </Field>
           <Field label="판매가">
             <input inputMode="numeric" value={product.price} onChange={e => update("price", e.target.value)} />
           </Field>
+          </div>
         </div>
         <div className="results" style={{ marginTop: 14 }}>
           <Result label="등록상태" value={ready ? "등록가능" : "판매가·키워드 확인"} status={ready} />
@@ -3394,8 +3398,8 @@ export default function Home() {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="field"><span>{label}</span>{children}</label>;
+function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
+  return <label className={className ? `field ${className}` : "field"}><span>{label}</span>{children}</label>;
 }
 
 function Result({ label, value, status, alert }: { label: string; value: string; status?: boolean; alert?: boolean }) {
