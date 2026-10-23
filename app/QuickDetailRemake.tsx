@@ -239,7 +239,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     }
   }
 
-  // 이미 완성된 상세페이지를 위·아래만 자르고, 맨 위에 6번 상단 로고만 붙여 상세페이지 칸에 넣는다(하단 이미지는 붙이지 않는다).
+  // 이미 완성된 상세페이지를 위·아래만 자르고 그대로 상세페이지 칸에 넣는다(로고는 자동으로 붙이지 않는다 — 기존 상세페이지에 로고가 있으면 두 번 들어가기 때문. 필요하면 6번 칸 "상세페이지에 로고 붙이기").
   async function useCroppedAsDetailPage() {
     if (!cut || cut.bottom - cut.top < 0.02) {
       setMessage("사용할 구간이 너무 좁습니다. 위·아래 자를 위치를 다시 정해주세요.");
@@ -247,10 +247,10 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     }
     setBusy(true);
     try {
-      const usable = await prependHeader(await cropDataUrl(cut.dataUrl, cut.top, cut.bottom), headerUrl);
-      onComplete({ dataUrl: usable, sections: [], logoApplied: true });
+      const usable = await cropDataUrl(cut.dataUrl, cut.top, cut.bottom);
+      onComplete({ dataUrl: usable, sections: [], logoApplied: false });
       setCut(null);
-      setMessage("자른 상세페이지 맨 위에 상단 로고를 붙여 아래 상세페이지 칸에 넣었습니다.");
+      setMessage("자른 상세페이지를 로고 없이 그대로 아래 상세페이지 칸에 넣었습니다. 로고가 필요하면 위 6번 칸의 \"상세페이지에 로고 붙이기\"를 누르세요.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "상세페이지를 자르지 못했습니다.");
     } finally {
@@ -520,7 +520,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         <div className="detailActions">
           <button type="button" className={cut.mode === "top" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "top" })}>위쪽 자를 위치 정하기</button>
           <button type="button" className={cut.mode === "bottom" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "bottom" })}>아래쪽 자를 위치 정하기</button>
-          <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPage()} title="자른 상세페이지 맨 위에 상단 로고만 붙여 상세페이지 칸에 넣습니다.">상세페이지 사용</button>          <button type="button" className="secondaryButton" disabled={busy} onClick={() => void confirmCutForSplit()} title="사진별로 나눠서 등록이미지에 추가하거나 AI로 새로 만들 때 씁니다.">사진별로 나누기</button>
+          <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPage()} title="자른 상세페이지를 로고 없이 그대로 상세페이지 칸에 넣습니다.">상세페이지 사용</button>          <button type="button" className="secondaryButton" disabled={busy} onClick={() => void confirmCutForSplit()} title="사진별로 나눠서 등록이미지에 추가하거나 AI로 새로 만들 때 씁니다.">사진별로 나누기</button>
           <button type="button" className="secondaryButton" disabled={!cut.history.length} onClick={() => setCut(c => c && c.history.length ? { ...c, ...c.history[c.history.length - 1], history: c.history.slice(0, -1) } : c)}>되돌리기</button>
           <button type="button" className="secondaryButton" disabled={cut.top === 0 && cut.bottom === 1} onClick={() => setCut(c => c && { ...c, top: 0, bottom: 1, history: [...c.history, { top: c.top, bottom: c.bottom }] })}>초기화</button>
           <button type="button" className="secondaryButton" onClick={() => setCut(null)}>닫기</button>

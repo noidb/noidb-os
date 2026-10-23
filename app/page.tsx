@@ -3036,7 +3036,7 @@ export default function Home() {
                   } catch (error) {
                     setDetailMessage(`오류: ${error instanceof Error ? error.message : "상단 로고를 붙이지 못했습니다."}`);
                   }
-                }}>상세페이지 사용</button>
+                }}>상세페이지에 로고 붙이기</button>
             </div>
             {detailHeader && <button type="button" className="secondaryButton" onClick={() => { setDetailHeader(null); setDetailPreview(""); }}>NOID-B 기본 로고로 되돌리기</button>}
           </div>
