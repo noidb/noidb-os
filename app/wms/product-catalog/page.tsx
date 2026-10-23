@@ -418,6 +418,9 @@ export default function ProductCatalogPage() {
   const [shownCounts, setShownCounts] = useState<Record<string, number>>({});
   const [detailChoices, setDetailChoices] = useState<Record<string, string>>({});
   const [brokenPhotoIds, setBrokenPhotoIds] = useState<Set<string>>(new Set());
+  // 2026-10-23 사진 드래그 선택: 끌고 있는 네모 영역(화면 좌표)과 20장 초과 안내.
+  const [dragBox, setDragBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [dragNotice, setDragNotice] = useState("");
   const [showHiddenPhotos, setShowHiddenPhotos] = useState<Record<string, boolean>>({});
   const savedSearchJson = useRef<Record<string, string>>({});
 
@@ -1011,6 +1014,86 @@ export default function ProductCatalogPage() {
     });
   }
 
+  /**
+   * 2026-10-23 드래그로 사진 여러 장 선택/해제.
+   * - 빈 곳이나 선택 안 된 사진에서 끌면 네모 안 사진이 선택(최대 20장), 이미 선택된 사진에서 끌기 시작하면 해제.
+   * - 5px 미만 움직임은 그냥 클릭(크게 보기 등)으로 둔다. 버튼·체크박스·링크에서는 시작하지 않는다.
+   * - 마우스·펜만 처리(터치는 화면 스크롤과 겹치므로 제외).
+   */
+  function startPhotoDrag(model: string, event: React.PointerEvent<HTMLElement>) {
+    if (event.button !== 0 || (event.pointerType !== "mouse" && event.pointerType !== "pen")) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("input, label, a, select, textarea, [data-no-drag]")) return;
+    if (target.closest("button") && !target.closest("[data-photo-zoom]")) return;
+    const container = event.currentTarget;
+    const startX = event.clientX + window.scrollX;
+    const startY = event.clientY + window.scrollY;
+    const base = new Set((photoStatesRef.current[model]?.hits || []).filter(hit => hit.selected).map(hit => hit.id));
+    const startedOn = (target.closest("[data-photo-id]") as HTMLElement | null)?.dataset.photoId;
+    const removing = Boolean(startedOn && base.has(startedOn));
+    let moved = false;
+    let lastKey = "";
+
+    const applyBox = (clientX: number, clientY: number) => {
+      const x = clientX + window.scrollX, y = clientY + window.scrollY;
+      const left = Math.min(startX, x), right = Math.max(startX, x), top = Math.min(startY, y), bottom = Math.max(startY, y);
+      setDragBox({ left: left - window.scrollX, top: top - window.scrollY, width: right - left, height: bottom - top });
+      const inside: string[] = [];
+      container.querySelectorAll<HTMLElement>("[data-photo-id]").forEach(node => {
+        const box = node.getBoundingClientRect();
+        const nl = box.left + window.scrollX, nr = box.right + window.scrollX, nt = box.top + window.scrollY, nb = box.bottom + window.scrollY;
+        if (nl < right && nr > left && nt < bottom && nb > top) inside.push(node.dataset.photoId || "");
+      });
+      const key = `${inside.join("|")}`;
+      if (key === lastKey) return;
+      lastKey = key;
+      const chosen = new Set(base);
+      let overflow = false;
+      if (removing) inside.forEach(id => chosen.delete(id));
+      else for (const id of inside) {
+        if (chosen.has(id)) continue;
+        if (chosen.size >= MAX_SELECTED_PHOTOS) { overflow = true; break; }
+        chosen.add(id);
+      }
+      setDragNotice(overflow ? `사진은 최대 ${MAX_SELECTED_PHOTOS}장까지만 선택할 수 있어 넘는 사진은 선택하지 않았습니다.` : "");
+      setPhotoStates(current => {
+        const state = current[model];
+        if (!state) return current;
+        const hits = state.hits.map(photo => photo.selected === chosen.has(photo.id) ? photo : { ...photo, selected: chosen.has(photo.id) });
+        const analysisStillSelected = hits.some(photo => photo.selected && photo.id === state.analysisId);
+        const analysisId = analysisStillSelected ? state.analysisId : (hits.find(photo => photo.selected)?.id || "");
+        return { ...current, [model]: { ...state, analysisId, hits } };
+      });
+    };
+
+    const onMove = (move: PointerEvent) => {
+      if (!moved) {
+        if (Math.abs(move.clientX + window.scrollX - startX) < 5 && Math.abs(move.clientY + window.scrollY - startY) < 5) return;
+        moved = true;
+        document.body.style.userSelect = "none";
+      }
+      if (move.clientY < 60) window.scrollBy(0, -24); else if (move.clientY > window.innerHeight - 60) window.scrollBy(0, 24);
+      applyBox(move.clientX, move.clientY);
+    };
+    const finish = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      document.body.style.userSelect = "";
+      setDragBox(null);
+      if (moved) {
+        // 드래그 끝에 사진이 '크게 보기'로 열리지 않게 이번 클릭 한 번을 막는다.
+        const swallow = (click: MouseEvent) => { click.stopPropagation(); click.preventDefault(); };
+        window.addEventListener("click", swallow, { capture: true, once: true });
+        window.setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+        window.setTimeout(() => setDragNotice(""), 4000);
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+  }
+
   const viewerState = viewer ? photoStates[viewer.model] : undefined;
   const viewerHit = viewer ? viewerState?.hits[viewer.index] : undefined;
   /** 화면 표시용 preview(blob URL)에 기대지 않고, 원본 File을 다시 읽어 강제로 저장한다.
@@ -1165,8 +1248,9 @@ export default function ProductCatalogPage() {
                   if (!photos) return null;
                       const isAnalysis = photos.analysisId === hit.id;
                     const full = !hit.selected && photos.hits.filter(photo => photo.selected).length >= MAX_SELECTED_PHOTOS;
-                    return <div key={hit.id} style={{ width: 104, fontSize: 11, overflowWrap: "anywhere", border: `2px solid ${isAnalysis ? wmsColors.greenDark : hit.selected ? wmsColors.slate : "transparent"}`, borderRadius: 8, padding: 2 }}>
-                      <button type="button" onClick={() => setViewer({ model: group.modelName, index: hitIndex })} title="크게 보기" style={{ display: "block", padding: 0, border: 0, background: "none", cursor: "zoom-in" }}>
+                    const dragSelectable = hit.identity.kind !== "detail" && !brokenPhotoIds.has(hit.id) && !photos.hiddenIds?.includes(hit.id);
+                    return <div key={hit.id} data-photo-id={dragSelectable ? hit.id : undefined} style={{ width: 104, fontSize: 11, overflowWrap: "anywhere", border: `2px solid ${isAnalysis ? wmsColors.greenDark : hit.selected ? wmsColors.slate : "transparent"}`, borderRadius: 8, padding: 2 }}>
+                      <button type="button" data-photo-zoom onClick={() => setViewer({ model: group.modelName, index: hitIndex })} title="크게 보기" style={{ display: "block", padding: 0, border: 0, background: "none", cursor: "zoom-in" }}>
                          <Thumbnail photoId={hit.id} file={hit.file} alt={hit.fileName} onBroken={() => setBrokenPhotoIds(current => new Set(current).add(hit.id))} />
                       </button>
                        {hit.identity.kind !== "detail" && <label title={isAnalysis ? "AI 분석에 쓰는 사진 (처음 선택한 사진)" : "선택"} style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 3, padding: "5px 6px", border: `1px solid ${hit.selected ? wmsColors.slate : wmsColors.border}`, borderRadius: 6, background: hit.selected ? wmsColors.surface : "#fff", cursor: full || brokenPhotoIds.has(hit.id) || photos.hiddenIds?.includes(hit.id) ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={hit.selected} disabled={full || brokenPhotoIds.has(hit.id) || photos.hiddenIds?.includes(hit.id)} onChange={event => setPhotoSelected(group.modelName, hit.id, event.target.checked)} style={{ width: 20, height: 20, margin: 0, cursor: "inherit" }} />{isAnalysis && <span style={{ color: wmsColors.greenDark }}>★</span>}</label>}
@@ -1214,7 +1298,7 @@ export default function ProductCatalogPage() {
                     <button type="button" onClick={() => clearPhotoSelection(group.modelName)} disabled={!photos.hits.some(hit => hit.selected)} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.ink }}>전체 해제</button>
                     {(() => { const ids = photos.hits.filter(hit => hit.selected).map(hit => hit.id); return <button type="button" onClick={() => void deletePhotos(group.modelName, ids)} disabled={!ids.length || Boolean(deletingPhotos)} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 8, background: wmsColors.warnSoft, padding: "7px 12px", cursor: ids.length ? "pointer" : "not-allowed", fontWeight: 700, fontSize: 13, color: wmsColors.warnText, opacity: ids.length ? 1 : 0.55 }}>{deletingPhotos === group.modelName ? "삭제 중…" : `선택 사진 삭제 (${ids.length}장)`}</button>; })()}
                   </div>}
-                  {photos && photos.hits.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                  {photos && photos.hits.length > 0 && <div onPointerDown={event => startPhotoDrag(group.modelName, event)} onDragStart={event => event.preventDefault()} title="빈 곳에서 마우스를 누른 채 끌면 여러 장이 한꺼번에 선택됩니다. 이미 선택된 사진에서 끌면 해제됩니다." style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8, paddingBottom: 6 }}>
                      {primarySlice.map(item => renderHit(item))}
                      {editedHits.length > 0 && tierHeader("edited", "보정본 폴더 (EVOTO 등)", editedHits.length)}
                      {tierOpen("edited") && editedSlice.map(item => renderHit(item))}
@@ -1223,6 +1307,7 @@ export default function ProductCatalogPage() {
                      {shownFlat.length > shownLimit && <button type="button" onClick={() => setShownCounts(current => ({ ...current, [group.modelName]: shownLimit + THUMBNAIL_PAGE }))} style={{ alignSelf: "center", border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "10px 14px", cursor: "pointer", fontWeight: 700, color: wmsColors.ink }}>사진 {Math.min(THUMBNAIL_PAGE, shownFlat.length - shownLimit)}장 더 표시 ({shownFlat.length - shownLimit}장 남음)</button>}
                     {photos.hits.length >= 400 && <p>사진이 많아 처음 400장만 표시합니다. 필요한 사진이 없으면 연결표의 사진폴더 지정을 고쳐야 하니 알려주세요.</p>}
                   </div>}
+                  {dragNotice && photos && photos.hits.length > 0 && <div style={{ color: wmsColors.warnText, fontSize: 12, fontWeight: 700, marginTop: 7 }}>{dragNotice}</div>}
                   {photos?.note && <div style={{ color: wmsColors.ink, fontSize: 12, marginTop: 7 }}>{photos.note}</div>}
                   {photos && !photos.error && nextPhotoLevel(photos) > 0 && <div style={{ marginTop: 8 }}><button type="button" onClick={() => void expandPhotos(first, group.items)} disabled={photos.loading} style={{ border: `1px solid ${wmsColors.slate}`, borderRadius: 8, background: "#fff", padding: "8px 12px", cursor: photos.loading ? "wait" : "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.slate }}>{photos.loading ? "사진 찾는 중…" : `${LEVEL_BUTTON_LABELS[nextPhotoLevel(photos)]} →`}</button></div>}
                   {photos && !photos.loading && <div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 7 }}>사진 후보 {photos.hits.length}개{photos.source ? ` · ${photos.source}` : ""} · 선택 {photos.hits.filter(hit => hit.selected).length}/{MAX_SELECTED_PHOTOS}장</div>}
@@ -1231,6 +1316,7 @@ export default function ProductCatalogPage() {
 
   return (
     <main style={{ maxWidth: 1180, margin: "0 auto", padding: "16px 16px 32px", fontFamily: "sans-serif" }}>
+      {dragBox && <div aria-hidden style={{ position: "fixed", left: dragBox.left, top: dragBox.top, width: dragBox.width, height: dragBox.height, border: `1px solid ${wmsColors.slate}`, background: "rgba(90, 110, 100, 0.18)", pointerEvents: "none", zIndex: 50 }} />}
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 18 }}>
         <div>
           <h1 style={{ margin: 0, color: wmsColors.ink, fontSize: 26 }}>상품등록 사진선택</h1>
