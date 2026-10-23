@@ -699,6 +699,11 @@ export default function ProductCatalogPage() {
   };
   }, [items, isReregistrationTarget, excludedModelKeys, stagedKeys, tabGroups]);
 
+  // 그 외 재등록 목록이 비어 선택지를 숨겼는데 예전에 그 목록을 보던 상태가 남아 있으면 '전체 상태'로 돌린다.
+  useEffect(() => {
+    if (status === "other-rereg" && items.length > 0 && summary.otherModels === 0) setStatus("all");
+  }, [status, items.length, summary.otherModels]);
+
   const reregistrationGroups = useMemo(() => {
     if (status === "reregister" || status === "other-rereg" || status === "stopped") {
       const needle = clean(query);
@@ -1357,7 +1362,8 @@ export default function ProductCatalogPage() {
 
       <div style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: 16, marginBottom: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
-          {[["제품DB 행", summary.total], ["실적저조 모델", summary.reregisterModels], ["그 외 재등록 모델", summary.otherModels], ["판매중지 모델", summary.stoppedModels], ["로켓 등록 증빙 확인", summary.rocketPending]].map(([label, value]) => (
+          {/* 2026-10-23 사용자 요청: '그 외 재등록SKU' 탭에 남은 모델이 없으면 칸·선택지를 숨긴다(탭은 그대로 두고, 현재상태에 '재등록'을 적어 다시 옮기면 다시 보인다). */}
+          {([["제품DB 행", summary.total], ["실적저조 모델", summary.reregisterModels], ...(summary.otherModels > 0 ? [["그 외 재등록 모델", summary.otherModels]] : []), ["판매중지 모델", summary.stoppedModels], ["로켓 등록 증빙 확인", summary.rocketPending]] as [string, number][]).map(([label, value]) => (
             <div key={String(label)} style={{ background: wmsColors.surface, borderRadius: 10, padding: "10px 12px" }}><div style={{ color: wmsColors.muted, fontSize: 11 }}>{label}</div><strong style={{ color: wmsColors.ink, fontSize: 20 }}>{value}</strong></div>
           ))}
         </div>
@@ -1366,7 +1372,7 @@ export default function ProductCatalogPage() {
           {query && <button type="button" onClick={() => { setQuery(""); try { window.sessionStorage.setItem(VIEW_KEY, JSON.stringify({ status, query: "" })); } catch {} }} title="검색어를 지웁니다." style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>검색 초기화</button>}
           <button type="button" onClick={() => void loadCatalog()} disabled={loading} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "새로 읽는 중…" : "제품DB 새로고침"}</button>
           <select value={status} onChange={event => setStatus(event.target.value)} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 10px", background: "#fff" }}>
-            <option value="all">전체 상태</option><option value="reregister">실적저조 SKU (실적저조SKU 탭)</option><option value="other-rereg">그 외 재등록 SKU (그 외 재등록SKU 탭)</option><option value="stopped">판매중지 SKU (판매중지SKU 탭)</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="rocket-new">Wing 등록검토 (Wing에만 있음)</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
+            <option value="all">전체 상태</option><option value="reregister">실적저조 SKU (실적저조SKU 탭)</option>{summary.otherModels > 0 && <option value="other-rereg">그 외 재등록 SKU (그 외 재등록SKU 탭)</option>}<option value="stopped">판매중지 SKU (판매중지SKU 탭)</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="rocket-new">Wing 등록검토 (Wing에만 있음)</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
           </select>
         </div>
       </div>
