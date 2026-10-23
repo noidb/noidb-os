@@ -1140,6 +1140,11 @@ export default function ProductCatalogPage() {
     }
     let state = photoStates[modelName];
     if (state?.loading) return;
+    // 2026-10-23 사용자 요청: 등록 화면은 이 화면을 바꾸지 않고 새 탭으로 연다.
+    // 크롬은 버튼을 누른 직후가 아니면 새 탭을 막을 수 있어, 준비하는 동안 쓸 빈 탭을 먼저 열어 둔다(아래 await들보다 앞).
+    let registrationTab: Window | null = null;
+    try { registrationTab = window.open("about:blank", "_blank"); } catch { registrationTab = null; }
+    const closeRegistrationTab = () => { try { registrationTab?.close(); } catch { /* 이미 닫힘 */ } };
     // 새로고침 뒤에는 화면의 검색 결과가 비어 있으므로, 이 브라우저에 저장해 둔 검색 결과·선택을 먼저 되살린다.
     if (!state) {
       setPreparing(modelName);
@@ -1147,6 +1152,7 @@ export default function ProductCatalogPage() {
       const restored = await restoreSavedSearch(modelName).catch(error => { restoreError = error instanceof Error ? error.message : ""; return null; });
       setPreparing("");
       if (!restored) {
+        closeRegistrationTab();
         setFolderMessage(restoreError
           ? `${modelName}: ${restoreError}`
           : `${modelName}: 저장된 사진 검색 결과가 없습니다. 먼저 "사진검색"을 눌러 기존 상세페이지·보정본 여부를 확인해주세요.`);
@@ -1179,8 +1185,18 @@ export default function ProductCatalogPage() {
         .map(sku => `reregisterSku=${encodeURIComponent(sku)}`)
         .join("&");
       const reregisterHref = `/?reregisterModel=${encodeURIComponent(modelName)}${selectedSkuParams ? `&${selectedSkuParams}` : ""}`;
-      router.push(rocketOnly ? `/?rocketModel=${encodeURIComponent(modelName)}` : reregisterHref);
+      const targetHref = rocketOnly ? `/?rocketModel=${encodeURIComponent(modelName)}` : reregisterHref;
+      // 먼저 열어 둔 새 탭에 등록 화면을 연다. 새 탭을 못 열었으면(팝업 차단) 다시 한 번 열어 보고, 그래도 안 되면 이 창에서 연다.
+      if (registrationTab && !registrationTab.closed) {
+        registrationTab.location.href = targetHref;
+        setFolderMessage(`${modelName}: 등록 준비를 마치고 새 탭에서 등록 화면을 열었습니다.`);
+      } else {
+        const reopened = window.open(targetHref, "_blank");
+        if (reopened) setFolderMessage(`${modelName}: 등록 준비를 마치고 새 탭에서 등록 화면을 열었습니다.`);
+        else router.push(targetHref);
+      }
     } catch {
+      closeRegistrationTab();
       setFolderMessage("등록 준비를 저장하지 못했습니다. 브라우저 저장공간과 선택한 사진을 확인해주세요.");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } finally { setPreparing(""); }

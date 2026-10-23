@@ -3081,8 +3081,24 @@ function readReregistrationDb_(db, model) {
   readReregistrationTabRows_(db.getParent(), wanted, headers).forEach((row, index) => {
     items.push({ sheetRow: -(index + 1), values: row.values, formulas: row.formulas, tab: row.tab });
   });
-  return { headers: headers, columns: columns, width: width, items: items,
+  return { headers: headers, columns: columns, width: width, items: scopeReregistrationItems_(items, columns),
     casingMismatch: items.some(item => String(item.values[columns['모델명/품번']] || '').trim() !== wanted) };
+}
+
+/**
+ * 2026-10-23: 재등록 대상 줄의 범위.
+ * - 판매중지(판매중지SKU 탭 줄이나 현재상태 '판매중지'가 있는 모델): 링크가 죽어 같은 모델 전 옵션이 대상이다.
+ * - 그 외(실적저조SKU·그 외 재등록SKU 탭): 링크가 살아 있고 다른 옵션은 정상 입고 중이므로 그 탭 줄만 대상이다.
+ *   탭 줄을 제품DB로 옮긴 뒤에도 현재상태 '재등록대상'·'재등록파일생성'으로 구별해 같은 줄만 대상으로 본다.
+ *   제품DB에 정상으로 있는 같은 모델의 다른 옵션(예: 골드)은 건드리지 않는다.
+ * 대상으로 볼 줄이 하나도 없으면 줄을 줄이지 않는다(기존 판단 그대로).
+ */
+function scopeReregistrationItems_(items, columns) {
+  const state = item => String(item.values[columns['현재상태']] || '').trim();
+  const wholeModel = items.some(item => (item.tab && item.tab.name === '판매중지SKU') || state(item) === '판매중지');
+  if (wholeModel) return items;
+  const targets = items.filter(item => item.tab || state(item) === '재등록대상' || state(item) === '재등록파일생성');
+  return targets.length ? targets : items;
 }
 
 // 2026-10-22: 제품DB에서 빠진 옛 SKU 탭. 같은 모델 줄은 재등록할 때 제품DB로 다시 가져온다.

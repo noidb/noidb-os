@@ -40,6 +40,24 @@ const check = (dbRows, tabs) => sandbox.reregistrationEligibility_(fakeDb(dbRows
 for (const tab of ["판매중지SKU", "실적저조SKU", "그 외 재등록SKU"]) {
   const r = check([row("정상", "we20240406SI")], { [tab]: [row("재등록대상", "we20240406GO")] });
   assert.equal(r.reregisterable, true, `${tab}: 탭에서 온 모델은 재등록 가능해야 함 (${r.reason})`);
+  // 대상 범위: 판매중지는 같은 모델 전 옵션(2줄), 실적저조·그 외 재등록은 그 탭 줄만(1줄) — 제품DB의 정상 옵션은 건드리지 않는다.
+  assert.equal(r.rowCount, tab === "판매중지SKU" ? 2 : 1, `${tab}: 재등록 대상 줄 수`);
+}
+// 1-2) 실제 사례 wn011140: 탭에는 실버 1줄, 제품DB에는 골드가 정상 → 대상은 실버 1줄뿐
+{
+  const silver = row("재등록대상", "wn011140SI", { "모델명/품번": "wn011140" });
+  const gold = row("정상", "wn011140G", { "모델명/품번": "wn011140" });
+  const db = fakeDb([gold], { "그 외 재등록SKU": [silver] });
+  const data = sandbox.readReregistrationDb_(db, "wn011140");
+  assert.equal(data.items.length, 1);
+  assert.equal(data.items[0].values[data.columns["모델SKU"]], "wn011140SI");
+  assert.equal(sandbox.reregistrationEligibility_(db, "wn011140").reregisterable, true);
+  // 탭 줄을 제품DB로 옮긴 직후(현재상태 '재등록대상')에도 골드는 대상이 아니다.
+  const moved = fakeDb([gold, silver], {});
+  const after = sandbox.readReregistrationDb_(moved, "wn011140");
+  assert.equal(after.items.length, 1);
+  assert.equal(after.items[0].values[after.columns["모델SKU"]], "wn011140SI");
+  assert.equal(sandbox.reregistrationEligibility_(moved, "wn011140", { pulledFromTab: true }).reregisterable, true);
 }
 // 2) 탭에서 온 줄이 패키지 표시여도 막지 않는다
 const other = row("정상", "other1SI", { "모델명/품번": "other1" });
