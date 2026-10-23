@@ -2655,7 +2655,7 @@ function getOrCreateSheet_(ss, name) {
 }
 
 // Re-registration uses exact model/option identity and never creates product rows.
-function reregistrationEligibility_(db, model) {
+function reregistrationEligibility_(db, model, options) {
   const data = readReregistrationDb_(db, model);
   const items = data.items;
   const columns = data.columns;
@@ -2669,8 +2669,12 @@ function reregistrationEligibility_(db, model) {
   // 그 탭에 같은 모델 줄이 있으면 재등록 대상이다(저장할 때 그 줄을 제품DB로 가져와 기존처럼 덮어쓴다).
   // 실적저조·그 외 재등록 줄은 링크가 살아 있고 같은 모델의 다른 옵션은 정상이라, 그 줄만으로는 모델 전체를 덮어쓰지 않는다
   // (제품DB에 살아 있는 옵션이 하나도 없을 때만 전체 재등록). 판매중지SKU 탭 줄은 링크가 죽은 것이라 모델 전체가 대상이다.
+  // 2026-10-23: 재등록 목록 탭에서 제품DB로 옮겨 온 줄(현재상태 '재등록대상')도 재등록 대상이다.
+  // 저장 중 탭 줄을 옮긴 직후의 두 번째 확인(options.pulledFromTab)과, 그 뒤 저장이 중간에 멈춰 제품DB에 남은 줄을 다시 저장할 때 통과시킨다.
+  const pendingFromTab = items.length > 0 && items.every(item => String(item.values[columns['현재상태']] || '').trim() === '재등록대상');
   const stopped = items.some(item => (item.tab && item.tab.name === '판매중지SKU') || String(item.values[columns['현재상태']] || '').trim() === '판매중지')
-    || (items.length > 0 && items.every(item => item.tab));
+    || (items.length > 0 && items.every(item => item.tab))
+    || pendingFromTab || Boolean(options && options.pulledFromTab);
   // 2026-10-23: 재등록 저장 때 옛 SKU ID 등을 비우지 않고 그대로 두므로(승인 때 덮어씀), 현재상태만으로 '다시 저장'을 판단한다.
   const retry = items.every(item => String(item.values[columns['현재상태']] || '').trim() === '재등록파일생성');
   void emptyIds;
@@ -2893,8 +2897,8 @@ function reregistrationOptionMatches_(model, existing, columns, newRows, sourceC
   return matches;
 }
 
-function planReregistration_(db, model, newRows) {
-  const eligibility = reregistrationEligibility_(db, model);
+function planReregistration_(db, model, newRows, options) {
+  const eligibility = reregistrationEligibility_(db, model, options);
   if (!eligibility.reregisterable) throw new Error(model + ': ' + (eligibility.reason || '재등록할 기존 행이 없습니다.'));
   assertUniqueProductKeys_(newRows, '재등록 옵션');
   const data = readReregistrationDb_(db, model);
@@ -2958,7 +2962,7 @@ function reregisterModel_(ss, db, model, newRows, operationId) {
   backupProductDbSheet_(ss, db, '동일모델재등록');
   // 판매중지SKU·실적저조SKU·그 외 재등록SKU 탭에 있던 옛 줄은 백업 뒤 제품DB 맨 아래로 옮긴 다음 기존 방식대로 덮어쓴다.
   const pulled = plan.items.some(item => item.sheetRow < 0) ? moveReregistrationTabRowsToDb_(ss, db, model) : 0;
-  const rechecked = planReregistration_(db, model, newRows);
+  const rechecked = planReregistration_(db, model, newRows, { pulledFromTab: pulled > 0 });
   if (pulled) {
     if (rechecked.items.some(item => item.sheetRow < 0) || rechecked.items.length !== plan.items.length) throw new Error('탭에서 옮긴 옛 줄을 제품DB에서 다시 찾지 못했습니다. 백업과 제품DB를 확인해주세요.');
     plan = rechecked;
