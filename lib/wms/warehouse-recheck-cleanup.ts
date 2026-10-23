@@ -116,7 +116,9 @@ export function planReregistrationTab(reregRows: string[][], productDb: string[]
         if (REREG_EXTRA_HEADERS.some(extra => squash(extra) === squash(header))) return ownValue;
         const src = full ? full.headers.findIndex(value => squash(value) === squash(header)) : -1;
         const value = full && src >= 0 ? String(full.row[src] ?? "") : "";
-        return value || ownValue;
+        // 2026-10-23 사용자 지침: 재등록 목록(판매중지SKU·실적저조SKU·그 외 재등록SKU)은 사용자가 직접 고쳐 두는 새 등록용 DB라
+        // 이미 적힌 값은 절대 덮어쓰지 않는다. 빈 칸만 제품DB·비관리SKU 값으로 채운다.
+        return ownValue.trim() ? ownValue : value;
       }));
     }
     return { rebuild: { headers: newHeaders, rows, filled }, leaving: [] as Array<{ rowNumber: number; skuId: string; row: string[]; status: string; reason: string; pair?: string }>, keepIds: new Set<string>(rows.map(row => String(row[find(newHeaders, "SKU ID", "SKUID")] ?? "").trim()).filter(Boolean)) };

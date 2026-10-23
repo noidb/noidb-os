@@ -210,7 +210,45 @@ function columnIndexToLetter(index: number): string {
  * 시트 전체나 범위를 덮어쓰지 않고, 호출한 쪽이 명시한 (행, 열) 좌표의 셀만 건드린다.
  * 이 함수는 어디서도 자동으로 호출되지 않으며, 사용자가 화면에서 저장을 눌렀을 때만 호출된다.
  */
-export async function updateSheetCells(sheetName: string, updates: SheetCellUpdate[]): Promise<void> {
+/**
+ * 2026-10-23 사용자 지침: 재등록 목록(판매중지SKU·실적저조SKU·그 외 재등록SKU, 예전 이름 재등록SKU)은
+ * 사용자가 상품명·색상 등을 직접 고쳐 두는 새 등록용 DB다. 어떤 파일·기능으로도 이미 적힌 값을 덮어쓰지 않는다.
+ * 허용: 빈 칸 채우기, 제목줄, 쿠팡에서 오는 상태·이력 칸(발주가능상태·제품링크·입고이력 등), 진행 기록 칸.
+ */
+export const PROTECTED_REREGISTRATION_TABS: ReadonlySet<string> = new Set(["판매중지SKU", "실적저조SKU", "그 외 재등록SKU", "재등록SKU"]);
+const PROTECTED_TAB_AUTO_COLUMNS = new Set([
+  "현재상태", "SKUID", "바코드", "발주가능상태", "제품링크", "노출상품ID", "옵션ID", "현재고", "누적입고", "미입고",
+  "최근발주일", "최근입고일", "이전쿠팡공급가", "최근쿠팡공급가", "공급가차이", "공급가확인", "쿠팡노출가", "재고현황", "기본순서",
+  "기존현재상태", "기록일", "진행상태", "새SKUID", "완료일",
+]);
+const squashHeader = (value: unknown) => String(value ?? "").replace(/\s+/g, "");
+
+/** 보호 탭에서 덮어쓰면 안 되는 칸(이미 값이 있는 사용자 입력 칸)을 뺀다. 순수 함수(검사용). */
+export function filterProtectedTabUpdates(rows: readonly (readonly unknown[])[], updates: SheetCellUpdate[]): { allowed: SheetCellUpdate[]; blocked: SheetCellUpdate[] } {
+  const headers = (rows[0] || []).map(squashHeader);
+  const allowed: SheetCellUpdate[] = [], blocked: SheetCellUpdate[] = [];
+  for (const update of updates) {
+    const current = String(rows[update.row - 1]?.[update.col - 1] ?? "").trim();
+    const header = headers[update.col - 1] || "";
+    if (update.row <= 1 || !current || PROTECTED_TAB_AUTO_COLUMNS.has(header) || String(update.value ?? "").trim() === current) allowed.push(update);
+    else blocked.push(update);
+  }
+  return { allowed, blocked };
+}
+
+export async function updateSheetCells(sheetName: string, updates: SheetCellUpdate[], options?: { userEditedThisSku?: boolean }): Promise<void> {
+  if (updates.length === 0) return;
+  // 사용자가 화면에서 그 SKU 칸을 직접 고쳐 저장한 경우만 보호 탭에도 그대로 쓴다.
+  if (PROTECTED_REREGISTRATION_TABS.has(sheetName) && !options?.userEditedThisSku) {
+    const current = await fetchSheetRows(sheetName, { valueRenderOption: "FORMULA" });
+    const { allowed, blocked } = filterProtectedTabUpdates(current, updates);
+    if (blocked.length) console.warn(`[${sheetName}] 재등록 목록 보호: 이미 적힌 ${blocked.length}칸은 덮어쓰지 않았습니다.`);
+    return updateUnprotectedSheetCells(sheetName, allowed);
+  }
+  return updateUnprotectedSheetCells(sheetName, updates);
+}
+
+async function updateUnprotectedSheetCells(sheetName: string, updates: SheetCellUpdate[]): Promise<void> {
   if (updates.length === 0) return;
   // 2026-10-22: =IMAGE() 사진 수식은 RAW로 쓰면 앞에 '가 붙은 글자로 들어가 사진이 안 뜬다 → 수식으로 쓴다(USER_ENTERED).
   // 그 밖의 값은 앞자리 0·바코드 등이 바뀌지 않게 지금처럼 RAW로 쓴다.
@@ -218,7 +256,7 @@ export async function updateSheetCells(sheetName: string, updates: SheetCellUpda
   const formulas = updates.filter(isImageFormula);
   const plain = updates.filter(update => !isImageFormula(update));
   if (formulas.length && plain.length) {
-    await updateSheetCells(sheetName, plain);
+    await updateUnprotectedSheetCells(sheetName, plain);
     await writeSheetCells(sheetName, formulas, "USER_ENTERED");
     return;
   }

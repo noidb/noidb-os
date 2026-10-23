@@ -14,6 +14,14 @@ export function colorCode(option: string) {
   if ((normalized.includes("화이트") || normalized.includes("white")) && !codes.includes("WH")) codes.push("WH");
   if ((normalized.includes("블랙") || normalized.includes("black")) && !codes.includes("BK")) codes.push("BK");
   if (codes.length) return codes.join("");
+  // 2026-10-23 사용자 지침: 색상 이름은 정해진 영문 코드로 (그 외 색상도 한글 두 글자 대신 코드로)
+  const others: [RegExp, string][] = [
+    [/레드|빨강|red/, "RD"], [/핑크|pink/, "PK"], [/블루|파랑|blue/, "BL"], [/그린|초록|green/, "GR"],
+    [/퍼플|보라|purple/, "PP"], [/브라운|brown/, "BR"], [/베이지|beige/, "BE"], [/네이비|navy/, "NV"],
+    [/그레이|회색|gray|grey/, "GY"]
+  ];
+  const other = others.find(([pattern]) => pattern.test(normalized));
+  if (other) return other[1];
   return normalized.replace(/[^a-z0-9가-힣]/g, "").slice(0, 2).toUpperCase() || "OP";
 }
 
@@ -60,7 +68,7 @@ export function buildSkuRows(payload: {
     if (useSizeCombo && sizes.length) {
       for (let sizeIndex = 0; sizeIndex < sizes.length; sizeIndex++) {
         const size = sizes[sizeIndex];
-        const sku = `${model}-${code}${sizeCodes[sizeIndex]}`;
+        const sku = `${model}${code}${sizeCodes[sizeIndex]}`;
         rows.push({
           color,
           size,
@@ -72,7 +80,7 @@ export function buildSkuRows(payload: {
         });
       }
     } else {
-      const sku = `${model}-${code}`;
+      const sku = `${model}${code}`;
       rows.push({
         color,
         size: sizes[0] || "",

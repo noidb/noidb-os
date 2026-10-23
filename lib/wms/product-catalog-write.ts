@@ -203,7 +203,8 @@ export async function updateProductCatalogFields(
   }
 
   if (!options?.dryRun) {
-    await updateSheetCells(sheetName, cellUpdates);
+    // 화면에서 이 SKU를 직접 고친 저장이라 재등록 목록 탭이어도 그대로 쓴다(사용자 지침 2026-10-23: 파일·자동 반영만 막음).
+    await updateSheetCells(sheetName, cellUpdates, { userEditedThisSku: true });
   }
 
   return { success: true, rowNumber, sheetName, updatedFields, skippedFields };

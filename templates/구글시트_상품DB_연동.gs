@@ -91,6 +91,8 @@ function setupProductDbSheets() {
   ensureWeeklyCouponTrigger_(ss);
   getImageFolder_();
   ss.getSheets().forEach(sheet => {
+    // 2026-10-23 사용자 지침: 재등록 목록(판매중지SKU·실적저조SKU·그 외 재등록SKU)과 비관리SKU 탭은 절대 지우지 않는다.
+    if (REREGISTRATION_SOURCE_TABS_.concat(['비관리SKU', '_보관_비관리SKU_20261008']).includes(sheet.getName())) return;
     if (!['제품DB',COUNTRY_AUDIT_SOURCE_SHEET,PO_HISTORY_SHEET,INBOUND_HISTORY_SHEET,SKU_MASTER_SHEET,PO_PICKING_SHEET,PO_SHIPMENT_SHEET,COUPON_ISSUE_SHEET,QUOTE_QUEUE_SHEET,SKU_REPLACEMENT_SHEET].includes(sheet.getName())) ss.deleteSheet(sheet);
   });
   SpreadsheetApp.getUi().alert('상품DB 설정 완료\n구 SKU 정리: ' + retiredRemoved + '행\n교체이력 정보 복구: ' + replacementRepair.restoredFields + '칸\n사라진 기존행 복구: ' + replacementRepair.restoredRows + '행\n중복 정리: ' + duplicateRemoved + '행');
@@ -2683,7 +2685,11 @@ function reregistrationColorToken_(value) {
   if (!text) return '';
   const aliases = { '실버':'SI', 'SILVER':'SI', 'SI':'SI', '골드':'GO', 'GOLD':'GO', 'GO':'GO',
     '로즈골드':'RG', '로즈 골드':'RG', 'ROSE GOLD':'RG', 'ROSEGOLD':'RG', 'RG':'RG',
-    '블랙':'BK', 'BLACK':'BK', 'BK':'BK', '화이트':'WH', 'WHITE':'WH', 'WH':'WH' };
+    '블랙':'BK', 'BLACK':'BK', 'BK':'BK', '화이트':'WH', 'WHITE':'WH', 'WH':'WH',
+    // 2026-10-23 사용자 지침: 색상 이름 ↔ 코드 (사이트 새 SKU 코드와 같음)
+    '레드':'RD', 'RED':'RD', 'RD':'RD', '핑크':'PK', 'PINK':'PK', 'PK':'PK', '블루':'BL', 'BLUE':'BL', 'BL':'BL',
+    '그린':'GR', 'GREEN':'GR', 'GR':'GR', '퍼플':'PP', 'PURPLE':'PP', 'PP':'PP', '브라운':'BR', 'BROWN':'BR', 'BR':'BR',
+    '베이지':'BE', 'BEIGE':'BE', 'BE':'BE', '네이비':'NV', 'NAVY':'NV', 'NV':'NV', '그레이':'GY', 'GRAY':'GY', 'GREY':'GY', 'GY':'GY' };
   // S and SS are not general color aliases. They are checked only in a model SKU below.
   return aliases[text] || 'TEXT:' + text;
 }
@@ -2751,8 +2757,17 @@ function reregistrationOptionEvidence_(model, values, columns) {
     const candidate = boundary.charAt(0) === '-' ? boundary.slice(1) : boundary;
     if (candidate && candidate.charAt(0) !== '-') tail = candidate;
   }
+  // 2026-10-23 사용자 지침: 색상 칸·상품명에 색상이 없으면 모델SKU 끝 코드로 색상을 읽는다
+  // (BK 블랙, WH 화이트, RG 로즈골드, GO 골드, SI 실버, 옛 표기 S·SS 실버, SG 골드 등). 코드 뒤에 숫자가 붙은 사이즈 코드는 읽지 않는다.
+  let tailColor = '';
+  if (tail) {
+    const code = tail.toUpperCase();
+    const legacyCodes = { S: 'SI', SS: 'SI', SG: 'GO' };
+    const token = legacyCodes[code] || reregistrationColorToken_(code);
+    if (token && !token.startsWith('TEXT:')) tailColor = token;
+  }
   return { sku: sku, key: key, rawColor: originalColor, rawSize: rawSize, category: category,
-    color: color, size: size, titleColor: titleColor, titleSize: titleSize, tail: tail, conflict: conflict };
+    color: color, size: size, titleColor: titleColor, titleSize: titleSize, tail: tail, tailColor: tailColor, conflict: conflict };
 }
 
 function reregistrationSemanticOption_(source, old, hasOtherSizes) {
@@ -2763,6 +2778,12 @@ function reregistrationSemanticOption_(source, old, hasOtherSizes) {
   if (source.size && old.titleSize && source.size !== old.titleSize) return false;
   // Two explicit metadata fields outrank opaque historical SKU codes (e.g. US 5 -> KR 9호).
   if (source.color && source.size && old.color === source.color && old.size === source.size) return true;
+  // 2026-10-23: 색상이 같고 사이즈도 같으면(둘 다 비었거나 FREE도 같은 것으로 봄) 같은 옵션이다.
+  // 옛 모델SKU 끝 코드(B·W·R·S·SG 등)는 제각각이라 코드로는 못 맞추므로 색상 칸(없으면 상품명 끝 색상)으로 맞춘다.
+  // 같은 색상·사이즈 기존 줄이 둘 이상이면 아래 호출부에서 그대로 멈춘다.
+  const plainSize = value => value && value !== 'FREE' ? value : '';
+  const oldColorAny = old.color || old.titleColor || old.tailColor;
+  if (source.color && oldColorAny === source.color && plainSize(source.size) === plainSize(old.size || old.titleSize)) return true;
   if (source.color !== 'SI' || !source.size || old.tail === null || !source.tail.startsWith('SI')) return false;
   if (old.color && old.color !== 'SI') return false;
   const sourceSizeCode = source.tail.slice(2);
