@@ -41,6 +41,15 @@ export default function DailyRoutine() {
       .catch(() => {});
   }, []);
 
+  // 2026-10-23: 확장 'WIMS 전체를 NOID-B로 전송'이 열어 준 주소(?open=wims)는 WIMS 칸을 바로 펼쳐 전송 내용을 받는다.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("open") !== "wims") return;
+    setOpen("wims");
+    mark("wims");
+    const timer = window.setTimeout(() => document.getElementById("routine-wims")?.scrollIntoView({ block: "start" }), 150);
+    return () => window.clearTimeout(timer);
+  }, [mark]);
+
   // '새로고침'·'정리행 미리보기'를 다시 누르면 같은 칸을 처음부터 다시 실행한다(부품을 새로 그림).
   const [runKey, setRunKey] = useState(0);
   const items: Array<{ id: RoutineId; title: string; summary: string; label: string; rerun?: boolean; shortcut?: string; siteLink?: string; body?: ReactNode }> = [
@@ -100,7 +109,7 @@ export default function DailyRoutine() {
               ? <button type="button" className="softSageButton" style={buttonStyle} onClick={() => { setRunKey((value) => value + 1); setOpen(item.id); }}>{item.label}</button>
               : <button type="button" className={isOpen ? "softApricotButton" : "softSageButton"} style={buttonStyle} aria-expanded={isOpen} onClick={() => { if (!isOpen) mark(item.id); setOpen(isOpen ? null : item.id); }}>{isOpen ? "접기" : item.label}</button>;
           return (
-            <article key={item.id} style={{ border: "1px solid #e5dace", borderLeft: `5px solid ${accents[index % accents.length].bar}`, background: "#fbf8f4", borderRadius: 10, padding: "10px 12px" }}>
+            <article key={item.id} id={`routine-${item.id}`} style={{ border: "1px solid #e5dace", borderLeft: `5px solid ${accents[index % accents.length].bar}`, background: "#fbf8f4", borderRadius: 10, padding: "10px 12px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "28px minmax(0, 1fr) minmax(150px, 220px)", gap: 10, alignItems: "center" }}>
                 <span style={{ width: 26, height: 26, borderRadius: 999, background: accents[index % accents.length].badgeBg, border: `1px solid ${accents[index % accents.length].badgeBorder}`, color: accents[index % accents.length].badgeText, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800 }}>{index + 1}</span>
                 <div style={{ minWidth: 0 }}>
