@@ -1171,7 +1171,15 @@ export default function ProductCatalogPage() {
       window.localStorage.setItem(REREGISTRATION_PREP_KEY, JSON.stringify({ modelName, items: groupItems }));
       // 제품DB에 없는 로켓 미등록 모델은 신규 등록으로 연다(제품DB가 아니라 로켓 미등록 목록에서 기본정보를 채운다).
       const rocketOnly = groupItems.length > 0 && groupItems.every(isRocketPendingItem);
-      router.push(rocketOnly ? `/?rocketModel=${encodeURIComponent(modelName)}` : `/?reregisterModel=${encodeURIComponent(modelName)}`);
+      // 재등록 탭에서 선택한 SKU만 등록 화면으로 넘긴다.
+      // 등록 화면이 같은 모델의 제품DB 전체 옵션(예: 골드)을 다시 섞지 않게 한다.
+      const selectedSkuParams = [...new Set(groupItems
+        .map(item => String(item.modelSku || item.skuId || "").trim())
+        .filter(Boolean))]
+        .map(sku => `reregisterSku=${encodeURIComponent(sku)}`)
+        .join("&");
+      const reregisterHref = `/?reregisterModel=${encodeURIComponent(modelName)}${selectedSkuParams ? `&${selectedSkuParams}` : ""}`;
+      router.push(rocketOnly ? `/?rocketModel=${encodeURIComponent(modelName)}` : reregisterHref);
     } catch {
       setFolderMessage("등록 준비를 저장하지 못했습니다. 브라우저 저장공간과 선택한 사진을 확인해주세요.");
       window.scrollTo({ top: 0, behavior: "smooth" });
