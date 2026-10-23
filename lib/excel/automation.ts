@@ -2,7 +2,6 @@ import ExcelJS from "exceljs";
 import path from "path";
 import {
   buildSkuRows,
-  costWithVat,
   dimensionText,
   formatCoupangOptionName,
   msrpPrice,
@@ -32,7 +31,8 @@ export async function buildAutomationWorkbook(payload: ExportPayload) {
   await workbook.xlsx.readFile(templatePath);
 
   const sale = parseNumber(payload.product.price);
-  const cost = costWithVat(parseNumber(payload.product.cost));
+  // 등록화면 원가 칸은 '부가세포함' 값이다. 부가세를 다시 붙이지 않는다.
+  const cost = parseNumber(payload.product.cost);
   const supply = supplyPrice(sale || 0);
   const msrp = msrpPrice(sale || 0);
   const supplier = supplierLabel(payload.product.supplier, payload.product.gender);

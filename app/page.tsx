@@ -20,7 +20,7 @@ import {
   syncProductDbToGoogleSheet,
   createLabelBlob,
 } from "@/lib/product-db/files";
-import { buildSkuRows } from "@/lib/excel/common";
+import { buildSkuRows, costWithVat, parseNumber } from "@/lib/excel/common";
 import type { SkuRow } from "@/lib/excel/types";
 import { assertProductDbFilesWritable, ensureProductFolderTree, rootFolderFileExists, writeCategoryFile, writeProductDbFiles, writeRootFolderFile } from "@/lib/product-db/fs";
 import { dataUrlToBlob } from "@/lib/product-db/files";
@@ -150,7 +150,7 @@ const DEFAULT_PRODUCT: Product = {
   coupangTitle: "",
   searchTags: "",
   dimension: "",
-  cost: "1900",
+  cost: "2090", // 부가세포함 (부가세 미포함 1,900원)
   price: "14900",
 };
 
@@ -271,6 +271,8 @@ async function imageUrlToDataUrl(url: string): Promise<string> {
 
 export default function Home() {
   const [product, setProduct] = useState<Product>({ ...DEFAULT_PRODUCT });
+  // 신상품 등록용 보조 입력: 부가세 미포함 단가를 넣으면 원가(부가세포함)가 자동으로 채워진다. 저장되는 값은 원가(부가세포함) 하나뿐.
+  const [costExVatInput, setCostExVatInput] = useState("");
   const [supplierOptions, setSupplierOptions] = useState<string[]>(DEFAULT_SUPPLIERS);
 
   const [photos, setPhotos] = useState<ProductPhoto[]>([]);
@@ -569,6 +571,7 @@ export default function Home() {
           }
           return;
         }
+        setCostExVatInput("");
         setProduct({
           ...DEFAULT_PRODUCT,
           supplier: String(first.vendorName || ""),
@@ -2718,8 +2721,18 @@ export default function Home() {
                 else { update("searchTags", tagsBackup); setTagsBackup(""); }
               }}>{product.searchTags ? "자동 검색태그 사용" : tagsBackup ? "직접 입력값 복구" : "자동 검색태그 사용 중"}</button>
           </Field>
-          <Field label="원가 (부가세 미포함)">
-            <input inputMode="numeric" value={product.cost} onChange={e => update("cost", e.target.value)} />
+          <Field label="원가 (부가세포함)">
+            <input inputMode="numeric" value={product.cost} onChange={e => { setCostExVatInput(""); update("cost", e.target.value); }} />
+            <small>구글시트 원가(부가세포함)와 같은 값입니다. 부가세 미포함: {product.cost ? Math.round(parseNumber(product.cost) / 1.1).toLocaleString() : "-"}원</small>
+          </Field>
+          <Field label="부가세 미포함으로 입력 (×1.1 자동 계산)">
+            <input inputMode="numeric" placeholder="거래처 단가(미포함)를 넣으면 왼쪽 원가가 자동으로 채워집니다"
+              value={costExVatInput}
+              onChange={e => {
+                const digits = e.target.value.replace(/[^\d]/g, "");
+                setCostExVatInput(digits);
+                update("cost", digits ? String(costWithVat(parseNumber(digits))) : "");
+              }} />
           </Field>
           <Field label="판매가">
             <input inputMode="numeric" value={product.price} onChange={e => update("price", e.target.value)} />

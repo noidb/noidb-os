@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildSkuRows, formatCoupangOptionName, costWithVat, dimensionText, parseNumber, supplierLabel, supplyPrice } from "@/lib/excel/common";
+import { buildSkuRows, formatCoupangOptionName, dimensionText, parseNumber, supplierLabel, supplyPrice } from "@/lib/excel/common";
 import type { ExportPayload } from "@/lib/excel/types";
 
 export const runtime = "nodejs";
@@ -87,7 +87,8 @@ export async function POST(req: NextRequest) {
     if (raw?.action === "linkReplacementExisting" && raw?.payload) {
       const payload = raw.payload as ExportPayload;
       const sale = parseNumber(payload.product.price);
-      const cost = costWithVat(parseNumber(payload.product.cost));
+      // 등록화면 원가 칸은 '부가세포함' 값이다(구글시트 원가(부가세포함)와 같음). 부가세를 다시 붙이지 않는다.
+      const cost = parseNumber(payload.product.cost);
       const supply = supplyPrice(sale);
       const supplier = supplierLabel(payload.product.supplier, payload.product.gender);
       const dimension = dimensionText(payload.product);
@@ -117,7 +118,8 @@ export async function POST(req: NextRequest) {
     }
     const payload = raw as ExportPayload;
     const sale = parseNumber(payload.product.price);
-    const cost = costWithVat(parseNumber(payload.product.cost));
+    // 등록화면 원가 칸은 '부가세포함' 값이다. 부가세를 다시 붙이지 않는다.
+    const cost = parseNumber(payload.product.cost);
     const supply = supplyPrice(sale);
     const supplier = supplierLabel(payload.product.supplier, payload.product.gender);
     const dimension = dimensionText(payload.product);
