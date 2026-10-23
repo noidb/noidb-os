@@ -218,8 +218,12 @@ export default function WimsRegistrationImportPanel() {
     const stamp = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).getTime();
     return Date.now() - stamp <= RECENT_DAYS * 24 * 60 * 60 * 1000;
   };
-  const actionRows = useMemo(() => allActionRows.filter(row => isApplicable(row) || isRecent(row)), [allActionRows]);
-  const pastRows = useMemo(() => allActionRows.filter(row => !isApplicable(row) && !isRecent(row)), [allActionRows]);
+  // 2026-10-23: 반려 건은 등록일이 오래돼도 사용자가 처리 결정(등록불가·재등록시도)을 해야 하므로 항상 맨 위에 둔다.
+  const isRejectedPending = (row: WimsRegistrationAudit["rows"][number]) => row.wims.status === "rejected";
+  const actionRows = useMemo(() => allActionRows
+    .filter(row => isRejectedPending(row) || isApplicable(row) || isRecent(row))
+    .sort((a, b) => Number(isRejectedPending(b)) - Number(isRejectedPending(a))), [allActionRows]);
+  const pastRows = useMemo(() => allActionRows.filter(row => !isRejectedPending(row) && !isApplicable(row) && !isRecent(row)), [allActionRows]);
 
   function actionLabel(row: WimsRegistrationAudit["rows"][number]) {
     if (row.type === "rejected") return { title: "반려 · 자동 연결 제외", color: "#c0392b", guide: "반려된 등록 건이라 SKU·바코드를 제품DB에 자동 반영하지 않습니다." };
