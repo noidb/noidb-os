@@ -532,6 +532,9 @@ export default function Home() {
     // rocketModel = 제품DB에 없는 로켓 미등록 모델(사진선택 "로켓 미등록" 보기에서 등록 준비). 신규 등록으로 연다.
     const rocketModel = params.get("rocketModel")?.trim() || "";
     const requestedModel = params.get("reregisterModel")?.trim() || rocketModel;
+    // 재등록SKU 탭에서 고른 행의 식별값. 없으면 기존처럼 모델 전체를 연다.
+    const requestedSkuKeys = new Set(params.getAll("reregisterSku")
+      .map(value => value.trim().toLowerCase()).filter(Boolean));
     if (!requestedModel) return;
     let active = true;
     void (async () => {
@@ -543,8 +546,21 @@ export default function Home() {
         const response = await fetch(rocketModel ? `/api/wms/rocket-pending?model=${encodeURIComponent(rocketModel)}` : "/api/wms/product-registration-catalog", { cache: "no-store" });
         const data = await response.json();
         if (!response.ok || !Array.isArray(data.items)) throw new Error(data?.error || "재등록 대상 조회 실패");
-        const group = data.items.filter((item: any) => String(item.modelName || "").trim().toLowerCase() === requestedModel.toLowerCase());
-        if (!group.length) throw new Error(`${requestedModel} 모델을 ${rocketModel ? "로켓 미등록 목록" : "제품DB"}에서 찾지 못했습니다.`);
+        const modelItems = data.items.filter((item: any) =>
+          String(item.modelName || "").trim().toLowerCase() === requestedModel.toLowerCase()
+        );
+        // ‘그 외 재등록SKU’ 등에서 특정 옵션만 선택했다면 제품DB에 있는 같은 모델의
+        // 다른 색상·옵션은 끼워 넣지 않는다. 예: 실버만 선택 → 실버만 등록 준비.
+        const group = requestedSkuKeys.size
+          ? modelItems.filter((item: any) => {
+              const modelSku = String(item.modelSku || "").trim().toLowerCase();
+              const skuId = String(item.skuId || "").trim().toLowerCase();
+              return requestedSkuKeys.has(modelSku) || requestedSkuKeys.has(skuId);
+            })
+          : modelItems;
+        if (!group.length) throw new Error(requestedSkuKeys.size
+          ? `${requestedModel}에서 선택한 재등록 SKU를 제품DB에서 찾지 못했습니다.`
+          : `${requestedModel} 모델을 ${rocketModel ? "로켓 미등록 목록" : "제품DB"}에서 찾지 못했습니다.`);
         if (active) setRocketNewModel(Boolean(rocketModel));
         if (group.some((item: any) => String(item.reregistrationTier || "").startsWith("영구제외"))) throw new Error(`${requestedModel}은 제품DB에서 영구제외된 모델입니다.`);
         if (active) setReregisterModelName(requestedModel);
