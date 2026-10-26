@@ -1574,11 +1574,12 @@ export default function ShipmentReceiptsPage() {
       )}
       {tab !== "anytime" && <>
       {cachedViewAt && busy && <p className={styles.notice} role="status">마지막으로 본 목록({new Date(cachedViewAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })})입니다 · 최신 자료 확인 중… 확인이 끝나면 버튼을 누를 수 있어요.</p>}
-      <p className={styles.notice}>
-        {payload?.board.collectedAt
-          ? `입고예정일 9/13 이후 마감 쉽먼트 ${payload.targets.length}건 · 가져온 시각 ${new Date(payload.board.collectedAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
-          : "아직 가져온 입고결과가 없습니다. 작업센터 '자주 하는 일'의 입고결과 가져오기 '바로가기'로 쿠팡 쉽먼트 화면을 열고 '입고결과 일괄 가져오기'를 눌러 주세요."}
-      </p>
+      {/* 2026-10-26: '입고예정일 9/13 이후 마감 쉽먼트 N건 · 가져온 시각' 안내 문구는 삭제(사용자 요청). 아직 가져온 게 없을 때의 안내만 남긴다. */}
+      {!payload?.board.collectedAt && (
+        <p className={styles.notice}>
+          아직 가져온 입고결과가 없습니다. 작업센터 '자주 하는 일'의 입고결과 가져오기 '바로가기'로 쿠팡 쉽먼트 화면을 열고 '입고결과 일괄 가져오기'를 눌러 주세요.
+        </p>
+      )}
       {payload?.board.warnings
         .filter((warning) => !warning.startsWith("공급상태가 정상이 아닌"))
         .map((warning, index) => (
