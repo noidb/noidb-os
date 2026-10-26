@@ -793,7 +793,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
 
       {/* 2026-10-26: 맨 아래 버튼은 신규발주서 검색이 아니라 메인화면과 같은 '발주제품보기'로 바로 간다. */}
       <a href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}/sku-summary`} style={{ display: "block", marginTop: "16px" }}>
-        <button type="button" style={{ ...wmsGhostButton, width: "100%" }}>발주제품보기</button>
+        <button type="button" className="softSageButton" style={{ width: "100%" }}>발주제품보기</button>
       </a>
     </main>
   );
