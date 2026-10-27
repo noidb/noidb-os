@@ -478,6 +478,8 @@ export default function Home() {
 
   useEffect(() => {
     void loadEditFolderHandle().then(handle => { if (handle) setEditFolderHandle(handle); }).catch(() => undefined);
+    // 마지막으로 저장한 모델 폴더 이름은 새로고침해도 기억한다(폴더 바로가기가 그 폴더로 열리게).
+    try { const last = window.localStorage.getItem("noidb-edit-last-model-folder"); if (last) setEditLastModelFolder(last); } catch { /* 저장 공간 없음 */ }
   }, []);
 
   useEffect(() => {
@@ -2528,32 +2530,33 @@ export default function Home() {
       }
     }
     setEditLastModelFolder(folderName);
+    try { window.localStorage.setItem("noidb-edit-last-model-folder", folderName); } catch { /* 저장 공간 없음 */ }
     return `${root.name}\\${folderName}`;
   };
 
   // 다른 칸의 "폴더 바로가기"와 같이 파일 선택 창으로 폴더를 연다(브라우저는 탐색기를 직접 열 수 없다).
   // 입력한 모델명 폴더 → 마지막에 저장한 모델명 폴더 → 상품수정 폴더 순으로 연다.
-  const openEditFolder = async () => {
-    setExportArea("thumb");
+  const openEditFolder = async (modelHint: string = thumbOnlyModel, notify: (message: string) => void = setExportMessage) => {
+    if (notify === setExportMessage) setExportArea("thumb");
     const picker = (window as any).showOpenFilePicker;
     if (typeof picker !== "function") {
-      setExportMessage("이 브라우저에서는 폴더 바로가기를 지원하지 않습니다.");
+      notify("이 브라우저에서는 폴더 바로가기를 지원하지 않습니다.");
       return;
     }
     try {
       let root = editFolderHandle;
       if (root && !(await ensureReadWritePermission(root))) root = null;
-      if (!root) root = await pickEditFolder();
+      if (!root) root = await pickEditFolder(notify);
       if (!root) return;
       let startIn: FileSystemDirectoryHandle = root;
-      for (const name of [safeFolderName(thumbOnlyModel.trim()), editLastModelFolder]) {
+      for (const name of [editLastModelFolder, safeFolderName(modelHint.trim())]) {
         if (!name) continue;
         try { startIn = await root.getDirectoryHandle(name); break; } catch { /* 아직 없는 폴더면 다음 후보 */ }
       }
       await picker({ startIn, multiple: false });
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
-      setExportMessage(`오류: ${e instanceof Error ? e.message : "폴더 열기 실패"}`);
+      notify(`오류: ${e instanceof Error ? e.message : "폴더 열기 실패"}`);
     }
   };
 
@@ -3337,7 +3340,7 @@ export default function Home() {
         <h2>7. 상품DB · 등록파일 일괄 생성</h2>
         <div className="exportActions">
           {dbSupported && <button className="folderPickButton" type="button" onClick={pickFolder}>폴더 선택</button>}
-          {dbSupported && <button className="folderPickButton" type="button" onClick={() => void openModelFolder(setDbStatus)}>폴더 바로가기</button>}
+          {dbSupported && <button className="folderPickButton" type="button" onClick={() => void (batchMode === "edit" ? openEditFolder(model, setBatchStatus) : openModelFolder(setDbStatus))}>폴더 바로가기</button>}
           <button className="finalSaveDraft" type="button" disabled={draftSaving} onClick={() => void saveDraft()}>
             {draftSaving ? "임시저장 중..." : "임시저장"}
           </button>
