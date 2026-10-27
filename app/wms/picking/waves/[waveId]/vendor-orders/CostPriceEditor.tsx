@@ -60,11 +60,22 @@ export default function CostPriceEditor({ skuId, currentCost, supplyPrice = "", 
   });
   return (
     <div style={{ marginTop: 10, padding: "8px 10px", border: `1px solid ${wmsColors.border}`, borderRadius: 8, display: "grid", gap: 6, fontSize: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-        <span style={{ color: wmsColors.muted }}>제품DB 원가(부가세 포함) <b style={{ color: wmsColors.ink, fontSize: 14 }}>{current ? `${current.toLocaleString()}원` : "미입력"}</b></span>
-        {!open && <button type="button" onClick={() => { setOpen(true); setMessage(""); }} style={button("sand")}>원가 수정</button>}
+      {/* 원가 · 쿠팡 공급가 · 마진을 세 칸으로 나눠 한눈에 보이게(2026-10-27). 마진은 빨간색 굵은 글씨. */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+        <div style={{ display: "grid", gap: 2, padding: "6px 8px", borderRadius: 8, background: "#f4f1ec" }}>
+          <span style={{ color: wmsColors.muted, fontSize: 11 }}>원가 (부가세 포함)</span>
+          <b style={{ color: wmsColors.ink, fontSize: 16 }}>{current ? `${current.toLocaleString()}원` : "미입력"}</b>
+        </div>
+        <div style={{ display: "grid", gap: 2, padding: "6px 8px", borderRadius: 8, background: "#f4f1ec" }}>
+          <span style={{ color: wmsColors.muted, fontSize: 11 }}>쿠팡 공급가</span>
+          <b style={{ color: wmsColors.ink, fontSize: 16 }}>{supply ? `${supply.toLocaleString()}원` : "미입력"}</b>
+        </div>
+        <div style={{ display: "grid", gap: 2, padding: "6px 8px", borderRadius: 8, background: "#f2dfd8" }}>
+          <span style={{ color: "#a33b2e", fontSize: 11, fontWeight: 800 }}>마진</span>
+          <b style={{ color: "#c0392b", fontSize: 20, fontWeight: 900 }}>{supply > 0 && current > 0 ? `${supply - current < 0 ? "−" : ""}${Math.abs(supply - current).toLocaleString()}원` : "-"}</b>
+        </div>
       </div>
-      <div style={{ color: wmsColors.muted }}>최근 쿠팡 공급가 <b style={{ color: wmsColors.ink, fontSize: 14 }}>{supply ? `${supply.toLocaleString()}원` : "미입력"}</b>{supply > 0 && current > 0 && <span style={{ marginLeft: 10 }}>마진 <b style={{ color: supply - current < 0 ? "#a33b2e" : wmsColors.ink, fontSize: 14 }}>{(supply - current).toLocaleString()}원</b></span>}</div>
+      {!open && <button type="button" onClick={() => { setOpen(true); setMessage(""); }} style={{ ...button("sand"), width: "100%" }}>원가 수정</button>}
       {open && <>
         <label style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span>영수증 단가(부가세 별도)</span>
