@@ -1129,6 +1129,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                       knownVendorNames={knownVendorNames}
                       productLink={liveCatalogByProductCode.get(normalizeSkuId(line.skuId))?.productLink || ""}
                       currentCost={liveCatalogByProductCode.get(normalizeSkuId(line.skuId))?.costVatIncluded || ""}
+                      supplyPrice={liveCatalogByProductCode.get(normalizeSkuId(line.skuId))?.recentSupplyPrice || ""}
                       onCostSaved={(cost, skuIds) => setLiveCatalogByProductCode(previous => { const ids = new Set([line.skuId, ...(skuIds || [])].map(normalizeSkuId)); const next = new Map(previous); for (const [key, value] of next) if (ids.has(normalizeSkuId(value.skuId))) next.set(key, { ...value, costVatIncluded: cost }); return next; })}
                       delaySummary={status === "sent" ? sentDelay(line) : receivingDelays.summaries.get(normalizeSkuId(line.skuId))}
                       delayDisabled={((historical || historyView) && !processingSent) || (status === "sent" ? sentDelaySaving : receivingDelays.loading || receivingDelays.saving || Boolean(receivingDelays.error)) || saving}
@@ -1402,6 +1403,7 @@ function VendorOrderLineCard({
   onQueueReorder,
   onCatalogStatusSaved,
   currentCost = "",
+  supplyPrice = "",
   onCostSaved = () => undefined,
 }: {
   line: VendorOrderDraftLine;
@@ -1438,6 +1440,7 @@ function VendorOrderLineCard({
   onCatalogStatusSaved: () => void;
   /** 제품DB 원가(부가세 포함) 실시간 값 — 발주결과처리에서 원가 확인·수정에 쓴다. */
   currentCost?: string;
+  supplyPrice?: string;
   onCostSaved?: (cost: string, skuIds?: string[]) => void;
 }) {
   const pasteUploading = useRef(false);
@@ -1739,7 +1742,7 @@ function VendorOrderLineCard({
       </div>}
       {processingSent && <SentVendorMemoInput line={line} disabled={delayDisabled || Boolean(optionsBusy)} onSaved={onReceivingSaved} />}
       {/* 영수증 단가가 다르면 여기서 받은 수량·입고단가를 고치고, 확인 후 제품DB 원가(부가세 포함)에 백업과 함께 반영한다. */}
-      {processingSent && <CostPriceEditor skuId={line.skuId} currentCost={currentCost} onSaved={onCostSaved} />}
+      {processingSent && <CostPriceEditor skuId={line.skuId} currentCost={currentCost} supplyPrice={supplyPrice} onSaved={onCostSaved} />}
       {processingSent && statusMessage && <p role="status" style={{fontSize:12,color:wmsColors.warn}}>{statusMessage}</p>}
       {processingSent && deletionAvailable && deleteBlockReason && <p style={{fontSize:12,color:wmsColors.muted}}>{deleteBlockReason}</p>}
 

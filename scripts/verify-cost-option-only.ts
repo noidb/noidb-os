@@ -11,3 +11,11 @@ assert.match(editor, /const sameModel = scope === "model"/, "옵션 버튼일 �
 assert.match(editor, /JSON\.stringify\(\{ skuId, costVatIncluded: [^}]*, sameModel \}\)/, "sameModel 값을 그대로 서버로 보냄");
 assert.match(route, /body\.sameModel === true/, "서버는 sameModel이 true일 때만 같은 모델 전부 수정");
 console.log("verify-cost-option-only: OK");
+
+// 2026-10-27: 결과 메모 한 줄 + 최근 쿠팡 공급가·마진 표시.
+const memo = readFileSync("app/wms/picking/waves/[waveId]/vendor-orders/SentVendorMemoInput.tsx", "utf8");
+assert.match(memo, /gridTemplateColumns: "auto minmax\(0, 1fr\) auto"/, "결과 메모 글씨는 입력칸 앞에 한 줄로");
+assert.match(editor, /최근 쿠팡 공급가/, "최근 쿠팡 공급가 표시");
+assert.match(editor, /마진[^]*supply - current/, "마진 = 공급가 - 원가");
+assert.match(readFileSync("lib/wms/product-catalog.ts", "utf8"), /recentSupplyPrice: \["최근쿠팡공급가"\]/, "제품DB 최근쿠팡공급가 칸을 읽음");
+console.log("verify-cost-option-only(공급가·메모): OK");

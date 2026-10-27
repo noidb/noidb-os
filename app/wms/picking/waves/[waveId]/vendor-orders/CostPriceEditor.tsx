@@ -9,9 +9,10 @@ import { wmsColors } from "@/lib/wms/ui-tokens";
  * 영수증 단가(부가세 별도)를 넣으면 부가세 10%를 더한 원가를 미리 보여주고, 확인을 누를 때만 제품DB 원가를 바꾼다.
  * 기본은 같은 모델(모델명/품번)의 SKU를 모두 같은 최신 원가로 한 번에 바꾼다(2026-10-21).
  * 옵션마다 단가가 다른 모델은 '해당 옵션 단가만 수정'을 누를 때만 이 SKU 하나만 바꾼다(2026-10-27).
+ * 원가 아래에 최근 쿠팡 공급가와 마진(공급가-원가)을 보여준다(2026-10-27). 둘 다 부가세 포함.
  * 입고수량은 다루지 않는다(2026-10-07 사용자 요청). 거래처에 보내는 발주서 카드에는 나오지 않는다.
  */
-export default function CostPriceEditor({ skuId, currentCost, onSaved }: { skuId: string; currentCost: string; onSaved: (cost: string, skuIds: string[]) => void }) {
+export default function CostPriceEditor({ skuId, currentCost, supplyPrice = "", onSaved }: { skuId: string; currentCost: string; supplyPrice?: string; onSaved: (cost: string, skuIds: string[]) => void }) {
   const [open, setOpen] = useState(false);
   const [price, setPrice] = useState("");
   const [busy, setBusy] = useState<"" | "model" | "option">("");
@@ -19,6 +20,7 @@ export default function CostPriceEditor({ skuId, currentCost, onSaved }: { skuId
   const current = Number(String(currentCost || "").replace(/[^\d.]/g, "")) || 0;
   const typed = Number(price.replace(/[^\d]/g, ""));
   const next = typed > 0 ? calculateReceivingCost(typed) : null;
+  const supply = Number(String(supplyPrice || "").replace(/[^\d.]/g, "")) || 0;
   const same = next !== null && next.costVatIncluded === current;
 
   async function save(scope: "model" | "option") {
@@ -62,6 +64,7 @@ export default function CostPriceEditor({ skuId, currentCost, onSaved }: { skuId
         <span style={{ color: wmsColors.muted }}>제품DB 원가(부가세 포함) <b style={{ color: wmsColors.ink, fontSize: 14 }}>{current ? `${current.toLocaleString()}원` : "미입력"}</b></span>
         {!open && <button type="button" onClick={() => { setOpen(true); setMessage(""); }} style={button("sand")}>원가 수정</button>}
       </div>
+      <div style={{ color: wmsColors.muted }}>최근 쿠팡 공급가 <b style={{ color: wmsColors.ink, fontSize: 14 }}>{supply ? `${supply.toLocaleString()}원` : "미입력"}</b>{supply > 0 && current > 0 && <span style={{ marginLeft: 10 }}>마진 <b style={{ color: supply - current < 0 ? "#a33b2e" : wmsColors.ink, fontSize: 14 }}>{(supply - current).toLocaleString()}원</b></span>}</div>
       {open && <>
         <label style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span>영수증 단가(부가세 별도)</span>

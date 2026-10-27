@@ -76,8 +76,8 @@ export default function SentVendorMemoInput({ line, disabled = false, onSaved }:
   }
 
   return <div style={{ minWidth: 0, marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${wmsColors.border}` }}>
-    <label htmlFor={`sent-result-memo-${line.id}`} style={{ display: "block", marginBottom: 6, fontSize: 12, fontWeight: 800, color: wmsColors.slate }}>결과 메모</label>
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 8, alignItems: "end" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "auto minmax(0, 1fr) auto", gap: 8, alignItems: "center" }}>
+      <label htmlFor={`sent-result-memo-${line.id}`} style={{ fontSize: 12, fontWeight: 800, color: wmsColors.slate, whiteSpace: "nowrap" }}>결과 메모</label>
       <textarea id={`sent-result-memo-${line.id}`} aria-label="결과 메모" value={memo} maxLength={500} rows={2} disabled={disabled || saving} placeholder="선택 입력" onChange={event => { const next = event.target.value; setMemo(next); dirtyRef.current = next !== baseMemo; setNotice(null); }} style={{ width: "100%", minWidth: 0, boxSizing: "border-box", resize: "vertical", fontSize: 13 }} />
       <button type="button" aria-label="메모 저장" disabled={disabled || saving || memo === baseMemo} onClick={() => void save()} style={{ ...wmsSageButton, minHeight: 44, whiteSpace: "nowrap", opacity: disabled || memo === baseMemo ? .55 : 1 }}>{saving ? "저장 중…" : "저장"}</button>
     </div>

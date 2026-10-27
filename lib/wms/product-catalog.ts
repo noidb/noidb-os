@@ -35,6 +35,8 @@ export interface ProductCatalogItem {
   orderableStatus: string;
   /** 제품DB 원가(부가세포함). 거래처 입고단가 반영 전후 비교에 사용한다. */
   costVatIncluded: string;
+  /** 제품DB "최근쿠팡공급가"(원발주서 매입가, 부가세 포함) — 쿠팡에 납품하는 마지막 단가. 없으면 "" (2026-10-27) */
+  recentSupplyPrice?: string;
   /** 아직 제품DB에 없는 컬럼(나중 추가 예정) — 없으면 항상 "" (거래처별 부족분 발주서 그룹핑에 사용) */
   vendorName: string;
   /** 실제 쿠팡 Seller SKU Barcode. 임의 생성하지 않고 이 컬럼 값만 사용한다 — 없으면 "" */
@@ -79,6 +81,7 @@ export const FIELD_HEADER_CANDIDATES: Record<Exclude<keyof ProductCatalogItem, "
   currentStatus: ["현재상태"],
   orderableStatus: ["발주가능상태"],
   costVatIncluded: ["원가(부가세포함)"],
+  recentSupplyPrice: ["최근쿠팡공급가"],
   vendorName: ["거래처", "거래처명", "매입처"],
   barcode: ["쿠팡 바코드", "Seller SKU Barcode", "쿠팡바코드", "바코드"],
   countryOfOrigin: ["제조국명"],
@@ -130,6 +133,7 @@ function mapCatalogRow(row: Record<string, string>): ProductCatalogItem {
     currentStatus: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.currentStatus),
     orderableStatus: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.orderableStatus),
     costVatIncluded: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.costVatIncluded),
+    recentSupplyPrice: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.recentSupplyPrice),
     vendorName: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.vendorName),
     barcode: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.barcode),
     countryOfOrigin: firstNonEmpty(row, FIELD_HEADER_CANDIDATES.countryOfOrigin),
