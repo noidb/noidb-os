@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useInvoiceGroupRepositoryState } from "@/lib/wms/invoice-group/context";
+import { applyOutputSetRecord, pendingDispatchRequirements } from "@/lib/wms/invoice-group/output-set";
 import { INVOICE_GROUP_STAGE_LABEL, isVisibleDispatchedInvoiceGroup, missingInvoiceGroupDispatchRequirements, type InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import type { ShipmentOutputPreview } from "@/lib/wms/shipment-output-context";
 import { DEFAULT_MAX_INVOICE_QUANTITY } from "@/lib/wms/shipment-output-split";
@@ -202,8 +203,9 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
   const confirmedCount = groups.reduce((sum, group) => sum + group.purchaseOrderNumbers.filter(po => isConfirmed(group, po)).length, 0);
   const hasUnsavedShipmentNumbers = groups.some(group => (shipmentNumberDrafts[group.id] ?? group.shipmentNumbers[0] ?? "").trim() !== (group.shipmentNumbers[0] ?? ""));
 
-  async function updateAllGroups(patch: (group: InvoiceGroup) => InvoiceGroup) {
-    for (const group of groups || []) {
+  /** base: 방금 저장한 최신 묶음이 있으면 그것을 기준으로(렌더 시점 groups는 낡았을 수 있음). */
+  async function updateAllGroups(patch: (group: InvoiceGroup) => InvoiceGroup, base?: InvoiceGroup[]) {
+    for (const group of base || groups || []) {
       const next = patch(group);
       if (next === group) continue;
       await invoiceGroupRepository.save(next);
@@ -533,12 +535,8 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
       const fileName = `Shipment_출력세트_${outputDateToken}.zip`;
       downloadBlobPreservingPage(zip, fileName, downloadTarget);
       const now = new Date().toISOString();
-      await updateAllGroups(group => {
-        const candidate: InvoiceGroup = { ...group, barcodeFileName: `03_바코드출력_${outputDateToken}_최종.xlsx`, barcodeGeneratedAt: now, outputSetGeneratedAt: now, updatedAt: now };
-        return candidate.stage === "new" && missingInvoiceGroupDispatchRequirements(candidate).length === 0
-          ? { ...candidate, stage: "shipment_completed" }
-          : candidate;
-      });
+      // 쉽먼트번호를 채운 최신 묶음(filledGroups)에 기록을 얹는다 — 낡은 groups에 얹으면 번호·등록기록이 지워진다.
+      await updateAllGroups(group => applyOutputSetRecord(group, `03_바코드출력_${outputDateToken}_최종.xlsx`, now), filledGroups);
       setOutputSetMessage(`출력세트 생성 완료 · ${fileName} · 부착문서+동봉내역서+바코드`);
     } catch (error) {
       closeReservedDownloadTarget(downloadTarget);
@@ -765,6 +763,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
       {advanceError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{advanceError}</p>}
       {hasUnsavedShipmentNumbers && <p style={{ color: "#c0392b", fontSize: "12px" }}>변경한 쉽먼트번호를 전체 저장해주세요.</p>}
       {readyForDispatchCount > 0 && <p style={{ color: wmsColors.greenDark, fontSize: "12px" }}>출고 준비 기록 {readyForDispatchCount}/{groups.length}건</p>}
+      {readyForDispatchCount < groups.length && <p style={{ color: "#c0392b", fontSize: "12px", margin: "4px 0 0" }}>출고완료에 빠진 항목({groups.length - readyForDispatchCount}묶음): {pendingDispatchRequirements(groups).join(", ")}</p>}
       <button type="button" disabled={advancing || hasUnsavedShipmentNumbers || !canDispatchAll} onClick={() => void handleMarkDispatched()} style={{ ...wmsPrimaryButton, width: "100%", marginTop: "8px", opacity: advancing || hasUnsavedShipmentNumbers || !canDispatchAll ? 0.6 : 1 }}>
         {advancing ? "기록 중..." : readyForDispatchCount === groups.length ? "실제 출고 확인 후 이 날짜 전체 출고완료로 기록" : `출력세트까지 끝난 ${readyForDispatchCount}묶음만 출고완료로 기록`}
       </button>
