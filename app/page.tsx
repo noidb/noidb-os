@@ -433,7 +433,7 @@ export default function Home() {
   const [labelImporterName, setLabelImporterName] = useState("프리스타일");
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchStatus, setBatchStatus] = useState("");
-  const [batchMode, setBatchMode] = useState<"practice" | "actual">("actual");
+  const [batchMode, setBatchMode] = useState<"practice" | "actual" | "edit">("actual");
   const [quoteQueue, setQuoteQueue] = useState<QuoteQueueRecord[]>([]);
   const [quoteQueueBusy, setQuoteQueueBusy] = useState("");
   const [drafts, setDrafts] = useState<ListedProductDraft[]>([]);
@@ -2073,8 +2073,8 @@ export default function Home() {
     };
   };
 
-  const collectInput = async (detailOverride?: string, syncGoogleSheet = true) =>
-    collectProductDbFiles(await buildCollectInput(detailOverride), { syncGoogleSheet });
+  const collectInput = async (detailOverride?: string, syncGoogleSheet = true, editOnly = false) =>
+    collectProductDbFiles(await buildCollectInput(detailOverride), { syncGoogleSheet, editOnly });
 
   const migrateExistingDbToGoogle = async () => {
     if (!dbHandle) {
@@ -2157,7 +2157,53 @@ export default function Home() {
     }
   };
 
+  // 2026-10-27 상품수정용: 이미 등록된 상품의 이미지만 고칠 때. 견적서·제품DB·등록 폴더는 건드리지 않고,
+  // 올린 썸네일·추가이미지·상세페이지·라벨 중 있는 것만 상품수정 폴더\모델명\ 에 한 번에 저장한다(없는 것은 건너뜀).
+  const saveForEdit = async () => {
+    const folderModel = model.trim();
+    if (!folderModel) {
+      setBatchStatus("모델명을 먼저 입력해주세요.");
+      return;
+    }
+    setBatchBusy(true);
+    setBatchStatus("수정용 파일을 만들고 있습니다...");
+    try {
+      let preview = detailPreview;
+      if (!preview && detailImages.length) {
+        try {
+          const built = await composeDetailPage();
+          preview = built.dataUrl;
+          setDetailPreview(preview);
+        } catch { /* 상세페이지를 못 만들어도 나머지는 저장한다 */ }
+      }
+      const { files } = await collectInput(preview, false, true);
+      if (!files.length) {
+        setBatchStatus("저장할 파일이 없습니다. 썸네일·추가이미지·상세페이지 중 하나 이상을 넣어주세요.");
+        return;
+      }
+      const savedAt = await saveThumbOnlyFiles(folderModel, files.map(file => ({ name: file.filename, blob: file.blob })), setBatchStatus);
+      if (!savedAt) {
+        setBatchStatus("저장을 취소했습니다. 상품수정 폴더를 고르면 저장됩니다.");
+        return;
+      }
+      const extraCount = files.filter(file => new RegExp(`^${folderModel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-\\d+\\.jpg$`, "i").test(file.filename)).length;
+      const hasDetail = files.some(file => file.filename.toLowerCase() === `${folderModel}.jpg`.toLowerCase());
+      const hasLabel = files.some(file => file.filename.startsWith("라벨_"));
+      const thumbCount = Math.max(0, files.length - extraCount - (hasDetail ? 1 : 0) - (hasLabel ? 1 : 0));
+      setDbSavedFiles(files.map(file => file.filename));
+      setBatchStatus(
+        `상품수정 파일 저장 완료 · ${files.length}개 → ${savedAt}\\` +
+        ` (썸네일 ${thumbCount} · 추가이미지 ${extraCount} · 상세페이지 ${hasDetail ? "있음" : "없음"} · 라벨 ${hasLabel ? "있음" : "없음"})`
+      );
+    } catch (e) {
+      setBatchStatus(`오류: ${e instanceof Error ? e.message : "저장 실패"}`);
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
   const batchSave = async () => {
+    if (batchMode === "edit") { await saveForEdit(); return; }
     const isActual = batchMode === "actual";
     if (isActual) setRegistrationUploadReady(null);
     if (pendingReplacementCleanup) {
@@ -2422,11 +2468,11 @@ export default function Home() {
   // 폴더는 처음 한 번만 고르면 기억하고, 폴더 저장을 못 하는 브라우저(모바일 등)는 예전처럼 다운로드한다.
   const safeFolderName = (name: string) => name.replace(/[\\/:*?"<>|]/g, "_").replace(/[. ]+$/, "").trim();
 
-  const pickEditFolder = async (): Promise<FileSystemDirectoryHandle | null> => {
+  const pickEditFolder = async (notify: (message: string) => void = setExportMessage): Promise<FileSystemDirectoryHandle | null> => {
     try {
       const handle = await window.showDirectoryPicker({ mode: "readwrite" });
       if (!(await ensureReadWritePermission(handle))) {
-        setExportMessage("오류: 폴더 쓰기 권한이 필요합니다.");
+        notify("오류: 폴더 쓰기 권한이 필요합니다.");
         return null;
       }
       await saveEditFolderHandle(handle);
@@ -2434,13 +2480,13 @@ export default function Home() {
       return handle;
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return null;
-      setExportMessage(`오류: ${e instanceof Error ? e.message : "폴더 선택 실패"}`);
+      notify(`오류: ${e instanceof Error ? e.message : "폴더 선택 실패"}`);
       return null;
     }
   };
 
   /** 파일들을 상품수정\모델명\ 에 저장한다. 저장한 위치 문구를 돌려주고, 폴더를 고르지 않았으면 null. */
-  const saveThumbOnlyFiles = async (folderModel: string, files: { name: string; blob: Blob }[]): Promise<string | null> => {
+  const saveThumbOnlyFiles = async (folderModel: string, files: { name: string; blob: Blob }[], notify: (message: string) => void = setExportMessage): Promise<string | null> => {
     if (!supportsDirectoryPicker()) {
       for (const [index, file] of files.entries()) {
         if (index) await new Promise(resolve => setTimeout(resolve, 400));
@@ -2451,8 +2497,8 @@ export default function Home() {
     let root = editFolderHandle;
     if (root && !(await ensureReadWritePermission(root))) root = null;
     if (!root) {
-      setExportMessage("상품수정 폴더를 골라주세요. 한 번 고르면 다음부터는 묻지 않습니다.");
-      root = await pickEditFolder();
+      notify("상품수정 폴더(제품이미지수정)를 골라주세요. 한 번 고르면 다음부터는 묻지 않습니다.");
+      root = await pickEditFolder(notify);
       if (!root) return null;
     }
     const folderName = safeFolderName(folderModel);
@@ -3279,10 +3325,14 @@ export default function Home() {
           </button>
         </div>
         {dbFolderName &&<p className="detailMessage">연결: {dbFolderName}</p>}
+        {batchMode === "edit" && <p className="detailMessage">수정 저장 위치: {editFolderHandle ? `${editFolderHandle.name} › ${model || "모델명"}` : "처음 저장할 때 '제품이미지수정' 폴더를 한 번 골라주세요"}</p>}
         {dbStatus && <p className="note">{dbStatus}</p>}
         <div className="batchModePanel" role="group" aria-label="일괄 생성 용도">
           <button type="button" className={batchMode === "actual" ? "selected" : ""} onClick={() => setBatchMode("actual")}>
             <strong>실제 등록용</strong><span>새 모델 등록 · 판매중지 모델은 기존 행 재사용</span>
+          </button>
+          <button type="button" className={batchMode === "edit" ? "selected" : ""} onClick={() => setBatchMode("edit")}>
+            <strong>상품수정용</strong><span>견적서 없음 · 있는 이미지만 수정 폴더\모델명에 저장</span>
           </button>
           <button type="button" className={batchMode === "practice" ? "selected" : ""} onClick={() => setBatchMode("practice")}>
             <strong>테스트·교육용</strong><span>ZIP만 생성 · 폴더와 제품DB 변경 없음</span>
@@ -3291,7 +3341,7 @@ export default function Home() {
         {batchMode === "actual" && modelDuplicate && !modelReregisterable && <p className="dangerAlert">기존 모델입니다. 판매중지 상태가 아닌 모델의 일괄 등록은 차단됩니다.</p>}
         <div className="finalSaveActions">
           <button className="finalSaveAll" type="button" disabled={batchBusy} onClick={batchSave}>
-            {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP 생성" : "전체 파일 저장"}
+            {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP 생성" : batchMode === "edit" ? "수정 파일 저장" : "전체 파일 저장"}
           </button>
         </div>
         {draftStatus && <p className="detailMessage" role="status" aria-live="polite">{draftStatus}</p>}
