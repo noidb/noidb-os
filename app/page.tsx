@@ -2167,6 +2167,7 @@ export default function Home() {
     }
     setBatchBusy(true);
     setBatchStatus("수정용 파일을 만들고 있습니다...");
+    let stage = "상세페이지 만들기";
     try {
       let preview = detailPreview;
       if (!preview && detailImages.length) {
@@ -2176,11 +2177,13 @@ export default function Home() {
           setDetailPreview(preview);
         } catch { /* 상세페이지를 못 만들어도 나머지는 저장한다 */ }
       }
+      stage = "이미지·라벨 파일 만들기";
       const { files } = await collectInput(preview, false, true);
       if (!files.length) {
         setBatchStatus("저장할 파일이 없습니다. 썸네일·추가이미지·상세페이지 중 하나 이상을 넣어주세요.");
         return;
       }
+      stage = "상품수정 폴더에 저장";
       const savedAt = await saveThumbOnlyFiles(folderModel, files.map(file => ({ name: file.filename, blob: file.blob })), setBatchStatus);
       if (!savedAt) {
         setBatchStatus("저장을 취소했습니다. 상품수정 폴더를 고르면 저장됩니다.");
@@ -2196,7 +2199,7 @@ export default function Home() {
         ` (썸네일 ${thumbCount} · 추가이미지 ${extraCount} · 상세페이지 ${hasDetail ? "있음" : "없음"} · 라벨 ${hasLabel ? "있음" : "없음"})`
       );
     } catch (e) {
-      setBatchStatus(`오류: ${e instanceof Error ? e.message : "저장 실패"}`);
+      setBatchStatus(`오류(${stage} 단계): ${e instanceof Error ? e.message : "저장 실패"}`);
     } finally {
       setBatchBusy(false);
     }
@@ -2502,12 +2505,27 @@ export default function Home() {
       if (!root) return null;
     }
     const folderName = safeFolderName(folderModel);
-    const modelDir = await root.getDirectoryHandle(folderName, { create: true });
+    const isNotFound = (e: unknown) => e instanceof DOMException && e.name === "NotFoundError";
+    // 기억해 둔 폴더가 옮겨지거나 지워져 찾지 못하면(NotFoundError) 폴더를 다시 고르게 해서 한 번 더 시도한다.
+    let modelDir: FileSystemDirectoryHandle;
+    try {
+      modelDir = await root.getDirectoryHandle(folderName, { create: true });
+    } catch (e) {
+      if (!isNotFound(e)) throw e;
+      notify("기억해 둔 저장 폴더를 찾지 못했습니다. 상품수정 폴더(제품이미지수정)를 다시 골라주세요.");
+      root = await pickEditFolder(notify);
+      if (!root) return null;
+      modelDir = await root.getDirectoryHandle(folderName, { create: true });
+    }
     for (const file of files) {
-      const fileHandle = await modelDir.getFileHandle(file.name, { create: true });
-      const writable = await fileHandle.createWritable();
-      await writable.write(file.blob);
-      await writable.close();
+      try {
+        const fileHandle = await modelDir.getFileHandle(file.name, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(file.blob);
+        await writable.close();
+      } catch (e) {
+        throw new Error(`${file.name} 저장 실패 (${e instanceof Error ? e.message : "알 수 없는 오류"})`);
+      }
     }
     setEditLastModelFolder(folderName);
     return `${root.name}\\${folderName}`;
