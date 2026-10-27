@@ -12,6 +12,8 @@ export type ExportProduct = {
   dimension: string;
   cost: string;
   price: string;
+  /** 카테고리 전용 쿠팡 양식 칸(칸 이름 → 값). 화면 '카테고리 전용 칸'에서 상품마다 고친 값. */
+  extraFields?: Record<string, string>;
 };
 
 export type ExportPayload = {

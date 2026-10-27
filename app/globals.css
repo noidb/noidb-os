@@ -754,3 +754,58 @@ html,body{overflow-x:clip}
 .wimsWidePanel .wimsSummaryGrid{grid-template-columns:repeat(3,minmax(0,1fr))}
 .wimsWidePanel .wimsActionGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:8px;max-height:420px;overflow-y:auto}
 @media(max-width:760px){.wimsWidePanel .wimsHeaderButtons{grid-template-columns:1fr 1fr}.wimsWidePanel .wimsHeaderButtons a{font-size:13px;min-height:42px;padding:0 8px}.wimsWidePanel .wimsActionGrid{grid-template-columns:1fr}}
+
+/* 2026-10-27 기본정보 목록 직접 관리(거래처·카테고리·성별·소재) + 카테고리별 쿠팡 양식 */
+.optionManageLink{margin-left:8px;padding:2px 9px;border:1px solid #c7b9a8;border-radius:8px;background:#e9ddcf;color:#4b4744;font-size:12px;font-weight:700;cursor:pointer;vertical-align:middle}
+.optionManageLink:hover{background:#e0d2c1}
+.optionAddRow{display:grid;grid-template-columns:1fr 80px 80px;gap:8px;align-items:center}
+.optionAddRow input{width:100%}
+.optionAddRow button{min-height:44px;padding:8px 10px}
+.optionAddRow .optionError{grid-column:1/-1}
+.optionError{color:#d92d20;font-weight:700;font-size:14px;margin:6px 0}
+.optionHint{color:#5b5b5b;font-size:14px;margin:6px 0}
+.optionModalBackdrop{position:fixed;inset:0;z-index:1000;background:rgba(37,37,37,.38);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto}
+.optionModal{width:min(560px,100%);background:#fff;border-radius:14px;padding:18px 20px;box-shadow:0 12px 40px rgba(0,0,0,.18)}
+.optionModal.wide{width:min(1040px,100%)}
+.optionModalHead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px}
+.optionModalHead h3{margin:0;font-size:18px;border-left:4px solid #60766a;padding-left:9px}
+.optionModalHead button{min-height:36px;padding:6px 14px}
+.optionManagerList{display:grid;gap:6px;max-height:55vh;overflow:auto;margin:8px 0 12px}
+.optionManagerRow{display:grid;grid-template-columns:1fr 44px 44px 96px 72px;gap:6px;align-items:center}
+.optionManagerRow:has(input){grid-template-columns:1fr 72px 72px}
+.optionManagerRow button{min-height:36px;padding:4px 8px;font-size:13px}
+.optionManagerRow .optionName{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.optionManagerRow input{width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px}
+.categoryManager{display:grid;grid-template-columns:200px 1fr;gap:16px}
+.categoryManagerList{display:grid;gap:6px;align-content:start}
+.categoryListRow{display:grid;grid-template-columns:1fr 36px 36px;gap:4px}
+.categoryListRow button{min-height:36px;padding:4px 6px;font-size:13px}
+.categoryListName{display:flex;justify-content:space-between;align-items:center;border:1px solid #d8d3cc;border-radius:8px;background:#fff;font-weight:700;cursor:pointer;text-align:left}
+.categoryListName small{color:#8a8580;font-weight:600}
+.categoryListRow.active .categoryListName{background:#e3ede6;border-color:#b9cbbc;color:#3f574b}
+.categoryManagerBody{min-width:0}
+.categoryFormGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.categoryFormGrid select{max-width:100%}
+.categoryTemplateBox{margin:12px 0;padding:10px 12px;border:1px solid #e3ddd5;border-radius:10px;background:#f7f4f0}
+.categoryTemplateHead{display:grid;grid-template-columns:auto 1fr 150px;gap:10px;align-items:center}
+.categoryTemplateHead span{font-size:14px;color:#4b4744;overflow-wrap:anywhere}
+.categorySubTitle{margin:14px 0 6px;font-size:15px}
+.categorySubTitle small{font-weight:500;color:#6b6b6b;margin-left:6px}
+.templateFieldTable{display:grid;gap:6px}
+.templateFieldRow{display:grid;grid-template-columns:minmax(180px,1fr) minmax(200px,1.3fr);gap:10px;align-items:center;padding:6px 8px;border-bottom:1px solid #eee9e3}
+.templateFieldName{display:grid;gap:2px;min-width:0}
+.templateFieldName small{color:#7a7570;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.templateFieldRow select,.templateFieldRow input{width:100%;min-width:0}
+.templateFieldTable.compact .templateFieldRow{padding:4px 0}
+.categoryOptionalToggle{margin-top:8px;min-height:38px!important}
+.categoryActions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.categoryExtraBox{display:grid;gap:6px}
+.categoryExtraBox > span small{font-weight:500;color:#6b6b6b;margin-left:6px;font-size:13px}
+.categoryExtraActions{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}
+.categoryExtraActions button{min-height:38px}
+@media (max-width:720px){
+  .categoryManager{grid-template-columns:1fr}
+  .categoryTemplateHead{grid-template-columns:1fr}
+  .templateFieldRow{grid-template-columns:1fr}
+  .optionManagerRow{grid-template-columns:1fr 40px 40px 80px 60px}
+}

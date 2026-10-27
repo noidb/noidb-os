@@ -18,10 +18,40 @@ import {
 } from "./common";
 import type { ExportPayload } from "./types";
 
+/** 사용자가 올린 쿠팡 양식·카테고리 경로·기본값(카테고리 설정). 없으면 예전처럼 기본 제공 양식을 쓴다. */
+export type QuoteCategoryOptions = {
+  template?: { buffer: Buffer; fileName: string };
+  path?: (gender: string) => string;
+  defaults?: Record<string, string>;
+  /** 필수 칸이 비어 있어도 만들기(사용자가 확인한 경우) */
+  allowMissingRequired?: boolean;
+};
+
+export class MissingRequiredError extends Error {
+  missing: string[];
+  constructor(missing: string[]) {
+    super(`쿠팡 필수 칸이 비어 있습니다: ${missing.join(", ")}`);
+    this.missing = missing;
+  }
+}
+
 function findQfSheet(workbook: ExcelJS.Workbook) {
   const sheet = workbook.worksheets.find(ws => ws.name.startsWith("QF_"));
   if (!sheet) throw new Error("견적서 QF 시트를 찾지 못했습니다.");
   return sheet;
+}
+
+function requiredHeaders(sheet: ExcelJS.Worksheet) {
+  const required: { header: string; col: number }[] = [];
+  sheet.getRow(5).eachCell({ includeEmpty: false }, (cell, col) => {
+    const header = String(cell.value ?? "").replace(/\s+/g, " ").trim();
+    if (header && String(sheet.getRow(6).getCell(col).value ?? "").includes("필수")) required.push({ header, col });
+  });
+  return required;
+}
+
+function isEmptyCell(cell: ExcelJS.Cell) {
+  return cell.value === null || cell.value === undefined || String(cell.value).trim() === "";
 }
 
 function headerMap(sheet: ExcelJS.Worksheet) {
@@ -114,24 +144,26 @@ function commonDefaults(payload: ExportPayload) {
   };
 }
 
-export async function buildQuoteWorkbook(input: ExportPayload | ExportPayload[]) {
+export async function buildQuoteWorkbook(input: ExportPayload | ExportPayload[], options: QuoteCategoryOptions = {}) {
   const payloads = Array.isArray(input) ? input : [input];
   const first = payloads[0];
   if (!first) throw new Error("견적서에 넣을 상품이 없습니다.");
-  const fileName = templateFileForCategory(first.product.category);
+  const fileName = options.template?.fileName || templateFileForCategory(first.product.category);
   if (!fileName) {
-    throw new Error(`지원하지 않는 카테고리입니다: ${first.product.category}`);
+    throw new Error(`${first.product.category} 카테고리에 쿠팡 양식이 없습니다. 기본정보의 카테고리 '목록 관리'에서 ${first.product.category}를 눌러 쿠팡 양식 파일을 올려주세요.`);
   }
   if (payloads.some(payload => payload.product.category !== first.product.category || payload.product.gender !== first.product.gender)) {
     throw new Error("성별과 카테고리가 같은 상품만 한 견적서로 묶을 수 있습니다.");
   }
 
-  const templatePath = path.join(templatesDir(), fileName);
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(templatePath);
+  if (options.template) await workbook.xlsx.load(options.template.buffer as unknown as ArrayBuffer);
+  else await workbook.xlsx.readFile(path.join(templatesDir(), fileName));
 
   const sheet = findQfSheet(workbook);
   const headers = headerMap(sheet);
+  const required = requiredHeaders(sheet);
+  const missing = new Map<string, Set<string>>();
   clearDataRows(sheet);
 
   let totalSkuCount = 0;
@@ -139,6 +171,8 @@ export async function buildQuoteWorkbook(input: ExportPayload | ExportPayload[])
     if (!payload.model) throw new Error("모델명이 없습니다.");
     if (!payload.title) throw new Error("상품명이 없습니다.");
     const defaults = commonDefaults(payload);
+    const customPath = options.path?.(payload.product.gender);
+    if (customPath) defaults.path = customPath;
     const skus = buildSkuRows(payload);
     if (!skus.length) throw new Error(`${payload.model}: 색상/사이즈 조합으로 생성할 SKU가 없습니다.`);
 
@@ -281,11 +315,28 @@ export async function buildQuoteWorkbook(input: ExportPayload | ExportPayload[])
     setByHeader(row, headers, "취급시 주의사항", defaults.handleCaution);
     setByHeader(row, headers, "품질보증기준", defaults.warranty);
     setByHeader(row, headers, "A/S 책임자와 전화번호", defaults.asContact);
+    // 카테고리 전용 칸: 사이트가 못 채운 빈 칸에만 상품별 값 → 카테고리 기본값 순서로 넣는다.
+    const extras = { ...(options.defaults || {}), ...Object.fromEntries(Object.entries(payload.product.extraFields || {}).filter(([, value]) => String(value ?? "").trim())) };
+    for (const [header, value] of Object.entries(extras)) {
+      const col = headers.get(header.replace(/\s+/g, " ").trim());
+      const text = String(value ?? "").trim();
+      if (!col || !text) continue;
+      const cell = row.getCell(col);
+      if (isEmptyCell(cell)) cell.value = /^-?\d+(?:\.\d+)?$/.test(text) && text.length < 12 ? Number(text) : text;
+    }
+    for (const { header, col } of required) {
+      if (!isEmptyCell(row.getCell(col))) continue;
+      if (!missing.has(header)) missing.set(header, new Set());
+      missing.get(header)!.add(payload.model);
+    }
     row.commit();
     });
     totalSkuCount += skus.length;
   }
 
+  if (missing.size && !options.allowMissingRequired) {
+    throw new MissingRequiredError([...missing.entries()].map(([header, models]) => `${header}(${[...models].slice(0, 3).join("·")}${models.size > 3 ? ` 외 ${models.size - 3}` : ""})`));
+  }
   const buffer = await workbook.xlsx.writeBuffer();
   const models = [...new Set(payloads.map(payload => String(payload.model || "").trim()).filter(Boolean))];
   const groupName = models.length <= 1 ? (models[0] || first.model) : `${models[0]}_외${models.length - 1}개`;

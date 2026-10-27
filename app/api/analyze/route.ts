@@ -79,6 +79,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 2026-10-27 카테고리는 사용자가 목록 관리에서 추가할 수 있으므로 화면이 보낸 목록을 쓴다.
+    const categoryList = Array.isArray(body.categories)
+      ? (body.categories as unknown[]).map(value => String(value ?? "").replace(/[|"`\n]/g, "").trim()).filter(Boolean).slice(0, 40)
+      : [];
+    const categoryChoices = (categoryList.length ? categoryList : ["반지", "귀걸이", "목걸이", "팔찌", "발찌", "피어싱", "브로치", "세트"]).join("|");
     const instruction = `
 너는 대한민국 쿠팡 로켓배송용 주얼리 상품등록 전문가다.
 첨부한 제품사진 1장만 분석하되, 보이지 않는 소재·사이즈는 단정하지 않는다.
@@ -86,7 +91,7 @@ export async function POST(req: NextRequest) {
 
 반드시 아래 JSON 한 개만 출력한다.
 {
-  "category": "반지|귀걸이|목걸이|팔찌|발찌|피어싱|브로치|세트",
+  "category": "${categoryChoices}",
   "gender": "여성|남성|남녀공용",
   "material": "써지컬스틸|925실버|티타늄|신주|14K|18K|기타",
   "colors": "쉼표로 구분한 옵션. 사용자가 이미 입력한 색상 순서가 있으면 그 순서를 바꾸지 말 것",
@@ -170,6 +175,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (categoryList.length && result.category && !categoryList.includes(result.category)) delete result.category;
     result.keyword = cleanKeyword(
       result.keyword,
       result.category || (body.current as any)?.category || "",

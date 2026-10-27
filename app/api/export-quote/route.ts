@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildQuoteWorkbook } from "@/lib/excel/quote";
+import { buildQuoteWorkbook, MissingRequiredError, type QuoteCategoryOptions } from "@/lib/excel/quote";
+import { readCategoryTemplate, readProductOptions } from "@/lib/product-options/store";
 import { buildSkuRows } from "@/lib/excel/common";
 import type { ExportPayload } from "@/lib/excel/types";
 import JSZip from "jszip";
@@ -13,10 +14,29 @@ function modelSummary(payloads: ExportPayload[]) {
   return models.length === 1 ? models[0] : `${models[0]}_외${models.length - 1}개`;
 }
 
+/** 카테고리 설정(올린 쿠팡 양식·경로·기본값)을 읽는다. 설정을 못 읽으면 예전 방식(기본 양식)으로 만든다. */
+async function categoryOptions(categoryName: string, allowMissingRequired: boolean): Promise<QuoteCategoryOptions> {
+  const options: QuoteCategoryOptions = { allowMissingRequired };
+  let config;
+  try { config = await readProductOptions(); } catch { return options; }
+  const category = config.categories.find(item => item.name === categoryName);
+  if (!category) return options;
+  if (category.template?.blobPath) {
+    const template = await readCategoryTemplate(category, categoryName);
+    if (template) options.template = template;
+  }
+  const paths = category.paths || {};
+  if (Object.keys(paths).length) options.path = gender => paths[gender] || "";
+  if (category.defaults && Object.keys(category.defaults).length) options.defaults = category.defaults;
+  return options;
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as ExportPayload & { payloads?: ExportPayload[] };
+    const body = (await req.json()) as ExportPayload & { payloads?: ExportPayload[]; allowMissingRequired?: boolean };
     const payloads = Array.isArray(body.payloads) ? body.payloads : [];
+    const firstCategory = payloads[0]?.product?.category || body.product?.category || "";
+    const options = firstCategory ? await categoryOptions(firstCategory, Boolean(body.allowMissingRequired)) : {};
     if (payloads.length) {
       const chunks: ExportPayload[][] = [];
       let current: ExportPayload[] = [];
@@ -37,7 +57,7 @@ export async function POST(req: NextRequest) {
       if (!chunks.length) throw new Error("견적서에 넣을 SKU가 없습니다.");
 
       const results = [];
-      for (const chunk of chunks) results.push(await buildQuoteWorkbook(chunk));
+      for (const chunk of chunks) results.push(await buildQuoteWorkbook(chunk, options));
       const base = `견적서_${payloads[0].product.gender}_${payloads[0].product.category}_${modelSummary(payloads)}`;
       if (results.length === 1) {
         return new NextResponse(results[0].buffer, {
@@ -67,7 +87,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "상품정보가 부족합니다." }, { status: 400 });
     }
 
-    const result = await buildQuoteWorkbook(body);
+    const result = await buildQuoteWorkbook(body, options);
     return new NextResponse(result.buffer, {
       status: 200,
       headers: {
@@ -78,6 +98,9 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (error) {
+    if (error instanceof MissingRequiredError) {
+      return NextResponse.json({ error: error.message, missingRequired: error.missing }, { status: 422 });
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "견적서 생성 실패" },
       { status: 500 }

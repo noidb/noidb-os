@@ -35,6 +35,9 @@ import { coverSquareCanvas, defaultFitAdjust, extendToSquareCanvas, fitToWhiteCa
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
+import { CategoryExtraFields, CategoryManager, ManageLink, OptionListManager, OptionSelect, useProductOptions } from "./ProductOptionsPanel";
+import { categoryLetter, categoryNames } from "@/lib/product-options/defaults";
+import type { OptionListKey, ProductOptionsConfig } from "@/lib/product-options/types";
 
 type Product = {
   supplier: string;
@@ -53,6 +56,8 @@ type Product = {
   dimension: string;
   cost: string;
   price: string;
+  /** 카테고리 전용 쿠팡 양식 칸(칸 이름 → 이 상품만의 값) */
+  extraFields?: Record<string, string>;
 };
 
 type Analysis = {
@@ -79,14 +84,13 @@ type SourcingAnalysis = {
   searchTips?: string[];
 };
 
-const codeMap: Record<string, string> = {
-  반지: "wr", 귀걸이: "we", 목걸이: "wn", 팔찌: "wb",
-  발찌: "wa", 피어싱: "wp", 브로치: "wc", 세트: "wx",
-};
+/** 2026-10-27 카테고리 목록·모델명 글자는 사용자가 화면에서 관리한다(목록 관리). 마지막으로 받은 설정을 여기 둔다. */
+let productOptionsSnapshot: ProductOptionsConfig | null = null;
 
-const CATEGORY_WORDS = new Set([
-  "반지", "귀걸이", "목걸이", "팔찌", "발찌", "피어싱", "브로치", "세트",
-]);
+const BASE_CATEGORY_WORDS = ["반지", "귀걸이", "목걸이", "팔찌", "발찌", "피어싱", "브로치", "세트"];
+function isCategoryWord(token: string) {
+  return BASE_CATEGORY_WORDS.includes(token) || categoryNames(productOptionsSnapshot).includes(token);
+}
 const GENDER_WORDS = new Set(["여성", "남성", "남녀공용", "여성용", "남성용"]);
 const FEMALE_RING_SIZES = "9호,11호,14호,17호,20호";
 const MALE_RING_SIZES = "20호,22호,25호";
@@ -124,6 +128,26 @@ function mergeSupplierOptions(values: string[]) {
     ...unique.filter(value => value !== "프리스타일" && value !== "기타").sort((a, b) => a.localeCompare(b, "ko")),
     ...(unique.includes("기타") ? ["기타"] : []),
   ];
+}
+
+/**
+ * 견적서(쿠팡 등록 엑셀) 요청. 쿠팡 필수 칸이 비어 있으면 어느 칸인지 보여주고,
+ * 그래도 만들겠다고 하면 비운 채로 만든다(2026-10-27).
+ */
+async function requestQuote(body: Record<string, unknown>): Promise<Response> {
+  const send = (extra: Record<string, unknown> = {}) => fetch("/api/export-quote", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...body, ...extra }),
+  });
+  const response = await send();
+  if (response.status !== 422) return response;
+  const data = await response.clone().json().catch(() => ({}));
+  const missing: string[] = Array.isArray(data.missingRequired) ? data.missingRequired : [];
+  if (!missing.length) return response;
+  const ok = window.confirm(`쿠팡 필수 칸이 비어 있습니다.\n\n- ${missing.join("\n- ")}\n\n기본정보의 '카테고리 전용 칸'이나 카테고리 기본값에서 채울 수 있습니다.\n비운 채로 엑셀을 만들까요? (쿠팡에서 반려될 수 있습니다)`);
+  if (!ok) throw new Error(`필수 칸을 채운 뒤 다시 눌러주세요: ${missing.join(", ")}`);
+  return send({ allowMissingRequired: true });
 }
 
 function openExternalUrl(url: string) {
@@ -179,16 +203,16 @@ function defaultDimension(category: string) {
 function buildAutoModel(product: Pick<Product, "category" | "gender" | "modelNo">) {
   const no = product.modelNo.replace(/\D/g, "").padStart(4, "0");
   if (!product.modelNo) return "";
-  const categoryCode = codeMap[product.category] ?? "wx";
+  const letter = categoryLetter(productOptionsSnapshot, product.category);
   const genderPrefix = product.gender === "남성" ? "m" : product.gender === "남녀공용" ? "u" : "w";
-  return `${genderPrefix}${categoryCode.slice(1)}${no}`;
+  return `${genderPrefix}${letter}${no}`;
 }
 
 function normalizeKeyword(value: string, product: Product) {
   const banned = new Set([
     product.category, product.gender, product.material,
     "여성용", "남성용", "남녀공용", "주얼리", "쥬얼리",
-    "반지", "귀걸이", "목걸이", "팔찌", "발찌", "피어싱", "브로치", "세트",
+    ...BASE_CATEGORY_WORDS, ...categoryNames(productOptionsSnapshot),
   ]);
   return [...new Set(
     value.replace(/[,.，、/|+()[\]{}:;·_-]+/g, " ").split(/\s+/)
@@ -216,8 +240,8 @@ function buildProductTitle(product: Product, cleanedKeyword: string) {
   };
   addPart(material);
   for (const token of cleanedKeyword.replace(/[,.，、/|+()[\]{}:;·_\-]+/g, " ").split(/\s+/).map(v => v.trim()).filter(Boolean)) {
-    if (token === material || token === gender || token === category || GENDER_WORDS.has(token) || CATEGORY_WORDS.has(token)) continue;
-    if (!token || CATEGORY_WORDS.has(token)) continue;
+    if (token === material || token === gender || token === category || GENDER_WORDS.has(token) || isCategoryWord(token)) continue;
+    if (!token || isCategoryWord(token)) continue;
     addPart(token);
   }
   addPart(gender);
@@ -274,6 +298,10 @@ export default function Home() {
   // 신상품 등록용 보조 입력: 부가세 미포함 단가를 넣으면 원가(부가세포함)가 자동으로 채워진다. 저장되는 값은 원가(부가세포함) 하나뿐.
   const [costExVatInput, setCostExVatInput] = useState("");
   const [supplierOptions, setSupplierOptions] = useState<string[]>(DEFAULT_SUPPLIERS);
+  const productOptions = useProductOptions();
+  productOptionsSnapshot = productOptions.config;
+  const [manageList, setManageList] = useState<OptionListKey | null>(null);
+  const [categoryManagerFor, setCategoryManagerFor] = useState<string | null>(null);
 
   const [photos, setPhotos] = useState<ProductPhoto[]>([]);
   const [photoMessage, setPhotoMessage] = useState("");
@@ -711,10 +739,14 @@ export default function Home() {
   }, [product, cleanedKeyword]);
   const title = product.coupangTitle?.trim() || generatedTitle;
   const tags = product.searchTags?.trim() || generatedTags;
-  const availableSuppliers = useMemo(
-    () => mergeSupplierOptions([...supplierOptions, product.supplier]),
-    [supplierOptions, product.supplier]
-  );
+  const availableSuppliers = useMemo(() => {
+    // 목록 관리에서 지운 거래처는 구글시트에 있어도 빼고, 목록 관리 순서를 따른다(지금 상품에 적힌 거래처는 남김).
+    const removed = new Set(productOptions.config.removedSuppliers);
+    const fromSheet = supplierOptions.filter(name => !removed.has(normalizeSupplierName(name)));
+    const configured = productOptions.config.suppliers;
+    const merged = [...new Set([...configured, ...mergeSupplierOptions(fromSheet).filter(name => !removed.has(name))])];
+    return product.supplier && !merged.includes(product.supplier) ? [...merged, product.supplier] : merged;
+  }, [supplierOptions, product.supplier, productOptions.config]);
 
   const ready = Boolean(
     product.supplier && product.category && product.material && product.colors &&
@@ -832,7 +864,10 @@ export default function Home() {
         next.sizes = defaultSizes(next.gender, next.category);
         next.material = "써지컬스틸";
       }
-      if (key === "category") next.dimension = defaultDimension(value);
+      if (key === "category") {
+        next.dimension = defaultDimension(value);
+        next.extraFields = {};
+      }
       if (key === "gender" && value === "남성") {
         next.colors = "실버";
       }
@@ -1049,7 +1084,7 @@ export default function Home() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageDataUrl: compressed, current: product }),
+        body: JSON.stringify({ imageDataUrl: compressed, current: product, categories: categoryNames(productOptions.config) }),
       });
       let data: any = null;
       try {
@@ -1384,11 +1419,7 @@ export default function Home() {
         0
       );
       setExportMessage(`${group.gender} ${group.category} 최신 정보로 묶음 견적서를 만들고 있습니다...`);
-      const response = await fetch("/api/export-quote", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payloads: latestRecords.map((record: QuoteQueueRecord) => record.payload) }),
-      });
+      const response = await requestQuote({ payloads: latestRecords.map((record: QuoteQueueRecord) => record.payload) });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.error || "묶음 견적서 생성 실패");
@@ -2245,11 +2276,7 @@ export default function Home() {
     }
     setExportLoading("quote");
     try {
-      const res = await fetch("/api/export-quote", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...exportPayload(), skuImages: {} }),
-      });
+      const res = await requestQuote({ ...exportPayload(), skuImages: {} });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "견적서 실패");
@@ -2703,30 +2730,41 @@ export default function Home() {
         </div>
       </section>
 
+      {manageList && (
+        <OptionListManager list={manageList} config={productOptions.config} send={productOptions.send} onClose={() => setManageList(null)} />
+      )}
+      {categoryManagerFor !== null && (
+        <CategoryManager config={productOptions.config} send={productOptions.send} setConfig={productOptions.setConfig}
+          initialCategory={categoryManagerFor} onClose={() => setCategoryManagerFor(null)} />
+      )}
       {/* 3. 기본정보 */}
       <section className="card full basicInfoCard">
         <h2>3. 기본정보 확인</h2>
         <div className="formGrid">
-          <Field label="거래처">
-            <select value={product.supplier} onChange={e => update("supplier", e.target.value)}>
-              {availableSuppliers.map(supplier => <option key={supplier}>{supplier}</option>)}
+          <Field label={<>거래처<ManageLink onClick={() => setManageList("suppliers")} /></>}>
+            <OptionSelect label="거래처" value={product.supplier} items={availableSuppliers}
+              onChange={value => update("supplier", value)}
+              onAdd={async value => { await productOptions.send({ action: "addItem", list: "suppliers", value }); }} />
+          </Field>
+          <Field label={<>카테고리<ManageLink onClick={() => setCategoryManagerFor(product.category)} /></>}>
+            {/* 새 카테고리는 모델명 글자·쿠팡 양식이 필요해서 카테고리 설정 창에서 추가한다 */}
+            <select value={product.category} onChange={e => {
+              if (e.target.value === "__add_category__") { setCategoryManagerFor(""); return; }
+              update("category", e.target.value);
+            }}>
+              {[...new Set([...categoryNames(productOptions.config), product.category].filter(Boolean))].map(c => <option key={c}>{c}</option>)}
+              <option value="__add_category__">+ 새 카테고리 추가</option>
             </select>
           </Field>
-          <Field label="카테고리">
-            <select value={product.category} onChange={e => update("category", e.target.value)}>
-              {Object.keys(codeMap).map(c => <option key={c}>{c}</option>)}
-            </select>
+          <Field label={<>성별<ManageLink onClick={() => setManageList("genders")} /></>}>
+            <OptionSelect label="성별" value={product.gender} items={productOptions.config.genders}
+              onChange={value => update("gender", value)}
+              onAdd={async value => { await productOptions.send({ action: "addItem", list: "genders", value }); }} />
           </Field>
-          <Field label="성별">
-            <select value={product.gender} onChange={e => update("gender", e.target.value)}>
-              <option>여성</option><option>남성</option><option>남녀공용</option>
-            </select>
-          </Field>
-          <Field label="소재">
-            <select value={product.material} onChange={e => update("material", e.target.value)}>
-              <option>써지컬스틸</option><option>925실버</option><option>티타늄</option>
-              <option>신주</option><option>14K</option><option>18K</option><option>기타</option>
-            </select>
+          <Field label={<>소재<ManageLink onClick={() => setManageList("materials")} /></>}>
+            <OptionSelect label="소재" value={product.material} items={productOptions.config.materials}
+              onChange={value => update("material", value)}
+              onAdd={async value => { await productOptions.send({ action: "addItem", list: "materials", value }); }} />
           </Field>
           <Field label="색상옵션">
             <input value={product.colors} onChange={e => update("colors", e.target.value)} />
@@ -2797,6 +2835,10 @@ export default function Home() {
                 else { update("searchTags", tagsBackup); setTagsBackup(""); }
               }}>{product.searchTags ? "자동 검색태그 사용" : tagsBackup ? "직접 입력값 복구" : "자동 검색태그 사용 중"}</button>
           </Field>
+          <CategoryExtraFields config={productOptions.config} category={product.category}
+            values={product.extraFields || {}}
+            onChange={(header, value) => setProduct(prev => ({ ...prev, extraFields: { ...(prev.extraFields || {}), [header]: value } }))}
+            onOpenSettings={() => setCategoryManagerFor(product.category)} />
           <div className="priceRow">
           <Field label="부가세 미포함 입력 (×1.1)">
             <input inputMode="numeric" placeholder="단가(미포함) 입력 시 원가 자동"
