@@ -432,6 +432,15 @@ async function loadPoUploadTemplateFiles(): Promise<ConfirmedQuantitySourceFile[
   })));
 }
 
+/** 파일 이름 괄호 안 발주번호 — 발주확정 단계(po-confirm.ts)가 파일을 찾는 규칙과 같다. 예) PO_FOR_CONFIRM(143933096).xlsx */
+function poNumberFromFileName(fileName: string): string {
+  return fileName.match(/\((\d+)\)/)?.[1] ?? "";
+}
+
+/** 2026-10-28 수정: 예전에는 파일 '내용'에서 발주번호를 찾아 후보가 정확히 1개일 때만 연결했고, 아니면
+ *  아무 말 없이 건너뛰어 "파일명이 저장되어 있지 않습니다"로 막혔다. 이제는 ① 내용 후보가 1개면 그것,
+ *  ② 내용 후보가 없거나 여럿이면 파일 이름의 발주번호가 정확히 같은 파일이 1개일 때 그것을 쓴다.
+ *  연결한 뒤의 검증(SKU·수량·바코드·센터·입고예정일 대조)은 그대로라서 엉뚱한 파일이 쓰이지는 않는다. */
 function inferTemplateFileNamesByPo(
   purchaseOrderNumbers: readonly string[],
   files: readonly ConfirmedQuantitySourceFile[],
@@ -439,10 +448,25 @@ function inferTemplateFileNamesByPo(
   const result: Record<string, string> = {};
   for (const rawPo of purchaseOrderNumbers) {
     const po = normalizeSkuId(rawPo);
-    const candidates = files.filter(file => file.rows?.some(row => normalizeSkuId(row.purchaseOrderNumber) === po));
-    if (candidates.length === 1) result[po] = normalizedFileName(candidates[0].name);
+    const byContent = files.filter(file => file.rows?.some(row => normalizeSkuId(row.purchaseOrderNumber) === po));
+    if (byContent.length === 1) { result[po] = normalizedFileName(byContent[0].name); continue; }
+    const byName = files.filter(file => poNumberFromFileName(file.name) === po);
+    const pool = byContent.length > 1 ? byContent.filter(file => byName.includes(file)) : byName;
+    if (pool.length === 1) result[po] = normalizedFileName(pool[0].name);
   }
   return result;
+}
+
+/** 파일을 연결하지 못했을 때 사용자가 무엇을 확인할지 알 수 있도록 이유를 구체적으로 만든다. */
+function explainMissingConfirmedFile(po: string, files: readonly ConfirmedQuantitySourceFile[]): string {
+  const base = `발주번호 ${po}: 확정 완료된 수량 파일을 찾지 못했습니다.`;
+  if (files.length === 0) return `${base} 발주서업로드양식 폴더에서 PO_FOR_CONFIRM 파일을 하나도 읽지 못했습니다(Drive 폴더 연결 확인 필요).`;
+  const byName = files.filter(file => poNumberFromFileName(file.name) === po);
+  const byContent = files.filter(file => file.rows?.some(row => normalizeSkuId(row.purchaseOrderNumber) === po));
+  const unreadable = files.filter(file => !file.rows).length;
+  if (byName.length > 1) return `${base} 이름에 ${po}가 들어간 파일이 ${byName.length}개입니다: ${byName.map(file => file.name).join(", ")}. 하나만 남겨 주세요.`;
+  if (byContent.length > 1) return `${base} 내용에 ${po}가 들어 있는 파일이 ${byContent.length}개입니다: ${byContent.map(file => file.name).join(", ")}. 하나만 남겨 주세요.`;
+  return `${base} 폴더의 파일 ${files.length}개(구조를 못 읽은 파일 ${unreadable}개) 중 ${po}가 이름이나 내용에 있는 파일이 없습니다.`;
 }
 
 export class AutoShipmentBlockedError extends Error {
@@ -579,7 +603,7 @@ export function resolveConfirmedQuantityRowsForShipment(
     const linkedFileName = linkedFileNameByPo.get(po);
     if (!linkedFileName) {
       if (!allowUnconfirmedQuantityFallback) {
-        blockingReasons.push(`발주번호 ${po}: 확정 완료된 수량 파일명이 저장되어 있지 않습니다.`);
+        blockingReasons.push(explainMissingConfirmedFile(po, confirmedFiles));
         continue;
       }
       const fallbackSourceRows = sourceRowsByPo.get(po) || [];
