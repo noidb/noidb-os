@@ -65,6 +65,29 @@ export async function POST(request: NextRequest) {
         workspace.statusListRequested = { ...(workspace.statusListRequested || {}), [kind]: requested };
         const check = current[skuId];
         if (kind === "release" && check?.decision === "release" && !check.releasedListClearedAt) current[skuId] = { ...check, releasedListClearedAt: at };
+      } else if (body.action === "clear-many") {
+        // 2026-10-29: 쿠팡에서 정상으로 바뀐 줄만 한꺼번에 지운다. clear-one을 여러 줄에 적용한 것이라
+        // 다른 줄(아직 처리 전이거나 화면에서 직접 고른 SKU)은 건드리지 않는다.
+        const kind = body.kind === "discontinue" ? "discontinue" : body.kind === "release" ? "release" : "";
+        const keys = Array.isArray(body.keys) ? [...new Set(body.keys.filter((key): key is string => typeof key === "string" && key.length <= 400))].slice(0, 5000) : [];
+        if (!kind || !keys.length) throw new Error("지울 SKU를 확인해 주세요.");
+        const cleared = { ...(workspace.statusListCleared || {}) };
+        const requested = { ...(workspace.statusListRequested?.[kind] || {}) };
+        const fresh = { ...(cleared[kind] || {}) };
+        const pruned: Record<string, string> = {};
+        for (const key of keys) {
+          const skuId = clearedSkuId(key);
+          if (!/^\d{1,20}$/.test(skuId)) continue;
+          fresh[key] = at;
+          if (requested[skuId]) pruned[skuId] = requested[skuId];
+          delete requested[skuId];
+          const check = current[skuId];
+          if (kind === "release" && check?.decision === "release" && !check.releasedListClearedAt) current[skuId] = { ...check, releasedListClearedAt: at };
+        }
+        cleared[kind] = fresh;
+        workspace.statusListCleared = cleared;
+        workspace.statusListRequested = { ...(workspace.statusListRequested || {}), [kind]: requested };
+        workspace.statusListRequestedPruned = { ...(workspace.statusListRequestedPruned || {}), [kind]: { at, marks: pruned } };
       } else if (body.action === "restore-last-clear") {
         // 실수로 비운 목록 되살리기(2026-10-20): 가장 최근에 같은 시각으로 비운 묶음만 기록에서 지운다.
         // 그 전에 하나씩 '삭제'한 SKU(승인 확인한 것)는 시각이 달라 그대로 숨겨 둔다.

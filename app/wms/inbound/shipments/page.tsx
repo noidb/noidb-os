@@ -559,7 +559,31 @@ export default function ShipmentReceiptsPage() {
     }
   }
 
-  async function supplyCheck(action: "discontinued" | "release" | "undo" | "clear-release" | "clear-list" | "clear-one" | "mark-requested", skuId = "", productName = "", list?: { kind: "discontinue" | "release"; keys: string[]; skuIds?: string[] }) {
+  /** 2026-10-29: 쿠팡 최신 공급상태 파일의 발주가능상태를 직접 눌러 확인한다(시트에 반영이 안 된 SKU도 쿠팡 값으로 보임). 열 때마다 읽지 않는다. */
+  async function checkLatestOrderable() {
+    if (fixture) return;
+    const key = "supply:latest-orderable";
+    setRoutingKeys((current) => ({ ...current, [key]: true }));
+    setError("");
+    try {
+      const response = await fetch("/api/wms/supply-status/audit", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || "쿠팡 최신 공급상태를 읽지 못했습니다.");
+      if (data.fileFound === false || !data.latestOrderable) throw new Error("상품공급상태 최신 파일을 찾지 못했습니다. 작업센터에서 파일이 올라와 있는지 확인해 주세요.");
+      setLatestOrderable({ orderable: data.latestOrderable, fileMtime: data.fileMtime });
+      setMessage(`쿠팡 최신 공급상태 파일(${new Date(data.fileMtime).toLocaleString("ko-KR")})로 발주상태를 다시 확인했습니다. 정상으로 바뀐 줄은 ✓로 표시됩니다.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "쿠팡 최신 공급상태를 읽지 못했습니다.");
+    } finally {
+      setRoutingKeys((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    }
+  }
+
+  async function supplyCheck(action: "discontinued" | "release" | "undo" | "clear-release" | "clear-list" | "clear-one" | "clear-many" | "mark-requested", skuId = "", productName = "", list?: { kind: "discontinue" | "release"; keys: string[]; skuIds?: string[] }) {
     if (fixture) return false;
     setError("");
     const key = `supply:${skuId || (list ? `${action}:${list.kind}` : action)}`;
@@ -590,6 +614,7 @@ export default function ShipmentReceiptsPage() {
         : action === "release" ? `SKU ${skuId}를 단종해제 대상에 넣었습니다.`
         : action === "undo" ? `SKU ${skuId} 확인을 되돌렸습니다.`
         : action === "clear-one" ? `SKU ${skuId}를 단종해제 대상에서 지웠습니다.`
+        : action === "clear-many" ? `정상으로 바뀐 ${list?.keys.length || 0}개를 단종해제 대상에서 지웠습니다. 잘못 지웠으면 아래 '되살리기'를 누르세요.`
         : action === "mark-requested" ? `단종해제 신청완료로 표시했습니다(${list?.skuIds?.length || 0}개). 쿠팡에서 정상으로 바뀐 것을 확인하면 줄마다 '삭제'를 누르세요.`
         : list?.kind === "discontinue" ? "단종 대상 목록을 비웠습니다."
         : "단종해제 대상 목록을 비웠습니다.",
@@ -1809,6 +1834,42 @@ export default function ShipmentReceiptsPage() {
                     </tbody>
                   </table>
                 </div>
+                {section.kind === "release" && !fixture && (() => {
+                  // 2026-10-29 사용자 요청: 쿠팡에서 이미 '정상'으로 바뀐 줄은 표시만 해 두고, 지우는 건 사용자가 버튼으로 직접 한다.
+                  const normalRows = section.rows.filter((row) => (latestOrderable ? latestOrderable.orderable[row.skuId] : row.orderableStatus) === "정상");
+                  return (
+                    <>
+                      <p className={styles.meta} style={{ margin: "8px 0 4px" }}>
+                        {normalRows.length
+                          ? `정상으로 바뀐 SKU ${normalRows.length}개 (표에 ✓ 표시). 확인하고 아래 버튼으로 지우세요.`
+                          : latestOrderable ? "쿠팡 최신 파일 기준으로 정상으로 바뀐 SKU가 없습니다." : "표의 발주상태는 제품DB 시트 값입니다. 시트에 반영이 안 된 SKU가 있으면 '쿠팡 최신파일로 확인'을 누르세요."}
+                      </p>
+                      <div className={styles.pairButtons}>
+                        <button
+                          type="button"
+                          className={`softBeigeButton ${styles.fullButton}`}
+                          title="상품공급상태 최신 파일을 읽어 표의 발주상태를 쿠팡 값으로 바꿔 보여 줍니다(시트는 바꾸지 않음)."
+                          disabled={routingKeys["supply:latest-orderable"]}
+                          onClick={() => void checkLatestOrderable()}
+                        >
+                          {routingKeys["supply:latest-orderable"] ? "읽는 중…" : latestOrderable ? "쿠팡 최신파일로 다시 확인" : "쿠팡 최신파일로 확인"}
+                        </button>
+                        <button
+                          type="button"
+                          className={`softPinkButton ${styles.fullButton}`}
+                          title="발주상태가 정상인 줄만 목록에서 지웁니다. 다른 줄은 그대로 둡니다."
+                          disabled={!normalRows.length || routingKeys["supply:clear-many:release"]}
+                          onClick={() => {
+                            if (!window.confirm(`정상으로 바뀐 ${normalRows.length}개를 단종해제 대상에서 지웁니다.\n\n(잘못 지우면 아래 '되살리기'로 돌릴 수 있습니다.)`)) return;
+                            void supplyCheck("clear-many", "", "", { kind: "release", keys: normalRows.map((row) => row.key) });
+                          }}
+                        >
+                          {routingKeys["supply:clear-many:release"] ? "지우는 중…" : `정상으로 바뀐 ${normalRows.length}개 지우기`}
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
                 {section.kind === "release" && (() => {
                   // 2026-10-23 사용자 요청: 신청 전 SKU만 / 신청완료까지 전체를 나눠서 받는다.
                   const requested = payload?.statusListRequested?.release || {};
