@@ -36,6 +36,8 @@ export function useOutboundPicks(expectedDate: string) {
  * 누르면 입고결과 화면의 단종 신청 목록(단종 대상 SKU)에 SKU를 넣고, 이 화면 목록에는 그대로 둔 채 '단종 보냄'만 표시한다.
  * 보냄 표시는 이 브라우저에 기억해 두 보기(SKU별 총수량·쉽먼트별 SKU리스트)에서 같이 보인다. 되돌리면 신청 목록에서도 뺀다.
  */
+/** 카드 오른쪽 버튼(발주 담기·단종·되돌리기) 공통 폭 — 두 버튼 크기를 똑같이 맞춘다. */
+const ACTION_BUTTON_WIDTH = "78px";
 const DISCONTINUE_SENT_KEY = "noidb_outbound_discontinue_sent_v1";
 
 export function useDiscontinueSent() {
@@ -83,11 +85,11 @@ export function useDiscontinueSent() {
 export function DiscontinueButton({ skuId, discontinue, onSent }: { skuId: string; discontinue: ReturnType<typeof useDiscontinueSent>; onSent?: () => void }) {
   const isSent = Boolean(discontinue.sent[skuId]);
   const busy = discontinue.busySku === skuId;
-  const small = { minHeight: "32px", padding: "4px 10px", fontSize: "12px", whiteSpace: "nowrap" as const };
+  const small = { width: ACTION_BUTTON_WIDTH, minHeight: "32px", padding: "4px 6px", fontSize: "12px", whiteSpace: "nowrap" as const };
   if (isSent) {
     return (
       <div style={{ display: "grid", justifyItems: "end", gap: "4px" }}>
-        <span style={{ fontSize: "12px", fontWeight: 800, color: "#b33f35" }}>단종 보냄</span>
+        <span style={{ width: ACTION_BUTTON_WIDTH, textAlign: "center", fontSize: "12px", fontWeight: 800, color: "#b33f35" }}>단종 보냄</span>
         <button type="button" className="softApricotButton" disabled={busy} onClick={() => void discontinue.undo(skuId)} style={small}>{busy ? "처리 중…" : "되돌리기"}</button>
       </div>
     );
@@ -125,7 +127,7 @@ export function initialQueryFromUrl(): string {
 
 export function PickButton({ picked, onClick, disabled }: { picked: boolean; onClick: () => void; disabled?: boolean }) {
   return (
-    <button type="button" onClick={onClick} disabled={disabled} title={disabled ? "단종으로 보낸 SKU는 발주 담기를 막았습니다. 되돌리면 다시 담을 수 있습니다." : undefined} className={picked ? "softPinkButton" : "softBeigeButton"} style={{ minHeight: "32px", padding: "4px 10px", fontSize: "12px", whiteSpace: "nowrap", opacity: disabled ? 0.45 : 1 }}>
+    <button type="button" onClick={onClick} disabled={disabled} title={disabled ? "단종으로 보낸 SKU는 발주 담기를 막았습니다. 되돌리면 다시 담을 수 있습니다." : undefined} className={picked ? "softPinkButton" : "softBeigeButton"} style={{ width: ACTION_BUTTON_WIDTH, minHeight: "32px", padding: "4px 6px", fontSize: "12px", whiteSpace: "nowrap", opacity: disabled ? 0.45 : 1 }}>
       {picked ? "담음 ✓" : "발주 담기"}
     </button>
   );
