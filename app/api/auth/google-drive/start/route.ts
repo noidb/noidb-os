@@ -12,6 +12,9 @@ import { isDriveOAuthConfigured, buildAuthUrl, createOAuthState, getOAuthEnv } f
  * 연결/재연결은 항상 localhost에서 하기 때문).
  */
 export const runtime = "nodejs";
+// 매 요청마다 새 state(시간 도장)를 만들어야 한다. 이 줄이 없으면 배포 시점에 한 번 만든 결과가
+// 계속 재사용되어 10분이 지난 state로 "state 검증 실패"가 난다 (2026-10-29).
+export const dynamic = "force-dynamic";
 
 function isAllowedOrigin(request: NextRequest, redirectUri: string): boolean {
   const host = request.nextUrl.hostname.toLowerCase();
