@@ -31,6 +31,80 @@ export function useOutboundPicks(expectedDate: string) {
   return { picked, toggle, clear: () => save({}) };
 }
 
+/**
+ * 발주제품보기 '단종' 버튼 (2026-10-29 사용자 요청).
+ * 누르면 입고결과 화면의 단종 신청 목록(단종 대상 SKU)에 SKU를 넣고, 이 화면 목록에는 그대로 둔 채 '단종 보냄'만 표시한다.
+ * 보냄 표시는 이 브라우저에 기억해 두 보기(SKU별 총수량·쉽먼트별 SKU리스트)에서 같이 보인다. 되돌리면 신청 목록에서도 뺀다.
+ */
+const DISCONTINUE_SENT_KEY = "noidb_outbound_discontinue_sent_v1";
+
+export function useDiscontinueSent() {
+  const [sent, setSent] = useState<Record<string, true>>({});
+  const [busySku, setBusySku] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    try { const raw = localStorage.getItem(DISCONTINUE_SENT_KEY); if (raw) setSent(JSON.parse(raw)); } catch { /* 없으면 빈 목록 */ }
+  }, []);
+  function remember(next: Record<string, true>) {
+    setSent(next);
+    try { localStorage.setItem(DISCONTINUE_SENT_KEY, JSON.stringify(next)); } catch { /* 저장 실패해도 화면 표시는 유지 */ }
+  }
+  async function call(action: string, skuId: string) {
+    const response = await fetch("/api/wms/vendor-order-actions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, skuId, from: "ordered-products" }) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) throw new Error(data.error || "처리하지 못했습니다.");
+  }
+  async function send(skuId: string, afterSent?: () => void) {
+    if (busySku) return;
+    if (!window.confirm(`SKU ${skuId}을(를) 단종 신청 목록(입고결과 화면의 단종 대상 SKU)으로 보낼까요?`)) return;
+    setBusySku(skuId); setError(null);
+    try {
+      await call("discontinue-list", skuId);
+      remember({ ...sent, [skuId]: true });
+      afterSent?.();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "단종으로 보내지 못했습니다."); }
+    finally { setBusySku(""); }
+  }
+  async function undo(skuId: string) {
+    if (busySku) return;
+    setBusySku(skuId); setError(null);
+    try {
+      await call("discontinue-list-undo", skuId);
+      const next = { ...sent };
+      delete next[skuId];
+      remember(next);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "되돌리지 못했습니다."); }
+    finally { setBusySku(""); }
+  }
+  return { sent, busySku, error, send, undo, dismissError: () => setError(null) };
+}
+
+/** '발주 담기' 아래에 놓는 단종 버튼. 보낸 뒤에는 '단종 보냄' 표시와 되돌리기가 나온다. */
+export function DiscontinueButton({ skuId, discontinue, onSent }: { skuId: string; discontinue: ReturnType<typeof useDiscontinueSent>; onSent?: () => void }) {
+  const isSent = Boolean(discontinue.sent[skuId]);
+  const busy = discontinue.busySku === skuId;
+  const small = { minHeight: "32px", padding: "4px 10px", fontSize: "12px", whiteSpace: "nowrap" as const };
+  if (isSent) {
+    return (
+      <div style={{ display: "grid", justifyItems: "end", gap: "4px" }}>
+        <span style={{ fontSize: "12px", fontWeight: 800, color: "#b33f35" }}>단종 보냄</span>
+        <button type="button" className="softApricotButton" disabled={busy} onClick={() => void discontinue.undo(skuId)} style={small}>{busy ? "처리 중…" : "되돌리기"}</button>
+      </div>
+    );
+  }
+  return <button type="button" className="softApricotButton" disabled={Boolean(discontinue.busySku)} onClick={() => void discontinue.send(skuId, onSent)} style={small}>{busy ? "보내는 중…" : "단종"}</button>;
+}
+
+/** 단종 보내기·되돌리기가 실패했을 때 목록 위에 보이는 안내. */
+export function DiscontinueError({ discontinue }: { discontinue: ReturnType<typeof useDiscontinueSent> }) {
+  if (!discontinue.error) return null;
+  return (
+    <p role="alert" onClick={discontinue.dismissError} style={{ margin: "0 0 10px", padding: "10px 12px", borderRadius: "12px", background: wmsColors.warnSoft, color: wmsColors.warn, fontSize: "12px", cursor: "pointer" }}>
+      {discontinue.error} (누르면 닫힙니다)
+    </p>
+  );
+}
+
 /** 위쪽 보기 전환: SKU별 총수량 ↔ 쉽먼트별 SKU리스트. 검색어를 그대로 넘긴다. */
 export function OrderedProductsSwitch({ expectedDate, current, query }: { expectedDate: string; current: "summary" | "shipments"; query: string }) {
   const href = (path: string) => `/wms/logistics/dates/${encodeURIComponent(expectedDate)}/${path}${query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ""}`;
@@ -49,9 +123,9 @@ export function initialQueryFromUrl(): string {
   return new URLSearchParams(window.location.search).get("q") || "";
 }
 
-export function PickButton({ picked, onClick }: { picked: boolean; onClick: () => void }) {
+export function PickButton({ picked, onClick, disabled }: { picked: boolean; onClick: () => void; disabled?: boolean }) {
   return (
-    <button type="button" onClick={onClick} className={picked ? "softPinkButton" : "softBeigeButton"} style={{ minHeight: "32px", padding: "4px 10px", fontSize: "12px", whiteSpace: "nowrap" }}>
+    <button type="button" onClick={onClick} disabled={disabled} title={disabled ? "단종으로 보낸 SKU는 발주 담기를 막았습니다. 되돌리면 다시 담을 수 있습니다." : undefined} className={picked ? "softPinkButton" : "softBeigeButton"} style={{ minHeight: "32px", padding: "4px 10px", fontSize: "12px", whiteSpace: "nowrap", opacity: disabled ? 0.45 : 1 }}>
       {picked ? "담음 ✓" : "발주 담기"}
     </button>
   );

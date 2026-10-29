@@ -48,6 +48,20 @@ export async function appendDiscontinueCodes(codes: string[]): Promise<{ added: 
   return { added, draft: await writeDiscontinueCodeDraft([base, ...added].filter(Boolean).join("\n")) };
 }
 
+/**
+ * 발주제품보기의 '단종' 되돌리기(2026-10-29): 직접 입력칸에서 그 SKU 줄만 뺀다.
+ * 읽기에 실패하면 모아 둔 목록을 덮어쓰지 않도록 멈춘다.
+ */
+export async function removeDiscontinueCodes(codes: string[]): Promise<{ removed: string[]; draft: DiscontinueCodeDraft }> {
+  const current = await readStrict();
+  const drop = new Set(codes.map(code => String(code || "").trim()).filter(Boolean));
+  const lines = current.text.split(/\r?\n/);
+  const kept = lines.filter(line => !drop.has(line.trim()));
+  const removed = [...drop].filter(code => lines.some(line => line.trim() === code));
+  if (!removed.length) return { removed, draft: current };
+  return { removed, draft: await writeDiscontinueCodeDraft(kept.join("\n").replace(/\s+$/, "")) };
+}
+
 export async function readDiscontinueCodeDraft(): Promise<DiscontinueCodeDraft> {
   if (useBlobStore()) {
     const result = await getFreshPrivateBlob(BLOB_PATH).catch(() => null);

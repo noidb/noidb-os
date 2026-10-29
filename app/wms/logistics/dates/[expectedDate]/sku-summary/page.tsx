@@ -7,7 +7,7 @@ import type { InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import ProductThumb, { LARGE_THUMB } from "../ProductThumb";
-import { initialQueryFromUrl, OrderedProductsSwitch, PickBar, PickButton, ProductInfo, useOutboundPicks } from "../OrderedProductsShared";
+import { DiscontinueButton, DiscontinueError, initialQueryFromUrl, OrderedProductsSwitch, PickBar, PickButton, ProductInfo, useDiscontinueSent, useOutboundPicks } from "../OrderedProductsShared";
 import { WMS_MOBILE_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
 import type { SkuSummaryPurchaseOrder, SkuSummaryRow } from "@/app/api/wms/logistics/sku-summary/route";
 
@@ -35,6 +35,8 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
   const [query, setQuery] = useState(initialQueryFromUrl);
   // 2026-10-15: 재고파악은 이 보기에서 한다 — 여기서 바로 '발주 담기'로 거래처발주를 모은다.
   const picks = useOutboundPicks(expectedDate);
+  // 2026-10-29: 카드의 '단종' 버튼 — 입고결과 화면의 단종 신청 목록으로 보내고, 이 목록에는 '단종 보냄'만 표시한다.
+  const discontinue = useDiscontinueSent();
   // 2026-10-11 사용자 요청: "발주 N건"을 누르면 그 발주서를 본다(1건이면 바로 열고, 여러 건이면 목록을 펼침).
   const [documents, setDocuments] = useState<Map<string, SkuSummaryPurchaseOrder>>(new Map());
   const [expandedSku, setExpandedSku] = useState<string | null>(null);
@@ -110,6 +112,7 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
             placeholder="바코드·SKU·상품명으로 찾기"
             style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: "12px", border: "1px solid #ddd8cd", fontSize: "14px", marginBottom: "12px" }}
           />
+          <DiscontinueError discontinue={discontinue} />
           {visibleRows.length === 0 && <p style={{ color: wmsColors.muted, fontSize: "13px" }}>찾는 상품이 없습니다.</p>}
           <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "8px" }}>
             {visibleRows.map(row => {
@@ -117,7 +120,7 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
               const display = resolveDisplayNameAndOption(row.productName, row.optionName);
               const rowKey = row.skuId || row.barcode;
               return (
-                <li key={rowKey} style={{ display: "grid", gridTemplateColumns: `${LARGE_THUMB} minmax(0, 1fr) auto`, gap: "10px", alignItems: "start", padding: "10px", borderRadius: "14px", background: picks.picked[row.skuId] ? "#fbf1ee" : "#fff", border: `1px solid ${picks.picked[row.skuId] ? "#dfbdb2" : "#e5dace"}` }}>
+                <li key={rowKey} style={{ display: "grid", gridTemplateColumns: `${LARGE_THUMB} minmax(0, 1fr) auto`, gap: "10px", alignItems: "start", padding: "10px", borderRadius: "14px", background: discontinue.sent[row.skuId] ? "#f1eeea" : picks.picked[row.skuId] ? "#fbf1ee" : "#fff", border: `1px solid ${picks.picked[row.skuId] ? "#dfbdb2" : "#e5dace"}` }}>
                   <ProductThumb key={row.skuId} catalog={catalog} skuId={row.skuId} alt={display.name} size={LARGE_THUMB} />
                   <ProductInfo
                     name={display.name}
@@ -145,7 +148,8 @@ export default function PurchaseOrderSkuSummaryPage({ params }: { params: { expe
                   />
                   <div style={{ display: "grid", justifyItems: "end", gap: "6px" }}>
                     <div style={{ fontSize: "20px", fontWeight: 800, minWidth: "36px", textAlign: "right" }}>{row.totalQuantity}<span style={{ fontSize: "11px", fontWeight: 600 }}>개</span></div>
-                    {row.skuId && <PickButton picked={Boolean(picks.picked[row.skuId])} onClick={() => picks.toggle(row.skuId, row.totalQuantity)} />}
+                    {row.skuId && <PickButton picked={Boolean(picks.picked[row.skuId])} disabled={Boolean(discontinue.sent[row.skuId])} onClick={() => picks.toggle(row.skuId, row.totalQuantity)} />}
+                    {row.skuId && <DiscontinueButton skuId={row.skuId} discontinue={discontinue} onSent={() => { if (picks.picked[row.skuId]) picks.toggle(row.skuId, row.totalQuantity); }} />}
                   </div>
                   {expandedSku === rowKey && (
                     <div style={{ gridColumn: "1 / -1", display: "grid", gap: "6px" }}>

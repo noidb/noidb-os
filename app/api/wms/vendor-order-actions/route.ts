@@ -4,7 +4,7 @@ import { readSavedStatusList } from "@/lib/wms/status-list-cache";
 import { readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { readPickingWaveStore, mutatePickingWaveStore } from "@/lib/wms/picking-wave/server-store";
 import { isVendorLineResolved } from "@/lib/wms/vendor-order/receiving-state";
-import { appendDiscontinueCodes } from "@/lib/wms/discontinue-code-draft-store";
+import { appendDiscontinueCodes, removeDiscontinueCodes } from "@/lib/wms/discontinue-code-draft-store";
 import {
   applyReceivingCost,
   completeStatusRequests,
@@ -47,7 +47,8 @@ export async function POST(request: NextRequest) {
       const skuId = String(body.skuId || "").trim();
       if (!/^\d+$/.test(skuId)) throw new Error("단종 신청 목록에 넣을 SKU ID를 확인해 주세요.");
       const { added } = await appendDiscontinueCodes([skuId]);
-      await logDiscontinue([skuId], body.sourceLineId ? "거래처발주(보낸 발주) 단종으로 이동" : "거래처발주(작성중) 단종으로 이동");
+      const logPath = body.from === "ordered-products" ? "발주제품보기 단종" : body.sourceLineId ? "거래처발주(보낸 발주) 단종으로 이동" : "거래처발주(작성중) 단종으로 이동";
+      await logDiscontinue([skuId], logPath);
       if (!body.sourceLineId) return NextResponse.json({ success: true, added: added.length > 0 });
       const store = await readPickingWaveStore();
       const source = store.vendorOrderLines.find(line => line.id === body.sourceLineId);
@@ -55,6 +56,13 @@ export async function POST(request: NextRequest) {
       if (isVendorLineResolved(source)) return NextResponse.json({ success: true, line: source, added: added.length > 0 });
       const saved = await mutatePickingWaveStore({ action: "resolveSentVendorLine", lineId: source.id, expectedUpdatedAt: source.updatedAt, kind: "discontinue", destinationId: `discontinue-list:${skuId}`, now: new Date().toISOString() });
       return NextResponse.json({ success: true, added: added.length > 0, line: saved.vendorOrderLines.find(line => line.id === source.id) });
+    }
+    // 2026-10-29 발주제품보기 '단종' 되돌리기: 단종 신청 목록 직접 입력칸에서 그 SKU만 뺀다(_WMS단종기록은 추가만 하므로 그대로 둔다).
+    if (body.action === "discontinue-list-undo") {
+      const skuId = String(body.skuId || "").trim();
+      if (!/^\d+$/.test(skuId)) throw new Error("되돌릴 SKU ID를 확인해 주세요.");
+      const { removed } = await removeDiscontinueCodes([skuId]);
+      return NextResponse.json({ success: true, removed: removed.length > 0 });
     }
     if (body.action === "queue-discontinue") {
       const store = body.sourceLineId ? await readPickingWaveStore() : null;

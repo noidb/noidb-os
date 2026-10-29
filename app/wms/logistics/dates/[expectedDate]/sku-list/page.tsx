@@ -8,7 +8,7 @@ import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { loadShipmentPrintGroupsByDate } from "@/lib/wms/load-shipment-print-groups";
 import type { ShipmentPrintGroup } from "@/lib/wms/shipment-print-client";
 import ProductThumb, { LARGE_THUMB } from "../ProductThumb";
-import { initialQueryFromUrl, OrderedProductsSwitch, PickBar, PickButton, ProductInfo, useOutboundPicks } from "../OrderedProductsShared";
+import { DiscontinueButton, DiscontinueError, initialQueryFromUrl, OrderedProductsSwitch, PickBar, PickButton, ProductInfo, useDiscontinueSent, useOutboundPicks } from "../OrderedProductsShared";
 import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 import { WMS_MOBILE_WIDTH, wmsColors } from "@/lib/wms/ui-tokens";
 
@@ -39,6 +39,7 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
   const [openShipment, setOpenShipment] = useState<string | null>(null);
   // 2026-10-15: 발주제품보기 — SKU별 총수량과 같은 '발주 담기' 목록을 쓴다(SKU 단위, 수량은 이 날짜 SKU 총수량).
   const picks = useOutboundPicks(expectedDate);
+  const discontinue = useDiscontinueSent();
   // 2026-10-15: 원본(Drive의 Label·내역서 PDF + 쉽먼트 XLSX)을 매번 다시 읽으면 오래 걸려서,
   // 마지막으로 읽은 결과를 이 기기에 남겨 두고 바로 보여준다. 쉽먼트 구성이 바뀌었거나 '원본 다시 읽기'를 누를 때만 다시 읽는다.
   const cacheKey = `noidb_sku_list_cache_v1_${expectedDate}`;
@@ -146,6 +147,7 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
             placeholder="바코드·SKU·상품명으로 찾기"
             style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: "12px", border: `1px solid #ddd8cd`, fontSize: "14px", marginBottom: "12px" }}
           />
+          <DiscontinueError discontinue={discontinue} />
           {visibleShipments.length === 0 && <p style={{ color: wmsColors.muted, fontSize: "13px" }}>찾는 상품이 없습니다.</p>}
           {visibleShipments.map(({ group, rows }, shipmentIndex) => {
             const total = group.barcodeRows.reduce((sum, row) => sum + row.quantity, 0);
@@ -173,13 +175,14 @@ export default function ShipmentSkuListPage({ params }: { params: { expectedDate
                     const unitPrice = unitPriceByPoSku.get(priceKey(row.purchaseOrderNumber, row.skuId)) || 0;
                     const isPicked = Boolean(picks.picked[row.skuId]);
                     return (
-                      <li key={`${row.purchaseOrderNumber}-${row.skuId}-${row.sourceRowNumber}`} style={{ display: "grid", gridTemplateColumns: `24px ${LARGE_THUMB} minmax(0, 1fr) auto`, gap: "10px", alignItems: "start", padding: "10px", borderRadius: "14px", background: isPicked ? "#fbf1ee" : "#fff", border: `1px solid ${isPicked ? "#dfbdb2" : "#e5dace"}` }}>
+                      <li key={`${row.purchaseOrderNumber}-${row.skuId}-${row.sourceRowNumber}`} style={{ display: "grid", gridTemplateColumns: `24px ${LARGE_THUMB} minmax(0, 1fr) auto`, gap: "10px", alignItems: "start", padding: "10px", borderRadius: "14px", background: discontinue.sent[row.skuId] ? "#f1eeea" : isPicked ? "#fbf1ee" : "#fff", border: `1px solid ${isPicked ? "#dfbdb2" : "#e5dace"}` }}>
                         <span style={{ fontSize: "12px", color: wmsColors.muted, textAlign: "center" }}>{order}</span>
                         <ProductThumb key={row.skuId} catalog={catalog} skuId={row.skuId} alt={row.productName} size={LARGE_THUMB} />
                         <ProductInfo name={row.productName} option={row.optionLabel} skuId={row.skuId} warehouseNumber={row.warehouseNumber} barcode={row.barcode} priceMax={unitPrice} productLink={catalog?.productLink} />
                         <div style={{ display: "grid", justifyItems: "end", gap: "6px" }}>
                           <div style={{ fontSize: "20px", fontWeight: 800, minWidth: "36px", textAlign: "right" }}>{row.quantity}<span style={{ fontSize: "11px", fontWeight: 600 }}>개</span></div>
-                          <PickButton picked={isPicked} onClick={() => picks.toggle(row.skuId, totalBySku.get(row.skuId) || row.quantity)} />
+                          <PickButton picked={isPicked} disabled={Boolean(discontinue.sent[row.skuId])} onClick={() => picks.toggle(row.skuId, totalBySku.get(row.skuId) || row.quantity)} />
+                          <DiscontinueButton skuId={row.skuId} discontinue={discontinue} onSent={() => { if (isPicked) picks.toggle(row.skuId, totalBySku.get(row.skuId) || row.quantity); }} />
                         </div>
                       </li>
                     );
