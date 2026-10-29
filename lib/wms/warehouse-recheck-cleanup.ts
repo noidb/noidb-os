@@ -121,7 +121,7 @@ export function planReregistrationTab(reregRows: string[][], productDb: string[]
         return ownValue.trim() ? ownValue : value;
       }));
     }
-    return { rebuild: { headers: newHeaders, rows, filled }, leaving: [] as Array<{ rowNumber: number; skuId: string; row: string[]; status: string; reason: string; pair?: string }>, keepIds: new Set<string>(rows.map(row => String(row[find(newHeaders, "SKU ID", "SKUID")] ?? "").trim()).filter(Boolean)) };
+    return { rebuild: { headers: newHeaders, rows, filled }, leaving: [] as Array<{ rowNumber: number; skuId: string; row: string[]; status: string; reason: string; pair?: string }>, returning: [] as Array<{ rowNumber: number; skuId: string; row: string[] }>, keepIds: new Set<string>(rows.map(row => String(row[find(newHeaders, "SKU ID", "SKUID")] ?? "").trim()).filter(Boolean)) };
   }
   // 같은 제품 짝 찾기: 제품DB에서 발주가능상태 '정상'인 SKU만 짝이 된다.
   const pd = { msku: find(pdHeaders, "모델SKU"), model: find(pdHeaders, "모델명/품번", "모델명"), color: find(pdHeaders, "색상"), name: find(pdHeaders, "상품명"), orderable: find(pdHeaders, "발주가능상태") };
@@ -130,10 +130,13 @@ export function planReregistrationTab(reregRows: string[][], productDb: string[]
   const rr = { status: find(headers, "현재상태"), msku: find(headers, "모델SKU"), model: find(headers, "모델명/품번", "모델명"), color: find(headers, "색상"), name: find(headers, "상품명"), state: find(headers, "진행상태"), newSku: find(headers, "새 SKU ID") };
   const leaving: Array<{ rowNumber: number; skuId: string; row: string[]; status: string; reason: string; pair?: string }> = [];
   const keepIds = new Set<string>();
+  // 2026-10-29: 쿠팡이 강제중단을 풀어 준 SKU — 현재상태에 '정상복귀'를 적으면 제품DB로 돌려보낸다(옛 정보 그대로).
+  const returning: Array<{ rowNumber: number; skuId: string; row: string[] }> = [];
   reregRows.slice(1).forEach((row, index) => {
     const id = skuCol >= 0 ? String(row[skuCol] ?? "").trim() : "";
     if (!id) return;
     const status = rr.status >= 0 ? String(row[rr.status] ?? "").trim() : "";
+    if (squash(status).includes("정상복귀")) { returning.push({ rowNumber: index + 2, skuId: id, row }); return; }
     if (isProductDbToStorageStatus(status)) { leaving.push({ rowNumber: index + 2, skuId: id, row, status, reason: status }); return; }
     const msku = rr.msku >= 0 ? key(row[rr.msku]) : "";
     const model = rr.model >= 0 ? key(row[rr.model]) : "";
@@ -147,7 +150,7 @@ export function planReregistrationTab(reregRows: string[][], productDb: string[]
     if (pair) { const pairId = String(pair[pdSku] ?? "").trim(); leaving.push({ rowNumber: index + 2, skuId: id, row, status: "비관리(중복등록)", reason: `재등록완료(새 SKU ${pairId})`, pair: pairId }); return; }
     keepIds.add(id);
   });
-  return { rebuild: undefined, leaving, keepIds };
+  return { rebuild: undefined, leaving, returning, keepIds };
 }
 
 export function planWarehouseRecheckCleanup(recheck: string[][], productDb: string[][], storage: string[][] | null, reregisteredSkuIds: ReadonlySet<string> = new Set(), reregHeaders: readonly string[] = [], today = "", reregRows?: string[][], retiredSkuIds: ReadonlySet<string> = new Set(), extraTabs: { other?: string[][] | null; stopped?: string[][] | null } = {}): CleanupPlan & { reregRebuild?: { headers: string[]; rows: string[][]; filled: number }; deleteReregRows: number[]; appendRereg: string[][]; appendOtherRereg: string[][]; appendStopped: string[][]; appendStorage: string[][]; appendProductDb: string[][]; clearStatusRows: number[]; deleteRows: number[]; deleteStorageRows: number[]; deleteProductDbRows: number[] } {
@@ -347,6 +350,22 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       const name = find(rrHeaders, "상품명");
       moves.push({ source: "재등록SKU", rowNumber: item.rowNumber, skuId: item.skuId, productName: name >= 0 ? String(item.row[name] ?? "").trim() : "", result: item.pair ? `같은 제품 새 SKU ${item.pair} 정상 입고 중 → 비관리(중복등록)` : `현재상태 ${item.status} → 단종이 재등록보다 우선`, orderableStatus: "", target: "보관", mode: "append", release: false, pair: item.pair });
       void stNameCol;
+    }
+  }
+  // 2026-10-29 실적저조SKU 탭 현재상태 '정상복귀' → 제품DB로(쿠팡이 강제중단을 풀어 줌). 옛 정보는 그대로 가져가고 현재상태만 '정상'.
+  if (reregPlan?.returning.length && !problems.length) {
+    const rrHeaders = (reregRows![0] || []).map(value => String(value ?? ""));
+    const rrName = find(rrHeaders, "상품명"), rrOrderable = find(rrHeaders, "발주가능상태");
+    const plannedProductDb = new Set(appendProductDb.map(row => String(row[pd.sku] ?? "").trim()));
+    for (const item of reregPlan.returning) {
+      const existing = productDbRowBySku.get(item.skuId);
+      if (!existing && !plannedProductDb.has(item.skuId)) {
+        appendProductDb.push(mapRow(rrHeaders, item.row, pdHeaders, { "현재상태": "정상", "창고확인결과": "" }));
+        plannedProductDb.add(item.skuId);
+      }
+      deleteReregRows.push(item.rowNumber);
+      const orderable = rrOrderable >= 0 ? String(item.row[rrOrderable] ?? "").trim() : "";
+      moves.push({ source: "재등록SKU", rowNumber: item.rowNumber, skuId: item.skuId, productName: rrName >= 0 ? String(item.row[rrName] ?? "").trim() : "", result: "정상복귀 → 쿠팡이 강제중단을 풀어 제품DB로", orderableStatus: orderable || "미확인", target: "제품DB", mode: existing ? "delete-only" : "append", productDbRow: existing, release: Boolean(orderable) && orderable !== "정상" });
     }
   }
   // 2026-10-23 사용자 확정: 제품DB에는 정상 입고될 수 있는 SKU만 둔다. 한 옵션이라도 판매중지(링크 죽음)면

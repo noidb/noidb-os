@@ -7,7 +7,8 @@ import { applySameModelFill, planSameModelFill } from "../lib/wms/same-model-fil
 // 2026-10-22 탭 나눔: 실적저조SKU(예전 재등록SKU) · 그 외 재등록SKU · 판매중지SKU
 assert.equal(pickLowPerformanceTab(["제품DB", "재등록SKU"]), "재등록SKU");
 assert.equal(pickLowPerformanceTab(["제품DB", "실적저조SKU", "재등록SKU"]), "실적저조SKU");
-assert.equal(LOW_PERFORMANCE_SKU_IDS.size, 63);
+assert.equal(LOW_PERFORMANCE_SKU_IDS.size, 62);
+assert.ok(!LOW_PERFORMANCE_SKU_IDS.has("43095733"), "쿠팡이 풀어 준 SKU는 목록에서 뺀다");
 assert.ok(LOW_PERFORMANCE_SKU_IDS.has("41093260"));
 const low = "41093260"; // 실적저조 목록에 있는 SKU
 
@@ -81,6 +82,23 @@ console.log("PASS 판매중지SKU 탭 정상 SKU → 단종 대상");
   assert.deepEqual(p.deleteReregRows.sort(), [2, 3]);
   assert.deepEqual(p.deleteProductDbRows, [2], "재등록파일생성 새 줄은 그대로");
   console.log("PASS 같은 링크 옵션 → 판매중지SKU (제품DB·실적저조SKU)");
+}
+
+// 2026-10-29: 실적저조SKU 탭 현재상태 '정상복귀' → 제품DB로(옛 정보 그대로, 현재상태 '정상'), 탭에서 지움
+{
+  const rrx = [RR, ["정상복귀", "m1", "43095733", "쿠팡이 푼 상품", "정상", "", "", "대기", "", ""], ["과재고", "m2", "700", "그대로 실적저조", "일시중단", "", "", "대기", "", ""]];
+  const p = planWarehouseRecheckCleanup([], [H, ["", "m9", "800", "다른 상품", "정상"]], null, new Set(), RR, "2026-10-29", rrx, new Set(), { other: [RR], stopped });
+  assert.deepEqual(p.problems, []);
+  const m = p.moves.find(x => x.skuId === "43095733");
+  assert.equal(m?.target, "제품DB"); assert.equal(m?.mode, "append"); assert.equal(m?.release, false);
+  assert.deepEqual(p.deleteReregRows, [2]);
+  assert.equal(p.appendProductDb.length, 1);
+  assert.deepEqual([p.appendProductDb[0][0], p.appendProductDb[0][2], p.appendProductDb[0][4]], ["정상", "43095733", "정상"]);
+  assert.equal(p.moves.find(x => x.skuId === "700"), undefined, "정상복귀가 아닌 줄은 그대로");
+  // 한 번 옮긴 뒤 다시 돌려도 실적저조SKU로 끌려가지 않는다
+  const again = planWarehouseRecheckCleanup([], [H, ["정상", "m1", "43095733", "쿠팡이 푼 상품", "정상"]], null, new Set(), RR, "2026-10-29", [RR], new Set(), { other: [RR], stopped });
+  assert.equal(again.moves.length, 0);
+  console.log("PASS 정상복귀 → 제품DB(재등록 목록에서 지움, 다시 끌려가지 않음)");
 }
 
 // 2026-10-23: 단종해제 대상에는 판매중지·실적저조 둘 다 아닌 SKU만 (화면에서 고른 것도 뺌)
