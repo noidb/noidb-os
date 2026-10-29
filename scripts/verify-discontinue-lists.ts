@@ -62,7 +62,18 @@ console.log("PASS discontinue/release lists from 제품DB, memo merge, dedupe, c
   const rows = [s("1", "비관리(중복등록)", "정상"), s("2", "재고있음", "정상"), s("3", "거래처단종", "불가"), s("4", "", "정상"), s("5", "재등록완료", "정상")];
   const first = buildStatusLists(rows, { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [] });
   assert.deepEqual(first.discontinue.map(x => x.skuId), ["1", "4", "5"]);
-  const cleared = buildStatusLists(rows, { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [], cleared: { discontinue: Object.fromEntries(first.discontinue.map(x => [x.key, "2026-10-20"])) } });
-  assert.deepEqual(cleared.discontinue.map(x => x.skuId), ["1", "4", "5"], "쿠팡이 아직 정상이면 다시 보임");
-  console.log("비관리SKU 정상 → 단종 대상 OK");
+  // 2026-10-29: 비우면 '신청 완료 · 쿠팡 처리 대기'로 옮기고 위 목록에서는 빠진다. 14일이 지나도 정상이면 다시 위로 올라온다.
+  const clearedAt = "2026-10-20T00:00:00Z";
+  const clearedOptions = { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [], cleared: { discontinue: Object.fromEntries(first.discontinue.map(x => [x.key, clearedAt])) } };
+  const cleared = buildStatusLists(rows, { ...clearedOptions, now: Date.parse("2026-10-29T00:00:00Z") });
+  assert.deepEqual(cleared.discontinue.map(x => x.skuId), [], "비운 SKU는 쿠팡이 정상이어도 위 목록에 다시 안 뜸");
+  assert.deepEqual(cleared.discontinuePending.map(x => x.skuId), ["1", "4", "5"], "쿠팡 처리 대기 칸으로 이동");
+  assert.equal(cleared.discontinuePending[0].clearedAt, clearedAt);
+  const later = buildStatusLists(rows, { ...clearedOptions, now: Date.parse("2026-11-10T00:00:00Z") });
+  assert.deepEqual(later.discontinue.map(x => x.skuId), ["1", "4", "5"], "14일 지나도 정상이면 다시 신청 목록에");
+  assert.equal(later.discontinuePending.length, 0);
+  // 쿠팡이 처리해 발주가능상태가 불가로 바뀌면 어느 목록에도 없다
+  const handled = buildStatusLists(rows.map(row => ({ ...(row as object), orderableStatus: "불가" }) as never), { ...clearedOptions, now: Date.parse("2026-10-29T00:00:00Z") });
+  assert.equal(handled.discontinue.length + handled.discontinuePending.length, 0, "상태가 바뀌면 대기에서도 사라짐");
+  console.log("비관리SKU 정상 → 단종 대상 / 비운 뒤 대기 / 14일 후 재표시 OK");
 }

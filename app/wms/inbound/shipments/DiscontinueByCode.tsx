@@ -38,8 +38,13 @@ function saveLookupMemory(lookup: Lookup[]) {
   } catch { /* 저장 못 해도 화면은 그대로 동작 */ }
 }
 
-export default function DiscontinueByCode({ autoRows, latestOrderable, clearing, onClearAuto, onDone }: {
+export default function DiscontinueByCode({ autoRows, pendingRows = [], latestOrderable, onCheckLatest, checkingLatest = false, clearing, onClearAuto, onDone }: {
+  /** 쿠팡 최신 공급상태 파일로 발주상태를 다시 확인(직접 눌렀을 때만 읽음) */
+  onCheckLatest?: () => void;
+  checkingLatest?: boolean;
   autoRows: DiscontinueAutoRow[];
+  /** 신청 완료로 비웠지만 쿠팡 발주가능상태가 아직 정상인 SKU(쿠팡 처리 대기) */
+  pendingRows?: (DiscontinueAutoRow & { clearedAt: string })[];
   latestOrderable: LatestOrderable;
   clearing: boolean;
   onClearAuto: (keys: string[]) => Promise<boolean>;
@@ -133,7 +138,7 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
 
   async function removeRow(row: Row) {
     if (row.auto) {
-      if (!window.confirm(`SKU ${row.skuId}를 단종 신청 목록에서 뺄까요? 뺀 SKU는 다시 뜨지 않습니다.`)) return;
+      if (!window.confirm(`SKU ${row.skuId}를 단종 신청 목록에서 뺄까요? 뺀 SKU는 아래 '신청 완료 · 쿠팡 처리 대기'로 옮겨지고, 쿠팡이 처리하면 사라집니다.`)) return;
       if (!await onClearAuto([row.autoKey])) return;
     }
     if (row.codes.length) removeCodes(row.codes);
@@ -228,6 +233,17 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
       <p className={styles.meta}>
         발주가능상태가 아직 정상인 SKU 중 비관리SKU(재고있음 제외)·판매중지SKU·실적저조SKU·그 외 재등록SKU에 있는 것, 제품DB 현재상태가 판매중지·단종·거래처단종·가품중단인 것, 아래 칸에 직접 넣은 바코드·SKU를 한 표로 보여 줘요. 같은 SKU는 한 번만 들어가요.
       </p>
+      {!latestOrderable ? (
+        <p className={styles.meta}>
+          표의 발주상태는 쿠팡 실시간 값이 아니라 제품DB 시트에 적힌 값이에요. 시트에 아직 반영 안 된 SKU는 쿠팡에서 이미 바뀌었어도 '정상'으로 보일 수 있어요.{" "}
+          {onCheckLatest && <button type="button" className="softBeigeButton" style={{ borderRadius: "8px", padding: "2px 10px", fontSize: "12px" }} disabled={checkingLatest} onClick={onCheckLatest}>{checkingLatest ? "읽는 중…" : "쿠팡 최신파일로 확인"}</button>}
+        </p>
+      ) : (
+        <p className={styles.meta}>
+          표의 발주상태는 쿠팡 최신 공급상태 파일({new Date(latestOrderable.fileMtime).toLocaleString("ko-KR")}) 기준이에요.{" "}
+          {onCheckLatest && <button type="button" className="softBeigeButton" style={{ borderRadius: "8px", padding: "2px 10px", fontSize: "12px" }} disabled={checkingLatest} onClick={onCheckLatest}>{checkingLatest ? "읽는 중…" : "다시 확인"}</button>}
+        </p>
+      )}
       {list.length > 0 ? (
         <div className={`${styles.tableWrap} ${styles.copyScroll}`}>
           <table className={`${styles.table} ${styles.copyTable}`} aria-label="단종 신청 목록">
@@ -236,7 +252,7 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
                 <th>SKU ID</th>
                 <th>상품명</th>
                 <th className={styles.orderableCol} title={latestOrderable ? `최신파일 ${new Date(latestOrderable.fileMtime).toLocaleString("ko-KR")}` : "제품DB 값 · 작업센터 '자주 하는 일'에서 상품공급상태 최신파일을 반영하면 쿠팡 최신값이 됩니다"}>
-                  발주상태{latestOrderable ? "" : " (DB)"}
+                  발주상태{latestOrderable ? " (쿠팡 최신파일)" : " (제품DB 시트 값)"}
                 </th>
                 <th className={styles.deleteCol} aria-label="빼기" />
               </tr>
@@ -295,6 +311,33 @@ export default function DiscontinueByCode({ autoRows, latestOrderable, clearing,
           {busy === "clear" || clearing ? "비우는 중…" : "단종 신청 완료 · 목록 비우기"}
         </button>
       </div>
+      {pendingRows.length > 0 && (
+        <details style={{ marginTop: "10px", border: "1px solid #d8d3cc", borderRadius: "8px", padding: "6px 10px", background: "#f7f4f0" }}>
+          <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: "14px" }}>신청 완료 · 쿠팡 처리 대기 <span style={{ color: "#7a3b2e" }}>{pendingRows.length}건</span></summary>
+          <p className={styles.meta} style={{ margin: "6px 0" }}>
+            단종 신청을 마쳤지만 쿠팡 발주가능상태가 아직 '정상'인 SKU예요. 쿠팡이 처리해 상태가 바뀌면 자동으로 사라지고, 신청 후 14일이 지나도 정상이면 위 단종 신청 목록에 다시 올라옵니다.
+          </p>
+          <div className={`${styles.tableWrap} ${styles.copyScroll}`}>
+            <table className={`${styles.table} ${styles.copyTable}`} aria-label="신청 완료 쿠팡 처리 대기">
+              <thead><tr><th>SKU ID</th><th>상품명</th><th className={styles.orderableCol}>발주상태</th><th>신청일</th></tr></thead>
+              <tbody>
+                {pendingRows.map(row => {
+                  const value = latestOrderable ? latestOrderable.orderable[row.skuId] || "파일에 없음" : row.orderableStatus || "미확인";
+                  const done = latestOrderable && Boolean(latestOrderable.orderable[row.skuId]) && value !== "정상" && value !== "확인필요";
+                  return (
+                    <tr key={row.skuId}>
+                      <td>{row.skuId}</td>
+                      <td>{row.productName}</td>
+                      <td className={`${styles.orderableCol} ${done ? styles.orderableDone : ""}`}>{value}{done ? " ✓" : ""}</td>
+                      <td>{row.clearedAt ? row.clearedAt.slice(5, 10).replace("-", ".") : ""}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
       {codes.length > 0 && (
         <button type="button" className={`softApricotButton ${styles.fullButton}`} disabled={working} onClick={() => void markOnly()} style={{ width: "100%", marginTop: "8px" }}>
           {busy === "mark" ? "제품DB에 적는 중…" : "직접 입력한 SKU가 이미 신청한 단종이면 · 제품DB에 거래처단종만 입력"}

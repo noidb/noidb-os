@@ -19,7 +19,13 @@ export const MEMO_RELEASE_SKU_IDS: readonly string[] = [
 export const MEMO_DISCONTINUE_SKU_IDS: readonly string[] = ["39127489", "38248703", "36789607"];
 
 export interface StatusListItem { skuId: string; productName: string; currentStatus: string; orderableStatus: string; reason: string; key: string; /** 옮겨 오기 전 탭(비관리SKU '원본 위치') */ origin?: string; /** 옮긴 이유(비관리SKU 보관사유 등) */ moveReason?: string; /** 지금 이 SKU가 있는 탭(2026-10-23: 시트에서 바로 찾게) */ currentTab?: string }
-export interface StatusLists { discontinue: StatusListItem[]; release: StatusListItem[]; /** 재등록으로 바뀐 옛 SKU라서 뺀 SKU */ reregisteredExcluded: string[] }
+/** 2026-10-29: 신청 완료로 비웠지만 쿠팡 발주가능상태가 아직 '정상'인 옛 탭 SKU(쿠팡이 처리하는 며칠 동안 대기). */
+export interface StatusListPendingItem extends StatusListItem { clearedAt: string }
+export interface StatusLists { discontinue: StatusListItem[]; release: StatusListItem[]; /** 신청 완료 · 쿠팡 처리 대기 중인 단종 SKU */ discontinuePending: StatusListPendingItem[]; /** 재등록으로 바뀐 옛 SKU라서 뺀 SKU */ reregisteredExcluded: string[] }
+/** 신청 완료 뒤 이 기간이 지나도 쿠팡이 여전히 '정상'이면 다시 단종 신청 목록에 올린다. */
+export const DISCONTINUE_PENDING_DAYS = 14;
+/** 쿠팡이 처리할 때까지 기다리는 옛 탭 출처 */
+export const DISCONTINUE_OLD_TAB_REASONS = ["비관리SKU", "판매중지SKU", "실적저조SKU", "그 외 재등록SKU"];
 /** '목록 비우기'로 처리완료한 항목. 키는 SKU·현재상태·발주가능상태 묶음이라 상태가 바뀌면 다시 나타난다. */
 export type StatusListCleared = { discontinue?: Record<string, string>; release?: Record<string, string> };
 
@@ -57,6 +63,8 @@ export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuI
   nameFallback?: Record<string, string>;
   /** 재등록SKU·교체이력에 있는 옛 SKU — 두 목록 모두에서 뺀다 */
   reregisteredSkuIds?: ReadonlySet<string>;
+  /** 시험용 현재 시각(ms) */
+  now?: number;
 } = {}): StatusLists {
   const bySku = new Map(items.map(item => [item.skuId, item]));
   const discontinue = new Map<string, StatusListItem>();
@@ -104,12 +112,28 @@ export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuI
     }
     // 2026-10-22: 직접 추가한 SKU, 제품DB로 이미 목록에 있던 SKU를 다시 고른 경우도 비운 뒤 새로 고른 것으로 본다.
     const pickedAgain = (item: StatusListItem) => {
-      // 옛 SKU 탭(비관리SKU·판매중지SKU·실적저조SKU·그 외 재등록SKU)에 있는데 아직 정상이면 서류가 안 들어간 것 → 다시 보인다.
-      if (list === discontinue && ["비관리SKU", "판매중지SKU", "실적저조SKU", "그 외 재등록SKU"].includes(item.reason)) return true;
       const at = list === release ? options.releaseFromScreen?.[item.skuId]?.at : undefined;
       return Boolean(at && at > (doneAt.get(item.skuId) || ""));
     };
-    return [...list.values()].filter(item => pickedAgain(item) || (!cleared[item.key] && !doneAt.has(item.skuId))).sort((a, b) => a.skuId.localeCompare(b.skuId));
+    // 2026-10-29: 옛 SKU 탭(비관리SKU 등)은 쿠팡이 단종을 처리해 발주가능상태가 바뀔 때까지 며칠 '정상'으로 남는다.
+    // 예전에는 그동안 비운 뒤에도 계속 위 목록에 다시 떴다(사용자: 처리하고 비웠는데 그대로 다시 뜸).
+    // 이제 비운 SKU는 '신청 완료 · 쿠팡 처리 대기'로 옮기고, 발주가능상태가 바뀌면 사라지며, 14일이 지나도 정상이면 다시 위로 올린다.
+    const now = options.now ?? Date.now();
+    const pending: StatusListPendingItem[] = [];
+    const shown: StatusListItem[] = [];
+    for (const item of list.values()) {
+      if (pickedAgain(item)) { shown.push(item); continue; }
+      const isCleared = Boolean(cleared[item.key]) || doneAt.has(item.skuId);
+      if (!isCleared) { shown.push(item); continue; }
+      if (list === discontinue && DISCONTINUE_OLD_TAB_REASONS.includes(item.reason)) {
+        const clearedAt = doneAt.get(item.skuId) || String(cleared[item.key] || "");
+        const parsed = Date.parse(clearedAt);
+        if (Number.isFinite(parsed) && now - parsed > DISCONTINUE_PENDING_DAYS * 24 * 3600_000) shown.push(item);
+        else pending.push({ ...item, clearedAt });
+      }
+    }
+    const bySkuId = (a: StatusListItem, b: StatusListItem) => a.skuId.localeCompare(b.skuId);
+    return { shown: shown.sort(bySkuId), pending: pending.sort(bySkuId) };
   };
   // 재등록SKU 탭·교체이력의 옛 SKU, 제품DB 재등록구분이 판매량저조영구정지·영구제외·재등록완료인 SKU는
   // 단종해제 대상이 아니다(신규 재등록 대상, 사용자 확인 2026-10-08) → 단종해제에서 뺀다.
@@ -136,5 +160,6 @@ export function buildStatusLists(items: readonly (Pick<ProductCatalogItem, "skuI
   };
   for (const skuId of reregistered) if (bySku.get(skuId)?.orderableStatus.trim() === "정상") addDiscontinue(skuId, "재등록완료 옛 SKU");
   for (const skuId of options.memoDiscontinueSkuIds ?? MEMO_DISCONTINUE_SKU_IDS) addDiscontinue(skuId, "메모");
-  return { discontinue: visible(discontinue, options.cleared?.discontinue), release: visible(release, options.cleared?.release), reregisteredExcluded: excluded };
+  const discontinueView = visible(discontinue, options.cleared?.discontinue);
+  return { discontinue: discontinueView.shown, release: visible(release, options.cleared?.release).shown, discontinuePending: discontinueView.pending, reregisteredExcluded: excluded };
 }

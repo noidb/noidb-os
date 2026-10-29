@@ -129,8 +129,10 @@ console.log("PASS 판매중지SKU 탭 정상 SKU → 단종 대상");
     { ...base, skuId: "6", currentStatus: "과재고" },
     { ...base, skuId: "7", currentStatus: "단종" },
     { ...base, skuId: "8", currentStatus: "과재고", sourceTab: "실적저조SKU", orderableStatus: "일시중단" },
-  ], { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [], cleared: { discontinue: { [JSON.stringify(["2", "과재고", "정상", "실적저조SKU"])]: "2026-10-22" } } });
-  assert.deepEqual(lists.discontinue.map(item => [item.skuId, item.reason]), [["1", "판매중지SKU"], ["2", "실적저조SKU"], ["3", "그 외 재등록SKU"], ["4", "비관리SKU"], ["7", "제품DB"]]);
+  ], { memoReleaseSkuIds: [], memoDiscontinueSkuIds: [], now: Date.parse("2026-10-29T00:00:00Z"), cleared: { discontinue: { [JSON.stringify(["2", "과재고", "정상", "실적저조SKU"])]: "2026-10-22" } } });
+  // 2026-10-29: 비운 SKU(2)는 쿠팡이 처리할 때까지 위 목록이 아니라 '신청 완료 · 쿠팡 처리 대기'에 둔다.
+  assert.deepEqual(lists.discontinue.map(item => [item.skuId, item.reason]), [["1", "판매중지SKU"], ["3", "그 외 재등록SKU"], ["4", "비관리SKU"], ["7", "제품DB"]]);
+  assert.deepEqual(lists.discontinuePending.map(item => item.skuId), ["2"]);
   console.log("PASS 단종 대상: 옛 SKU 탭의 정상 SKU 전부(비관리 재고있음·제품DB 정상 판매 제외)");
 }
 

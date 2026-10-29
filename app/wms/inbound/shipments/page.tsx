@@ -22,6 +22,8 @@ import DiscontinueByCode from "./DiscontinueByCode";
 import { saveReceiptTabCounts } from "@/lib/wms/receipt-tab-counts";
 import { readLastView, saveLastView } from "@/lib/wms/last-view-cache";
 
+/** 서버 규칙(lib/wms/discontinue-lists.ts DISCONTINUE_OLD_TAB_REASONS)과 같게 유지 — 서버 파일을 화면에서 불러오지 않으려고 따로 둠 */
+const DISCONTINUE_OLD_TAB_REASONS = ["비관리SKU", "판매중지SKU", "실적저조SKU", "그 외 재등록SKU"];
 type Tab = "anytime" | "results" | "pending" | "history";
 type Decision = "vendor" | "discontinue" | "reorder" | "marketing";
 type ApiPayload = {
@@ -40,7 +42,7 @@ type ApiPayload = {
   /** 마케팅 무조건 제외(같은 모델 전체) 현황 */
   marketingExclusion?: { listedSkuCount: number; models: string[]; skuCount: number; userSkus?: Array<{ skuId: string; productName: string; at: string }> };
   /** 제품DB 기준 단종 대상·단종해제 대상 목록 */
-  statusLists?: { discontinue: StatusListRow[]; release: StatusListRow[]; reregisteredExcluded?: string[] } | null;
+  statusLists?: { discontinue: StatusListRow[]; release: StatusListRow[]; discontinuePending?: (StatusListRow & { clearedAt: string })[]; reregisteredExcluded?: string[] } | null;
   /** 가장 최근에 한꺼번에 비운 목록(되살리기용) */
   statusListLastCleared?: Partial<Record<"discontinue" | "release", { at: string; count: number } | null>>;
   /** 단종해제 신청 완료를 누른 SKU(SKU → 신청 시각) */
@@ -606,6 +608,15 @@ export default function ShipmentReceiptsPage() {
         statusLists: current.statusLists && list && action !== "mark-requested" ? {
           ...current.statusLists,
           [list.kind]: current.statusLists[list.kind].filter((row) => !list.keys.includes(row.key)),
+          // 2026-10-29: 비운 단종 줄(옛 탭 출처)은 쿠팡이 처리할 때까지 '신청 완료 · 쿠팡 처리 대기' 칸으로 옮긴다(서버 계산과 같은 규칙).
+          ...(list.kind === "discontinue" ? {
+            discontinuePending: [
+              ...(current.statusLists.discontinuePending || []).filter((row) => !list.keys.includes(row.key)),
+              ...current.statusLists.discontinue
+                .filter((row) => list.keys.includes(row.key) && DISCONTINUE_OLD_TAB_REASONS.includes(row.reason))
+                .map((row) => ({ ...row, clearedAt: new Date().toISOString() })),
+            ],
+          } : {}),
         } : current.statusLists,
       });
       followUpStale.current = true;
@@ -1742,7 +1753,10 @@ export default function ShipmentReceiptsPage() {
             {!fixture && (
               <DiscontinueByCode
                 autoRows={discontinueList}
+                pendingRows={payload?.statusLists?.discontinuePending || []}
                 latestOrderable={latestOrderable}
+                onCheckLatest={() => void checkLatestOrderable()}
+                checkingLatest={Boolean(routingKeys["supply:latest-orderable"])}
                 clearing={Boolean(routingKeys["supply:clear-list:discontinue"])}
                 onClearAuto={(keys) => supplyCheck("clear-list", "", "", { kind: "discontinue", keys })}
                 onDone={(text, isError) => {
