@@ -137,36 +137,92 @@
       if (!response.dated) pdfBatch.textContent = `${dateSelect.value || "이 날짜"} 폴더가 아직 없어 쉽먼트출력세트 폴더를 열었습니다. PDF를 받으면 날짜 폴더가 생깁니다.`;
     } catch (error) { pdfBatch.textContent = error.message; }
   });
+  // 0.9.14(2026-10-29): 쿠팡 목록이 10개씩 쪽으로 나뉘어 있어 첫 쪽만 받던 문제 → 쪽 번호(1·2·3…)와 다음(›) 버튼을 스스로 눌러 끝까지 받는다.
+  const pageSignature = () => shipmentRows().map(row => row.shipment).join(",");
+  const clickTarget = element => element.closest("a, button, li") || element;
+  const isDisabled = element => { const target = clickTarget(element); return Boolean(target.disabled) || target.getAttribute("aria-disabled") === "true" || [target, target.parentElement].some(node => /disabled/i.test(node?.className || "")); };
+  const isActive = element => { const target = clickTarget(element); return target.getAttribute("aria-current") === "page" || [target, target.parentElement].some(node => /(^|[\s_-])(active|current|selected|on)([\s_-]|$)/i.test(node?.className || "")); };
+  /** 표 아래 쪽 번호 묶음(숫자 3개 이상이 한 곳에 모인 곳)을 찾는다. 없으면 null(한 쪽짜리 목록). */
+  function pagination() {
+    const leaves = [...document.querySelectorAll("a, button, li, span")].filter(element => !element.closest("table") && /^\d{1,3}$/.test(textOf(element)) && !element.querySelector("a, button, li, span, div"));
+    for (const leaf of leaves) {
+      let node = leaf.parentElement;
+      for (let depth = 0; node && depth < 4; depth += 1, node = node.parentElement) {
+        const inside = leaves.filter(item => node.contains(item));
+        const values = [...new Set(inside.map(item => Number(textOf(item))))];
+        if (values.length < 3) continue;
+        const items = [...new Map(inside.map(item => [clickTarget(item), { value: Number(textOf(item)), target: clickTarget(item), active: isActive(item) }])).values()];
+        const arrows = [...node.querySelectorAll("a, button, li")].filter(item => !/\d/.test(textOf(item)) && !item.querySelector("a, button, li"));
+        const last = inside[inside.length - 1];
+        const after = arrows.filter(item => last.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING);
+        return { items, next: after[after.length - 1] || null };
+      }
+    }
+    return null;
+  }
+  async function waitFor(condition, ms) { const end = Date.now() + ms; while (Date.now() < end) { if (condition()) return true; await wait(250); } return false; }
   pdfAll.addEventListener("click", async () => {
     const date = dateSelect.value;
-    const rows = shipmentRows().filter(row => row.date === date);
-    if (!date || !rows.length) { pdfBatch.textContent = "이 화면 목록에 그 날짜 쉽먼트가 없습니다. 쿠팡에서 검색한 뒤 다시 눌러 주세요."; return; }
+    if (!date || !shipmentRows().length) { pdfBatch.textContent = "이 화면에 쉽먼트 목록이 없습니다. 쿠팡에서 검색한 뒤 다시 눌러 주세요."; return; }
     pdfBusy = true; pdfAll.disabled = dateSelect.disabled = true;
     const done = await readDone();
-    let clicked = 0, skipped = 0;
-    try {
-      for (const row of rows) {
+    let clicked = 0, skipped = 0, total = 0, pages = 0;
+    const seen = new Set(), visitedPages = new Set();
+    async function readPage(label) {
+      pages += 1;
+      for (const row of shipmentRows().filter(item => item.date === date && !seen.has(item.shipment))) {
+        seen.add(row.shipment); total += 1;
         for (const [kind, button, name] of [["Label", row.label, "Label"], ["ManiFest", row.manifest, "내역서"]]) {
           if (!button) continue;
           if (done[`${row.shipment}:${kind}`]) { skipped += 1; continue; }
-          pdfBatch.textContent = `${date} 쉽먼트 ${rows.length}건 받는 중… ${row.shipment} ${name}`;
+          pdfBatch.textContent = `${date} 쉽먼트 ${total}건째${label} 받는 중… ${row.shipment} ${name}`;
           button.click();
           clicked += 1;
           await wait(2500);
         }
       }
+    }
+    try {
+      await readPage("");
+      for (let guard = 0; guard < 60; guard += 1) {
+        const pager = pagination();
+        if (!pager) break;
+        for (const item of pager.items) if (item.active) visitedPages.add(item.value);
+        const nextPage = pager.items.filter(item => !visitedPages.has(item.value)).sort((a, b) => a.value - b.value)[0];
+        if (nextPage) {
+          visitedPages.add(nextPage.value);
+          pdfBatch.textContent = `${date}: ${nextPage.value}쪽으로 넘어가는 중…`;
+          const before = pageSignature();
+          nextPage.target.click();
+          await waitFor(() => pageSignature() !== before, 6000);
+          await wait(600);
+          await readPage(` (${nextPage.value}쪽)`);
+          continue;
+        }
+        if (pager.next && !isDisabled(pager.next)) {
+          const before = `${pager.items.map(item => item.value).join(",")}|${pageSignature()}`;
+          pdfBatch.textContent = `${date}: 다음 쪽 묶음으로 넘어가는 중…`;
+          clickTarget(pager.next).click();
+          const changed = await waitFor(() => { const now = pagination(); return !now || `${now.items.map(item => item.value).join(",")}|${pageSignature()}` !== before; }, 6000);
+          if (!changed) break;
+          await wait(600);
+          await readPage(" (다음 쪽 묶음)");
+          continue;
+        }
+        break;
+      }
+      if (!total) { pdfBatch.textContent = `${date} 쉽먼트를 찾지 못했습니다. 쿠팡에서 검색한 뒤 다시 눌러 주세요.`; return; }
       // 저장이 다 끝나면(최대 90초) NOID-B 날짜 작업 화면을 열어 출력세트를 자동으로 만든다.
       const failedBefore = pdfFailed;
-      pdfBatch.textContent = `${date} 쉽먼트 ${rows.length}건: 새로 받기 ${clicked}개${skipped ? ` · 이미 받은 ${skipped}개 건너뜀` : ""}. G드라이브 저장을 기다리는 중…`;
+      pdfBatch.textContent = `${date} 쉽먼트 ${total}건(${pages}쪽 확인): 새로 받기 ${clicked}개${skipped ? ` · 이미 받은 ${skipped}개 건너뜀` : ""}. G드라이브 저장을 기다리는 중…`;
       const deadline = Date.now() + 90000;
       while (Date.now() < deadline && (pendingSaves > 0 || Date.now() - lastPdfEventAt < 3000)) await wait(500);
       if (pdfFailed > failedBefore || pendingSaves > 0) {
         pdfBatch.textContent = `${date}: 저장하지 못한 PDF가 있어 출력세트를 자동으로 만들지 않았습니다. 아래 결과를 확인한 뒤 다시 눌러 주세요.`;
       } else {
         await chrome.runtime.sendMessage({ type: "NOIDB_OPEN_OUTPUT_SET", date }).catch(() => null);
-        pdfBatch.textContent = `${date} 쉽먼트 ${rows.length}건 저장 끝 (새로 ${clicked}개${skipped ? ` · 이미 받은 ${skipped}개` : ""}). NOID-B에서 출력세트를 자동으로 만드는 중입니다.`;
+        pdfBatch.textContent = `${date} 쉽먼트 ${total}건(${pages}쪽 확인) 저장 끝 (새로 ${clicked}개${skipped ? ` · 이미 받은 ${skipped}개` : ""}). NOID-B에서 출력세트를 자동으로 만드는 중입니다.`;
       }
-       ;
     } finally { pdfBusy = false; pdfAll.disabled = dateSelect.disabled = false; }
   });
   placePanel();
