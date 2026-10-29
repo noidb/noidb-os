@@ -947,6 +947,8 @@ export default function ShipmentReceiptsPage() {
   };
   // 지금 발주가능상태(제품DB 기준). 정상이 아니면 쿠팡에 재발주요청을 할 수 없다.
   const currentOrderStatus = (skuId: string) => payload?.orderStatuses?.[skuId] || "";
+  // 2026-10-29: 단종해제를 눌러 둔 SKU가 정상으로 바뀌었으면 '정상 전환됨' 표시를 붙인다(새로고침 때 제품DB 발주가능상태 기준).
+  const releasedToNormal = (skuId: string) => supplyChecks[skuId]?.decision === "release" && currentOrderStatus(skuId) === "정상";
   // 2026-10-21 사용자 요청: 단종확인한 SKU, 그리고 거래처발주·기존 발주로 처리한 뒤 이미 단종된(발주가능상태가 정상이 아니고 단종해제를 고르지 않은) SKU는 목록에서 뺀다.
   // 단종해제를 고른 SKU는 '단종해제 승인 대기'로 남기고, 쿠팡이 정상으로 바꾸면 자동으로 '처리 전'이 되어 재발주요청 대상이 된다.
   const hiddenAsDiscontinued = (line: LogisticsReceiptBoardLine) => {
@@ -1070,6 +1072,7 @@ export default function ShipmentReceiptsPage() {
           const busyLine = busy || routingKeys[line.lineKey];
           if (status === "처리 전") return (
             <div className={styles.decisionRow}>
+              {releasedToNormal(line.skuId) && <span className={styles.meta} style={{ gridColumn: "span 2", textAlign: "center" }}>정상 전환됨 · 재발주요청 가능</span>}
               <button className={`softBeigeButton ${styles.decisionButton}`} style={{ gridColumn: "span 2" }} disabled={busyLine} onClick={() => void toggleReorderExclusion(line, "exclude")}>
                 재발주요청 제외
               </button>
@@ -1089,7 +1092,7 @@ export default function ShipmentReceiptsPage() {
           );
           if ((line.route && line.route.decision !== "reorder") || covered[line.lineKey]) return (
             <div className={styles.decisionRow}>
-              <span className={styles.meta} style={{ gridColumn: "span 2", textAlign: "center" }}>{status}</span>
+              <span className={styles.meta} style={{ gridColumn: "span 2", textAlign: "center" }}>{status}{releasedToNormal(line.skuId) ? " · 정상 전환됨" : ""}</span>
               {/* 2026-10-21: 두 버튼을 같은 크기로 한 줄에 */}
               <div style={{ gridColumn: "span 2", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
                 <button className={`softSageButton ${styles.decisionButton}`} disabled={busyLine} onClick={() => void moveToReorder(line, status)}>
