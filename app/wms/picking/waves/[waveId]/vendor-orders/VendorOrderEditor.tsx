@@ -1116,7 +1116,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                       compact={params.waveId.startsWith(VENDOR_QUEUE_PREFIX)}
                       onReceivingSaved={saved => {
                         if (processingSent) { handleSentLineSaved(saved); return; }
-                        const receipt = { isStockReplenishment:saved.isStockReplenishment, receivingCompletedAt:saved.receivingCompletedAt, receivingCompletionToken:saved.receivingCompletionToken, receivedQuantity:saved.receivedQuantity, receivedUnitPrice:saved.receivedUnitPrice, receivedVat:saved.receivedVat, receivedCostVatIncluded:saved.receivedCostVatIncluded, receivedUsedImmediatelyAt:saved.receivedUsedImmediatelyAt, receivedCostAppliedAt:saved.receivedCostAppliedAt, receivingHistory:saved.receivingHistory, updatedAt:saved.updatedAt };
+                        const receipt = { resultMemo:saved.resultMemo, isStockReplenishment:saved.isStockReplenishment, receivingCompletedAt:saved.receivingCompletedAt, receivingCompletionToken:saved.receivingCompletionToken, receivedQuantity:saved.receivedQuantity, receivedUnitPrice:saved.receivedUnitPrice, receivedVat:saved.receivedVat, receivedCostVatIncluded:saved.receivedCostVatIncluded, receivedUsedImmediatelyAt:saved.receivedUsedImmediatelyAt, receivedCostAppliedAt:saved.receivedCostAppliedAt, receivingHistory:saved.receivingHistory, updatedAt:saved.updatedAt };
                         setLines(previous => previous.map(item => item.id === saved.id ? {...item,...receipt} : item));
                         const baseline = lineBaselines.current.get(saved.id);
                         if(baseline) lineBaselines.current.set(saved.id,{...baseline,...receipt});
@@ -1443,6 +1443,9 @@ function VendorOrderLineCard({
   supplyPrice?: string;
   onCostSaved?: (cost: string, skuIds?: string[]) => void;
 }) {
+  // 2026-11-02: 거래처 묶음이 아직 발주중으로 안 넘어가도, 이미 주문완료한 줄에는 입고 결과 메뉴(입고완료·단종·지연·결과 메모·원가)를 같이 보여준다.
+  // 거래처 수정·삭제는 아래 기존 버튼(거래처 수정·상품 삭제)이 이미 있어 여기서는 뺀다.
+  const orderedDraft = !processingSent && editable && Boolean(line.orderedAt);
   const pasteUploading = useRef(false);
   const [imageEditOpen, setImageEditOpen] = useState(false);
   const [pendingImageUrl, setPendingImageUrl] = useState<string | null>(null);
@@ -1733,17 +1736,17 @@ function VendorOrderLineCard({
         {delaySummary?.active && <span style={{ color: "#a33b2e", fontSize: "12px", fontWeight: 800 }}>입고지연 · {receivingDelayDate(delaySummary.recentDelayedAt)}</span>}
       </div>
       {delaySummary?.active && delaySummary.memo && <p style={{ margin: "6px 0 0", fontSize: "12px", color: wmsColors.muted, overflowWrap: "anywhere" }}>{delaySummary.memo}</p>}
-      {processingSent && <div aria-label="상품 결과처리" style={{display:"grid",gridTemplateColumns:"repeat(3, minmax(0, 1fr))",gridAutoRows:"minmax(48px, 1fr)",gap:12,marginTop:12}}>
+      {(processingSent || orderedDraft) && <div aria-label="상품 결과처리" style={{display:"grid",gridTemplateColumns:"repeat(3, minmax(0, 1fr))",gridAutoRows:"minmax(48px, 1fr)",gap:12,marginTop:12}}>
         <CompleteReceivingButton line={line} stockOnly onSaved={onReceivingSaved} style={{height:"100%"}} />
         <button type="button" onClick={() => handleSetCatalogStatus("단종")} disabled={Boolean(statusSaving)} style={{...wmsWarnButton,width:"100%",height:"100%",minHeight:48,fontSize:13}}>{statusSaving === "단종" ? "단종으로 이동 중..." : "단종으로 이동"}</button>
-        <SentVendorChangeButton line={line} options={knownVendorNames} onMoved={onVendorMoved} style={{height:"100%"}} />
+        {processingSent && <SentVendorChangeButton line={line} options={knownVendorNames} onMoved={onVendorMoved} style={{height:"100%"}} />}
         <button type="button" disabled={delayDisabled} onClick={onDelay} style={{...wmsSecondaryButton,width:"100%",height:"100%",minHeight:48,fontSize:13}}>{delaySummary?.active ? "입고지연 해제" : "입고지연"}</button>
-        {deletionAvailable && <button type="button" onClick={onRemove} disabled={Boolean(deleteBlockReason) || optionsBusy} style={{...wmsWarnButton,width:"100%",height:"100%",minHeight:48,fontSize:13,opacity:deleteBlockReason ? .5 : 1}}>삭제</button>}
+        {processingSent && deletionAvailable && <button type="button" onClick={onRemove} disabled={Boolean(deleteBlockReason) || optionsBusy} style={{...wmsWarnButton,width:"100%",height:"100%",minHeight:48,fontSize:13,opacity:deleteBlockReason ? .5 : 1}}>삭제</button>}
       </div>}
-      {processingSent && <SentVendorMemoInput line={line} disabled={delayDisabled || Boolean(optionsBusy)} onSaved={onReceivingSaved} />}
+      {(processingSent || orderedDraft) && <SentVendorMemoInput line={line} disabled={delayDisabled || Boolean(optionsBusy)} onSaved={onReceivingSaved} />}
       {/* 영수증 단가가 다르면 여기서 받은 수량·입고단가를 고치고, 확인 후 제품DB 원가(부가세 포함)에 백업과 함께 반영한다. */}
-      {processingSent && <CostPriceEditor skuId={line.skuId} currentCost={currentCost} supplyPrice={supplyPrice} onSaved={onCostSaved} />}
-      {processingSent && statusMessage && <p role="status" style={{fontSize:12,color:wmsColors.warn}}>{statusMessage}</p>}
+      {(processingSent || orderedDraft) && <CostPriceEditor skuId={line.skuId} currentCost={currentCost} supplyPrice={supplyPrice} onSaved={onCostSaved} />}
+      {(processingSent || orderedDraft) && statusMessage && <p role="status" style={{fontSize:12,color:wmsColors.warn}}>{statusMessage}</p>}
       {processingSent && deletionAvailable && deleteBlockReason && <p style={{fontSize:12,color:wmsColors.muted}}>{deleteBlockReason}</p>}
 
       {partialCompletion && <p style={{ color: wmsColors.warn, fontSize: "12px" }}>일부 미납분은 미납분재발주요청이 완료됐습니다. 남은 발주가 있어 상품을 유지했으니 실제 부족수량을 확인해 주세요.</p>}

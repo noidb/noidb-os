@@ -271,7 +271,7 @@ export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot,
     next.vendorOrderLines=next.vendorOrderLines.map(line=>line.id===source.id?{...line,receivingDelayedAt:mutation.delayed?(active?line.receivingDelayedAt:mutation.now):line.receivingDelayedAt,receivingDelayReleasedAt:mutation.delayed?undefined:mutation.now,receivingDelayMemo:mutation.memo,updatedAt:mutation.now}:line);
   } else if (mutation.action === "setSentVendorMemo") {
     const source = next.vendorOrderLines.find(line => line.id === mutation.lineId);
-    if (!source || isVendorLineResolved(source) || next.deletedVendorLineIds[source.id] || next.deletedVendorDraftIds[source.draftId] || !next.vendorOrderDrafts.some(draft => draft.id === source.draftId && draft.status === "sent")) throw new Error("결과 메모를 남길 전송완료 상품을 다시 확인해 주세요.");
+    if (!source || isVendorLineResolved(source) || next.deletedVendorLineIds[source.id] || next.deletedVendorDraftIds[source.draftId] || (!source.orderedAt && !next.vendorOrderDrafts.some(draft => draft.id === source.draftId && draft.status === "sent"))) throw new Error("결과 메모를 남길 전송완료 상품을 다시 확인해 주세요.");
     if ((source.resultMemo || "") === mutation.memo) return current;
     if (source.updatedAt !== mutation.expectedUpdatedAt) throw new Error("상품 처리 상태가 변경됐습니다. 최신 목록에서 다시 확인해 주세요.");
     next.vendorOrderLines = next.vendorOrderLines.map(line => line.id === source.id ? { ...line, resultMemo: mutation.memo, updatedAt: mutation.now } : line);
