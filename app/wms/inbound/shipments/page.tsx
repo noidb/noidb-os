@@ -881,7 +881,9 @@ export default function ShipmentReceiptsPage() {
   const lineBySku = new Map(lines.map((line) => [line.skuId, line]));
   // 2026-10-11: 추가 발주가 나온(초도가 이미 팔린) 마케팅 후보는 기본으로 체크를 뺀다. 사용자가 직접 바꾸면 그 값을 따른다.
   const laterOrders = payload?.laterOrders || {};
-  const isMarketingChecked = (lineKey: string) => marketingSelected[lineKey] ?? !laterOrders[lineKey];
+  // 2026-11-02: 이미 처리됐다가 재수집으로 수량이 바뀐 줄(review)은 쿠폰·광고로 다시 보낼 수 없다 → 체크할 수 없고 목록 비우기 때 제외로만 빠진다.
+  const isMarketingReview = (lineKey: string) => lineByKey.get(lineKey)?.state === "review";
+  const isMarketingChecked = (lineKey: string) => !isMarketingReview(lineKey) && (marketingSelected[lineKey] ?? !laterOrders[lineKey]);
   const supplyChecks = payload?.supplyStatusChecks || {};
   // 공급상태가 정상이 아니어서 검토로 빠진 줄(단종확인·단종해제 대상)
   const isSupplyReview = (line: LogisticsReceiptBoardLine) =>
@@ -2144,6 +2146,7 @@ export default function ShipmentReceiptsPage() {
                         <input
                           type="checkbox"
                           checked={isMarketingChecked(line.lineKey)}
+                          disabled={isMarketingReview(line.lineKey)}
                           onChange={(event) =>
                             setMarketingSelected((current) => ({
                               ...current,
@@ -2171,6 +2174,11 @@ export default function ShipmentReceiptsPage() {
                           {payload?.orderStatuses?.[line.skuId] && payload.orderStatuses[line.skuId] !== "정상" && (
                             <small style={{ color: "#fff", background: "#b5524a", borderRadius: "6px", padding: "2px 8px", fontWeight: 800, alignSelf: "flex-start" }}>
                               발주상태 {payload.orderStatuses[line.skuId]}
+                            </small>
+                          )}
+                          {isMarketingReview(line.lineKey) && (
+                            <small style={{ color: "#a6614e", fontWeight: 700 }}>
+                              이미 처리한 입고분 · 재수집 뒤 수량 변경(보낼 수 없음, 목록 비우기 때 제외로 빠집니다)
                             </small>
                           )}
                           {laterOrders[line.lineKey] && (

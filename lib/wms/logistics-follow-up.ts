@@ -88,8 +88,13 @@ export function queueMarketing(workspace: WeeklyWorkspace, targets: LogisticsRec
   const selected = exactKeys(input.lineKeys, true); const excluded = input.excludedLineKeys === undefined ? [] : exactKeys(input.excludedLineKeys, true);
   if (!selected.length && !excluded.length) throw new Error("선택 또는 제외할 초도 입고 후보를 확인해 주세요.");
   if (selected.some(key => excluded.includes(key))) throw new Error("선택과 제외 목록이 겹칩니다.");
-  const candidates = new Map(board.lines.filter(row => row.kind === "marketing" && row.state === "ready" && !activeMarketingExclusionKeys(workspace).has(row.lineKey)).map(row => [row.lineKey, row]));
-  if ([...selected, ...excluded].some(key => !candidates.has(key))) throw new Error("현재 초도 입고 후보만 선택 또는 제외할 수 있습니다.");
+  const activeExcluded = activeMarketingExclusionKeys(workspace);
+  const candidates = new Map(board.lines.filter(row => row.kind === "marketing" && row.state === "ready" && !activeExcluded.has(row.lineKey)).map(row => [row.lineKey, row]));
+  // 2026-11-02: 이미 처리했다가 재수집으로 수량이 바뀐 줄(review)은 쿠폰·광고로 다시 보낼 수는 없지만, 목록 비우기 때 제외(숨김)로는 받는다.
+  // 예전에는 이런 줄이 하나라도 섞이면 '현재 초도 입고 후보만…' 오류로 묶음 전체가 거절됐다.
+  const reviewRows = new Map(board.lines.filter(row => row.kind === "marketing" && row.state === "review" && !activeExcluded.has(row.lineKey)).map(row => [row.lineKey, row]));
+  if (selected.some(key => !candidates.has(key))) throw new Error("현재 초도 입고 후보만 쿠폰·광고로 보낼 수 있습니다. 이미 처리했던 입고분은 체크를 빼고 다시 눌러 주세요.");
+  if (excluded.some(key => !candidates.has(key) && !reviewRows.has(key))) throw new Error("현재 초도 입고 후보만 선택 또는 제외할 수 있습니다.");
   // Validate the entire batch against a copy before creating any source run.
   // 2026-10-21: 같은 SKU가 여러 쉽먼트에 1개씩 들어온 줄을 함께 보내면 둘째 줄이 '이미 검토 목록에 있음'으로 막혀
   // 묶음 전체가 실패했다. 파일 생성 때 SKU당 한 줄로 합쳐지므로(batchRuns·transientRun) 같은 SKU도 함께 받는다.
@@ -103,7 +108,8 @@ export function queueMarketing(workspace: WeeklyWorkspace, targets: LogisticsRec
   }
   if (excluded.length) {
     const history = workspace.logisticsFollowUp?.exclusions || [];
-    workspace.logisticsFollowUp = { ...workspace.logisticsFollowUp, exclusions: [...history, ...excluded.map(key => ({ lineKey: key, sourceFingerprint: receiptSourceFingerprint(candidates.get(key)!), skuId: candidates.get(key)!.skuId, at, dismissed: true }))] };
+    const rowOf = (key: string) => (candidates.get(key) || reviewRows.get(key))!;
+    workspace.logisticsFollowUp = { ...workspace.logisticsFollowUp, exclusions: [...history, ...excluded.map(key => ({ lineKey: key, sourceFingerprint: receiptSourceFingerprint(rowOf(key)), skuId: rowOf(key).skuId, at, dismissed: true }))] };
   }
   return logisticsFollowUpResponse(workspace, board);
 }
