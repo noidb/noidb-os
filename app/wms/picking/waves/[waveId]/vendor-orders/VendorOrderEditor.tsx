@@ -1446,6 +1446,8 @@ function VendorOrderLineCard({
   // 2026-11-02: 거래처 묶음이 아직 발주중으로 안 넘어가도, 이미 주문완료한 줄에는 입고 결과 메뉴(입고완료·단종·지연·결과 메모·원가)를 같이 보여준다.
   // 거래처 수정·삭제는 아래 기존 버튼(거래처 수정·상품 삭제)이 이미 있어 여기서는 뺀다.
   const orderedDraft = !processingSent && editable && Boolean(line.orderedAt);
+  // 주문완료한 줄은 발주중 묶음과 같은 결과처리 화면으로 보여준다(사진·수량·거래처·메모 수정칸은 주문완료를 취소하면 다시 나온다).
+  const editView = editable && !orderedDraft;
   const pasteUploading = useRef(false);
   const [imageEditOpen, setImageEditOpen] = useState(false);
   const [pendingImageUrl, setPendingImageUrl] = useState<string | null>(null);
@@ -1476,7 +1478,7 @@ function VendorOrderLineCard({
   }, [line.id]);
 
   const { option: displayOption } = resolveDisplayNameAndOption(line.productName, line.optionLabel);
-  const photoEditable = editable && !optionsBusy;
+  const photoEditable = editView && !optionsBusy;
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
 
   /** 카드 클릭 후 Ctrl+C — 오른쪽 마우스 '이미지 복사' 없이 카드 이미지를 그대로 복사한다(2026-10-22).
@@ -1619,9 +1621,9 @@ function VendorOrderLineCard({
       if (images.length > 1) { setImageSaveError("한 상품에는 사진 한 장씩 끌어 놓아 주세요."); return; }
       if (images[0]) void pastePhoto(images[0]); else setImageSaveError("웹 링크 대신 이미지 파일을 끌어 놓거나 복사해 주세요.");
     }} style={{ ...wmsOuterCard, padding: "12px", marginBottom: "10px", height: compact ? "100%" : undefined, boxSizing: "border-box", display: compact ? "flex" : undefined, flexDirection: compact ? "column" : undefined, outline: imageDragActive ? `3px solid ${wmsColors.green}` : undefined, outlineOffset: imageDragActive ? "2px" : undefined }}>
-      <VendorOrderCardPreview line={line} vendorName={line.vendorName} orderDate={orderDate} onEditImage={editable ? () => setImageEditOpen(true) : undefined} />
+      <VendorOrderCardPreview line={line} vendorName={line.vendorName} orderDate={orderDate} onEditImage={editView ? () => setImageEditOpen(true) : undefined} />
       {copyMessage ? <p role="status" style={{ margin: "8px 0 0", fontSize: 12, fontWeight: 700, color: wmsColors.muted }}>{copyMessage}</p>
-        : <p style={{ margin: "8px 0 0", fontSize: 12, color: wmsColors.muted }}>{editable ? "클릭 후 Ctrl+C 복사 · 사진은 끌어 놓거나 Ctrl+V" : "클릭 후 Ctrl+C 복사"}</p>}
+        : <p style={{ margin: "8px 0 0", fontSize: 12, color: wmsColors.muted }}>{editView ? "클릭 후 Ctrl+C 복사 · 사진은 끌어 놓거나 Ctrl+V" : "클릭 후 Ctrl+C 복사"}</p>}
       {imageSaving && <p role="status">사진 저장 중…</p>}
 
       {imageSaveError && (
@@ -1636,7 +1638,7 @@ function VendorOrderLineCard({
       )}
 
       {line.isStockReplenishment && <p data-stock-replenishment style={{ margin: "8px 0", padding: "8px", borderRadius: "8px", background: wmsColors.greenSoft, color: wmsColors.greenDark, textAlign: "center", fontSize: "13px", fontWeight: 700 }}>재고보충 · 쿠팡 미납분재발주요청 제외</p>}
-      {editable && line.isManuallyAdded && <label style={{ display: "flex", alignItems: "center", gap: "8px", minHeight: "44px", fontSize: "12px" }}>
+      {editView && line.isManuallyAdded && <label style={{ display: "flex", alignItems: "center", gap: "8px", minHeight: "44px", fontSize: "12px" }}>
         <input type="checkbox" aria-label="재고보충" checked={Boolean(line.isStockReplenishment)} onChange={event => onChange({ isStockReplenishment: event.target.checked })} style={{ width: "22px", height: "22px" }} />
         재고보충으로 주문 (여유 재고)
       </label>}
@@ -1658,7 +1660,7 @@ function VendorOrderLineCard({
           gap: "12px",
         }}
       >
-        {editable ? (
+        {editView ? (
           <input
             className="wms-input"
             value={line.optionLabel || displayOption}
@@ -1701,10 +1703,10 @@ function VendorOrderLineCard({
         <span>SKU <b style={{ color: wmsColors.ink, userSelect: "all" }}>{line.skuId || "미확인"}</b></span>
         <span>바코드 <b style={{ color: wmsColors.ink, userSelect: "all" }}>{line.barcode || "미등록"}</b></span>
       </div>}
-      <div style={{ marginTop: "14px", display: editable ? "block" : "none" }}>
+      <div style={{ marginTop: "14px", display: editView ? "block" : "none" }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "6px" }}>
           <div style={{ fontSize: "11px", color: wmsColors.muted, textAlign: "center" }}>주문수량</div>
-          {editable ? (
+          {editView ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
               <button onClick={() => onStep(-1)} style={stepperButtonStyle}>
                 −
@@ -1725,7 +1727,7 @@ function VendorOrderLineCard({
             <strong style={{ fontSize: "18px" }}>{line.shortageQuantity}개</strong>
           )}
           <div style={{ fontSize: "11px", color: wmsColors.warn, fontWeight: 700 }}>실제 부족수량 {line.actualShortageQuantity ?? line.shortageQuantity}개</div>
-          {editable && suggestedOrderQuantity !== undefined && <div style={{ fontSize: "12px", textAlign: "center", lineHeight: 1.6 }}>
+          {editView && suggestedOrderQuantity !== undefined && <div style={{ fontSize: "12px", textAlign: "center", lineHeight: 1.6 }}>
             {line.vendorName.trim() === "창성" ? "창성 · 미납수량 그대로" : line.vendorName.trim() === "모건쥬얼리" ? "10개 이하 10개" : "10개 미만 12개 · 이상 24개"} · 권장 {suggestedOrderQuantity}개
             {line.shortageQuantity !== suggestedOrderQuantity && <button type="button" style={{ ...wmsGhostButton, display: "block", margin: "6px auto 0", minHeight: 36 }} onClick={() => onChange({ shortageQuantity: suggestedOrderQuantity })}>권장 수량 적용</button>}
           </div>}
@@ -1740,9 +1742,18 @@ function VendorOrderLineCard({
         <CompleteReceivingButton line={line} stockOnly onSaved={onReceivingSaved} style={{height:"100%"}} />
         <button type="button" onClick={() => handleSetCatalogStatus("단종")} disabled={Boolean(statusSaving)} style={{...wmsWarnButton,width:"100%",height:"100%",minHeight:48,fontSize:13}}>{statusSaving === "단종" ? "단종으로 이동 중..." : "단종으로 이동"}</button>
         {processingSent && <SentVendorChangeButton line={line} options={knownVendorNames} onMoved={onVendorMoved} style={{height:"100%"}} />}
+        {orderedDraft && <button type="button" disabled={Boolean(optionsBusy)} onClick={() => { setVendorDraft(line.vendorName); setEditingVendor(true); setVendorSaveError(null); }} style={{...wmsSecondaryButton,width:"100%",height:"100%",minHeight:48,fontSize:13}}>거래처 수정</button>}
         <button type="button" disabled={delayDisabled} onClick={onDelay} style={{...wmsSecondaryButton,width:"100%",height:"100%",minHeight:48,fontSize:13}}>{delaySummary?.active ? "입고지연 해제" : "입고지연"}</button>
-        {processingSent && deletionAvailable && <button type="button" onClick={onRemove} disabled={Boolean(deleteBlockReason) || optionsBusy} style={{...wmsWarnButton,width:"100%",height:"100%",minHeight:48,fontSize:13,opacity:deleteBlockReason ? .5 : 1}}>삭제</button>}
+        {(processingSent || orderedDraft) && deletionAvailable && <button type="button" onClick={onRemove} disabled={Boolean(deleteBlockReason) || optionsBusy} style={{...wmsWarnButton,width:"100%",height:"100%",minHeight:48,fontSize:13,opacity:deleteBlockReason ? .5 : 1}}>삭제</button>}
+        {orderedDraft && onOrdered && <button type="button" onClick={() => { if (window.confirm(`SKU ${line.skuId} 주문완료를 취소할까요?`)) onOrdered(false); }} disabled={orderBusy} style={{...wmsSecondaryButton,width:"100%",height:"100%",minHeight:48,fontSize:13}}>주문완료 취소</button>}
       </div>}
+      {orderedDraft && editingVendor && <div style={{ marginTop: 10, display: "flex", gap: "6px", flexWrap: "wrap" }}>
+        <VendorNameSelect value={vendorDraft} onChange={setVendorDraft} options={knownVendorNames} disabled={vendorSaving} />
+        <button type="button" onClick={handleSaveVendorToCatalog} disabled={vendorSaving || !vendorDraft.trim() || vendorDraft.trim() === UNASSIGNED_VENDOR_NAME} style={{ ...wmsGhostButton, minHeight: "32px", padding: "0 8px", fontSize: "12px", flexShrink: 0, opacity: vendorSaving ? 0.6 : 1 }}>{vendorSaving ? "저장 중" : "수정 저장"}</button>
+        <button type="button" onClick={() => { setVendorDraft(line.vendorName); setEditingVendor(false); }} style={{ ...wmsSecondaryButton, minHeight: "32px", padding: "0 8px", fontSize: "12px" }}>취소</button>
+      </div>}
+      {orderedDraft && vendorSaveError && <p style={{ fontSize: 12, color: "#c0392b", margin: "6px 0 0" }}>{vendorSaveError}</p>}
+      {orderedDraft && deletionAvailable && deleteBlockReason && <p style={{fontSize:12,color:wmsColors.muted}}>{deleteBlockReason}</p>}
       {(processingSent || orderedDraft) && <SentVendorMemoInput line={line} disabled={delayDisabled || Boolean(optionsBusy)} onSaved={onReceivingSaved} />}
       {/* 영수증 단가가 다르면 여기서 받은 수량·입고단가를 고치고, 확인 후 제품DB 원가(부가세 포함)에 백업과 함께 반영한다. */}
       {(processingSent || orderedDraft) && <CostPriceEditor skuId={line.skuId} currentCost={currentCost} supplyPrice={supplyPrice} onSaved={onCostSaved} />}
@@ -1753,7 +1764,7 @@ function VendorOrderLineCard({
       <div data-vendor-option-slot style={{ height: processingSent && !onAddOptions ? 0 : "44px", marginTop: processingSent && !onAddOptions ? 0 : "10px" }}>
         {onAddOptions && <button type="button" disabled={optionsBusy} onClick={onAddOptions} style={{ ...wmsSecondaryButton, width: "100%", height: "44px", fontSize: "13px" }}>+ 옵션 추가</button>}
       </div>
-      {editable && (
+      {editView && (
         <div style={{ marginTop: "14px", display: "flex", flexDirection: "column", gap: "6px", paddingTop: "10px", borderTop: `1px dashed ${wmsColors.border}` }}>
           {!editingVendor ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
@@ -1786,7 +1797,7 @@ function VendorOrderLineCard({
         </div>
       )}
 
-      {(deletionAvailable || onOrdered) && !processingSent && <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: onOrdered && deletionAvailable ? "repeat(2, minmax(0, 1fr))" : "minmax(0, 1fr)", gap: 8 }}>
+      {(deletionAvailable || onOrdered) && !processingSent && !orderedDraft && <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: onOrdered && deletionAvailable ? "repeat(2, minmax(0, 1fr))" : "minmax(0, 1fr)", gap: 8 }}>
         {onOrdered && (line.orderedAt
           ? <button type="button" onClick={() => { if (window.confirm(`SKU ${line.skuId} 주문완료를 취소할까요?`)) onOrdered(false); }} disabled={orderBusy} style={{ ...wmsSecondaryButton, width: "100%", minHeight: 44, fontSize: 13 }}>주문완료 취소</button>
           : <button type="button" onClick={() => onOrdered(true)} disabled={orderBusy} title="거래처에 카톡으로 보낸 상품이면 누르세요. 이 거래처 상품을 모두 누르면 발주중으로 넘어갑니다." style={{ ...wmsGreenDarkButton, width: "100%", minHeight: 44, fontSize: 13, borderRadius: 8 }}>{orderBusy ? "저장 중..." : "주문완료"}</button>)}
