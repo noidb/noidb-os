@@ -279,7 +279,7 @@ export function applyPickingWaveStoreMutation(current: PickingWaveStoreSnapshot,
     const lineId = mutation.action === "completeVendorReceiving" ? mutation.before.id : mutation.lineId;
     const lineBefore = next.vendorOrderLines.find(line => line.id === lineId);
     const owner = lineBefore && next.vendorOrderDrafts.find(draft => draft.id === lineBefore.draftId);
-    if (!lineBefore || !owner || !["sent", "approved"].includes(owner.status) || lineBefore.orderExclusion || lineBefore.vendorTransfer || lineBefore.sentResolution || next.deletedVendorLineIds[lineBefore.id] || next.deletedVendorDraftIds[lineBefore.draftId]) throw new Error("입고완료할 전송·승인 발주 품목을 다시 확인해 주세요.");
+    if (!lineBefore || !owner || (!["sent", "approved"].includes(owner.status) && !lineBefore.orderedAt) || lineBefore.orderExclusion || lineBefore.vendorTransfer || lineBefore.sentResolution || next.deletedVendorLineIds[lineBefore.id] || next.deletedVendorDraftIds[lineBefore.draftId]) throw new Error("입고완료할 전송·승인 발주 품목을 다시 확인해 주세요.");
     let before = lineBefore;
     if (mutation.action === "completeVendorReceiving") before = mutation.before;
     else {
