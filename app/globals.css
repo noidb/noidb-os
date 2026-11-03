@@ -827,3 +827,9 @@ html,body{overflow-x:clip}
 @media (max-width:760px){
   .labelPdfRow{grid-template-columns:minmax(0,1fr);gap:8px}
 }
+
+/* 2026-11-03 카테고리 설정: 저장 버튼·결과 문구를 창 아래에 고정(긴 칸 목록을 펼쳐도 저장 결과가 보이게) */
+.categoryStickyBar{position:sticky;bottom:-18px;z-index:2;background:#fff;margin-top:14px;padding:8px 0 10px;border-top:1px solid #eee9e3}
+.categoryStickyBar .categoryActions{margin-top:6px}
+.categoryStickyBar .optionHint,.categoryStickyBar .optionError{margin:0 0 6px}
+.categoryStickyBar .optionHint{color:#3f574b;font-weight:700;font-size:15px}

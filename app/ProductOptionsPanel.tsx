@@ -412,11 +412,13 @@ export function CategoryManager({ config, send, setConfig, initialCategory, onCl
             </>
           )}
 
+          <div className="categoryStickyBar">
+          {message && <p className={/못|오류|없|이미|입력/.test(message) ? "optionError" : "optionHint"}>{message}</p>}
           <div className="categoryActions">
             <button type="button" className="softPinkButton" disabled={busy || !form.name.trim() || !form.letter} onClick={() => void save()}>{isNew ? "카테고리 추가" : "설정 저장"}</button>
             {!isNew && selected && <button type="button" className="softApricotButton" disabled={busy || config.categories.length <= 1} onClick={() => void remove()}>목록에서 지우기</button>}
           </div>
-          {message && <p className={/못|오류|없|이미|입력/.test(message) ? "optionError" : "optionHint"}>{message}</p>}
+          </div>
         </div>
       </div>
     </Modal>
