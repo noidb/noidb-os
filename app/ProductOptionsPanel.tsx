@@ -12,6 +12,7 @@ import { defaultProductOptions, normalizeProductOptions } from "@/lib/product-op
 import type { CategoryConfig, OptionListKey, ProductOptionsConfig, TemplateField, TemplateInfo } from "@/lib/product-options/types";
 
 const CACHE_KEY = "noidb-product-options";
+const DRAFT_CACHE_KEY = "noidb-product-options-category-drafts";
 const INFO_CACHE_KEY = "noidb-product-options-template-info";
 export const ADD_NEW_VALUE = "__add_new__";
 
@@ -256,18 +257,45 @@ export function CategoryManager({ config, send, setConfig, initialCategory, onCl
   const fileRef = useRef<HTMLInputElement>(null);
   const template = useTemplateInfo(config, isNew ? "" : selected);
 
-  useEffect(() => {
-    if (isNew) return;
-    const found = config.categories.find(item => item.name === selected);
-    setForm(found ? structuredClone(found) : { name: "", letter: "" });
-    setMessage("");
-  }, [selected, isNew, config]);
+  // 입력 중인 값은 저장 전에도 이 컴퓨터에 기억하고, 뒤에서 새 목록을 받아도 덮어쓰지 않는다(2026-11-03).
+  const dirty = useRef(false);
+  const lastKey = useRef("");
+  const draftKey = isNew ? "__new__" : selected;
+  const readDrafts = (): Record<string, CategoryConfig> => {
+    try { return JSON.parse(window.localStorage.getItem(DRAFT_CACHE_KEY) || "{}"); } catch { return {}; }
+  };
+  const writeDraft = (key: string, value: CategoryConfig | null) => {
+    try {
+      const all = readDrafts();
+      if (value) all[key] = value; else delete all[key];
+      window.localStorage.setItem(DRAFT_CACHE_KEY, JSON.stringify(all));
+    } catch { /* 저장 공간 없음 */ }
+  };
+  const editForm = (change: (prev: CategoryConfig) => CategoryConfig) => {
+    dirty.current = true;
+    setForm(prev => { const next = change(prev); writeDraft(draftKey, next); return next; });
+  };
 
-  const startNew = () => { setIsNew(true); setSelected(""); setForm({ name: "", letter: "" }); setMessage(""); };
+  useEffect(() => {
+    const found = isNew ? undefined : config.categories.find(item => item.name === selected);
+    if (lastKey.current === draftKey && dirty.current) {
+      // 같은 카테고리를 편집 중: 양식(올린 파일)만 새 값으로 맞추고 입력값은 그대로 둔다
+      if (found) setForm(prev => ({ ...prev, template: found.template }));
+      return;
+    }
+    lastKey.current = draftKey;
+    const draft = readDrafts()[draftKey];
+    dirty.current = Boolean(draft);
+    setForm(draft ? { ...draft, template: found?.template ?? draft.template } : found ? structuredClone(found) : { name: "", letter: "" });
+    setMessage(draft ? "저장하지 않은 입력값을 다시 불러왔습니다. 확인 후 '설정 저장'을 눌러주세요." : "");
+  }, [selected, isNew, config, draftKey]);
+
+  const startNew = () => { dirty.current = false; setIsNew(true); setSelected(""); setForm({ name: "", letter: "" }); setMessage(""); };
   const save = async () => {
     setBusy(true); setMessage("");
     try {
       await send({ action: "saveCategory", original: isNew ? "" : selected, category: form });
+      writeDraft(draftKey, null); dirty.current = false; lastKey.current = "";
       setIsNew(false);
       setSelected(form.name.trim());
       setMessage(isNew ? "저장했습니다. 이제 쿠팡 양식 파일을 올려주세요." : "저장했습니다.");
@@ -304,7 +332,7 @@ export function CategoryManager({ config, send, setConfig, initialCategory, onCl
   const fields = info?.fields.filter(field => !field.siteFilled) || [];
   const requiredFields = fields.filter(field => field.required);
   const optionalFields = fields.filter(field => !field.required);
-  const setDefault = (header: string, value: string) => setForm(prev => ({ ...prev, defaults: { ...(prev.defaults || {}), [header]: value } }));
+  const setDefault = (header: string, value: string) => editForm(prev => ({ ...prev, defaults: { ...(prev.defaults || {}), [header]: value } }));
   const emptyRequired = requiredFields.filter(field => !String(form.defaults?.[field.header] || "").trim());
   const hasTemplate = Boolean(info);
 
@@ -327,10 +355,10 @@ export function CategoryManager({ config, send, setConfig, initialCategory, onCl
         <div className="categoryManagerBody">
           <div className="categoryFormGrid">
             <label className="field"><span>카테고리 이름</span>
-              <input value={form.name} placeholder="예: 집게핀" onChange={e => setForm(prev => ({ ...prev, name: e.target.value }))} />
+              <input value={form.name} placeholder="예: 집게핀" onChange={e => editForm(prev => ({ ...prev, name: e.target.value }))} />
             </label>
             <label className="field"><span>모델명 글자(영어 소문자)</span>
-              <input value={form.letter} placeholder="예: h" maxLength={4} onChange={e => setForm(prev => ({ ...prev, letter: e.target.value.toLowerCase().replace(/[^a-z]/g, "") }))} />
+              <input value={form.letter} placeholder="예: h" maxLength={4} onChange={e => editForm(prev => ({ ...prev, letter: e.target.value.toLowerCase().replace(/[^a-z]/g, "") }))} />
               <small>{form.letter ? `여성 w${form.letter}0001 · 남성 m${form.letter}0001 · 남녀공용 u${form.letter}0001` : "다른 카테고리와 겹치지 않는 글자"}</small>
             </label>
           </div>
@@ -353,7 +381,7 @@ export function CategoryManager({ config, send, setConfig, initialCategory, onCl
               <div className="categoryFormGrid">
                 {config.genders.map(gender => (
                   <label className="field" key={gender}><span>{gender}</span>
-                    <select value={form.paths?.[gender] || ""} onChange={e => setForm(prev => ({ ...prev, paths: { ...(prev.paths || {}), [gender]: e.target.value } }))}>
+                    <select value={form.paths?.[gender] || ""} onChange={e => editForm(prev => ({ ...prev, paths: { ...(prev.paths || {}), [gender]: e.target.value } }))}>
                       <option value="">{form.template ? "(경로를 골라주세요)" : "(기본 경로 사용)"}</option>
                       {info.categoryPaths.map(path => <option key={path} value={path}>{path}</option>)}
                     </select>

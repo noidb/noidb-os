@@ -57,9 +57,9 @@ export async function changeProductOptions(change: (config: ProductOptionsConfig
         });
         return next;
       } catch (error) {
-        const conflict = error instanceof BlobPreconditionFailedError || /already exists/i.test(String((error as Error)?.message || ""));
+        const conflict = error instanceof BlobPreconditionFailedError || /already exists|precondition|etag/i.test(String((error as Error)?.message || ""));
         if (!conflict || attempt === 5) throw error;
-        await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)));
+        await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)));
       }
     }
     throw new Error("목록 설정을 저장하지 못했습니다. 잠시 뒤 다시 눌러주세요.");
