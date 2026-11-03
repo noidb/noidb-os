@@ -7,6 +7,8 @@ type RetiredTab = "재등록SKU" | "그 외 재등록SKU" | "판매중지SKU";
 /** 화면 표시 이름: 코드 안의 "재등록SKU"는 실적저조SKU 탭(2026-10-22 이름 변경). */
 const tabLabel = (name: string) => name === "재등록SKU" ? "실적저조SKU" : name === "보관" ? "비관리SKU" : name;
 const isRetired = (name: string): name is RetiredTab => name === "재등록SKU" || name === "그 외 재등록SKU" || name === "판매중지SKU";
+/** 옮길 곳 문구(표·휴대폰 카드 공통) */
+const targetLabel = (move: { source: string; target: string; mode: string }) => `${tabLabel(move.target)}${move.mode === "fill" ? " (제품DB 정보 채우기)" : move.mode === "clear-status" ? ` (제품DB에 이미 있음 · ${tabLabel(move.source)}에서 지움)` : move.mode === "delete-only" ? (isRetired(move.target) ? ` (${tabLabel(move.target)}에 이미 있음 · ${tabLabel(move.source)}에서만 지움)` : move.source === "보관" ? " (중복 · 비관리SKU에서만 지움)" : " (비관리SKU에 이미 있음 · 제품DB에서만 지움)") : ""}`;
 type Move = { source: "창고재확인" | "보관" | "제품DB" | "재등록SKU"; rowNumber: number; skuId: string; productName: string; result: string; orderableStatus: string; target: "보관" | "제품DB" | RetiredTab; mode: "append" | "clear-status" | "delete-only" | "fill"; release: boolean; pair?: string };
 type Fill = { cost: number; dimension: number; cells: Array<{ tab: string; row: number; skuId: string; model: string; field: string; value: string }>; conflicts: Array<{ model: string; field: string; values: string[]; used: string }> };
 type Preview = { token: string; pending: number; moves: Move[]; unknown: Array<{ rowNumber: number; skuId: string; productName: string; result: string }>; problems: string[]; fill?: Fill };
@@ -76,7 +78,22 @@ export default function WarehouseRecheckCleanup({ onDone, embedded = false, auto
             {preview.unknown.length ? ` · 기준 없는 결과 ${preview.unknown.length}건(그대로 둠)` : ""}
           </p>
           {preview.moves.length > 0 && (
-            <div className={`${styles.tableWrap} ${styles.copyScroll}`}>
+            <>
+            {/* 2026-11-03: 휴대폰(720px 이하)에서는 표 대신 줄마다 카드로 보여 준다. 컴퓨터 화면은 그대로 표. */}
+            <div className={styles.moveCards} aria-label="옮길 행 카드">
+              {preview.moves.map((move) => (
+                <div className={styles.moveCard} key={`card:${move.source}:${move.rowNumber}`}>
+                  <div className={styles.moveCardTop}>
+                    <strong>{move.skuId}</strong>
+                    <span>{tabLabel(move.source)} → {tabLabel(move.target)}</span>
+                  </div>
+                  <p className={styles.moveCardName}>{move.productName}</p>
+                  <p className={styles.moveCardInfo}>확인결과 {move.result || "-"} · 발주가능상태 <b className={move.release ? styles.moveCardRelease : undefined}>{move.orderableStatus || "-"}{move.release ? " → 단종해제" : ""}</b></p>
+                  {(move.mode !== "append") && <p className={styles.moveCardInfo}>{targetLabel(move)}</p>}
+                </div>
+              ))}
+            </div>
+            <div className={`${styles.tableWrap} ${styles.copyScroll} ${styles.moveTable}`}>
               <table className={`${styles.table} ${styles.copyTable}`} aria-label="옮길 행">
                 <thead><tr><th>있던 탭</th><th>SKU ID</th><th>상품명</th><th>확인결과</th><th>옮길 곳</th><th>발주가능상태</th></tr></thead>
                 <tbody>
@@ -86,13 +103,14 @@ export default function WarehouseRecheckCleanup({ onDone, embedded = false, auto
                       <td>{move.skuId}</td>
                       <td>{move.productName}</td>
                       <td>{move.result}</td>
-                      <td>{tabLabel(move.target)}{move.mode === "fill" ? " (제품DB 정보 채우기)" : move.mode === "clear-status" ? ` (제품DB에 이미 있음 · ${tabLabel(move.source)}에서 지움)` : move.mode === "delete-only" ? (isRetired(move.target) ? ` (${tabLabel(move.target)}에 이미 있음 · ${tabLabel(move.source)}에서만 지움)` : move.source === "보관" ? " (중복 · 비관리SKU에서만 지움)" : " (비관리SKU에 이미 있음 · 제품DB에서만 지움)") : ""}</td>
+                      <td>{targetLabel(move)}</td>
                       <td className={move.release ? styles.statusCell : undefined}>{move.orderableStatus}{move.release ? " → 단종해제" : ""}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            </>
           )}
           {preview.fill && preview.fill.cells.length > 0 && (
             <details className={styles.meta}>

@@ -805,3 +805,62 @@
     font-size: 17px;
   }
 }
+
+/* 2026-11-03 구글시트 정리 '옮길 행': 컴퓨터는 표, 휴대폰(720px 이하)은 줄마다 카드 */
+.moveCards {
+  display: none;
+}
+@media (max-width: 720px) {
+  .moveTable {
+    display: none;
+  }
+  .moveCards {
+    display: grid;
+    gap: 8px;
+    margin-top: 8px;
+    max-height: 420px;
+    overflow-y: auto;
+  }
+  .moveCard {
+    min-width: 0;
+    padding: 10px 12px;
+    border: 1px solid #e5dace;
+    border-radius: 10px;
+    background: #fff;
+  }
+  .moveCardTop {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 4px 10px;
+    align-items: baseline;
+  }
+  .moveCardTop strong {
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+  }
+  .moveCardTop span {
+    font-size: 12px;
+    font-weight: 800;
+    color: #4d6358;
+  }
+  .moveCardName {
+    margin: 4px 0 0;
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+  .moveCardInfo {
+    margin: 4px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #77716a;
+    overflow-wrap: anywhere;
+  }
+  .moveCardRelease {
+    color: #3f5a4b;
+    background: #e3ede6;
+    padding: 0 6px;
+    border-radius: 6px;
+  }
+}

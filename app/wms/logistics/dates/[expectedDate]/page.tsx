@@ -706,7 +706,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
       </ShipmentWorkflowStepCard>
 
       {/* 2026-10-21: 3번(쉽먼트파일)과 4번(출력세트) 사이 할 일 — 쿠팡 쉽먼트 화면에서 Label·내역서 PDF 받기 */}
-      <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "12px", margin: "12px 0 0", background: "#fff", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(160px, 260px)", gap: "10px", alignItems: "center" }}>
+      <div className="labelPdfRow" style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "12px", padding: "12px", margin: "12px 0 0", background: "#fff" }}>
         <div>
           <strong style={{ display: "block", fontSize: "14px" }}>Label·내역서 PDF 받기</strong>
           <span style={{ fontSize: "12px", color: wmsColors.muted }}>쿠팡 쉽먼트 화면의 확장 칸에서 이 날짜를 고르고 [이 날짜 Label·내역서 전부 받기]를 누르세요. PDF는 G드라이브 출력세트/입고예정일 폴더에 저장되고, 다 받으면 4번 출력세트가 자동으로 만들어집니다.</span>

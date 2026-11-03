@@ -99,7 +99,8 @@ export default function DailyRoutine() {
     <section aria-label="최신정보 업데이트" style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: "14px 16px", margin: "0 0 18px" }}>
       <h2 style={{ margin: "0 0 10px", fontSize: 18, color: wmsColors.ink, paddingLeft: 10, borderLeft: "4px solid #60766a" }}>최신정보 업데이트</h2>
       {note && <p role={note.error ? "alert" : "status"} style={{ margin: "0 0 10px", fontSize: 13, color: note.error ? "#a33" : "#3f574b" }}>{note.text}</p>}
-      <div style={{ display: "grid", gap: 8 }}>
+      {/* 2026-11-03: 안의 표가 넓어도 칸이 화면 밖으로 밀리지 않게 칸 너비를 화면에 고정(minmax(0,1fr)) */}
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 8 }}>
         {items.map((item, index) => {
           const isOpen = open === item.id;
           // 하기: 사이트 화면으로 이동(siteLink) 또는 이 자리에서 펼치기(body)
@@ -109,7 +110,7 @@ export default function DailyRoutine() {
               ? <button type="button" className="softSageButton" style={buttonStyle} onClick={() => { setRunKey((value) => value + 1); setOpen(item.id); }}>{item.label}</button>
               : <button type="button" className={isOpen ? "softApricotButton" : "softSageButton"} style={buttonStyle} aria-expanded={isOpen} onClick={() => { if (!isOpen) mark(item.id); setOpen(isOpen ? null : item.id); }}>{isOpen ? "접기" : item.label}</button>;
           return (
-            <article key={item.id} id={`routine-${item.id}`} style={{ border: "1px solid #e5dace", borderLeft: `5px solid ${accents[index % accents.length].bar}`, background: "#fbf8f4", borderRadius: 10, padding: "10px 12px" }}>
+            <article key={item.id} id={`routine-${item.id}`} style={{ border: "1px solid #e5dace", borderLeft: `5px solid ${accents[index % accents.length].bar}`, background: "#fbf8f4", borderRadius: 10, padding: "10px 12px", minWidth: 0 }}>
               {/* 2026-11-03: 휴대폰에서는 번호·제목 한 줄 → 설명 전체 폭 → 버튼이 맨 아래(globals.css .routineRow). 컴퓨터 화면은 그대로. */}
               <div className="routineRow">
                 <span className="routineBadge" style={{ width: 26, height: 26, borderRadius: 999, background: accents[index % accents.length].badgeBg, border: `1px solid ${accents[index % accents.length].badgeBorder}`, color: accents[index % accents.length].badgeText, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800 }}>{index + 1}</span>

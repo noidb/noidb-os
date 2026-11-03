@@ -821,3 +821,9 @@ html,body{overflow-x:clip}
   .routineTitle{align-self:center}
   .routineActions{margin-top:2px}
 }
+
+/* 2026-11-03 'Label·내역서 PDF 받기' 칸: 컴퓨터는 [설명 | 버튼] 나란히, 휴대폰은 설명 전체 폭 → 버튼 전체 폭 */
+.labelPdfRow{display:grid;grid-template-columns:minmax(0,1fr) minmax(160px,260px);gap:10px;align-items:center}
+@media (max-width:760px){
+  .labelPdfRow{grid-template-columns:minmax(0,1fr);gap:8px}
+}
