@@ -809,3 +809,15 @@ html,body{overflow-x:clip}
   .templateFieldRow{grid-template-columns:1fr}
   .optionManagerRow{grid-template-columns:1fr 40px 40px 80px 60px}
 }
+
+/* 2026-11-03 입고센터 '최신정보 업데이트' 카드: 컴퓨터는 [번호 | 제목·설명 | 버튼], 휴대폰은 번호·제목 → 설명 → 버튼(전체 폭) */
+.routineRow{display:grid;grid-template-columns:28px minmax(0,1fr) minmax(150px,220px);grid-template-areas:"badge title actions" "badge text actions";column-gap:10px;row-gap:2px;align-items:center}
+.routineBadge{grid-area:badge;align-self:center}
+.routineTitle{grid-area:title;align-self:end}
+.routineText{grid-area:text;align-self:start}
+.routineActions{grid-area:actions}
+@media (max-width:720px){
+  .routineRow{grid-template-columns:28px minmax(0,1fr);grid-template-areas:"badge title" "text text" "actions actions";row-gap:6px}
+  .routineTitle{align-self:center}
+  .routineActions{margin-top:2px}
+}

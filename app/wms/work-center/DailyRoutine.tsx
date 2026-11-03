@@ -8,7 +8,7 @@ import WimsRegistrationImportPanel from "@/app/product-registration/WimsRegistra
 import WarehouseRecheckCleanup from "@/app/wms/inbound/shipments/WarehouseRecheckCleanup";
 
 /**
- * 작업센터 맨 위 '자주 하는 일'(2026-10-21 사용자 요청).
+ * 작업센터 맨 위 '최신정보 업데이트'(2026-10-21 사용자 요청).
  * 매일·수시·며칠에 한 번 하는 일이 화면 여기저기 흩어져 있어 잊기 쉬워서 한곳에 모은다.
  * - '하기': 사이트 안에서 처리(공급상태 반영·구글시트 정리·WIMS 등록상태는 원래 화면의 같은 부품을 여기서 펼쳐 바로 실행).
  * - '바로가기': 그 일을 하는 쿠팡 화면을 새 탭으로 연다.
@@ -96,8 +96,8 @@ export default function DailyRoutine() {
     { bar: "#d9b8ab", badgeBg: "#f2dfd8", badgeBorder: "#d9b8ab", badgeText: "#8a5a4b" },
   ] as const;
   return (
-    <section aria-label="자주 하는 일" style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: "14px 16px", margin: "0 0 18px" }}>
-      <h2 style={{ margin: "0 0 10px", fontSize: 18, color: wmsColors.ink, paddingLeft: 10, borderLeft: "4px solid #60766a" }}>자주 하는 일</h2>
+    <section aria-label="최신정보 업데이트" style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: "14px 16px", margin: "0 0 18px" }}>
+      <h2 style={{ margin: "0 0 10px", fontSize: 18, color: wmsColors.ink, paddingLeft: 10, borderLeft: "4px solid #60766a" }}>최신정보 업데이트</h2>
       {note && <p role={note.error ? "alert" : "status"} style={{ margin: "0 0 10px", fontSize: 13, color: note.error ? "#a33" : "#3f574b" }}>{note.text}</p>}
       <div style={{ display: "grid", gap: 8 }}>
         {items.map((item, index) => {
@@ -110,16 +110,17 @@ export default function DailyRoutine() {
               : <button type="button" className={isOpen ? "softApricotButton" : "softSageButton"} style={buttonStyle} aria-expanded={isOpen} onClick={() => { if (!isOpen) mark(item.id); setOpen(isOpen ? null : item.id); }}>{isOpen ? "접기" : item.label}</button>;
           return (
             <article key={item.id} id={`routine-${item.id}`} style={{ border: "1px solid #e5dace", borderLeft: `5px solid ${accents[index % accents.length].bar}`, background: "#fbf8f4", borderRadius: 10, padding: "10px 12px" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "28px minmax(0, 1fr) minmax(150px, 220px)", gap: 10, alignItems: "center" }}>
-                <span style={{ width: 26, height: 26, borderRadius: 999, background: accents[index % accents.length].badgeBg, border: `1px solid ${accents[index % accents.length].badgeBorder}`, color: accents[index % accents.length].badgeText, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800 }}>{index + 1}</span>
-                <div style={{ minWidth: 0 }}>
-                  <strong style={{ display: "block", fontSize: 15, color: wmsColors.ink }}>{item.title}</strong>
+              {/* 2026-11-03: 휴대폰에서는 번호·제목 한 줄 → 설명 전체 폭 → 버튼이 맨 아래(globals.css .routineRow). 컴퓨터 화면은 그대로. */}
+              <div className="routineRow">
+                <span className="routineBadge" style={{ width: 26, height: 26, borderRadius: 999, background: accents[index % accents.length].badgeBg, border: `1px solid ${accents[index % accents.length].badgeBorder}`, color: accents[index % accents.length].badgeText, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800 }}>{index + 1}</span>
+                <strong className="routineTitle" style={{ display: "block", fontSize: 15, color: wmsColors.ink }}>{item.title}</strong>
+                <div className="routineText" style={{ minWidth: 0 }}>
                   <span style={{ display: "block", fontSize: 12, color: wmsColors.muted }}>{item.summary}</span>
                   <span style={{ display: "block", fontSize: 12, marginTop: 2, color: doneAt[item.id] ? "#4d6a5a" : wmsColors.muted, fontWeight: doneAt[item.id] ? 700 : 400 }}>
                     {!loaded ? "마지막 처리 확인 중…" : doneAt[item.id] ? `마지막 처리 ${timeLabel(doneAt[item.id])}` : "마지막 처리 기록 없음"}
                   </span>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: item.shortcut ? "1fr 1fr" : "1fr", gap: 6 }}>
+                <div className="routineActions" style={{ display: "grid", gridTemplateColumns: item.shortcut ? "1fr 1fr" : "1fr", gap: 6 }}>
                   {doButton}
                   {item.shortcut && <a className="softBeigeButton" style={buttonStyle} href={item.shortcut} target="_blank" rel="noreferrer" onClick={() => mark(item.id)}>바로가기</a>}
                 </div>

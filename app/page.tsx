@@ -3515,7 +3515,7 @@ export default function Home() {
         </div>
       </section>
 
-      {/* 2026-10-21: '9. 등록 진행상황(WIMS 상품등록상태)'은 입고센터 '자주 하는 일' 5번으로 옮겨 여기서는 뺐다. */}
+      {/* 2026-10-21: '9. 등록 진행상황(WIMS 상품등록상태)'은 입고센터 '최신정보 업데이트' 5번으로 옮겨 여기서는 뺐다. */}
 
       {lightbox && (
         <div className="lightbox" onClick={() => setLightbox("")}>

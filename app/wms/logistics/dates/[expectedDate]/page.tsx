@@ -681,13 +681,13 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
           <button type="button" disabled={generatingInvoice || previewLoading || !preview?.canGenerate || confirmedCount !== purchaseOrderNumbers.length} onClick={() => void handleGenerateInvoice()} style={{ ...wmsPrimaryButton, width: "100%", opacity: generatingInvoice || previewLoading || !preview?.canGenerate || confirmedCount !== purchaseOrderNumbers.length ? 0.5 : 1 }}>
             {generatingInvoice ? "생성 중..." : invoiceGeneratedForAll ? "송장파일 다시 생성" : "이 날짜 송장파일 한 번에 생성"}
           </button>
-          {/* 일반 크롬에서는 한진 오즈뷰어 오류가 나서, 컴퓨터에 등록한 'hanjinprint' 주소로 전용 크롬(전용 사용자 폴더·확장 끔)을 연다(2026-10-21). */}
+          {/* 일반 크롬에서는 한진 오즈뷰어 오류가 나서, 컴퓨터에 등록한 'hanjinprint' 주소로 전용 크롬(전용 사용자 폴더·확장 끔)을 연다(2026-10-21). 2026-11-03: 연결 명령의 %LOCALAPPDATA%를 윈도우가 연결 주소 실행 때 잘못 읽어 일반 크롬에 탭만 생기는 문제가 있어, 설치 파일(.cmd)이 실제 폴더 주소를 적어 등록하도록 바꿨다. */}
           <a href="hanjinprint:open" style={{ ...wmsPrimaryButton, width: "100%", background: "#f2dfd8", color: "#7f4032", border: "1px solid #dfbdb2", textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box" }}>
             송장출력 하러가기
           </a>
         </div>
         <p style={{ margin: "6px 0 0", fontSize: "11px", color: wmsColors.muted, textAlign: "right" }}>
-          '송장출력 하러가기'가 안 열리는 컴퓨터는 <a href="/downloads/hanjin-print-chrome-setup.reg" download style={{ color: wmsColors.muted }}>한진 전용 크롬 연결 파일</a>을 받아 한 번 실행해 주세요.
+          '송장출력 하러가기'가 안 열리거나 일반 크롬에서 열리는 컴퓨터는 <a href="/downloads/hanjin-print-chrome-setup.cmd" download style={{ color: wmsColors.muted }}>한진 전용 크롬 연결 파일</a>을 받아 한 번 실행해 주세요.
         </p>
       </ShipmentWorkflowStepCard>
 

@@ -19,7 +19,7 @@ export default function SupplyStatusAuditPanel({ onApplied, onAudited, compact =
   onAudited?: (latest: { orderable: Record<string, string>; fileName: string; fileMtime: string }) => void;
   /** 입고결과 화면처럼 표 사이에 한 줄로 넣을 때 */
   compact?: boolean;
-  /** 작업센터 '자주 하는 일'(2026-10-21): 제목·확인 버튼 없이 결과만 보여 준다(바깥 '새로고침' 버튼이 확인을 대신함) */
+  /** 작업센터 '최신정보 업데이트'(2026-10-21): 제목·확인 버튼 없이 결과만 보여 준다(바깥 '새로고침' 버튼이 확인을 대신함) */
   headless?: boolean;
   /** 화면에 나오자마자 최신파일을 확인한다 */
   autoRun?: boolean;

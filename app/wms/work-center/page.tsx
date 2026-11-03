@@ -300,7 +300,6 @@ export default function WmsWorkCenterPage() {
       <AppNavigation active="work-center" />
       {/* 2026-10-21 사용자 요청: 매일·수시로 하는 일을 한곳에 모아 잊지 않게 */}
       <DailyRoutine />
-      <ExtensionDownloads />
       <InProgressOrdersSection live={live} />
       <ShipmentClosedGroupsBanner groups={live.groups} />
 
@@ -309,7 +308,7 @@ export default function WmsWorkCenterPage() {
       {/* 2026-10-11 사용자 요청: 진행 중 발주 카드와 메뉴 카드가 똑같아 헷갈려서 제목·구분선으로 나눈다. */}
       <h2 className={styles.menuHeading}>작업 메뉴</h2>
       <div className={styles.tasks}>
-        {/* 2026-10-21: '발주서작업' 칸은 위 '자주 하는 일' 2번(발주서작업 버튼)과 겹쳐서 뺐다. */}
+        {/* 2026-10-21: '발주서작업' 칸은 위 '최신정보 업데이트' 2번(발주서작업 버튼)과 겹쳐서 뺐다. */}
         {/* 2026-10-20 사용자 요청: 하는 시점에 맞춰 수시 처리(거래처 발주·단종·단종해제)와 입고결과 처리(미납분 재발주·쿠폰광고)로 나눔. */}
         <section className={`${styles.task} ${styles.taskSage}`}>
           <h2>거래처발주</h2>
@@ -334,6 +333,8 @@ export default function WmsWorkCenterPage() {
       </div>
 
       <ShortageVendorOrdersBanner />
+      {/* 2026-11-03 사용자 요청: 가장 자주 쓰지 않는 크롬 확장 프로그램 칸은 PC·모바일 모두 맨 아래로 */}
+      <ExtensionDownloads />
     </main>
   );
 }

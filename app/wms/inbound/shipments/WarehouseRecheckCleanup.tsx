@@ -14,7 +14,7 @@ type Preview = { token: string; pending: number; moves: Move[]; unknown: Array<{
 /** 창고재확인 탭 정리: 미리보기로 옮길 행을 확인한 뒤 실행해야 시트가 바뀐다. */
 export default function WarehouseRecheckCleanup({ onDone, embedded = false, autoLoad = false, onClose }: {
   onDone: (message: string, isError?: boolean) => void;
-  /** 작업센터 '자주 하는 일'(2026-10-21): 제목·설명·미리보기 버튼 없이 정리할 행 목록만 */
+  /** 작업센터 '최신정보 업데이트'(2026-10-21): 제목·설명·미리보기 버튼 없이 정리할 행 목록만 */
   embedded?: boolean;
   /** 화면에 나오자마자 정리할 행을 읽는다 */
   autoLoad?: boolean;

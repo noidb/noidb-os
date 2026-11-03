@@ -1585,7 +1585,7 @@ export default function ShipmentReceiptsPage() {
       <header className={styles.header}>
         <h1 className={styles.title}>쉽먼트 입고결과</h1>
         <div className={styles.actions}>
-          {/* 2026-10-21: '입고결과 가져오기'는 작업센터 '자주 하는 일' 3번 '바로가기'와 겹쳐서 뺐다. */}
+          {/* 2026-10-21: '입고결과 가져오기'는 작업센터 '최신정보 업데이트' 3번 '바로가기'와 겹쳐서 뺐다. */}
           <button
             className={`softSageButton ${styles.headerButton}`}
             type="button"
@@ -1618,7 +1618,7 @@ export default function ShipmentReceiptsPage() {
       {/* 2026-10-26: '입고예정일 9/13 이후 마감 쉽먼트 N건 · 가져온 시각' 안내 문구는 삭제(사용자 요청). 아직 가져온 게 없을 때의 안내만 남긴다. */}
       {!payload?.board.collectedAt && (
         <p className={styles.notice}>
-          아직 가져온 입고결과가 없습니다. 작업센터 '자주 하는 일'의 입고결과 가져오기 '바로가기'로 쿠팡 쉽먼트 화면을 열고 '입고결과 일괄 가져오기'를 눌러 주세요.
+          아직 가져온 입고결과가 없습니다. 작업센터 '최신정보 업데이트'의 입고결과 가져오기 '바로가기'로 쿠팡 쉽먼트 화면을 열고 '입고결과 일괄 가져오기'를 눌러 주세요.
         </p>
       )}
       {payload?.board.warnings
@@ -1743,7 +1743,7 @@ export default function ShipmentReceiptsPage() {
           <>
             {/* 2026-10-23 사용자 요청: 거래처 발주는 메인 1번 칸에서 바로 들어가고, 이 화면은 단종/해제만 둔다. */}
             {/* 2026-10-20: AI상품등록 9번의 상품공급상태 최신파일 반영을 여기로 옮김 — 반영하면 아래 단종·단종해제 목록을 다시 계산한다. */}
-            {/* 2026-10-21: 상품공급상태 최신파일 반영은 작업센터 '자주 하는 일' 1번으로 옮겨 여기서는 뺐다(반영하면 제품DB가 바뀌어 이 화면을 열 때 목록에 그대로 반영됨). */}
+            {/* 2026-10-21: 상품공급상태 최신파일 반영은 작업센터 '최신정보 업데이트' 1번으로 옮겨 여기서는 뺐다(반영하면 제품DB가 바뀌어 이 화면을 열 때 목록에 그대로 반영됨). */}
             {/* 2026-10-23: 탭을 못 읽었거나(이름 바뀜 등) 같은 SKU가 두 탭에 있으면 목록이 틀릴 수 있어 위에 알린다. */}
             {!fixture && payload?.sheetHealth?.unreadTabs?.length ? (
               <p className={`${styles.notice} ${styles.error}`}>못 읽은 구글시트 탭: {payload.sheetHealth.unreadTabs.join(", ")} — 이 탭의 SKU가 아래 목록에서 빠졌을 수 있어요. 탭 이름이 바뀌지 않았는지 확인해 주세요.</p>
@@ -1788,7 +1788,7 @@ export default function ShipmentReceiptsPage() {
                       <tr>
                         <th>SKU ID</th>
                         <th>상품명</th>
-                        <th className={styles.orderableCol} title={latestOrderable ? `최신파일 ${new Date(latestOrderable.fileMtime).toLocaleString("ko-KR")}` : "제품DB 값 · 작업센터 '자주 하는 일'에서 상품공급상태 최신파일을 반영하면 쿠팡 최신값이 됩니다"}>
+                        <th className={styles.orderableCol} title={latestOrderable ? `최신파일 ${new Date(latestOrderable.fileMtime).toLocaleString("ko-KR")}` : "제품DB 값 · 작업센터 '최신정보 업데이트'에서 상품공급상태 최신파일을 반영하면 쿠팡 최신값이 됩니다"}>
                           발주상태{latestOrderable ? "" : " (DB)"}
                         </th>
                         {section.kind === "release" && <th className={styles.deleteCol} aria-label="삭제" />}
@@ -1977,7 +1977,7 @@ export default function ShipmentReceiptsPage() {
               );
             })}
             {followUpQueueOf("discontinue").length > 0 && renderFollowUpWork("discontinue")}
-            {/* 2026-10-21: 구글시트 정리는 작업센터 '자주 하는 일' 4번으로 옮겨 여기서는 뺐다. */}
+            {/* 2026-10-21: 구글시트 정리는 작업센터 '최신정보 업데이트' 4번으로 옮겨 여기서는 뺐다. */}
           </>
         )}
         {tab === "results" && payload && (
