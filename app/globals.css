@@ -833,3 +833,6 @@ html,body{overflow-x:clip}
 .categoryStickyBar .categoryActions{margin-top:6px}
 .categoryStickyBar .optionHint,.categoryStickyBar .optionError{margin:0 0 6px}
 .categoryStickyBar .optionHint{color:#3f574b;font-weight:700;font-size:15px}
+
+/* 2026-11-03 쿠팡 추가이미지 9장을 넘는 사용자 추가 칸 = 상세페이지 전용(파일 저장 안 함) */
+.slotAlias.detailOnlyAlias{color:#60766a}

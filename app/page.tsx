@@ -96,6 +96,8 @@ const FEMALE_RING_SIZES = "9호,11호,14호,17호,20호";
 const MALE_RING_SIZES = "20호,22호,25호";
 const UNISEX_RING_SIZES = "9호,11호,14호,17호,20호,22호,25호";
 const MAX_PHOTOS = 20;
+/** 쿠팡 추가이미지는 최대 9장(고정 01~04 + 사용자 추가 05~09). 그 뒤 추가 칸은 상세페이지 전용이라 파일로 저장하지 않는다. */
+const MAX_FILE_CUSTOM_SLOTS = 5;
 const ACCEPTED = ["image/jpeg", "image/jpg", "image/png"];
 const DEFAULT_DETAIL_HEADER = "/노이드비-상단이미지.jpg";
 const DRAFT_STORAGE_KEY = "noidb-product-draft";
@@ -1565,11 +1567,8 @@ export default function Home() {
   };
 
   const addCustomSlot = (type: CustomSlot["type"]) => {
+    // 2026-11-03 칸 수 제한 없음. 쿠팡 추가이미지는 9장까지라 6번째 추가 칸(10장째)부터는 상세페이지 전용(파일 저장 안 함).
     setCustomSlots(prev => {
-      if (prev.length >= 5) {
-        setBatchStatus("사용자 추가 이미지는 05~09번까지 최대 5개입니다.");
-        return prev;
-      }
       return [...prev, { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type, slot: null }];
     });
   };
@@ -1803,13 +1802,13 @@ export default function Home() {
     additionalImagesCsv: [
       ...buildAdditionalImagesCsv(model, [allOptions?.dataUrl, detailCut?.dataUrl, wear01?.dataUrl, wear02?.dataUrl])
         .split(",").filter(Boolean),
-      ...customSlots.filter(item => item.slot?.dataUrl).slice(0, 5)
+      ...customSlots.slice(0, MAX_FILE_CUSTOM_SLOTS).filter(item => item.slot?.dataUrl)
         .map((_, index) => `${model}-${String(index + 5).padStart(2, "0")}.jpg`),
     ].join(","),
     additionalImages: [
       ...buildAdditionalImagesCsv(model, [allOptions?.dataUrl, detailCut?.dataUrl, wear01?.dataUrl, wear02?.dataUrl])
         .split(",").filter(Boolean),
-      ...customSlots.filter(item => item.slot?.dataUrl).slice(0, 5)
+      ...customSlots.slice(0, MAX_FILE_CUSTOM_SLOTS).filter(item => item.slot?.dataUrl)
         .map((_, index) => `${model}-${String(index + 5).padStart(2, "0")}.jpg`),
     ],
   };
@@ -2038,8 +2037,8 @@ export default function Home() {
       normalizeOptional(wear02?.dataUrl),
     ]);
     const customImages = customSlots
+      .slice(0, MAX_FILE_CUSTOM_SLOTS)
       .filter(item => item.slot?.dataUrl)
-      .slice(0, 5)
       .map(async (item, index) => ({
         filename: `${model}-${String(index + 5).padStart(2, "0")}.jpg`,
         dataUrl: await normalizeCoupangImage(item.slot!.dataUrl),
@@ -2425,7 +2424,7 @@ export default function Home() {
           .map(async dataUrl => dataUrl ? normalizeCoupangImage(dataUrl) : undefined)
       );
       const normalizedCustom = await Promise.all(
-        customSlots.filter(item => item.slot?.dataUrl).slice(0, 5).map(async (item, index) => ({
+        customSlots.slice(0, MAX_FILE_CUSTOM_SLOTS).filter(item => item.slot?.dataUrl).map(async (item, index) => ({
           filename: `${model}-${String(index + 5).padStart(2, "0")}.jpg`,
           dataUrl: await normalizeCoupangImage(item.slot!.dataUrl),
         }))
@@ -3186,8 +3185,9 @@ export default function Home() {
               key={item.id}
               slotKey={`custom:${item.id}`}
               title={customSlotTitle(item, index)}
-              subtitle={`사용자 추가 이미지 ${String(index + 5).padStart(2, "0")}`}
-              filename={model ? `${model}-${String(index + 5).padStart(2, "0")}.jpg` : `모델명-${String(index + 5).padStart(2, "0")}.jpg`}
+              subtitle={index < MAX_FILE_CUSTOM_SLOTS ? `사용자 추가 이미지 ${String(index + 5).padStart(2, "0")}` : "상세페이지 전용"}
+              detailOnly={index >= MAX_FILE_CUSTOM_SLOTS}
+              filename={index >= MAX_FILE_CUSTOM_SLOTS ? "상세페이지 전용" : model ? `${model}-${String(index + 5).padStart(2, "0")}.jpg` : `모델명-${String(index + 5).padStart(2, "0")}.jpg`}
               value={item.slot}
               onChange={slot => setSlotValue(`custom:${item.id}`, slot)}
               onPoolDrop={poolIndex => assignPoolItem(poolIndex, `custom:${item.id}`)}
@@ -3720,6 +3720,7 @@ function ImageSlot({
   onRemoveSlot,
   coverSquare = false,
   pickOnClick = true,
+  detailOnly = false,
 }: {
   slotKey: string;
   title: string;
@@ -3737,6 +3738,8 @@ function ImageSlot({
   coverSquare?: boolean;
   /** false면 빈 칸을 눌러도 파일 선택 창(탐색기)을 열지 않는다. 붙여넣기 전용 칸에서 칸을 눌러 붙여넣기를 준비할 때 창이 뜨지 않게 한다. */
   pickOnClick?: boolean;
+  /** 상세페이지 전용 칸(쿠팡 추가이미지 9장을 넘는 칸). 파일로 저장하지 않는다. */
+  detailOnly?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -3767,7 +3770,7 @@ function ImageSlot({
           e.dataTransfer.setData("application/x-laura-slot-key", slotKey);
         }}>
         <h3>{title}</h3>
-        {displaySubtitle && <p className="slotAlias" title={displaySubtitle}>{displaySubtitle}</p>}
+        {displaySubtitle && <p className={detailOnly ? "slotAlias detailOnlyAlias" : "slotAlias"} title={detailOnly ? "쿠팡 추가이미지는 9장까지라 이 칸은 파일로 저장되지 않고 상세페이지에만 쓰입니다." : displaySubtitle}>{displaySubtitle}</p>}
       </div>
       <div
         className={"slotDrop" + (value && !value.locked ? " slotDropEdit" : "")}
