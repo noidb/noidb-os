@@ -14,7 +14,29 @@ const STYLE_OPTIONS: Array<{ value: QuickDetailStyle; title: string; description
 ];
 
 type Result = { dataUrl: string; sectionCount: number; width: number; height: number };
-type CutState = { dataUrl: string; name: string; top: number; bottom: number; mode: "top" | "bottom"; history: Array<{ top: number; bottom: number }> };
+type CutHole = { from: number; to: number };
+type CutSnapshot = { top: number; bottom: number; holes: CutHole[] };
+/** holes: 가운데 잘라내기로 뺄 구간(0~1 비율). holeStart: 가운데 잘라내기에서 첫 번째 클릭 위치. */
+type CutState = { dataUrl: string; name: string; top: number; bottom: number; holes: CutHole[]; holeStart: number | null; mode: "top" | "bottom" | "hole"; history: CutSnapshot[] };
+
+/** 가운데 구간을 빼낼 때 사진 사이에 남기는 간격. 상세페이지 만들기의 기본 간격(780px 기준 90px)과 같은 비율. */
+const HOLE_GAP_PER_780 = 90;
+
+/** 위·아래 자름선 안쪽에서 holes 구간을 뺀 나머지 조각들. */
+function keptRanges(top: number, bottom: number, holes: CutHole[]): Array<[number, number]> {
+  const sorted = holes
+    .map(hole => ({ from: Math.max(top, hole.from), to: Math.min(bottom, hole.to) }))
+    .filter(hole => hole.to > hole.from)
+    .sort((a, b) => a.from - b.from);
+  const ranges: Array<[number, number]> = [];
+  let cursor = top;
+  for (const hole of sorted) {
+    if (hole.from > cursor) ranges.push([cursor, hole.from]);
+    cursor = Math.max(cursor, hole.to);
+  }
+  if (cursor < bottom) ranges.push([cursor, bottom]);
+  return ranges;
+}
 
 type Props = {
   headerUrl: string;
@@ -28,22 +50,33 @@ type Props = {
   poolImages?: Array<{ dataUrl: string; fileName: string }>;
 };
 
-async function cropDataUrl(dataUrl: string, top: number, bottom: number): Promise<string> {
-  if (top <= 0 && bottom >= 1) return dataUrl;
+async function cropDataUrl(dataUrl: string, top: number, bottom: number, holes: CutHole[] = []): Promise<string> {
+  if (top <= 0 && bottom >= 1 && !holes.length) return dataUrl;
   const image = await new Promise<HTMLImageElement>((resolve, reject) => {
     const element = new Image();
     element.onload = () => resolve(element);
     element.onerror = () => reject(new Error("상세페이지를 불러오지 못했습니다."));
     element.src = dataUrl;
   });
-  const y = Math.round(image.naturalHeight * top);
-  const h = Math.max(1, Math.round(image.naturalHeight * bottom) - y);
+  const ranges = keptRanges(top, bottom, holes).map(([from, to]) => {
+    const y = Math.round(image.naturalHeight * from);
+    return { y, h: Math.max(1, Math.round(image.naturalHeight * to) - y) };
+  });
+  if (!ranges.length) throw new Error("사용할 구간이 없습니다. 가운데 잘라내기를 되돌려주세요.");
+  // 빼낸 자리에는 사이트 기본 간격(흰색)을 한 번만 넣는다.
+  const gap = ranges.length > 1 ? Math.round(image.naturalWidth * HOLE_GAP_PER_780 / 780) : 0;
   const canvas = document.createElement("canvas");
   canvas.width = image.naturalWidth;
-  canvas.height = h;
+  canvas.height = ranges.reduce((sum, range) => sum + range.h, 0) + gap * (ranges.length - 1);
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
-  ctx.drawImage(image, 0, y, image.naturalWidth, h, 0, 0, image.naturalWidth, h);
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  let offset = 0;
+  for (const range of ranges) {
+    ctx.drawImage(image, 0, range.y, image.naturalWidth, range.h, 0, offset, image.naturalWidth, range.h);
+    offset += range.h + gap;
+  }
   return canvas.toDataURL("image/jpeg", 0.97);
 }
 
@@ -147,7 +180,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     }
     try {
       const dataUrl = await readImageFile(file);
-      setCut({ dataUrl, name: file.name, top: 0, bottom: 1, mode: "top", history: [] });
+      setCut({ dataUrl, name: file.name, top: 0, bottom: 1, holes: [], holeStart: null, mode: "top", history: [] });
       setMessage("자를 부분이 있으면 위·아래 위치를 클릭해 정한 뒤, 그대로 상세페이지에 쓸지 사진별로 나눌지 선택하세요.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "이미지를 불러오지 못했습니다.");
@@ -177,7 +210,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     }
     setBusy(true);
     try {
-      const usable = await cropDataUrl(cut.dataUrl, cut.top, cut.bottom);
+      const usable = await cropDataUrl(cut.dataUrl, cut.top, cut.bottom, cut.holes);
       const found = await splitDetailPage(usable, headerUrl);
       const classified = await classifyKinds(found);
       const stamp = Date.now().toString(36);
@@ -247,7 +280,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     }
     setBusy(true);
     try {
-      const usable = await cropDataUrl(cut.dataUrl, cut.top, cut.bottom);
+      const usable = await cropDataUrl(cut.dataUrl, cut.top, cut.bottom, cut.holes);
       onComplete({ dataUrl: usable, sections: [], logoApplied: false });
       setCut(null);
       setMessage("자른 상세페이지를 로고 없이 그대로 아래 상세페이지 칸에 넣었습니다. 로고가 필요하면 위 6번 칸의 \"상세페이지에 로고 붙이기\"를 누르세요.");
@@ -518,27 +551,41 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     {cut && (
       <div className="pageCutPanel" style={{ marginTop: 16 }}>
         <div className="detailActions">
-          <button type="button" className={cut.mode === "top" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "top" })}>위쪽 자를 위치 정하기</button>
-          <button type="button" className={cut.mode === "bottom" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "bottom" })}>아래쪽 자를 위치 정하기</button>
+          <button type="button" className={cut.mode === "top" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "top", holeStart: null })}>위쪽 자를 위치 정하기</button>
+          <button type="button" className={cut.mode === "bottom" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "bottom", holeStart: null })}>아래쪽 자를 위치 정하기</button>
+          <button type="button" className={cut.mode === "hole" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "hole", holeStart: null })} title="지울 문구의 바로 위와 바로 아래를 클릭하면 그 사이가 빠지고, 사이트 기본 간격만 남습니다.">가운데 잘라내기</button>
           <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPage()} title="자른 상세페이지를 로고 없이 그대로 상세페이지 칸에 넣습니다.">상세페이지 사용</button>          <button type="button" className="secondaryButton" disabled={busy} onClick={() => void confirmCutForSplit()} title="사진별로 나눠서 등록이미지에 추가하거나 AI로 새로 만들 때 씁니다.">사진별로 나누기</button>
-          <button type="button" className="secondaryButton" disabled={!cut.history.length} onClick={() => setCut(c => c && c.history.length ? { ...c, ...c.history[c.history.length - 1], history: c.history.slice(0, -1) } : c)}>되돌리기</button>
-          <button type="button" className="secondaryButton" disabled={cut.top === 0 && cut.bottom === 1} onClick={() => setCut(c => c && { ...c, top: 0, bottom: 1, history: [...c.history, { top: c.top, bottom: c.bottom }] })}>초기화</button>
+          <button type="button" className="secondaryButton" disabled={!cut.history.length && cut.holeStart === null} onClick={() => setCut(c => c && (c.holeStart !== null ? { ...c, holeStart: null } : c.history.length ? { ...c, ...c.history[c.history.length - 1], holeStart: null, history: c.history.slice(0, -1) } : c))}>되돌리기</button>
+          <button type="button" className="secondaryButton" disabled={cut.top === 0 && cut.bottom === 1 && !cut.holes.length} onClick={() => setCut(c => c && { ...c, top: 0, bottom: 1, holes: [], holeStart: null, history: [...c.history, { top: c.top, bottom: c.bottom, holes: c.holes }] })}>초기화</button>
           <button type="button" className="secondaryButton" onClick={() => setCut(null)}>닫기</button>
         </div>
-        <p className="detailMessage">{cut.mode === "top" ? "사용할 부분이 시작되는 위치를 이미지에서 클릭하세요. 그 위쪽은 버려집니다. 클릭하면 바로 아래쪽 정하기로 넘어갑니다." : "사용할 부분이 끝나는 위치를 이미지에서 클릭하세요. 그 아래쪽은 버려집니다."}</p>
+        <p className="detailMessage">{cut.mode === "top" ? "사용할 부분이 시작되는 위치를 이미지에서 클릭하세요. 그 위쪽은 버려집니다. 클릭하면 바로 아래쪽 정하기로 넘어갑니다." : cut.mode === "bottom" ? "사용할 부분이 끝나는 위치를 이미지에서 클릭하세요. 그 아래쪽은 버려집니다." : cut.holeStart === null ? "지울 문구의 바로 위를 클릭하세요." : "지울 문구의 바로 아래를 클릭하세요. 그 사이가 빠지고 사이트 기본 간격만 남습니다."}</p>
         <div className="pageCutScroll">
           <div className="pageCutFrame" onClick={event => {
             const rect = event.currentTarget.getBoundingClientRect();
             const ratio = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
-            setCut(c => c && (c.mode === "top"
+            setCut(c => {
+              if (!c) return c;
+              const snapshot = { top: c.top, bottom: c.bottom, holes: c.holes };
+              // 2026-11-03 가운데 잘라내기: 첫 클릭(위)·두 번째 클릭(아래) 사이를 뺀다. 순서가 바뀌어도 알아서 맞춘다.
+              if (c.mode === "hole") {
+                if (c.holeStart === null) return { ...c, holeStart: ratio };
+                const from = Math.min(c.holeStart, ratio), to = Math.max(c.holeStart, ratio);
+                if (to - from < 0.002) return { ...c, holeStart: null };
+                return { ...c, holes: [...c.holes, { from, to }], holeStart: null, history: [...c.history, snapshot] };
+              }
               // 2026-10-23 사용자 요청: 위쪽을 정하면 곧바로 아래쪽 모드로 넘어가 '아래쪽 자를 위치 정하기'를 따로 누르지 않아도 된다.
-              ? { ...c, top: Math.min(ratio, c.bottom - 0.01), mode: "bottom", history: [...c.history, { top: c.top, bottom: c.bottom }] }
-              : { ...c, bottom: Math.max(ratio, c.top + 0.01), history: [...c.history, { top: c.top, bottom: c.bottom }] }));
+              return c.mode === "top"
+                ? { ...c, top: Math.min(ratio, c.bottom - 0.01), mode: "bottom", history: [...c.history, snapshot] }
+                : { ...c, bottom: Math.max(ratio, c.top + 0.01), history: [...c.history, snapshot] };
+            });
           }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={cut.dataUrl} alt="올린 상세페이지" draggable={false} />
             <div className="pageCutShade" style={{ top: 0, height: `${cut.top * 100}%` }} />
             <div className="pageCutShade" style={{ top: `${cut.bottom * 100}%`, bottom: 0 }} />
+            {cut.holes.map((hole, index) => <div className="pageCutShade" key={index} style={{ top: `${hole.from * 100}%`, height: `${(hole.to - hole.from) * 100}%`, background: "rgba(225,29,72,.35)" }} />)}
+            {cut.holeStart !== null && <div className="pageCutLine" style={{ top: `${cut.holeStart * 100}%` }}>지울 구간 시작</div>}
             <div className="pageCutLine" style={{ top: `${cut.top * 100}%` }}>위쪽 자름선</div>
             <div className="pageCutLine" style={{ top: `${cut.bottom * 100}%` }}>아래쪽 자름선</div>
           </div>
