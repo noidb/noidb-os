@@ -53,7 +53,7 @@ export async function changeProductOptions(change: (config: ProductOptionsConfig
       try {
         await put(CONFIG_PATH, body, {
           access: "private", addRandomSuffix: false, contentType: "application/json",
-          ...(exists && etag ? { allowOverwrite: true, ifMatch: etag } : { allowOverwrite: false }),
+          ...(exists && etag ? { allowOverwrite: true, ifMatch: etag.replace(/^W\//, "").replace(/^"|"$/g, "") } : { allowOverwrite: false }),
         });
         return next;
       } catch (error) {
