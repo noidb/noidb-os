@@ -836,3 +836,7 @@ html,body{overflow-x:clip}
 
 /* 2026-11-03 쿠팡 추가이미지 9장을 넘는 사용자 추가 칸 = 상세페이지 전용(파일 저장 안 함) */
 .slotAlias.detailOnlyAlias{color:#60766a}
+
+/* 2026-11-03: 틀고정에 '+ 전체옵션 이미지 / 디테일컷 / 착용컷' 버튼 줄까지 포함 */
+.uploadPoolSticky .slotAddButtons{margin:8px 0 0}
+.uploadPoolSticky .uploadPool{margin-bottom:0}

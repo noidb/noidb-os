@@ -3061,8 +3061,9 @@ export default function Home() {
           <strong>여러 이미지를 한 번에 업로드</strong>
           <span>클릭하거나 이미지를 이곳으로 드래그한 뒤 각 등록 칸에 배치하세요.</span>
         </div>
+        <div className="uploadPoolSticky" title="5번 안에서 아래로 내려도 이 사진 목록과 추가 버튼은 화면 위에 붙어 있습니다.">
         {!!uploadPool.length && (
-          <div className="uploadPool uploadPoolSticky" title="5번 안에서 아래로 내려도 이 사진 목록은 화면 위에 붙어 있습니다.">
+          <div className="uploadPool">
             {uploadPool.map((item, index) => (
               <div className="uploadPoolItem" key={`${item.fileName}-${index}`} draggable
                 onDragStart={e => e.dataTransfer.setData("application/x-laura-pool-index", String(index))}>
@@ -3078,6 +3079,7 @@ export default function Home() {
           <button type="button" onClick={() => addCustomSlot("all")}>+ 전체옵션 이미지</button>
           <button type="button" onClick={() => addCustomSlot("detail")}>+ 디테일컷</button>
           <button type="button" onClick={() => addCustomSlot("wear")}>+ 착용컷</button>
+        </div>
         </div>
 
         {variantOptions.error && <p className="error">{variantOptions.error} 색상에는 블랙,화이트처럼 색상만, 사이즈에는 S,M처럼 사이즈만 입력해주세요.</p>}
