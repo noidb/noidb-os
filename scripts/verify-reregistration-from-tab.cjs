@@ -116,4 +116,15 @@ assert.equal(second.reregisterable, true, "옮긴 직후 재확인 통과");
   const dupIds = sandbox.collectDuplicateTabSkuIds_({ getSheetByName: name => (name === "판매중지SKU" ? fakeSheet(HEADERS, stopped) : null) }, db, "we011316");
   assert.deepEqual(Array.from(dupIds), ["38256587"], "비관리로 보낼 옛 줄");
 }
+// 4-2) 옛 중복 줄을 먼저 치운 뒤 최근 줄만 제품DB로 옮기면, 옮긴 직후 두 번째 확인(pulledFromTab)도 통과한다.
+{
+  const mk = (sku, id) => row("판매중지", sku, { "모델명/품번": "we011316", "SKU ID": id });
+  const afterPull = [row("정상", "xx0001", { "모델명/품번": "xx0001" }), mk("we011316BK", "39404616"), mk("we011316WH", "40284074")];
+  const db = fakeDb(afterPull, { "판매중지SKU": [] });
+  const r = sandbox.reregistrationEligibility_(db, "we011316", { pulledFromTab: true });
+  assert.equal(r.reregisterable, true, "옛 줄을 먼저 치운 뒤 두 번째 확인 통과: " + r.reason);
+  // 옛 줄을 치우지 않으면(예전 순서) 같은 모델SKU 2줄이라 막힌다 — 순서가 중요함을 확인
+  const stuck = fakeDb(afterPull, { "판매중지SKU": [mk("we011316BK", "38256587")] });
+  assert.equal(sandbox.reregistrationEligibility_(stuck, "we011316", { pulledFromTab: true }).reregisterable, false);
+}
 console.log("PASS 재등록SKU 탭에서 가져온 모델은 판매중지 검사 없이 재등록 가능, 다른 경로는 검사 유지");

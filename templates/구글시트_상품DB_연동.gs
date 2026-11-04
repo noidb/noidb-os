@@ -2970,7 +2970,10 @@ function reregisterModel_(ss, db, model, newRows, operationId) {
   backupProductDbSheet_(ss, db, '동일모델재등록');
   // 판매중지SKU·실적저조SKU·그 외 재등록SKU 탭에 있던 옛 줄은 백업 뒤 제품DB 맨 아래로 옮긴 다음 기존 방식대로 덮어쓴다.
   const trace = {};
+  // 2026-11-04: 중복 옛 줄은 최근 줄을 제품DB로 옮기기 '전에' 비관리SKU로 먼저 치운다.
+  // 나중에 치우면 탭에 혼자 남은 옛 줄이 중복으로 보이지 않아 두 번째 확인에서 같은 모델SKU 2줄로 막힌다(we011316).
   const duplicateSkuIds = plan.items.some(item => item.sheetRow < 0) ? collectDuplicateTabSkuIds_(ss, db, model) : [];
+  const duplicateNote = moveDuplicateTabRowsToUnmanaged_(ss, model, duplicateSkuIds);
   const pulled = plan.items.some(item => item.sheetRow < 0) ? moveReregistrationTabRowsToDb_(ss, db, model, trace) : 0;
   let rechecked;
   try {
@@ -3069,7 +3072,6 @@ function reregisterModel_(ss, db, model, newRows, operationId) {
       }
     });
   });
-  const duplicateNote = moveDuplicateTabRowsToUnmanaged_(ss, model, duplicateSkuIds);
   return { updatedRows: plan.items.length, status: '재등록파일생성', duplicateNote: duplicateNote, duplicatesMoved: duplicateSkuIds.length };
 }
 
