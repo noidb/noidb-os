@@ -17,6 +17,8 @@ import {
   templatesDir,
 } from "./common";
 import type { ExportPayload } from "./types";
+import { guessColorFamily, isColorFamilyHeader } from "../product-options/color-family";
+import { choicesForColumn } from "../product-options/template-parse";
 
 /** 사용자가 올린 쿠팡 양식·카테고리 경로·기본값(카테고리 설정). 없으면 예전처럼 기본 제공 양식을 쓴다. */
 export type QuoteCategoryOptions = {
@@ -163,6 +165,10 @@ export async function buildQuoteWorkbook(input: ExportPayload | ExportPayload[],
   const sheet = findQfSheet(workbook);
   const headers = headerMap(sheet);
   const required = requiredHeaders(sheet);
+  // '색상계열' 칸: 양식 드롭다운 값 안에서 SKU 색상마다 따로 고른다.
+  const colorFamilyCols = [...headers.entries()]
+    .filter(([header]) => isColorFamilyHeader(header))
+    .map(([, col]) => ({ col, choices: choicesForColumn(workbook, sheet, sheet.getColumn(col).letter) }));
   const missing = new Map<string, Set<string>>();
   clearDataRows(sheet);
 
@@ -190,6 +196,11 @@ export async function buildQuoteWorkbook(input: ExportPayload | ExportPayload[],
     setByHeader(row, headers, "검색태그", payload.tags);
     setByHeader(row, headers, "브랜드", defaults.brand);
     setByHeader(row, headers, "색상", colorOption);
+    for (const { col, choices } of colorFamilyCols) {
+      const picked = String(payload.product.colorFamilies?.[sku.color] || "").trim();
+      const family = picked || guessColorFamily(sku.color, choices);
+      if (family) row.getCell(col).value = family;
+    }
     setByHeader(row, headers, "주얼리 사이즈", sku.size);
     setByHeader(row, headers, "사이즈", sku.size);
     setByHeader(row, headers, "반지 사이즈", "");

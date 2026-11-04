@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { defaultProductOptions, normalizeProductOptions } from "@/lib/product-options/defaults";
+import { guessColorFamily, isColorFamilyHeader } from "@/lib/product-options/color-family";
 import type { CategoryConfig, OptionListKey, ProductOptionsConfig, TemplateField, TemplateInfo } from "@/lib/product-options/types";
 
 const CACHE_KEY = "noidb-product-options";
@@ -449,7 +450,7 @@ export function CategoryExtraFields({ config, category, values, onChange, onOpen
   const [showAll, setShowAll] = useState(false);
   const settings = config.categories.find(item => item.name === category);
   const defaults = settings?.defaults || {};
-  const fields = useMemo(() => (template.info?.fields || []).filter(field => !field.siteFilled), [template.info]);
+  const fields = useMemo(() => (template.info?.fields || []).filter(field => !field.siteFilled && !isColorFamilyHeader(field.header)), [template.info]);
   if (!category) return null;
   if (!template.loading && !template.info) {
     return (
@@ -484,6 +485,40 @@ export function CategoryExtraFields({ config, category, values, onChange, onOpen
           <button type="button" className="softApricotButton" onClick={() => setShowAll(value => !value)}>{showAll ? "선택 칸 접기" : `선택 칸 ${fields.length - important.length}개 더 보기`}</button>
         )}
         <button type="button" className="softBeigeButton" onClick={onOpenSettings}>{category} 기본값 설정</button>
+      </div>
+    </div>
+  );
+}
+
+/** 쿠팡 양식에 '색상계열' 칸이 있으면 색상옵션마다 계열을 보여 준다. 자동으로 고른 값이 미리 들어가 있고, 틀린 것만 고친다. */
+export function ColorFamilyFields({ config, category, colors, values, onChange }: {
+  config: ProductOptionsConfig;
+  category: string;
+  colors: string;
+  values: Record<string, string>;
+  onChange: (color: string, value: string) => void;
+}) {
+  const template = useTemplateInfo(config, category);
+  const field = (template.info?.fields || []).find(item => isColorFamilyHeader(item.header));
+  const list = [...new Set(colors.split(/[,，\n]/).map(item => item.trim()).filter(Boolean))];
+  if (!field || !list.length) return null;
+  return (
+    <div className="field fullRowField categoryExtraBox">
+      <span>색상계열 <small>색상옵션마다 자동으로 골랐습니다. 틀린 것만 바꿔 주세요.</small></span>
+      <div className="templateFieldTable compact">
+        {list.map(color => {
+          const guessed = guessColorFamily(color, field.choices);
+          const value = values[color] ?? guessed;
+          return (
+            <div className="templateFieldRow" key={color}>
+              <div className="templateFieldName"><strong>{color}</strong></div>
+              <select value={value} onChange={e => onChange(color, e.target.value)}>
+                <option value="">(고르세요)</option>
+                {(value && !field.choices.includes(value) ? [value, ...field.choices] : field.choices).map(choice => <option key={choice} value={choice}>{choice}</option>)}
+              </select>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

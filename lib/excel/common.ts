@@ -184,8 +184,9 @@ export function msrpPrice(salePrice: number) {
   return Math.ceil((salePrice * 1.5) / 1000) * 1000;
 }
 
+/** 2026-11-04 사용자 지침: 이미지 대체 텍스트에는 상품명만 넣는다(예전 '악세사리' 안내 문구 삭제). */
 export function altText(title: string) {
-  return `${title}\n${ALT_TEXT_FOOTER}`;
+  return String(title || "").trim();
 }
 
 export function supplierLabel(supplier: string, gender: string) {

@@ -35,7 +35,7 @@ import { coverSquareCanvas, defaultFitAdjust, extendToSquareCanvas, fitToWhiteCa
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
-import { CategoryExtraFields, CategoryManager, ManageLink, OptionListManager, OptionSelect, useProductOptions } from "./ProductOptionsPanel";
+import { CategoryExtraFields, CategoryManager, ColorFamilyFields, ManageLink, OptionListManager, OptionSelect, useProductOptions } from "./ProductOptionsPanel";
 import { categoryLetter, categoryNames } from "@/lib/product-options/defaults";
 import type { OptionListKey, ProductOptionsConfig } from "@/lib/product-options/types";
 
@@ -58,6 +58,8 @@ type Product = {
   price: string;
   /** 카테고리 전용 쿠팡 양식 칸(칸 이름 → 이 상품만의 값) */
   extraFields?: Record<string, string>;
+  /** 색상옵션 → 쿠팡 색상계열(상품마다 고친 값) */
+  colorFamilies?: Record<string, string>;
 };
 
 type Analysis = {
@@ -871,6 +873,7 @@ export default function Home() {
       if (key === "category") {
         next.dimension = defaultDimension(value);
         next.extraFields = {};
+        next.colorFamilies = {};
       }
       if (key === "gender" && value === "남성") {
         next.colors = "실버";
@@ -2901,6 +2904,9 @@ export default function Home() {
                 else { update("searchTags", tagsBackup); setTagsBackup(""); }
               }}>{product.searchTags ? "자동 검색태그 사용" : tagsBackup ? "직접 입력값 복구" : "자동 검색태그 사용 중"}</button>
           </Field>
+          <ColorFamilyFields config={productOptions.config} category={product.category} colors={product.colors}
+            values={product.colorFamilies || {}}
+            onChange={(color, value) => setProduct(prev => ({ ...prev, colorFamilies: { ...(prev.colorFamilies || {}), [color]: value } }))} />
           <CategoryExtraFields config={productOptions.config} category={product.category}
             values={product.extraFields || {}}
             onChange={(header, value) => setProduct(prev => ({ ...prev, extraFields: { ...(prev.extraFields || {}), [header]: value } }))}

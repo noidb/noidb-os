@@ -54,6 +54,16 @@ function listChoices(workbook: ExcelJS.Workbook, formula: string): string[] {
   return [...new Set(ranges.flatMap(range => readRange(workbook, range)))];
 }
 
+/** 양식 시트의 한 열(예: 'G')에 걸린 드롭다운 목록 값. 없으면 빈 배열. */
+export function choicesForColumn(workbook: ExcelJS.Workbook, sheet: ExcelJS.Worksheet, column: string): string[] {
+  const validations = ((sheet as unknown as { dataValidations: unknown }).dataValidations as { model: Record<string, { type?: string; formulae?: string[] }> }).model || {};
+  for (const [address, rule] of Object.entries(validations)) {
+    if (address.match(/^([A-Z]+)/)?.[1] !== column || rule?.type !== "list" || !rule.formulae?.[0]) continue;
+    return listChoices(workbook, rule.formulae[0]);
+  }
+  return [];
+}
+
 export async function parseCoupangTemplate(buffer: ArrayBuffer | Buffer, fileName: string): Promise<TemplateInfo> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer as ArrayBuffer);
