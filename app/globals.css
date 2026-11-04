@@ -843,3 +843,6 @@ html,body{overflow-x:clip}
 
 /* 2026-11-04 상세페이지 사진 아래 글 */
 .detailCaptionInput{width:100%;margin:6px 0;padding:8px 10px;border:1px solid #d8d3cc;border-radius:8px;font-size:14px;line-height:1.4;resize:vertical;background:#fff;box-sizing:border-box}
+
+/* 2026-11-04 카테고리 전용 칸: 직접 쓰는 칸 아래에 쿠팡 양식 예시를 계속 보여준다 */
+.templateFieldName .templateFieldExample{color:#3f574b;font-weight:700;white-space:normal;overflow:visible;text-overflow:clip;font-size:12px}

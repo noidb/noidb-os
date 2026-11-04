@@ -480,7 +480,11 @@ export function CategoryExtraFields({ config, category, values, onChange, onOpen
         <div className="templateFieldTable compact">
           {shown.map(field => (
             <div className="templateFieldRow" key={field.header}>
-              <div className="templateFieldName"><strong>{field.header}{field.required && <span className="requiredMark"> 필수</span>}</strong></div>
+              <div className="templateFieldName"><strong>{field.header}{field.required && <span className="requiredMark"> 필수</span>}</strong>
+                {/* 2026-11-04 입력할 때 어떻게 써야 하는지 알 수 있게 쿠팡 양식의 예시를 계속 보여준다(설명 전체는 마우스를 올리면 나옴). */}
+                {!field.choices.length && field.example && <small className="templateFieldExample" title={field.description || undefined}>쓰는 예: {field.example.replace(/\s+/g, " ").slice(0, 60)}</small>}
+                {field.choices.length > 0 && field.description && <small title={field.description}>{field.description.replace(/\s+/g, " ").slice(0, 50)}</small>}
+              </div>
               <FieldValueInput field={field} value={values[field.header] || ""}
                 placeholder={defaults[field.header] ? `기본값: ${defaults[field.header]}` : field.choices.length ? "(고르세요)" : undefined}
                 onChange={value => onChange(field.header, value)} />
