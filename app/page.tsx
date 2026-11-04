@@ -349,6 +349,8 @@ export default function Home() {
   const [lightbox, setLightbox] = useState("");
 
   const [detailImages, setDetailImages] = useState<DetailImage[]>([]);
+  // 2026-11-04 사진 아래 글 칸은 평소엔 숨기고, 그 사진의 '텍스트 넣기'를 누를 때만 연다(이미 글이 있으면 계속 보임).
+  const [captionOpenIds, setCaptionOpenIds] = useState<string[]>([]);
   const [detailHeader, setDetailHeader] = useState<SlotImage | null>(null);
   const [detailFooter, setDetailFooter] = useState<SlotImage | null>(null);
   const [detailPreview, setDetailPreview] = useState("");
@@ -3380,15 +3382,17 @@ export default function Home() {
               <img src={item.dataUrl} alt={item.name} />
               <div className="detailItemInfo">
                 <strong>{item.name}</strong>
-                <textarea className="detailCaptionInput" rows={2} placeholder="이 사진 아래에 넣을 글 (비워 두면 사진만)"
+                {(Boolean(item.caption) || captionOpenIds.includes(item.id)) && <textarea className="detailCaptionInput" rows={2} placeholder="이 사진 아래에 넣을 글 (비워 두면 사진만)"
+                  autoFocus={!item.caption}
                   value={item.caption || ""}
                   onDragStart={e => { e.preventDefault(); e.stopPropagation(); }}
                   onChange={e => {
                     const value = e.target.value;
                     setDetailImages(prev => prev.map(d => d.id === item.id ? { ...d, caption: value } : d));
                     setDetailPreview("");
-                  }} />
+                  }} />}
                 <div className="detailItemButtons">
+                  {!item.caption && <button type="button" onClick={() => setCaptionOpenIds(prev => prev.includes(item.id) ? prev.filter(id => id !== item.id) : [...prev, item.id])}>{captionOpenIds.includes(item.id) ? "글 칸 닫기" : "텍스트 넣기"}</button>}
                   <button type="button" onClick={() => setLightbox(item.dataUrl)}>확대</button>
                   <button type="button" className="removeButton"
                     onClick={() => {

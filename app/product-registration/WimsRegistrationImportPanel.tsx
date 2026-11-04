@@ -6,6 +6,24 @@ import type { WimsRegistrationAudit } from "@/lib/wms/wims-registration-audit";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 import { wmsColors } from "@/lib/wms/ui-tokens";
 
+// 2026-11-04 상품등록일이 이 날짜 이전인 WIMS 줄은 화면·제품DB 대조에서 아예 뺀다(저장된 원본 데이터는 그대로 둔다).
+const WIMS_SHOW_FROM = "2026-08-27";
+function dropOldRegistrations(snapshot: WimsRegistrationSnapshot): WimsRegistrationSnapshot {
+  const rows = snapshot.rows.filter(row => {
+    const match = String(row.registeredAt || "").trim().match(/^(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})/);
+    if (!match) return true; // 등록일을 읽을 수 없는 줄은 빼지 않는다
+    return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}` >= WIMS_SHOW_FROM;
+  });
+  if (rows.length === snapshot.rows.length) return snapshot;
+  return {
+    rows,
+    reviewingCount: rows.filter(row => row.status === "reviewing").length,
+    approvedCount: rows.filter(row => row.status === "approved").length,
+    rejectedCount: rows.filter(row => row.status === "rejected").length,
+    unknownCount: rows.filter(row => row.status === "unknown").length,
+  };
+}
+
 const statusText = { reviewing: "검수중", approved: "검수완료", rejected: "반려", unknown: "확인 필요" } as const;
 const STORAGE_KEY = "noidb_wims_registration_snapshot_v1";
 const EXTENSION_EVENT_TYPE = "NOIDB_WIMS_EXTENSION_TRANSFER";
@@ -71,12 +89,13 @@ export default function WimsRegistrationImportPanel() {
     const show = (saved: SavedSnapshot) => {
       if (cancelled || !saved?.capturedAt || !Array.isArray(saved.snapshot?.rows) || saved.capturedAt <= shownAt) return;
       shownAt = saved.capturedAt;
-      setSnapshot(saved.snapshot);
+      const visible = dropOldRegistrations(saved.snapshot);
+      setSnapshot(visible);
       setCapturedAt(saved.capturedAt);
       setCapture(saved.capture || null);
       setPrevious(saved.previous || null);
       setAudit(null);
-      void auditRows(saved.snapshot.rows);
+      void auditRows(visible.rows);
     };
     const params = new URLSearchParams(window.location.search);
     if (params.get("source") === "wims-extension" && params.get("transferId")) {
@@ -120,7 +139,8 @@ export default function WimsRegistrationImportPanel() {
         const nextCapture = readExtensionCaptureSummary(event.data.payload as Record<string, unknown>, nextSnapshot.rows.length);
         const nextCapturedAt = typeof event.data.payload.capturedAt === "string" ? event.data.payload.capturedAt : new Date().toISOString();
         setText(incomingText);
-        setSnapshot(nextSnapshot);
+        const visibleSnapshot = dropOldRegistrations(nextSnapshot);
+        setSnapshot(visibleSnapshot);
         setCapturedAt(nextCapturedAt);
         setCapture(nextCapture);
         setAudit(null);
@@ -134,7 +154,7 @@ export default function WimsRegistrationImportPanel() {
         completedUrl.searchParams.delete("transferId");
         window.history.replaceState(window.history.state, "", `${completedUrl.pathname}${completedUrl.search}${completedUrl.hash}`);
         window.postMessage({ type: EXTENSION_ACK_TYPE, accepted: true }, window.location.origin);
-        void auditRows(nextSnapshot.rows);
+        void auditRows(visibleSnapshot.rows);
       } catch (caught) {
         // 새 결과를 못 읽어도 지난 결과는 지우지 않고 그대로 보여준다.
         setText(incomingText);
@@ -151,7 +171,7 @@ export default function WimsRegistrationImportPanel() {
     try {
       const nextSnapshot = parseWimsClipboard(text);
       const nextCapturedAt = new Date().toISOString();
-      setSnapshot(nextSnapshot);
+      setSnapshot(dropOldRegistrations(nextSnapshot));
       setCapturedAt(nextCapturedAt);
       setCapture(null);
       persistSnapshot({ capturedAt: nextCapturedAt, snapshot: nextSnapshot, capture: null });
