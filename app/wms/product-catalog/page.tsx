@@ -406,6 +406,8 @@ export default function ProductCatalogPage() {
   const [query, setQuery] = useState("");
   // 2026-11-04 "등록 진행 중" 목록은 길어서 기본으로 접어 둔다. 검색어를 넣으면 자동으로 펼친다.
   const [progressOpen, setProgressOpen] = useState(false);
+  // 2026-11-04 "반려 · 보완 후 재등록" 목록도 기본 접힘. 검색어를 넣으면 자동으로 펼친다.
+  const [rejectedOpen, setRejectedOpen] = useState(false);
   const [status, setStatus] = useState("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1413,13 +1415,16 @@ export default function ProductCatalogPage() {
       {exclusionError && <div role="alert" style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{exclusionError}</div>}
 
       {rejectedGroups.length > 0 && <section style={{ border: `2px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 16 }}>
-        <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 18 }}>반려 · 보완 후 재등록 · {rejectedGroups.length}건</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 18 }}>반려 · 보완 후 재등록 · {rejectedGroups.length}건</div>
+          {!query.trim() && <button type="button" className="softBeigeButton" onClick={() => setRejectedOpen(open => !open)} style={{ minHeight: 36, minWidth: 90, padding: "0 14px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>{rejectedOpen ? "접기" : "펼치기"}</button>}
+        </div>
         <p style={{ margin: "6px 0 4px", color: wmsColors.ink, fontSize: 12 }}>여기 있는 모델은 아래 재등록 목록에서 빠집니다. 이 카드에서 바로 등록 준비·사진검색·재등록 제외를 하세요.</p>
-        <p style={{ margin: "0 0 12px", color: wmsColors.muted, fontSize: 12 }}>등록일은 반려일이 아닙니다. 상세 반려 사유와 반려일은 쿠팡 반려 안내에서 확인해 주세요.</p>
-        <div style={{ display: "grid", gap: 8 }}>
+        <p style={{ margin: "0", color: wmsColors.muted, fontSize: 12 }}>등록일은 반려일이 아닙니다. 상세 반려 사유와 반려일은 쿠팡 반려 안내에서 확인해 주세요.</p>
+        {(rejectedOpen || Boolean(query.trim())) && <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
           {/* 2026-10-21: 반려 카드마다 쿠팡에 남아 있는 예전 SKU 후보를 찾아 바로 단종 신청 목록에 넣게 한다. */}
           {rejectedGroups.map(stage => renderGroupCard(stage.group, <><StageInfo stage={stage} /><LegacySkuCandidates names={[...stage.group.items.map(item => item.productName), ...stage.wimsRows.map(row => row.productName)].filter(Boolean)} /></>, wmsColors.warn))}
-        </div>
+        </div>}
       </section>}
       {/* 모델SKU가 없어 제품DB 모델과 연결되지 않은 WIMS 반려 기록 — 대부분 사이트 사용 전 반려 후 이미 다시 올린 상품이라
           조치 대상이 아니다(2026-10-07 사용자 확인). 지우지 않고 접어서만 보관한다. */}
