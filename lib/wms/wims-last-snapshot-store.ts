@@ -14,6 +14,8 @@ export interface WimsLastSnapshot {
   capturedAt: string;
   snapshot: { rows: unknown[] } & Record<string, unknown>;
   capture: unknown | null;
+  /** 2026-11-04: 상태가 달라진 직전 전송본의 상태 표(새 결과 표시용). 같은 내용을 다시 보내도 바뀌지 않는다. */
+  previous?: { capturedAt: string; statuses: Record<string, string> } | null;
 }
 
 function useBlobStore(): boolean {
@@ -24,7 +26,10 @@ export function normalizeWimsLastSnapshot(value: unknown): WimsLastSnapshot | nu
   if (!value || typeof value !== "object") return null;
   const raw = value as Partial<WimsLastSnapshot>;
   if (typeof raw.capturedAt !== "string" || !raw.snapshot || typeof raw.snapshot !== "object" || !Array.isArray((raw.snapshot as { rows?: unknown }).rows)) return null;
-  return { capturedAt: raw.capturedAt, snapshot: raw.snapshot as WimsLastSnapshot["snapshot"], capture: raw.capture ?? null };
+  const previous = raw.previous && typeof raw.previous === "object" && typeof raw.previous.capturedAt === "string" && raw.previous.statuses && typeof raw.previous.statuses === "object"
+    ? { capturedAt: raw.previous.capturedAt, statuses: raw.previous.statuses as Record<string, string> }
+    : null;
+  return { capturedAt: raw.capturedAt, snapshot: raw.snapshot as WimsLastSnapshot["snapshot"], capture: raw.capture ?? null, previous };
 }
 
 export async function readWimsLastSnapshot(): Promise<WimsLastSnapshot | null> {

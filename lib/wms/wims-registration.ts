@@ -144,3 +144,14 @@ function parseVerticalWimsRows(lines: string[]): WimsRegistrationRow[] {
     } satisfies WimsRegistrationRow;
   }).filter(row => row.productName && row.statusLabel);
 }
+
+/** 2026-11-04: 지난 전송과 비교해 '새 결과'를 찾기 위한 행 식별자(모델SKU + 등록일시). 상태는 비교 대상이라 넣지 않는다. */
+export function wimsRowKey(row: Pick<WimsRegistrationRow, "modelSku" | "productName" | "registeredAt">): string {
+  return `${row.modelSku || row.productName}|${String(row.registeredAt || "").trim()}`;
+}
+
+export function wimsStatusMap(rows: Pick<WimsRegistrationRow, "modelSku" | "productName" | "registeredAt" | "status">[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const row of rows) map[wimsRowKey(row)] = row.status;
+  return map;
+}

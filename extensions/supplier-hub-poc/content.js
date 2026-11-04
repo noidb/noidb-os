@@ -3171,7 +3171,9 @@ function noidbSafeRuntimeSendMessage(message, callback) {
   // (표 스캔과 달리 이 필터 적용 자체는 재시도 루프를 두지 않는다 — 실패하면
   // 플래그를 세우지 않은 채 다음 페이지 로드 때 자연스럽게 다시 시도된다.
   // 같은 로드 안에서 반복 시도하지 않으므로 무한 재실행 위험이 없다.)
-  setTimeout(() => tryAutoApplyDefaultFilter(), 1500);
+  // 2026-11-04 자동 필터 끔(신규발주서 자동 다운로드가 실패해 쓸모가 없어짐). 코드는 남겨 두고 실행만 막는다.
+  // 다시 켜려면 아래 줄 맨 앞의 // 를 지운다.
+  // setTimeout(() => tryAutoApplyDefaultFilter(), 1500);
 
   runOrderListScanGuarded("initial");
   // Supplier Hub는 SPA라 표가 비동기로 렌더링될 수 있어 짧게 재시도한다.
