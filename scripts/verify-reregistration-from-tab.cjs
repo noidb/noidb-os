@@ -74,4 +74,31 @@ assert.equal(dbPack.reregisterable, false, "제품DB 패키지 줄은 계속 차
 const second = sandbox.reregistrationEligibility_(fakeDb([row("정상", "we20240406SI"), row("재등록대상", "we20240406GO", { "패키지": "2개입" })], {}), "we20240406", { pulledFromTab: true });
 assert.equal(second.reregisterable, true, "옮긴 직후 재확인 통과");
 
+
+// 6) 2026-11-04 we011520: 실적저조 탭 줄을 제품DB로 옮길 때 현재상태를 '재등록대상'으로 표시해야 옮긴 뒤 두 번째 확인이 통과한다.
+{
+  sandbox.ensureSheetSize_ = () => {};
+  sandbox.SpreadsheetApp = { flush: () => {} };
+  const gold = row("정상", "we011520GO", { "모델명/품번": "we011520" });
+  const lowSale = row("실적저조", "we011520SI", { "모델명/품번": "we011520" });
+  const dbRows = [gold];
+  const tabRows = [lowSale];
+  const db = fakeDb(dbRows, { "실적저조SKU": tabRows });
+  const ss = db.getParent();
+  const tab = ss.getSheetByName("실적저조SKU");
+  tab.deleteRow = index => { tabRows.splice(index - 2, 1); };
+  db.getRange = ((orig) => (r, c, nRows, nCols) => {
+    const range = orig(r, c, nRows, nCols);
+    range.setValues = values => { values.forEach((line, i) => { dbRows[r - 2 + i] = line; }); };
+    return range;
+  })(db.getRange);
+  ss.getSheetByName = name => (name === "실적저조SKU" ? tab : null);
+  const moved = sandbox.moveReregistrationTabRowsToDb_(ss, db, "we011520", {});
+  assert.equal(moved, 1);
+  assert.equal(tabRows.length, 0, "탭에서 지워짐");
+  assert.equal(dbRows[1][0], "재등록대상", "옮긴 줄 현재상태 표시");
+  const after = sandbox.reregistrationEligibility_(db, "we011520", { pulledFromTab: true });
+  assert.equal(after.reregisterable, true, "옮긴 뒤 두 번째 확인 통과: " + after.reason);
+  assert.equal(after.rowCount, 1, "정상 옵션(골드)은 대상이 아님");
+}
 console.log("PASS 재등록SKU 탭에서 가져온 모델은 판매중지 검사 없이 재등록 가능, 다른 경로는 검사 유지");

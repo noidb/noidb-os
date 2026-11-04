@@ -2969,10 +2969,16 @@ function reregisterModel_(ss, db, model, newRows, operationId) {
   Sheets.Spreadsheets.get(ss.getId(), { fields: 'spreadsheetId' });
   backupProductDbSheet_(ss, db, '동일모델재등록');
   // 판매중지SKU·실적저조SKU·그 외 재등록SKU 탭에 있던 옛 줄은 백업 뒤 제품DB 맨 아래로 옮긴 다음 기존 방식대로 덮어쓴다.
-  const pulled = plan.items.some(item => item.sheetRow < 0) ? moveReregistrationTabRowsToDb_(ss, db, model) : 0;
-  const rechecked = planReregistration_(db, model, newRows, { pulledFromTab: pulled > 0 });
+  const trace = {};
+  const pulled = plan.items.some(item => item.sheetRow < 0) ? moveReregistrationTabRowsToDb_(ss, db, model, trace) : 0;
+  let rechecked;
+  try {
+    rechecked = planReregistration_(db, model, newRows, { pulledFromTab: pulled > 0 });
+  } catch (error) {
+    throw new Error(String(error.message || error) + restoreReregistrationTabRows_(ss, db, pulled > 0 ? trace : null));
+  }
   if (pulled) {
-    if (rechecked.items.some(item => item.sheetRow < 0) || rechecked.items.length !== plan.items.length) throw new Error('탭에서 옮긴 옛 줄을 제품DB에서 다시 찾지 못했습니다. 백업과 제품DB를 확인해주세요.');
+    if (rechecked.items.some(item => item.sheetRow < 0) || rechecked.items.length !== plan.items.length) throw new Error('탭에서 옮긴 옛 줄을 제품DB에서 다시 찾지 못했습니다. 백업과 제품DB를 확인해주세요.' + restoreReregistrationTabRows_(ss, db, trace));
     plan = rechecked;
   } else if (JSON.stringify(plan) !== JSON.stringify(rechecked)) throw new Error('제품DB가 확인 중 변경되었습니다. 다시 저장해주세요.');
   const requests = [];
@@ -3014,7 +3020,7 @@ function reregisterModel_(ss, db, model, newRows, operationId) {
   try {
     Sheets.Spreadsheets.batchUpdate({ requests: requests }, ss.getId());
   } catch (error) {
-    throw new Error('재등록 일괄 반영 실패: ' + String(error.message || error).slice(0, 300));
+    throw new Error('재등록 일괄 반영 실패: ' + String(error.message || error).slice(0, 300) + restoreReregistrationTabRows_(ss, db, pulled > 0 ? trace : null));
   }
   SpreadsheetApp.flush();
   const afterRange = db.getRange(2, 1, plan.items.length, plan.headers.length);
@@ -3131,14 +3137,24 @@ function readReregistrationTabRows_(ss, model, dbHeaders) {
 }
 
 /** 옛 SKU 탭의 같은 모델 줄을 제품DB 맨 아래에 붙이고 탭에서 지운다. 옮긴 줄 수를 돌려준다. */
-function moveReregistrationTabRowsToDb_(ss, db, model) {
+function moveReregistrationTabRowsToDb_(ss, db, model, trace) {
   const width = db.getLastColumn();
   const dbHeaders = db.getRange(1, 1, 1, width).getDisplayValues()[0].map(value => String(value || '').trim());
   const rows = readReregistrationTabRows_(ss, model, dbHeaders);
   if (!rows.length) return 0;
   const start = db.getLastRow() + 1;
   ensureSheetSize_(db, start + rows.length - 1, width);
-  db.getRange(start, 1, rows.length, width).setValues(rows.map(row => row.values.map((value, i) => row.formulas[i] || value)));
+  // 2026-11-04: 실적저조SKU·그 외 재등록SKU 탭에서 온 줄은 현재상태를 '재등록대상'으로 표시해서 옮긴다.
+  // 표시가 없으면 옮긴 뒤 두 번째 확인에서 그 줄을 찾지 못하고 같은 모델의 정상 옵션까지 대상으로 잡아
+  // "판매중지 기본 옵션만 재등록할 수 있습니다" 오류가 났다(we011520). 판매중지SKU 탭 줄은 모델 전체가 대상이라 표시하지 않는다.
+  let stateColumn = dbHeaders.indexOf('현재상태');
+  if (stateColumn < 0) stateColumn = dbHeaders.indexOf('SKU매칭상태');
+  db.getRange(start, 1, rows.length, width).setValues(rows.map(row => row.values.map((value, i) => {
+    if (i === stateColumn && row.tab.name !== '판매중지SKU') return '재등록대상';
+    return row.formulas[i] || value;
+  })));
+  // 실패하면 되돌릴 수 있게 옮긴 줄의 원래 탭·값을 기록해 둔다.
+  if (trace) { trace.start = start; trace.rows = rows; }
   const byTab = {};
   rows.forEach(row => { (byTab[row.tab.name] = byTab[row.tab.name] || []).push(row.tab.row); });
   Object.keys(byTab).forEach(name => {
@@ -3147,6 +3163,36 @@ function moveReregistrationTabRowsToDb_(ss, db, model) {
   });
   SpreadsheetApp.flush();
   return rows.length;
+}
+
+/**
+ * 2026-11-04: 재등록 저장이 중간에 실패하면 제품DB로 옮겼던 줄을 원래 탭(원래 값 그대로)으로 되돌리고 제품DB의 그 줄을 지운다.
+ * 되돌리기까지 실패하면 오류 문구에 알려 준다(백업 탭에 원본이 있다).
+ */
+function restoreReregistrationTabRows_(ss, db, trace) {
+  if (!trace || !trace.rows || !trace.rows.length) return '';
+  try {
+    const dbHeaders = db.getRange(1, 1, 1, db.getLastColumn()).getDisplayValues()[0].map(value => String(value || '').trim());
+    trace.rows.forEach(row => {
+      const sheet = ss.getSheetByName(row.tab.name);
+      if (!sheet) throw new Error(row.tab.name + ' 탭이 없습니다.');
+      const width = sheet.getLastColumn();
+      const headers = sheet.getRange(1, 1, 1, width).getDisplayValues()[0].map(value => String(value || '').trim());
+      const out = headers.map(header => {
+        const at = dbHeaders.indexOf(header);
+        return at < 0 ? '' : (row.formulas[at] || row.values[at]);
+      });
+      const target = sheet.getLastRow() + 1;
+      ensureSheetSize_(sheet, target, width);
+      sheet.getRange(target, 1, 1, width).setValues([out]);
+    });
+    // 제품DB 맨 아래에 붙였던 줄(옮긴 순서 그대로)을 뒤에서부터 지운다.
+    for (let i = trace.rows.length - 1; i >= 0; i--) db.deleteRow(trace.start + i);
+    SpreadsheetApp.flush();
+    return ' (옮긴 줄은 원래 탭으로 되돌렸습니다)';
+  } catch (error) {
+    return ' (옮긴 줄을 원래 탭으로 되돌리지 못했습니다: ' + String(error.message || error).slice(0, 120) + ' — 제품DB 맨 아래 줄과 백업 탭을 확인해주세요)';
+  }
 }
 
 function isReregistrationPackage_(values, columns) {
