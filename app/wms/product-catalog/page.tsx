@@ -409,6 +409,8 @@ export default function ProductCatalogPage() {
   const [error, setError] = useState("");
   const [photoStates, setPhotoStates] = useState<Record<string, PhotoState>>({});
   const photoStatesRef = useRef(photoStates);
+  // 2026-11-04 '검색 멈춤': 모델별 검색 번호. 멈추면 번호가 바뀌어, 늦게 도착한 검색 결과는 버린다.
+  const photoSearchTokens = useRef<Record<string, number>>({});
   photoStatesRef.current = photoStates;
   /** 새로고침 뒤 폴더 권한이 아직 없을 때 "저장된 결과가 있다"는 안내용 (모델명 → 선택 사진 수). */
   const [savedHints, setSavedHints] = useState<Record<string, number>>({});
@@ -897,12 +899,16 @@ export default function ProductCatalogPage() {
     const key = item.modelName || item.modelSku || item.productName;
     if (!key || photoStates[key]?.loading) return;
     const previous = photoStates[key];
+    const token = (photoSearchTokens.current[key] || 0) + 1;
+    photoSearchTokens.current[key] = token;
+    const stopped = () => photoSearchTokens.current[key] !== token;
     setPhotoStates(current => ({ ...current, [key]: { ...(current[key] || { hits: [], analysisId: "", level: 1, grouped: false, hasFolders: false }), loading: true, error: undefined, note: undefined } }));
     try {
       const modelName = item.modelName.trim();
       if (!modelName) throw new Error("모델명이 없어 사진 검색을 진행할 수 없습니다. 모델명과 SKU 식별정보를 먼저 확인해주세요.");
       if (!fresh) {
         const restored = await restoreSavedSearch(modelName).catch(() => null);
+        if (stopped()) return;
         if (restored) { setPhotoStates(current => ({ ...current, [key]: restored })); return; }
       }
       const link = fetchLinkTable(modelName, relatedItems);
@@ -910,12 +916,15 @@ export default function ProductCatalogPage() {
       const keepSelected = new Set((previous?.hits || []).filter(hit => hit.selected).map(hit => hit.id));
       const foundIds = new Set(found.map(hit => hit.id));
       const keptSelected = (previous?.hits || []).filter(hit => hit.selected && !foundIds.has(hit.id));
+      if (stopped()) return;
       const hits = sortPhotoHits([...await toHits(found, keepSelected), ...keptSelected]);
+      if (stopped()) return;
       const analysisId = hits.some(hit => hit.selected && hit.id === previous?.analysisId) ? previous!.analysisId : "";
       const recovered = found.some(photo => photo.matchedBy.includes("1차 · 이동된 모델 폴더"));
       const note = recovered ? "MYBOX 통합 후 이동된 모델 폴더에서 사진을 찾았습니다. 제품DB의 확정 폴더 경로는 옛 경로입니다." : hasFolders && !found.length ? "1차 확정 폴더에서 사진을 찾지 못했습니다. 아래 버튼으로 범위를 넓혀 주세요." : undefined;
       setPhotoStates(current => ({ ...current, [key]: { loading: false, hits, analysisId, level, grouped, hasFolders, hiddenIds: previous?.hiddenIds || [], visualGroups: previous?.visualGroups || {}, photoDecisions: previous?.photoDecisions || {}, source: recovered ? "1차 · 이동된 모델 폴더" : levelSource(level, hasFolders), note } }));
     } catch (cause) {
+      if (stopped()) return;
       setPhotoStates(current => ({ ...current, [key]: { loading: false, hits: [], analysisId: "", level: 1, grouped: false, hasFolders: false, error: cause instanceof Error ? cause.message : "사진 후보를 찾지 못했습니다." } }));
     }
   }
@@ -926,16 +935,27 @@ export default function ProductCatalogPage() {
     const state = photoStates[key];
     const level = state ? nextPhotoLevel(state) : 0;
     if (!state || !level || state.loading) return;
+    const token = (photoSearchTokens.current[key] || 0) + 1;
+    photoSearchTokens.current[key] = token;
+    const stopped = () => photoSearchTokens.current[key] !== token;
     setPhotoStates(current => ({ ...current, [key]: { ...current[key], loading: true, error: undefined, note: undefined } }));
     try {
       const link = fetchLinkTable(key.trim(), relatedItems);
       const result = await loadPhotoLevel(level, key.trim(), relatedItems, link, state.hits);
       const added = await toHits(result.photos, new Set());
+      if (stopped()) return;
       const note = added.length ? `${LEVEL_NAMES[level]}에서 ${added.length}장을 뒤에 추가했습니다.` : `${LEVEL_NAMES[level]}에는 추가할 사진이 없습니다.`;
       setPhotoStates(current => ({ ...current, [key]: { ...current[key], loading: false, level, hits: sortPhotoHits([...current[key].hits, ...added]), source: levelSource(level, current[key].hasFolders), note } }));
     } catch (cause) {
+      if (stopped()) return;
       setPhotoStates(current => ({ ...current, [key]: { ...current[key], loading: false, error: cause instanceof Error ? cause.message : "사진을 더 찾지 못했습니다." } }));
     }
+  }
+
+  // 2026-11-04 검색 멈춤: 지금까지 찾은 사진은 그대로 두고 검색만 끝낸다(바로 등록 준비 가능).
+  function stopPhotoSearch(key: string) {
+    photoSearchTokens.current[key] = (photoSearchTokens.current[key] || 0) + 1;
+    setPhotoStates(current => current[key] ? { ...current, [key]: { ...current[key], loading: false, note: current[key].hits.length ? "사진 검색을 멈췄습니다. 지금까지 찾은 사진으로 등록 준비할 수 있습니다." : "사진 검색을 멈췄습니다." } } : current);
   }
 
   // 검색 초기화: 화면과 이 브라우저에 저장된 결과·선택·분석용·단계를 모두 지워 검색 전 상태로 되돌린다.
@@ -1308,7 +1328,7 @@ export default function ProductCatalogPage() {
                       {group.items.some(isRocketPendingItem) && <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}><RocketModelEditor compact items={group.items.filter(isRocketPendingItem)} onSaved={reloadRocketItems} /><RocketDeleteButton items={group.items.filter(isRocketPendingItem)} onDone={reloadRocketItems} /></div>}
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>{photos && !photos.loading && (() => { const count = photos.hits.filter(hit => hit.selected && !brokenPhotoIds.has(hit.id) && !photos.hiddenIds?.includes(hit.id)).length; return <button type="button" onClick={() => void downloadSelectedPhotos(group.modelName)} disabled={!count || Boolean(downloading)} title={count ? "선택한 사진을 내려받습니다. 여러 장이면 zip 하나로 받습니다." : "다운로드할 사진을 먼저 선택하세요."} style={{ ...neutralPillStyle, cursor: !count ? "not-allowed" : downloading ? "wait" : "pointer", opacity: count ? 1 : 0.55 }}>{downloading === group.modelName ? "내려받는 중…" : `선택 사진 다운로드 (${count}장)`}</button>; })()}<Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={primaryPillStyle}>등록 준비</Link><button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName || photos?.loading} style={{ ...pillStyle, cursor: photos?.loading ? "wait" : "pointer" }}>{photos?.loading ? "사진 검색 중…" : "사진검색"}</button>{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={neutralPillStyle}>사진 검색 초기화</button>}</div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>{photos && !photos.loading && (() => { const count = photos.hits.filter(hit => hit.selected && !brokenPhotoIds.has(hit.id) && !photos.hiddenIds?.includes(hit.id)).length; return <button type="button" onClick={() => void downloadSelectedPhotos(group.modelName)} disabled={!count || Boolean(downloading)} title={count ? "선택한 사진을 내려받습니다. 여러 장이면 zip 하나로 받습니다." : "다운로드할 사진을 먼저 선택하세요."} style={{ ...neutralPillStyle, cursor: !count ? "not-allowed" : downloading ? "wait" : "pointer", opacity: count ? 1 : 0.55 }}>{downloading === group.modelName ? "내려받는 중…" : `선택 사진 다운로드 (${count}장)`}</button>; })()}<Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={primaryPillStyle}>등록 준비</Link>{photos?.loading ? <button type="button" onClick={() => stopPhotoSearch(group.modelName)} title="지금까지 찾은 사진은 그대로 두고 검색을 멈춥니다." style={neutralPillStyle}>검색 멈춤</button> : <button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName} style={{ ...pillStyle, cursor: "pointer" }}>사진검색</button>}{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={neutralPillStyle}>사진 검색 초기화</button>}</div>
                       <div style={{ display: "inline-flex", alignItems: "stretch", border: "1px solid #dfbdb2", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
                         <select aria-label={`${group.modelName} 제외 사유`} value={exclusionReasons[group.key] || "상표·디자인 위험"} onChange={event => setExclusionReasons(current => ({ ...current, [group.key]: event.target.value }))} style={{ border: 0, outline: "none", background: "#f4f1ec", color: "#4b4744", fontWeight: 700, fontSize: 12, minHeight: 30, padding: "0 8px" }}><option>상표·디자인 위험</option><option>거래처 생산종료</option><option>직접입력</option></select>
                         {(exclusionReasons[group.key] || "") === "직접입력" && <input value={exclusionMemos[group.key] || ""} onChange={event => setExclusionMemos(current => ({ ...current, [group.key]: event.target.value }))} placeholder="메모" maxLength={60} aria-label={`${group.modelName} 제외 메모`} style={{ border: 0, borderLeft: "1px solid #dfbdb2", outline: "none", minHeight: 30, width: 150, padding: "0 8px", fontSize: 12 }} />}
@@ -1345,7 +1365,7 @@ export default function ProductCatalogPage() {
                   </div>}
                   {dragNotice && photos && photos.hits.length > 0 && <div style={{ color: wmsColors.warnText, fontSize: 12, fontWeight: 700, marginTop: 7 }}>{dragNotice}</div>}
                   {photos?.note && <div style={{ color: wmsColors.ink, fontSize: 12, marginTop: 7 }}>{photos.note}</div>}
-                  {photos && !photos.error && nextPhotoLevel(photos) > 0 && <div style={{ marginTop: 8 }}><button type="button" onClick={() => void expandPhotos(first, group.items)} disabled={photos.loading} style={{ border: `1px solid ${wmsColors.slate}`, borderRadius: 8, background: "#fff", padding: "8px 12px", cursor: photos.loading ? "wait" : "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.slate }}>{photos.loading ? "사진 찾는 중…" : `${LEVEL_BUTTON_LABELS[nextPhotoLevel(photos)]} →`}</button></div>}
+                  {photos && !photos.error && nextPhotoLevel(photos) > 0 && <div style={{ marginTop: 8 }}><button type="button" onClick={() => photos.loading ? stopPhotoSearch(group.modelName) : void expandPhotos(first, group.items)} title={photos.loading ? "지금까지 찾은 사진은 그대로 두고 검색을 멈춥니다." : undefined} style={{ border: `1px solid ${wmsColors.slate}`, borderRadius: 8, background: "#fff", padding: "8px 12px", cursor: "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.slate }}>{photos.loading ? "사진 찾는 중… (누르면 검색 멈춤)" : `${LEVEL_BUTTON_LABELS[nextPhotoLevel(photos)]} →`}</button></div>}
                   {photos && !photos.loading && <div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 7 }}>사진 후보 {photos.hits.length}개{photos.source ? ` · ${photos.source}` : ""} · 선택 {photos.hits.filter(hit => hit.selected).length}/{MAX_SELECTED_PHOTOS}장</div>}
                 </article>;
   };
@@ -1566,7 +1586,7 @@ export default function ProductCatalogPage() {
                 <div style={{ textAlign: "right", minWidth: 150 }}><div style={{ color: reregistration ? wmsColors.warnText : item.skuId ? wmsColors.greenDark : wmsColors.warn, fontWeight: 800, fontSize: 12 }}>{identityNeedsChecking ? "식별정보 확인 필요" : reregistration ? "모델 전체 재등록 대상" : item.skuId ? "DB에 SKU 있음" : "승인정보 연결 필요"}</div><div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 5 }}>DB 상태: {item.currentStatus || "미입력"}</div>{rocketPending && <div style={{ color: wmsColors.warnText, fontSize: 11, marginTop: 3 }}>R 바코드 미확인 · 등록 증빙 확인 필요</div>}</div>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
-                <button type="button" onClick={() => void searchPhotos(item)} disabled={!photoKey || photos?.loading} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "사진 검색 중…" : "사진 후보 검색"}</button>
+                <button type="button" onClick={() => photos?.loading ? stopPhotoSearch(photoKey) : void searchPhotos(item)} disabled={!photoKey} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 10px", cursor: "pointer", fontWeight: 700, color: wmsColors.ink }}>{photos?.loading ? "검색 멈춤" : "사진 후보 검색"}</button>
                 {imageUrl && <a href={imageUrl} target="_blank" rel="noreferrer" aria-label="대표이미지 크게 보기" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: wmsColors.slate }}><img src={imageUrl} alt="대표이미지" width={42} height={42} loading="lazy" style={{ width: 42, height: 42, objectFit: "contain", border: `1px solid ${wmsColors.border}`, borderRadius: 6, background: wmsColors.surface }} /><span>대표이미지 원본 열기 ↗</span></a>}
                 {productLink ? <>
                   <a href={productLink} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: wmsColors.slate }}>쿠팡 제품페이지 열기 ↗</a>
