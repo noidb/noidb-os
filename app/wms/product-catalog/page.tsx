@@ -404,6 +404,8 @@ export default function ProductCatalogPage() {
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [snapshot, setSnapshot] = useState<WimsRegistrationSnapshot | null>(null);
   const [query, setQuery] = useState("");
+  // 2026-11-04 "등록 진행 중" 목록은 길어서 기본으로 접어 둔다. 검색어를 넣으면 자동으로 펼친다.
+  const [progressOpen, setProgressOpen] = useState(false);
   const [status, setStatus] = useState("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1435,11 +1437,14 @@ export default function ProductCatalogPage() {
       </details>}
 
       {progressGroups.length > 0 && <section style={{ border: `2px solid ${wmsColors.slate}`, background: wmsColors.surface, borderRadius: 14, padding: 16, marginBottom: 16 }}>
-        <div style={{ color: wmsColors.ink, fontWeight: 900, fontSize: 18 }}>등록 진행 중 · {progressGroups.length}개 모델</div>
-        <p style={{ margin: "6px 0 12px", color: wmsColors.muted, fontSize: 12 }}>이미 등록파일을 만들었거나 WIMS 승인을 기다리는 모델입니다. 아래 재등록 목록에는 나오지 않습니다. 진행 상태는 제품DB 현재상태와 마지막으로 가져온 WIMS 등록 결과 기준입니다.</p>
-        <div style={{ display: "grid", gap: 8 }}>
-          {progressGroups.map(stage => renderGroupCard(stage.group, <StageInfo stage={stage} />, wmsColors.slate))}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <div style={{ color: wmsColors.ink, fontWeight: 900, fontSize: 18 }}>등록 진행 중 · {progressGroups.length}개 모델</div>
+          {!query.trim() && <button type="button" className="softBeigeButton" onClick={() => setProgressOpen(open => !open)} style={{ minHeight: 36, minWidth: 90, padding: "0 14px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>{progressOpen ? "접기" : "펼치기"}</button>}
         </div>
+        <p style={{ margin: "6px 0 0", color: wmsColors.muted, fontSize: 12 }}>이미 등록파일을 만들었거나 WIMS 승인을 기다리는 모델입니다. 아래 재등록 목록에는 나오지 않습니다. 진행 상태는 제품DB 현재상태와 마지막으로 가져온 WIMS 등록 결과 기준입니다.</p>
+        {(progressOpen || Boolean(query.trim())) && <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+          {progressGroups.map(stage => renderGroupCard(stage.group, <StageInfo stage={stage} />, wmsColors.slate))}
+        </div>}
       </section>}
 
       {/* 창을 다시 누를 때의 자동 새로고침은 목록을 그대로 둔 채 뒤에서 읽는다(처음 한 번만 로딩 화면). */}
