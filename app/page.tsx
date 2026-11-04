@@ -73,7 +73,7 @@ type Analysis = {
 type ProductPhoto = { id: string; name: string; dataUrl: string };
 type SlotImage = { dataUrl: string; fileName: string; source?: string; crop?: SquareCrop; locked?: boolean };
 type VariantOption = SkuRow & { key: string; label: string };
-type DetailImage = { id: string; name: string; dataUrl: string; zoom?: number; focusX?: number; focusY?: number; frameHeight?: number };
+type DetailImage = { id: string; name: string; dataUrl: string; zoom?: number; focusX?: number; focusY?: number; frameHeight?: number; caption?: string };
 type CustomSlot = { id: string; type: "all" | "detail" | "wear"; slot: SlotImage | null };
 type QuoteQueueRecord = { model: string; gender: string; category: string; skuCount: number; savedAt: number | string; payload: any };
 type PendingReplacementCleanup = { model: string; legacySku: string; oldRows: number; matchedOptions: number };
@@ -1698,11 +1698,38 @@ export default function Home() {
         }
         return { img, height, sourceWidth, sourceHeight: Math.min(img.height, sourceHeight),
           focusX: Math.max(0, Math.min(1, item.focusX ?? 0.5)),
-          focusY: Math.max(0, Math.min(1, item.focusY ?? 0.5)) };
+          focusY: Math.max(0, Math.min(1, item.focusY ?? 0.5)),
+          lines: [] as string[], textHeight: 0 };
       })
     );
+    // 사진 아래 글(2026-11-04): 사진마다 적은 글을 사진 바로 밑에 가운데 정렬로 넣는다. 글이 없는 사진은 예전과 똑같다.
+    const CAPTION_FONT = '700 30px "Pretendard", "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
+    const CAPTION_LINE = 46;
+    const CAPTION_PAD = 40;
+    try { await document.fonts?.ready; } catch { /* 글꼴 준비를 못 기다려도 기본 글꼴로 진행 */ }
+    const measure = document.createElement("canvas").getContext("2d");
+    if (measure) {
+      measure.font = CAPTION_FONT;
+      prepared.forEach((item, index) => {
+        const text = (detailImages[index].caption || "").replace(/\r/g, "").trim();
+        if (!text) return;
+        const maxWidth = width - 120;
+        const lines: string[] = [];
+        for (const paragraph of text.split("\n")) {
+          if (!paragraph.trim()) { lines.push(""); continue; }
+          let line = "";
+          for (const char of paragraph) {
+            if (line && measure.measureText(line + char).width > maxWidth) { lines.push(line.trimEnd()); line = char === " " ? "" : char; }
+            else line += char;
+          }
+          if (line) lines.push(line.trimEnd());
+        }
+        item.lines = lines;
+        item.textHeight = CAPTION_PAD + lines.length * CAPTION_LINE;
+      });
+    }
     const totalHeight =
-      headerHeight + gap + prepared.reduce((s, i) => s + i.height, 0) + gap * Math.max(0, prepared.length - 1) + gap + footerHeight;
+      headerHeight + gap + prepared.reduce((s, i) => s + i.height + i.textHeight, 0) + gap * Math.max(0, prepared.length - 1) + gap + footerHeight;
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = totalHeight;
@@ -1716,7 +1743,16 @@ export default function Home() {
       const sourceX = Math.max(0, Math.min(item.img.width - item.sourceWidth, item.img.width * item.focusX - item.sourceWidth / 2));
       const sourceY = Math.max(0, Math.min(item.img.height - item.sourceHeight, item.img.height * item.focusY - item.sourceHeight / 2));
       ctx.drawImage(item.img, sourceX, sourceY, item.sourceWidth, item.sourceHeight, 0, y, width, item.height);
-      y += item.height + gap;
+      if (item.lines.length) {
+        ctx.fillStyle = "#252525";
+        ctx.font = CAPTION_FONT;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        item.lines.forEach((line, lineIndex) => ctx.fillText(line, width / 2, y + item.height + CAPTION_PAD + lineIndex * CAPTION_LINE + CAPTION_LINE / 2 - 8));
+        ctx.textAlign = "left";
+        ctx.textBaseline = "alphabetic";
+      }
+      y += item.height + item.textHeight + gap;
     }
     if (footer) ctx.drawImage(footer, 0, y, width, footerHeight);
     return { dataUrl: canvas.toDataURL("image/jpeg", 0.97), totalHeight };
@@ -3305,6 +3341,14 @@ export default function Home() {
               <img src={item.dataUrl} alt={item.name} />
               <div className="detailItemInfo">
                 <strong>{item.name}</strong>
+                <textarea className="detailCaptionInput" rows={2} placeholder="이 사진 아래에 넣을 글 (비워 두면 사진만)"
+                  value={item.caption || ""}
+                  onDragStart={e => { e.preventDefault(); e.stopPropagation(); }}
+                  onChange={e => {
+                    const value = e.target.value;
+                    setDetailImages(prev => prev.map(d => d.id === item.id ? { ...d, caption: value } : d));
+                    setDetailPreview("");
+                  }} />
                 <div className="detailItemButtons">
                   <button type="button" onClick={() => setLightbox(item.dataUrl)}>확대</button>
                   <button type="button" className="removeButton"

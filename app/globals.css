@@ -840,3 +840,6 @@ html,body{overflow-x:clip}
 /* 2026-11-03: 틀고정에 '+ 전체옵션 이미지 / 디테일컷 / 착용컷' 버튼 줄까지 포함 */
 .uploadPoolSticky .slotAddButtons{margin:8px 0 0}
 .uploadPoolSticky .uploadPool{margin-bottom:0}
+
+/* 2026-11-04 상세페이지 사진 아래 글 */
+.detailCaptionInput{width:100%;margin:6px 0;padding:8px 10px;border:1px solid #d8d3cc;border-radius:8px;font-size:14px;line-height:1.4;resize:vertical;background:#fff;box-sizing:border-box}
