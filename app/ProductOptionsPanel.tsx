@@ -261,6 +261,9 @@ export function CategoryManager({ config, send, setConfig, initialCategory, onCl
   // 입력 중인 값은 저장 전에도 이 컴퓨터에 기억하고, 뒤에서 새 목록을 받아도 덮어쓰지 않는다(2026-11-03).
   const dirty = useRef(false);
   const lastKey = useRef("");
+  // 2026-11-04 저장 안내: 저장 뒤 설정을 다시 받아와도 지워지지 않게 기억해 둔다(다른 카테고리를 고르거나 고치면 사라진다).
+  const savedNote = useRef<{ key: string; text: string } | null>(null);
+  const [savedFlash, setSavedFlash] = useState(false);
   const draftKey = isNew ? "__new__" : selected;
   const readDrafts = (): Record<string, CategoryConfig> => {
     try { return JSON.parse(window.localStorage.getItem(DRAFT_CACHE_KEY) || "{}"); } catch { return {}; }
@@ -274,6 +277,7 @@ export function CategoryManager({ config, send, setConfig, initialCategory, onCl
   };
   const editForm = (change: (prev: CategoryConfig) => CategoryConfig) => {
     dirty.current = true;
+    savedNote.current = null;
     setForm(prev => { const next = change(prev); writeDraft(draftKey, next); return next; });
   };
 
@@ -288,7 +292,7 @@ export function CategoryManager({ config, send, setConfig, initialCategory, onCl
     const draft = readDrafts()[draftKey];
     dirty.current = Boolean(draft);
     setForm(draft ? { ...draft, template: found?.template ?? draft.template } : found ? structuredClone(found) : { name: "", letter: "" });
-    setMessage(draft ? "저장하지 않은 입력값을 다시 불러왔습니다. 확인 후 '설정 저장'을 눌러주세요." : "");
+    setMessage(draft ? "저장하지 않은 입력값을 다시 불러왔습니다. 확인 후 '설정 저장'을 눌러주세요." : savedNote.current?.key === draftKey ? savedNote.current.text : "");
   }, [selected, isNew, config, draftKey]);
 
   const startNew = () => { dirty.current = false; setIsNew(true); setSelected(""); setForm({ name: "", letter: "" }); setMessage(""); };
@@ -299,7 +303,11 @@ export function CategoryManager({ config, send, setConfig, initialCategory, onCl
       writeDraft(draftKey, null); dirty.current = false; lastKey.current = "";
       setIsNew(false);
       setSelected(form.name.trim());
-      setMessage(isNew ? "저장했습니다. 이제 쿠팡 양식 파일을 올려주세요." : "저장했습니다.");
+      const text = isNew ? "저장했습니다. 이제 쿠팡 양식 파일을 올려주세요." : "저장했습니다.";
+      savedNote.current = { key: form.name.trim(), text };
+      setMessage(text);
+      setSavedFlash(true);
+      window.setTimeout(() => setSavedFlash(false), 2500);
     } catch (e) { setMessage(e instanceof Error ? e.message : "저장하지 못했습니다."); }
     finally { setBusy(false); }
   };
@@ -416,7 +424,7 @@ export function CategoryManager({ config, send, setConfig, initialCategory, onCl
           <div className="categoryStickyBar">
           {message && <p className={/못|오류|없|이미|입력/.test(message) ? "optionError" : "optionHint"}>{message}</p>}
           <div className="categoryActions">
-            <button type="button" className="softPinkButton" disabled={busy || !form.name.trim() || !form.letter} onClick={() => void save()}>{isNew ? "카테고리 추가" : "설정 저장"}</button>
+            <button type="button" className="softPinkButton" disabled={busy || !form.name.trim() || !form.letter} onClick={() => void save()}>{savedFlash ? "저장됨 ✓" : isNew ? "카테고리 추가" : "설정 저장"}</button>
             {!isNew && selected && <button type="button" className="softApricotButton" disabled={busy || config.categories.length <= 1} onClick={() => void remove()}>목록에서 지우기</button>}
           </div>
           </div>

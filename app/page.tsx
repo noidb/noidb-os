@@ -715,6 +715,17 @@ export default function Home() {
     return product.modelName?.trim() || buildAutoModel(product);
   }, [product.category, product.gender, product.modelNo, product.modelName]);
 
+  // 2026-11-04 목록 관리에서 카테고리 모델명 글자를 바꾸면, 지금 작성 중인 상품의 자동 모델명도 새 글자로 바꾼다(직접 고친 모델명·재등록 모델은 그대로).
+  const currentCategoryLetter = categoryLetter(productOptions.config, product.category);
+  useEffect(() => {
+    if (reregisterModelName || !product.modelNo || !product.modelName) return;
+    const auto = buildAutoModel(product);
+    if (!auto || auto === product.modelName) return;
+    if (product.modelName.replace(/^[a-z]+/, "") !== auto.replace(/^[a-z]+/, "")) return;
+    setProduct(prev => prev.modelName === product.modelName ? { ...prev, modelName: auto } : prev);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentCategoryLetter]);
+
   // 대부분 실제 등록이므로 기본은 실제 등록용이다. 테스트·교육용은 그 상품에서만 쓰고, 다른 상품으로 바뀌면 실제 등록용으로 돌아간다.
   useEffect(() => {
     setBatchMode("actual");
@@ -1320,6 +1331,23 @@ export default function Home() {
     }
     setUploadPool(prev => [...prev, ...items]);
   };
+  // 2026-11-04 칸 위가 아닌 곳에서 Ctrl+V 하면 복사한 이미지를 5번 사진 목록에 넣는다(입력칸·다른 붙여넣기 패널은 건드리지 않음).
+  const addUploadPoolFilesRef = useRef(addUploadPoolFiles);
+  addUploadPoolFilesRef.current = addUploadPoolFiles;
+  useEffect(() => {
+    const onPaste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.closest("input,textarea,select,[contenteditable='true']"))) return;
+      const images = Array.from(event.clipboardData?.files || []).filter(file => file.type.startsWith("image/"));
+      if (!images.length) return;
+      event.preventDefault();
+      const named = images.map((file, index) => file.name && !/^image\.(png|jpe?g)$/i.test(file.name) ? file : new File([file], `붙여넣기_${Date.now()}_${index + 1}.${file.type === "image/jpeg" ? "jpg" : "png"}`, { type: file.type }));
+      void addUploadPoolFilesRef.current(named);
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, []);
 
   const openUploadPoolPicker = async () => {
     try {
@@ -3813,6 +3841,20 @@ function ImageSlot({
   const pendingFileRevision = useRef(0);
   const displaySubtitle = slotKey.startsWith("opt:") ? filename : subtitle;
   useEffect(() => () => { pendingFileRevision.current += 1; }, []);
+  // 2026-11-04 칸 위에 마우스를 올리고 Ctrl+V 하면 복사한 이미지를 이 칸에 넣는다.
+  const hovered = useRef(false);
+  const applyFileRef = useRef<(file: File | undefined) => Promise<void>>(async () => {});
+  useEffect(() => {
+    const onPaste = (event: ClipboardEvent) => {
+      if (!hovered.current) return;
+      const image = Array.from(event.clipboardData?.files || []).find(file => file.type.startsWith("image/"));
+      if (!image) return;
+      event.preventDefault();
+      void applyFileRef.current(image);
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, []);
 
   const applyFile = async (file: File | undefined) => {
     if (!file) return;
@@ -3824,9 +3866,11 @@ function ImageSlot({
     if (value) onReturnToPool?.(value);
     onChange({ dataUrl, fileName: file.name });
   };
+  applyFileRef.current = applyFile;
 
   return (
-    <div className={"imageSlot" + (value ? " imageSlotFilled" : " imageSlotEmpty") + (dragging ? " dragging" : "")}>
+    <div onMouseEnter={() => { hovered.current = true; }} onMouseLeave={() => { hovered.current = false; }}
+      className={"imageSlot" + (value ? " imageSlotFilled" : " imageSlotEmpty") + (dragging ? " dragging" : "")}>
       <div className="imageSlotHeader"
         draggable={Boolean(value)}
         title={value ? "제목을 끌어 다른 칸과 위치를 바꿀 수 있습니다." : undefined}
@@ -3871,7 +3915,7 @@ function ImageSlot({
         ) : (
           <div className="slotPlaceholder">
             <strong>{title}</strong>
-            <span>{pickOnClick ? "이미지를 끌어놓거나 클릭하세요." : "Ctrl+V로 붙여넣거나 이미지를 끌어놓으세요."}</span>
+            <span>{pickOnClick ? "이미지를 끌어놓거나 클릭하세요. (마우스를 올리고 Ctrl+V로 붙여넣기)" : "Ctrl+V로 붙여넣거나 이미지를 끌어놓으세요."}</span>
           </div>
         )}
       </div>
