@@ -2998,6 +2998,25 @@ function reregisterModel_(ss, db, model, newRows, operationId) {
     rowOrder.splice(sourceIndex, 1);
     rowOrder.splice(targetIndex, 0, item.sheetRow);
   });
+  // 2026-11-04 사용자 요청: 같은 모델의 나머지 옵션(재등록 대상이 아닌 정상 줄)도 재등록 줄 바로 아래로 모아 정렬한다.
+  // 값은 바꾸지 않고 줄 위치만 옮긴다(기존 순서 유지).
+  const targetRows = {};
+  plan.items.forEach(item => { targetRows[item.sheetRow] = true; });
+  const modelValues = db.getRange(1, plan.columns['모델명/품번'] + 1, db.getLastRow(), 1).getValues();
+  const wantedModel = String(model).trim().toLowerCase();
+  const siblings = [];
+  modelValues.forEach((value, index) => {
+    const sheetRow = index + 1;
+    if (sheetRow > 1 && !targetRows[sheetRow] && String(value[0] || '').trim().toLowerCase() === wantedModel) siblings.push(sheetRow);
+  });
+  siblings.forEach((sheetRow, index) => {
+    const sourceIndex = rowOrder.indexOf(sheetRow);
+    const targetIndex = plan.items.length + index + 1;
+    if (sourceIndex === targetIndex) return;
+    requests.push({ moveDimension: { source: { sheetId: sheetId, dimension: 'ROWS', startIndex: sourceIndex, endIndex: sourceIndex + 1 }, destinationIndex: targetIndex } });
+    rowOrder.splice(sourceIndex, 1);
+    rowOrder.splice(targetIndex, 0, sheetRow);
+  });
   if (!plan.retry) {
     const history = getOrCreateSheet_(ss, SKU_REPLACEMENT_SHEET);
     if (history.getLastRow() === 0) {
