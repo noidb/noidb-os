@@ -396,20 +396,31 @@ export async function collectProductDbFiles(
   const additionalImagesCsv = additionalImageNames.join(",");
   const payload = buildGoogleSheetPayload(input, input.optionThumbs || {});
 
-  const quoteCategories = ["반지", "귀걸이", "피어싱", "목걸이", "팔찌", "발찌"];
-  // 2026-10-27 상품수정용: 견적서는 만들지 않는다.
+  // 2026-11-04 견적서는 쿠팡 양식이 있는 모든 카테고리에서 만든다(사용자가 목록 관리에서 추가한 새 카테고리 포함).
+  // 예전에는 6개 카테고리만 만들어서 여성모자 등은 견적서가 조용히 빠졌다. 못 만들면 이유를 알린다.
   if (collectOptions.editOnly) {
-    // 견적서 건너뜀
-  } else if (quoteCategories.includes(category) && input.title) {
+    // 2026-10-27 상품수정용: 견적서는 만들지 않는다.
+  } else if (input.title) {
     try {
       // 견적서에는 옵션 이미지가 들어가지 않는다. 원본 data URL까지 보내면
       // 이미지가 많은 상품에서 Vercel 요청 용량을 초과해 견적서만 누락될 수 있다.
       const { optionImages: _unusedOptionImages, skuImages: _unusedSkuImages, ...quotePayload } = payload;
-      const res = await fetch("/api/export-quote", {
+      const send = (extra: Record<string, unknown> = {}) => fetch("/api/export-quote", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(quotePayload),
+        body: JSON.stringify({ ...quotePayload, ...extra }),
       });
+      let res = await send();
+      if (res.status === 422) {
+        // 쿠팡 필수 칸이 비어 있음 → 어느 칸인지 보여주고, 그래도 만들지 확인한다.
+        const data = await res.clone().json().catch(() => ({}));
+        const missing: string[] = Array.isArray(data.missingRequired) ? data.missingRequired : [];
+        const ok = missing.length > 0 && window.confirm(
+          `쿠팡 필수 칸이 비어 있습니다.\n\n- ${missing.join("\n- ")}\n\n기본정보의 '카테고리 전용 칸'이나 카테고리 기본값에서 채울 수 있습니다.\n비운 채로 견적서를 만들까요? (쿠팡에서 반려될 수 있습니다)`,
+        );
+        if (!ok) throw new Error(`필수 칸이 비어 있습니다: ${missing.join(", ")}`);
+        res = await send({ allowMissingRequired: true });
+      }
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "견적서 생성 실패");
@@ -418,7 +429,7 @@ export async function collectProductDbFiles(
       pushFlat(files, quoteName, await res.blob());
       readyFiles.push(quoteName);
     } catch (error) {
-      skipped.push(`견적서 (${error instanceof Error ? error.message : "실패"})`);
+      skipped.push(`견적서 미저장: ${error instanceof Error ? error.message : "실패"}`);
       missingFiles.push(`견적서_${model}_${category}.xlsx`);
     }
   } else {

@@ -2298,7 +2298,9 @@ export default function Home() {
         const saved = await writeProductDbFiles(dbHandle, product.category, model, files, { overwriteExisting: reregisterable });
         const fileSkips = skipped.filter(item => !item.startsWith("Google 시트"));
         setDbSavedFiles(saved);
+        const quoteSkip = fileSkips.find(item => item.startsWith("견적서 미저장"));
         setBatchStatus(
+          (quoteSkip ? `오류: ${quoteSkip} · 다른 파일 ${saved.length}개는 저장했습니다. 견적서는 아래 '견적서만 다운로드'로 만드세요. · ` : "") +
           `상품 생성 완료 · ${saved.length}개 저장 → ${product.category}/${model}/` +
             (fileSkips.length ? ` · 미저장: ${fileSkips.join(", ")}` : "") +
             ` · ${sync.message}`
