@@ -104,7 +104,18 @@ const ACCEPTED = ["image/jpeg", "image/jpg", "image/png"];
 const DEFAULT_DETAIL_HEADER = "/노이드비-상단이미지.jpg";
 const DRAFT_STORAGE_KEY = "noidb-product-draft";
 /** 제품사진선택으로 나갈 때 작업 중이던 내용을 임시저장한 모델명. 돌아오면 그 임시저장을 다시 연다(이 탭에서만). */
+// 2026-11-04 '등록 준비'가 새 탭으로 열리므로 탭끼리 공유되는 localStorage에 {model, at}로 남긴다(6시간 안에서만 이어 열기).
 const PHOTO_SELECT_RETURN_KEY = "noidb-photo-select-return";
+const PHOTO_SELECT_RETURN_MAX_MS = 6 * 60 * 60 * 1000;
+function readPhotoSelectReturn(): string {
+  try {
+    const raw = localStorage.getItem(PHOTO_SELECT_RETURN_KEY);
+    if (!raw) return "";
+    const parsed = JSON.parse(raw) as { model?: string; at?: number };
+    if (!parsed?.model || !parsed.at || Date.now() - parsed.at > PHOTO_SELECT_RETURN_MAX_MS) { localStorage.removeItem(PHOTO_SELECT_RETURN_KEY); return ""; }
+    return parsed.model;
+  } catch { return ""; }
+}
 const PRODUCT_DB_PATH_KEY = "noidb-product-db-path";
 const LAURA_DRAFT_STORAGE_KEY = "laura-product-draft";
 const LEGACY_DRAFT_STORAGE_KEY = ["noi", "db-product-draft"].join("");
@@ -507,7 +518,7 @@ export default function Home() {
     try {
       if (new URLSearchParams(window.location.search).has("reregisterModel") || new URLSearchParams(window.location.search).has("rocketModel")) return;
       // 제품사진선택에서 등록 준비 없이(뒤로 가기 등) 돌아온 경우에도 나가기 전 작업을 다시 연다.
-      if (sessionStorage.getItem(PHOTO_SELECT_RETURN_KEY)) {
+      if (readPhotoSelectReturn()) {
         void restoreWorkAfterPhotoSelect();
         return;
       }
@@ -1997,8 +2008,8 @@ export default function Home() {
   const restoreWorkAfterPhotoSelect = async (expectedModel = "") => {
     let draftModel = "";
     try {
-      draftModel = sessionStorage.getItem(PHOTO_SELECT_RETURN_KEY) || "";
-      sessionStorage.removeItem(PHOTO_SELECT_RETURN_KEY);
+      draftModel = readPhotoSelectReturn();
+      localStorage.removeItem(PHOTO_SELECT_RETURN_KEY);
     } catch { /* 저장공간을 못 쓰면 되살릴 작업도 없다 */ }
     if (!draftModel) return false;
     const record = (await listProductDrafts().catch(() => [])).find(row => row.model === draftModel);
@@ -2032,7 +2043,7 @@ export default function Home() {
     leavingForPhotosRef.current = true;
     try {
       await saveProductDraft(buildDraftRecord());
-      sessionStorage.setItem(PHOTO_SELECT_RETURN_KEY, model);
+      localStorage.setItem(PHOTO_SELECT_RETURN_KEY, JSON.stringify({ model, at: Date.now() }));
     } catch (error) {
       if (!window.confirm(`작업 내용을 임시저장하지 못했습니다(${error instanceof Error ? error.message : "저장 공간 확인"}).\n그래도 제품사진선택으로 이동할까요? 이동하면 입력한 내용이 사라집니다.`)) {
         leavingForPhotosRef.current = false;
