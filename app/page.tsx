@@ -2298,6 +2298,8 @@ export default function Home() {
     const required: string[] = [];
     if (!model) required.push("모델명");
     if (!product.category) required.push("카테고리");
+    // 2026-11-04 치수는 화면에 '필수입력'으로 표시돼 있으므로 비어 있으면 저장 전에 막는다.
+    if (!product.dimension.trim()) required.push("치수");
     if (isActual && !dbHandle && dbSupported) required.push("상품DB 폴더 연결");
     if (required.length) {
       setBatchStatus(`필수 항목 부족: ${required.join(", ")}`);
@@ -2369,10 +2371,24 @@ export default function Home() {
         setBatchStatus("테스트·교육용 ZIP 생성 완료 · 실제 상품 폴더와 Google 제품DB는 변경하지 않았습니다.");
       } else if (dbHandle) {
         // 파일 충돌 여부를 Google 시트 변경보다 먼저 확인하여 기존 상품과 시트가 모두 보존되게 한다.
-        if (!reregisterable) await assertProductDbFilesWritable(dbHandle, product.category, model, files);
+        // 2026-11-04 같은 모델 파일이 이미 있으면(임시저장·이전 저장) 바로 막지 않고, 덮어쓸지 물어본다. 취소하면 아무것도 바꾸지 않는다.
+        let overwriteFiles = reregisterable;
+        if (!reregisterable) {
+          try {
+            await assertProductDbFilesWritable(dbHandle, product.category, model, files);
+          } catch (conflict) {
+            const text = conflict instanceof Error ? conflict.message : "";
+            if (!text.startsWith("기존 파일")) throw conflict;
+            if (!window.confirm(`${text}\n\n같은 이름의 파일을 새 내용으로 덮어쓸까요?\n(취소하면 아무것도 저장하지 않습니다.)`)) {
+              setBatchStatus("덮어쓰기를 취소했습니다. 상품 폴더와 Google 제품DB는 변경하지 않았습니다.");
+              return;
+            }
+            overwriteFiles = true;
+          }
+        }
         const sync = await syncProductDbToGoogleSheet((await buildCollectInput(preview)));
         if (!sync.ok) throw new Error(`${sync.message} · 상품 폴더는 변경하지 않았습니다.`);
-        const saved = await writeProductDbFiles(dbHandle, product.category, model, files, { overwriteExisting: reregisterable });
+        const saved = await writeProductDbFiles(dbHandle, product.category, model, files, { overwriteExisting: overwriteFiles });
         const fileSkips = skipped.filter(item => !item.startsWith("Google 시트"));
         setDbSavedFiles(saved);
         const quoteSkip = fileSkips.find(item => item.startsWith("견적서 미저장"));

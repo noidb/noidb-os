@@ -18,7 +18,7 @@ export function colorCode(option: string) {
   const others: [RegExp, string][] = [
     [/레드|빨강|red/, "RD"], [/핑크|pink/, "PK"], [/블루|파랑|blue/, "BL"], [/그린|초록|green/, "GR"],
     [/퍼플|보라|purple/, "PP"], [/브라운|brown/, "BR"], [/베이지|beige/, "BE"], [/네이비|navy/, "NV"],
-    [/그레이|회색|gray|grey/, "GY"], [/아이보리|ivory/, "IV"]
+    [/그레이|회색|gray|grey/, "GY"], [/아이보리|ivory/, "IV"], [/민트|mint/, "MT"]
   ];
   const other = others.find(([pattern]) => pattern.test(normalized));
   if (other) return other[1];
