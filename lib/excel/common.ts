@@ -159,7 +159,10 @@ export function genderTarget(gender: string) {
 }
 
 export function kindLabel(gender: string, category: string) {
-  return `${gender} ${category}`;
+  // 카테고리 이름에 성별이 이미 들어 있으면(예: 여성모자) 한 번 더 붙이지 않는다.
+  const name = String(category || "").trim();
+  if (!gender || name.startsWith(gender)) return name;
+  return `${gender} ${name}`;
 }
 
 export function dimensionText(product: ExportPayload["product"]) {
