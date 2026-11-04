@@ -8,7 +8,7 @@ import { wmsColors } from "@/lib/wms/ui-tokens";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
-import { MAX_SELECTED_PHOTOS, clearPhotoSearch, connectPhotoFolder, FOLDER_TIER_LABELS, loadPhotoSearch, loadSavedThumbnail, saveThumbnail, openPhotoFolders, openSavedPhotos, photoFolderName, photoFolderReady, savePhotoSearch, searchPhotoFolder, savePreparedPhotos, type FolderTier, type LocalPhoto } from "@/lib/image-search/browser-folder";
+import { MAX_SELECTED_PHOTOS, clearPhotoSearch, connectPhotoFolder, FOLDER_TIER_LABELS, loadPhotoSearch, loadSavedThumbnail, saveThumbnail, openPhotoFolders, openModelFolderDirect, openSavedPhotos, photoFolderName, photoFolderReady, savePhotoSearch, searchPhotoFolder, savePreparedPhotos, type FolderTier, type LocalPhoto } from "@/lib/image-search/browser-folder";
 import { deletePhotoFiles, loadPreparedDetail, requestPhotoDeletePermission, savePreparedDetail } from "@/lib/image-search/browser-folder";
 import { identifyPhoto, photoPriority, photoTier, type PhotoIdentity, type PhotoTier } from "@/lib/image-search/photo-kind";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
@@ -870,6 +870,12 @@ export default function ProductCatalogPage() {
     const hasFolders = link.folders.length > 0;
     let found: LocalPhoto[] = [];
     let grouped = false;
+    // 2026-11-04 연결표 폴더가 없으면 MYBOX 전체를 훑기 전에 ★전체제품사진/01/_제품별/모델명 폴더를 이름으로 바로 연다(몇 초).
+    // 찾으면 1차로 보여 주고, 더 필요하면 '더 보기'로 전체 검색을 한다.
+    if (!hasFolders) {
+      const direct = await openModelFolderDirect([modelName]).catch(() => []);
+      if (direct.length) return { found: direct, grouped: false, level: 1, hasFolders: true };
+    }
     let level = hasFolders ? 1 : FULL_SEARCH_LEVEL;
     while (true) {
       const result = await loadPhotoLevel(level, modelName, relatedItems, link, found, refresh);

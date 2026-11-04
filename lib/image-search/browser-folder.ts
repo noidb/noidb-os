@@ -192,6 +192,49 @@ export async function openPhotoFolders(folderPaths: string[], modelKeys: string[
   return { photos: found.sort((a, b) => a.id.localeCompare(b.id, "ko")), grouped };
 }
 
+/**
+ * 2026-11-04 속도 개선: ★전체제품사진/01/_제품별/모델명 폴더를 이름으로 바로 열어 그 안(_통합원본_xx 등 하위 폴더 포함) 사진을 읽는다.
+ * MYBOX 전체를 훑지 않으므로 몇 초면 끝난다. 폴더가 없으면 빈 목록을 돌려주고, 호출한 쪽이 전체 검색으로 넘어간다.
+ * 연결한 폴더가 ★전체제품사진이든 그 위 폴더든 모두 처리한다. 대소문자(WH011195/wh011195)는 둘 다 시도한다.
+ */
+export async function openModelFolderDirect(modelNames: string[], existing: LocalPhoto[] = []): Promise<LocalPhoto[]> {
+  const root = await connectedRoot();
+  const names = [...new Set(modelNames.map(name => name.trim()).filter(Boolean).flatMap(name => [name, name.toUpperCase(), name.toLowerCase()]))];
+  if (!names.length) return [];
+  const baseSets: string[][] = root.name === "★전체제품사진" ? [["01", "_제품별"]] : [["★전체제품사진", "01", "_제품별"], ["01", "_제품별"]];
+  const seen = new Set(existing.map(photo => duplicateKey(photo.file)));
+  const existingIds = new Set(existing.map(photo => photo.id));
+  const found: LocalPhoto[] = [];
+  const label = "1차 · 모델명 폴더";
+  async function collect(dir: FileSystemDirectoryHandle, prefix: string) {
+    const entries: [string, any][] = [];
+    for await (const pair of (dir as any).entries()) if (!pair[0].startsWith(".")) entries.push(pair);
+    for (const [name, entry] of entries) {
+      if (existing.length + found.length >= MAX_PHOTOS) return;
+      const id = `${prefix}/${name}`;
+      if (entry.kind === "directory") { await collect(entry, id); continue; }
+      if (!IMAGE_FILE.test(name) || existingIds.has(id)) continue;
+      const file = await entry.getFile() as File;
+      if (seen.has(duplicateKey(file))) continue;
+      seen.add(duplicateKey(file));
+      found.push({ id, name, file, matchedBy: [label] });
+    }
+  }
+  for (const segments of baseSets) {
+    const parent = await descend(root, segments).catch(() => null);
+    if (!parent) continue;
+    const opened = new Set<string>();
+    for (const name of names) {
+      const dir = await parent.getDirectoryHandle(name).catch(() => null);
+      if (!dir || opened.has(dir.name.toLowerCase())) continue;
+      opened.add(dir.name.toLowerCase());
+      await collect(dir, [root.name, ...segments, dir.name].join("/"));
+    }
+    if (found.length) break;
+  }
+  return found.sort((a, b) => a.id.localeCompare(b.id, "ko"));
+}
+
 /** 저장해 둔 검색 결과(id = 연결 폴더 기준 경로)를 검색 없이 다시 연다. 사라진 파일은 건너뛴다. */
 export async function openSavedPhotos(saved: { id: string; matchedBy: string[] }[]): Promise<LocalPhoto[]> {
   const root = await connectedRoot();
