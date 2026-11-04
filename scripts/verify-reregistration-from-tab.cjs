@@ -101,4 +101,19 @@ assert.equal(second.reregisterable, true, "옮긴 직후 재확인 통과");
   assert.equal(after.reregisterable, true, "옮긴 뒤 두 번째 확인 통과: " + after.reason);
   assert.equal(after.rowCount, 1, "정상 옵션(골드)은 대상이 아님");
 }
+// 4) 2026-11-04 실제 사례 we011316: 판매중지SKU 탭에 BK가 2줄(SKU ID 38256587·39404616) → 최근 SKU ID 한 줄만 대상, 옛 줄은 비관리SKU로
+{
+  const mk = (sku, id, color) => row("판매중지", sku, { "모델명/품번": "we011316", "SKU ID": id, "상품명": "귀걸이 " + color });
+  const stopped = [mk("we011316BK", "39404616", "블랙"), mk("we011316BK", "38256587", "블랙"), mk("we011316WH", "40284074", "화이트")];
+  const db = fakeDb([row("정상", "xx0001", { "모델명/품번": "xx0001" })], { "판매중지SKU": stopped });
+  const data = sandbox.readReregistrationDb_(db, "we011316");
+  assert.equal(data.items.length, 2, "중복 BK 줄은 하나만 대상");
+  const ids = data.items.map(item => item.values[data.columns["SKU ID"]]).sort();
+  assert.deepEqual(ids, ["39404616", "40284074"], "SKU ID 큰 줄을 남김");
+  const r = sandbox.reregistrationEligibility_(db, "we011316");
+  assert.equal(r.reregisterable, true, "중복 줄이 있어도 재등록 가능: " + r.reason);
+  assert.equal(r.rowCount, 2);
+  const dupIds = sandbox.collectDuplicateTabSkuIds_({ getSheetByName: name => (name === "판매중지SKU" ? fakeSheet(HEADERS, stopped) : null) }, db, "we011316");
+  assert.deepEqual(Array.from(dupIds), ["38256587"], "비관리로 보낼 옛 줄");
+}
 console.log("PASS 재등록SKU 탭에서 가져온 모델은 판매중지 검사 없이 재등록 가능, 다른 경로는 검사 유지");
