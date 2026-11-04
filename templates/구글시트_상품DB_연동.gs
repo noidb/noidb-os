@@ -2973,7 +2973,7 @@ function reregisterModel_(ss, db, model, newRows, operationId) {
   // 2026-11-04: 중복 옛 줄은 최근 줄을 제품DB로 옮기기 '전에' 비관리SKU로 먼저 치운다.
   // 나중에 치우면 탭에 혼자 남은 옛 줄이 중복으로 보이지 않아 두 번째 확인에서 같은 모델SKU 2줄로 막힌다(we011316).
   const duplicateSkuIds = plan.items.some(item => item.sheetRow < 0) ? collectDuplicateTabSkuIds_(ss, db, model) : [];
-  const duplicateNote = moveDuplicateTabRowsToUnmanaged_(ss, model, duplicateSkuIds);
+  const duplicatesMoved = moveDuplicateTabRowsToUnmanaged_(ss, model, duplicateSkuIds);
   const pulled = plan.items.some(item => item.sheetRow < 0) ? moveReregistrationTabRowsToDb_(ss, db, model, trace) : 0;
   let rechecked;
   try {
@@ -3072,7 +3072,7 @@ function reregisterModel_(ss, db, model, newRows, operationId) {
       }
     });
   });
-  return { updatedRows: plan.items.length, status: '재등록파일생성', duplicateNote: duplicateNote, duplicatesMoved: duplicateSkuIds.length };
+  return { updatedRows: plan.items.length, status: '재등록파일생성', duplicatesMoved: duplicatesMoved };
 }
 
 // Read the current header layout without migrating or rewriting the product DB.
@@ -3158,7 +3158,7 @@ function readReregistrationTabRows_(ss, model, dbHeaders) {
   });
   // 2026-11-04: 재등록 탭에 같은 모델SKU 줄이 둘 이상이면(예전 재등록으로 생긴 중복 등록, 예: we011316BK 2줄)
   // SKU ID가 가장 큰(최근) 줄 하나만 재등록 대상으로 남기고, 나머지는 found.duplicates로 따로 돌려준다.
-  // 중복 줄은 재등록이 끝난 뒤 비관리SKU 탭('비관리(중복등록)')으로 옮긴다(moveDuplicateTabRowsToUnmanaged_).
+  // 중복 줄은 재등록 저장 맨 앞에서 비관리SKU 탭('비관리(중복등록)')으로 옮긴다(moveDuplicateTabRowsToUnmanaged_).
   const skuAt = dbHeaders.indexOf('모델SKU'), idAt = dbHeaders.indexOf('SKU ID');
   if (skuAt < 0 || idAt < 0) return found;
   const idNumber = row => Number(String(row.values[idAt] == null ? '' : row.values[idAt]).replace(/\D/g, '')) || 0;
@@ -3186,61 +3186,70 @@ function collectDuplicateTabSkuIds_(ss, db, model) {
 }
 
 /**
- * 2026-11-04 사용자 요청: 재등록하고 남은 옛 중복 줄(같은 모델SKU의 오래된 SKU ID)은
- * 현재상태 '비관리(중복등록)'로 적어 비관리SKU 탭으로 옮기고 원래 탭에서는 지운다. 값은 그대로 보존한다.
- * 실패해도 재등록 자체는 성공으로 두고 안내 문구만 돌려준다.
+ * 2026-11-04 사용자 요청: 재등록할 때 같은 모델SKU의 오래된 옛 줄(중복 등록)은
+ * 현재상태 '비관리(중복등록)'로 적어 비관리SKU 탭으로 옮기고 원래 탭에서 지운다.
+ * - 줄 전체를 시트 복사(copyTo)로 옮긴다: 값·서식·계산식이 빠지지 않는다(계산식의 같은 줄 참조도 새 줄로 맞춰짐).
+ * - 비관리SKU에 그 SKU ID가 이미 있으면 다시 붙이지 않고 원래 탭에서 지우기만 한다(여러 번 눌러도 한 줄).
+ * - 복사가 확인된 뒤에만 원래 탭에서 지운다. 실패하면 조용히 넘어가지 않고 오류로 알린다.
  */
 function moveDuplicateTabRowsToUnmanaged_(ss, model, skuIds) {
-  if (!skuIds || !skuIds.length) return '';
-  try {
-    const target = ss.getSheetByName('비관리SKU');
-    if (!target) return ' (비관리SKU 탭이 없어 중복 줄을 옮기지 못했습니다)';
-    const targetWidth = target.getLastColumn();
-    const targetHeaders = target.getRange(1, 1, 1, targetWidth).getDisplayValues()[0].map(value => String(value || '').trim());
-    const wanted = String(model || '').trim().toLowerCase();
-    const ids = {};
-    skuIds.forEach(id => { ids[String(id)] = true; });
-    const out = [], removals = [];
-    REREGISTRATION_SOURCE_TABS_.forEach(name => {
-      const sheet = ss.getSheetByName(name);
-      if (!sheet || sheet.getLastRow() < 2) return;
-      const width = sheet.getLastColumn();
-      const headers = sheet.getRange(1, 1, 1, width).getDisplayValues()[0].map(value => String(value || '').trim());
-      const modelCol = headers.indexOf('모델명/품번'), idCol = headers.indexOf('SKU ID');
-      if (modelCol < 0 || idCol < 0) return;
-      sheet.getRange(2, 1, sheet.getLastRow() - 1, width).getValues().forEach((row, index) => {
-        if (String(row[modelCol] || '').trim().toLowerCase() !== wanted || !ids[String(row[idCol] == null ? '' : row[idCol]).trim()]) return;
-        const line = targetHeaders.map(header => {
-          if (header === '현재상태') return '비관리(중복등록)';
-          if (header === '원본 위치') return name + '!' + (index + 2);
-          if (header === '보관사유') return '비관리(중복등록)';
-          const at = headers.indexOf(header);
-          return at < 0 ? '' : row[at];
-        });
-        out.push(line);
-        removals.push({ name: name, row: index + 2 });
-      });
-    });
-    if (!out.length) return '';
-    const start = target.getLastRow() + 1;
-    ensureSheetSize_(target, start + out.length - 1, targetWidth);
-    target.getRange(start, 1, out.length, targetWidth).setValues(out);
-    if (start > 2) target.getRange(start - 1, 1, 1, targetWidth).copyTo(target.getRange(start, 1, out.length, targetWidth), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
-    // 옮긴 값이 비관리SKU에 제대로 적힌 것을 확인한 뒤에만 원래 탭에서 지운다.
-    SpreadsheetApp.flush();
-    const check = target.getRange(start, 1, 1, 1).getDisplayValues()[0][0];
-    if (check !== '비관리(중복등록)') return ' (중복 줄을 비관리SKU에 옮겼는지 확인하지 못해 원래 탭에 그대로 뒀습니다)';
-    const byTab = {};
-    removals.forEach(item => { (byTab[item.name] = byTab[item.name] || []).push(item.row); });
-    Object.keys(byTab).forEach(name => {
-      const sheet = ss.getSheetByName(name);
-      byTab[name].sort((a, b) => b - a).forEach(row => sheet.deleteRow(row));
-    });
-    SpreadsheetApp.flush();
-    return ' (남은 중복 옛 줄 ' + out.length + '개는 비관리SKU로 옮겼습니다)';
-  } catch (error) {
-    return ' (중복 옛 줄을 비관리SKU로 옮기지 못했습니다: ' + String(error.message || error).slice(0, 100) + ')';
+  if (!skuIds || !skuIds.length) return 0;
+  const target = ss.getSheetByName('비관리SKU');
+  if (!target) throw new Error('중복 옛 줄을 옮길 비관리SKU 탭이 없습니다. 아무것도 바꾸지 않았습니다.');
+  const targetWidth = target.getLastColumn();
+  const targetHeaders = target.getRange(1, 1, 1, targetWidth).getDisplayValues()[0].map(value => String(value || '').trim());
+  const tCol = name => targetHeaders.indexOf(name);
+  if (tCol('SKU ID') < 0 || tCol('현재상태') < 0) throw new Error('비관리SKU 탭에서 SKU ID·현재상태 열을 찾지 못했습니다. 아무것도 바꾸지 않았습니다.');
+  const idText = value => String(value == null ? '' : value).trim();
+  const existingIds = {};
+  if (target.getLastRow() > 1) {
+    target.getRange(2, tCol('SKU ID') + 1, target.getLastRow() - 1, 1).getDisplayValues()
+      .forEach(row => { if (idText(row[0])) existingIds[idText(row[0])] = true; });
   }
+  const wanted = String(model || '').trim().toLowerCase();
+  const ids = {};
+  skuIds.forEach(id => { ids[idText(id)] = true; });
+  const removals = [];
+  REREGISTRATION_SOURCE_TABS_.forEach(name => {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet || sheet.getLastRow() < 2) return;
+    const width = sheet.getLastColumn();
+    const headers = sheet.getRange(1, 1, 1, width).getDisplayValues()[0].map(value => String(value || '').trim());
+    const modelCol = headers.indexOf('모델명/품번'), idCol = headers.indexOf('SKU ID'), nameCol = headers.indexOf('상품명');
+    if (modelCol < 0 || idCol < 0) return;
+    // 원래 탭과 비관리SKU의 앞쪽 열이 같은 순서여야 줄 전체 복사를 쓸 수 있다.
+    const sameLayout = headers.every((header, index) => !header || header === targetHeaders[index]);
+    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, width).getDisplayValues();
+    values.forEach((row, index) => {
+      const id = idText(row[idCol]);
+      if (String(row[modelCol] || '').trim().toLowerCase() !== wanted || !ids[id]) return;
+      const sourceRow = index + 2;
+      if (!existingIds[id]) {
+        if (!sameLayout) throw new Error(name + ' 탭과 비관리SKU 탭의 열 순서가 달라 중복 옛 줄(SKU ' + id + ')을 옮기지 못했습니다. 아무것도 바꾸지 않았습니다.');
+        const at = target.getLastRow() + 1;
+        ensureSheetSize_(target, at, Math.max(targetWidth, width));
+        sheet.getRange(sourceRow, 1, 1, width).copyTo(target.getRange(at, 1, 1, width));
+        target.getRange(at, tCol('현재상태') + 1).setValue('비관리(중복등록)');
+        if (tCol('원본 위치') >= 0) target.getRange(at, tCol('원본 위치') + 1).setValue(name + '!' + sourceRow);
+        if (tCol('보관사유') >= 0) target.getRange(at, tCol('보관사유') + 1).setValue('비관리(중복등록)');
+        SpreadsheetApp.flush();
+        const copied = target.getRange(at, 1, 1, targetWidth).getDisplayValues()[0];
+        if (idText(copied[tCol('SKU ID')]) !== id || (nameCol >= 0 && tCol('상품명') >= 0 && idText(copied[tCol('상품명')]) !== idText(row[nameCol]))) {
+          throw new Error('중복 옛 줄(SKU ' + id + ')을 비관리SKU에 복사했는지 확인하지 못했습니다. 원래 탭의 줄은 지우지 않았습니다. 비관리SKU ' + at + '행을 확인해주세요.');
+        }
+        existingIds[id] = true;
+      }
+      removals.push({ name: name, row: sourceRow });
+    });
+  });
+  const byTab = {};
+  removals.forEach(item => { (byTab[item.name] = byTab[item.name] || []).push(item.row); });
+  Object.keys(byTab).forEach(name => {
+    const sheet = ss.getSheetByName(name);
+    byTab[name].sort((a, b) => b - a).forEach(row => sheet.deleteRow(row));
+  });
+  SpreadsheetApp.flush();
+  return removals.length;
 }
 
 /** 옛 SKU 탭의 같은 모델 줄을 제품DB 맨 아래에 붙이고 탭에서 지운다. 옮긴 줄 수를 돌려준다. */
