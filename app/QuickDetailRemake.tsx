@@ -50,7 +50,34 @@ type Props = {
   poolImages?: Array<{ dataUrl: string; fileName: string }>;
 };
 
+/** 2026-11-04 쿠팡은 상세페이지 가로 780px 미만을 반려한다. 기존 상세페이지를 자르거나 로고를 붙인 결과가 더 좁으면 780px로 키운다(780 이상이면 그대로). */
+const MIN_DETAIL_WIDTH = 780;
+export async function ensureMinWidth(dataUrl: string): Promise<string> {
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => reject(new Error("상세페이지를 불러오지 못했습니다."));
+    element.src = dataUrl;
+  });
+  if (image.naturalWidth >= MIN_DETAIL_WIDTH) return dataUrl;
+  const canvas = document.createElement("canvas");
+  canvas.width = MIN_DETAIL_WIDTH;
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * MIN_DETAIL_WIDTH / image.naturalWidth));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.97);
+}
+
 async function cropDataUrl(dataUrl: string, top: number, bottom: number, holes: CutHole[] = []): Promise<string> {
+  return ensureMinWidth(await cropDataUrlRaw(dataUrl, top, bottom, holes));
+}
+
+async function cropDataUrlRaw(dataUrl: string, top: number, bottom: number, holes: CutHole[] = []): Promise<string> {
   if (top <= 0 && bottom >= 1 && !holes.length) return dataUrl;
   const image = await new Promise<HTMLImageElement>((resolve, reject) => {
     const element = new Image();
@@ -82,6 +109,10 @@ async function cropDataUrl(dataUrl: string, top: number, bottom: number, holes: 
 
 // 위를 잘라 로고가 없어진 상세페이지 맨 위에 6번 상단 로고 이미지를 같은 폭으로 붙인다(6번 상단 로고 칸의 "상세페이지 사용").
 export async function prependHeader(dataUrl: string, headerUrl: string): Promise<string> {
+  return ensureMinWidth(await prependHeaderRaw(dataUrl, headerUrl));
+}
+
+async function prependHeaderRaw(dataUrl: string, headerUrl: string): Promise<string> {
   const load = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
     const element = new Image();
     element.onload = () => resolve(element);

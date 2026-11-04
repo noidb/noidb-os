@@ -27,7 +27,7 @@ import { dataUrlToBlob } from "@/lib/product-db/files";
 import { buildProductDbZip } from "@/lib/product-db/zip";
 import { compressImageDataUrl } from "@/lib/image/compress";
 import { splitDetailPage, type QuickDetailSection } from "@/lib/image-generator/quick-detail";
-import QuickDetailRemake, { prependHeader } from "./QuickDetailRemake";
+import QuickDetailRemake, { ensureMinWidth, prependHeader } from "./QuickDetailRemake";
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { loadPreparedDetail, loadPreparedPhotos, type PreparedDetail } from "@/lib/image-search/browser-folder";
@@ -1741,7 +1741,8 @@ export default function Home() {
     setExportLoading("detail");
     try {
       setExportMessage("상세이미지만 만들고 있습니다...");
-      const dataUrl = detailPreview || (await composeDetailPage()).dataUrl;
+      // 2026-11-04 쿠팡 상세페이지 최소 가로 780px — 어떤 경로로 만든 상세페이지든 내려받기 직전에 한 번 더 맞춘다.
+      const dataUrl = await ensureMinWidth(detailPreview || (await composeDetailPage()).dataUrl);
       setDetailPreview(dataUrl);
       downloadDataUrl(dataUrl, `${model}.jpg`);
       setExportMessage("상세이미지 다운로드 완료");
