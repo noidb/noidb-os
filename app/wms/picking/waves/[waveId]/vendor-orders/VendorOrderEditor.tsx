@@ -85,6 +85,9 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
   const vendorMoving = useRef(false);
   const [saving, setSaving] = useState(false);
   const [statusSavingVendor, setStatusSavingVendor] = useState<string | null>(null);
+  // 2026-11-05 주문완료/취소는 누른 카드만 잠그고 저장은 뒤에서 차례로 한다(다른 카드는 그대로 쓸 수 있다).
+  const [orderingLineIds, setOrderingLineIds] = useState<Set<string>>(new Set());
+  const orderSaveChain = useRef<Promise<unknown>>(Promise.resolve());
   const [photoWorkCount, setPhotoWorkCount] = useState(0);
   const reportQueueEditing = useContext(VendorQueueEditingContext);
   useEffect(() => { reportQueueEditing?.(dirty || saving || photoWorkCount > 0 || loading); return () => reportQueueEditing?.(false); }, [dirty, saving, photoWorkCount, loading, reportQueueEditing]);
@@ -268,7 +271,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
   }, [params.waveId]);
 
   useEffect(() => {
-    if (!sharedSnapshot || loading || saving || statusSavingVendor || photoWorkCount || lastSharedSnapshot.current === sharedSnapshot) return;
+    if (!sharedSnapshot || loading || saving || statusSavingVendor || orderingLineIds.size || photoWorkCount || lastSharedSnapshot.current === sharedSnapshot) return;
     lastSharedSnapshot.current = sharedSnapshot;
     const remoteDrafts = deriveVendorOrderDrafts(sharedSnapshot.vendorOrderDrafts, sharedSnapshot.vendorOrderLines).filter(d => d.waveId === params.waveId && !d.archivedAt);
     const ids = new Set(remoteDrafts.map(d => d.id));
@@ -291,7 +294,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     draftBaselineRecords.current = remoteDrafts;
     draftBaselines.current = new Map(remoteDrafts.map(d => [d.id, d.updatedAt]));
     setDirty(removedLineIds.size > 0 || mergedLines.records.some(line => vendorRecordChanged(lineBaselines.current.get(line.id), line)) || mergedDrafts.records.some(d => vendorRecordChanged(remoteDrafts.find(r => r.id === d.id), d)));
-  }, [sharedSnapshot, loading, saving, statusSavingVendor, photoWorkCount, params.waveId, removedLineIds]);
+  }, [sharedSnapshot, loading, saving, statusSavingVendor, orderingLineIds, photoWorkCount, params.waveId, removedLineIds]);
 
   function resolveEditConflict(conflict: VendorEditConflict, useMine: boolean) {
     if (!useMine) {
@@ -864,7 +867,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
   }
 
   /** 라인들을 저장(임시저장)한다 — draftId를 현재 vendorName 기준으로 다시 맞추고, 삭제된 라인을 반영한다. */
-  async function persistAll(overrideStatus?: { vendorName: string; status: VendorOrderDraftStatus }, sourceLines?: VendorOrderDraftLine[], onlyVendor?: string) {
+  async function persistAll(overrideStatus?: { vendorName: string; status: VendorOrderDraftStatus }, sourceLines?: VendorOrderDraftLine[], onlyVendor?: string, quiet = false) {
     if (saving || saveInFlight.current || workspaceMoved || historyView) return false;
     const targetVendor = overrideStatus?.vendorName || onlyVendor;
     const vendorNames = new Set<string>();
@@ -878,7 +881,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     if (!vendorNames.size) return true;
     if (conflictsRef.current.some(conflict => vendorNames.has(conflict.vendorName))) { setSaveError("다른 기기와 겹친 변경사항을 먼저 확인해 주세요."); return false; }
     saveInFlight.current = true;
-    if (targetVendor) setStatusSavingVendor(targetVendor); else setSaving(true);
+    if (quiet) { /* 뒤에서 조용히 저장: 화면을 잠그지 않는다 */ } else if (targetVendor) setStatusSavingVendor(targetVendor); else setSaving(true);
     setSaveError(null);
     const baselineTimes = [...lineBaselines.current.values()].filter(line => vendorNames.has(line.vendorName)).map(line => Date.parse(line.updatedAt) + 1);
     const draftTimes = draftBaselineRecords.current.filter(draft => vendorNames.has(draft.vendorName)).map(draft => Date.parse(draft.updatedAt) + 1);
@@ -958,34 +961,69 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     for (const draft of draftsToSave) draftBaselines.current.set(draft.id, draft.updatedAt);
     setDraftsByVendor(previous => ({ ...previous, ...Object.fromEntries(draftsToSave.map(draft => [draft.vendorName, draft])) }));
     draftBaselineRecords.current = draftBaselineRecords.current.filter(draft => !vendorNames.has(draft.vendorName)).concat(draftsToSave);
-    setLines(previous => previous.filter(line => !vendorNames.has(line.vendorName || UNASSIGNED_VENDOR_NAME)).concat(linesToSave));
+    if (quiet) {
+      // 저장하는 사이 다른 카드에서 바뀐 값은 그대로 두고, 저장 시각·초안 번호만 맞춘다.
+      const savedById = new Map(linesToSave.map(line => [line.id, line] as const));
+      const merged = linesRef.current
+        .filter(line => !vendorNames.has(line.vendorName || UNASSIGNED_VENDOR_NAME) || savedById.has(line.id))
+        .map(line => { const savedLine = savedById.get(line.id); return savedLine ? { ...line, updatedAt: savedLine.updatedAt, draftId: savedLine.draftId, vendorName: savedLine.vendorName } : line; });
+      linesRef.current = merged;
+      setLines(merged);
+    } else {
+      setLines(previous => previous.filter(line => !vendorNames.has(line.vendorName || UNASSIGNED_VENDOR_NAME)).concat(linesToSave));
+    }
     for (const [id, line] of lineBaselines.current) if (vendorNames.has(line.vendorName || UNASSIGNED_VENDOR_NAME)) lineBaselines.current.delete(id);
     for (const line of linesToSave) lineBaselines.current.set(line.id, line);
     setRemovedLineIds(previous => new Set([...previous].filter(id => !removedLineIdsToSave.includes(id))));
-    setDirty(linesRef.current.some(line => !vendorNames.has(line.vendorName || UNASSIGNED_VENDOR_NAME) && vendorRecordChanged(lineBaselines.current.get(line.id), line)) || [...removedLineIds].some(id => !removedLineIdsToSave.includes(id)));
+    setDirty(linesRef.current.some(line => (quiet || !vendorNames.has(line.vendorName || UNASSIGNED_VENDOR_NAME)) && vendorRecordChanged(lineBaselines.current.get(line.id), line)) || [...removedLineIds].some(id => !removedLineIdsToSave.includes(id)));
     notifyQueueChange();
     return true;
     } catch (error) {
       const message = error instanceof DOMException && error.name === "AbortError" ? "저장 응답이 45초 이상 지연되었습니다. 입력 내용은 유지됩니다. 새로고침해 반영 여부를 확인한 뒤 다시 저장해 주세요." : error instanceof Error ? error.message : "공용 저장에 실패했습니다. 입력한 내용은 유지되며 다시 저장할 수 있습니다.";
       setSaveError(message);
       return false;
-    } finally { saveInFlight.current = false; setSaving(false); setStatusSavingVendor(null); }
+    } finally { saveInFlight.current = false; if (!quiet) { setSaving(false); setStatusSavingVendor(null); } }
   }
 
-  /** 상품별 주문완료(2026-10-22): 그 상품에 주문 날짜를 남기고, 그 거래처 작성중 상품이 모두 주문되면 발주중(전송완료)으로 넘긴다. */
+  /**
+   * 상품별 주문완료(2026-10-22): 그 상품에 주문 날짜를 남기고, 그 거래처 작성중 상품이 모두 주문되면 발주중(전송완료)으로 넘긴다.
+   * 2026-11-05: 누른 카드는 바로 바뀌고, 그 카드 버튼만 잠근다. 저장은 뒤에서 차례로 하며 실패하면 그 카드만 원래대로 돌린다.
+   * 마지막 상품이라 발주중으로 넘어갈 때만 그 거래처 화면을 잠깐 잠근다.
+   */
   async function markLineOrdered(line: VendorOrderDraftLine, ordered: boolean) {
+    if (workspaceMoved || historyView || orderingLineIds.has(line.id)) return;
     const vendorName = line.vendorName || UNASSIGNED_VENDOR_NAME;
+    const previousOrderedAt = line.orderedAt;
     const now = new Date().toISOString();
     const nextLines = linesRef.current.map(item => item.id === line.id ? { ...item, orderedAt: ordered ? now : undefined } : item);
     linesRef.current = nextLines;
     setLines(nextLines);
     const vendorLines = nextLines.filter(item => (item.vendorName || UNASSIGNED_VENDOR_NAME) === vendorName && item.shortageQuantity > 0 && !excludedLineIds.has(item.id) && !removedLineIds.has(item.id));
     const allOrdered = ordered && vendorLines.length > 0 && vendorLines.every(item => item.orderedAt);
-    setStatusSavingVendor(vendorName);
-    try {
-      const saved = await persistAll(allOrdered ? { vendorName, status: "sent" } : undefined, nextLines, vendorName);
-      if (saved) setCompletionMessage(allOrdered ? `${vendorName} 상품을 모두 주문완료해 발주중으로 넘겼습니다.` : ordered ? `SKU ${line.skuId} 주문완료로 표시했습니다.` : `SKU ${line.skuId} 주문완료를 취소했습니다.`);
-    } finally { setStatusSavingVendor(null); }
+    setOrderingLineIds(previous => new Set(previous).add(line.id));
+    const run = async () => {
+      // 다른 저장이 끝날 때까지 기다린 뒤(최대 30초) 저장한다 — 서로 부딪혀 재시도하는 일을 줄인다.
+      for (let waited = 0; saveInFlight.current && waited < 30_000; waited += 150) await new Promise(resolve => window.setTimeout(resolve, 150));
+      if (allOrdered) setStatusSavingVendor(vendorName);
+      try {
+        const saved = await persistAll(allOrdered ? { vendorName, status: "sent" } : undefined, undefined, vendorName, !allOrdered);
+        if (saved) {
+          setCompletionMessage(allOrdered ? `${vendorName} 상품을 모두 주문완료해 발주중으로 넘겼습니다.` : ordered ? `SKU ${line.skuId} 주문완료로 표시했습니다.` : `SKU ${line.skuId} 주문완료를 취소했습니다.`);
+        } else {
+          // 저장 실패: 이 카드만 원래 상태로 되돌린다(이유는 persistAll이 화면에 띄움).
+          const reverted = linesRef.current.map(item => item.id === line.id ? { ...item, orderedAt: previousOrderedAt } : item);
+          linesRef.current = reverted;
+          setLines(reverted);
+        }
+      } finally {
+        if (allOrdered) setStatusSavingVendor(null);
+        setOrderingLineIds(previous => { const next = new Set(previous); next.delete(line.id); return next; });
+      }
+    };
+    // 연달아 눌러도 한 번에 하나씩 저장한다.
+    const task = orderSaveChain.current.then(run, run);
+    orderSaveChain.current = task.catch(() => undefined);
+    await task;
   }
 
   async function markSent(vendorName: string) {
@@ -1145,7 +1183,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
                       deleteBlockReason={getVendorLineDeletionBlockReason(line, draftsByVendor[group.vendorName], true)}
                       onRemove={() => removeLine(line)}
                       onOrdered={editable ? (ordered => void markLineOrdered(line, ordered)) : undefined}
-                      orderBusy={saving || statusSavingVendor === group.vendorName}
+                      orderBusy={saving || statusSavingVendor === group.vendorName || orderingLineIds.has(line.id)}
                       canQueueDiscontinue={editable || processingSent}
                       onQueueDiscontinue={() => processingSent ? queueSentLineForDiscontinue(line) : queueLineForDiscontinue(line)}
                       onQueueReorder={() => queueLineForReorder(line, processingSent)}
