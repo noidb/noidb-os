@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useInvoiceGroupRepositoryState } from "@/lib/wms/invoice-group/context";
 import { applyOutputSetRecord, pendingDispatchRequirements } from "@/lib/wms/invoice-group/output-set";
-import { saveOutputSetToDrive } from "@/lib/wms/output-set-drive-save";
+import { fetchOutputSetLink, saveOutputSetToDrive, type OutputSetLinkKind } from "@/lib/wms/output-set-drive-save";
 import type { SupplierHubPurchaseOrder } from "@/lib/wms/supplier-hub-orders";
 import { isAsideCompletedDispatchPurchaseOrder } from "@/lib/wms/logistics-aside-dispatch";
 import { INVOICE_GROUP_STAGE_LABEL, isVisibleDispatchedInvoiceGroup, missingInvoiceGroupDispatchRequirements, type InvoiceGroup } from "@/lib/wms/invoice-group/types";
@@ -62,6 +62,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
   const [generatingOutputSet, setGeneratingOutputSet] = useState(false);
   const [outputSetMessage, setOutputSetMessage] = useState<string | null>(null);
   const [outputSetError, setOutputSetError] = useState<string | null>(null);
+  const [openingLink, setOpeningLink] = useState<OutputSetLinkKind | null>(null);
   const [detectingShipmentNumbers, setDetectingShipmentNumbers] = useState(false);
 
   const [advancing, setAdvancing] = useState(false);
@@ -533,6 +534,23 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     return next;
   }
 
+  // 2026-11-05: 출력 폴더·파일 바로 열기. 팝업 차단을 피하려고 빈 탭을 먼저 열고, 주소를 받으면 그 탭을 옮긴다.
+  async function handleOpenOutputLink(kind: OutputSetLinkKind) {
+    if (openingLink) return;
+    const tab = window.open("about:blank", "_blank");
+    setOpeningLink(kind);
+    setOutputSetError(null);
+    try {
+      const url = await fetchOutputSetLink(expectedDate, kind);
+      if (tab) tab.location.href = url; else window.location.href = url;
+    } catch (error) {
+      tab?.close();
+      setOutputSetError(error instanceof Error ? error.message : "G드라이브 주소를 받지 못했습니다.");
+    } finally {
+      setOpeningLink(null);
+    }
+  }
+
   async function handleGenerateOutputSet() {
     if (generatingOutputSet) return;
     if (hasUnsavedShipmentNumbers) { setOutputSetError("변경한 쉽먼트번호를 전체 저장한 뒤 출력세트를 생성하세요."); return; }
@@ -802,6 +820,15 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
         <button type="button" disabled={generatingOutputSet || hasUnsavedShipmentNumbers || !shipmentGeneratedForAll} onClick={() => void handleGenerateOutputSet()} style={{ ...wmsPrimaryButton, width: "100%", opacity: generatingOutputSet || hasUnsavedShipmentNumbers || !shipmentGeneratedForAll ? 0.5 : 1 }}>
           {generatingOutputSet ? "생성 중..." : outputSetGeneratedForAll ? "출력세트 다시 생성" : "이 날짜 출력세트 한 번에 생성"}
         </button>
+        {outputSetGeneratedForAll && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "8px", marginTop: "8px" }}>
+            {([["folder", "출력 폴더 열기"], ["labels", "부착문서 열기"], ["manifests", "동봉내역서 열기"], ["barcode", "바코드 파일 열기"]] as [OutputSetLinkKind, string][]).map(([kind, label]) => (
+              <button key={kind} type="button" className={kind === "folder" ? "softSageButton" : "softBeigeButton"} disabled={Boolean(openingLink)} onClick={() => void handleOpenOutputLink(kind)} style={{ width: "100%", opacity: openingLink ? 0.6 : 1 }}>
+                {openingLink === kind ? "여는 중..." : label}
+              </button>
+            ))}
+          </div>
+        )}
       </ShipmentWorkflowStepCard>
 
       {advanceError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{advanceError}</p>}

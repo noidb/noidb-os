@@ -47,3 +47,14 @@ export async function saveOutputSetToDrive(
   }
   return { folder, fileNames };
 }
+
+export type OutputSetLinkKind = "folder" | "labels" | "manifests" | "barcode";
+
+/** 2026-11-05: G드라이브 날짜 폴더와 출력세트 파일 3개의 웹 주소를 받는다(버튼을 누를 때만 조회). */
+export async function fetchOutputSetLink(expectedDate: string, kind: OutputSetLinkKind): Promise<string> {
+  const data = await post({ action: "links", expectedDate });
+  if (!data.found) throw new Error("G드라이브에 이 날짜 출력세트 폴더가 아직 없습니다. 출력세트를 먼저 생성해 주세요.");
+  const url = String(kind === "folder" ? data.folderUrl : kind === "labels" ? data.labelsUrl : kind === "manifests" ? data.manifestsUrl : data.barcodeUrl || "");
+  if (!url) throw new Error("폴더에서 해당 파일을 찾지 못했습니다. 출력세트를 다시 생성해 주세요.");
+  return url;
+}

@@ -80,6 +80,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, sessionUri, fileName, folder: token }, { headers });
     }
 
+    // 2026-11-05: 출력 화면의 '폴더 열기·부착문서·동봉내역서·바코드' 버튼용. 폴더가 없으면 만들지 않고 없다고만 알려 준다.
+    if (body.action === "links") {
+      const token = dateToken(body.expectedDate);
+      if (!token) throw new Error("입고예정일이 올바르지 않습니다.");
+      let folderId = "";
+      try { folderId = await resolveDriveFolderPath([...FOLDER, token]); } catch { folderId = ""; }
+      if (!folderId) return NextResponse.json({ ok: true, found: false }, { headers });
+      const files = await listOAuthDriveFolderFiles(folderId); // 최근 수정 순
+      const latest = (prefix: string) => files.find(file => file.name.startsWith(prefix));
+      const fileUrl = (prefix: string) => { const file = latest(prefix); return file ? `https://drive.google.com/file/d/${file.id}/view` : ""; };
+      return NextResponse.json({
+        ok: true, found: true, folder: token,
+        folderUrl: `https://drive.google.com/drive/folders/${folderId}`,
+        labelsUrl: fileUrl("01_"), manifestsUrl: fileUrl("02_"), barcodeUrl: fileUrl("03_"),
+      }, { headers });
+    }
+
     if (body.action === "chunk") {
       const sessionUri = typeof body.sessionUri === "string" ? body.sessionUri : "";
       // 구글 이어 올리기 주소만 허용한다(다른 주소로 보내지 못하게).
