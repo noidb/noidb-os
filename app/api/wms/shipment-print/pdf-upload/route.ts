@@ -52,7 +52,11 @@ export async function POST(request: NextRequest) {
     const fileName = `${prefix}${inner})_${hash}.pdf`;
     const parentId = await resolveDriveFolderPath(FOLDER);
     const token = dateToken(body.expectedDate);
-    const isSame = (file: { name: string }) => file.name.endsWith(`_${hash}.pdf`);
+    // 2026-11-05: 쿠팡이 같은 쉽먼트 PDF를 다시 만들 때마다 내용(시간 정보 등)이 조금씩 달라 내용 지문이 매번 새로 나와
+    // 같은 쉽먼트 Label이 5~6개씩 쌓였다. 같은 쉽먼트 번호 + 같은 종류(Label/내역서)가 이미 있으면 같은 파일로 본다.
+    const shipmentNo = inner.match(/^(\d{5,})\)/)?.[1] || "";
+    const sameShipmentPrefix = shipmentNo ? `${prefix}${shipmentNo})_` : "";
+    const isSame = (file: { name: string }) => file.name.endsWith(`_${hash}.pdf`) || Boolean(sameShipmentPrefix && file.name.startsWith(sameShipmentPrefix) && /\.pdf$/i.test(file.name));
     if (!token) {
       const same = (await listOAuthDriveFolderFiles(parentId)).find(isSame);
       if (same) return NextResponse.json({ ok: true, skipped: true, fileName: same.name, folder: "" }, { headers });
