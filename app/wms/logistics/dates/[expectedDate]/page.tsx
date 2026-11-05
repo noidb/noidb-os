@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useInvoiceGroupRepositoryState } from "@/lib/wms/invoice-group/context";
 import { applyOutputSetRecord, pendingDispatchRequirements } from "@/lib/wms/invoice-group/output-set";
 import { saveOutputSetToDrive } from "@/lib/wms/output-set-drive-save";
+import type { SupplierHubPurchaseOrder } from "@/lib/wms/supplier-hub-orders";
+import { isAsideCompletedDispatchPurchaseOrder } from "@/lib/wms/logistics-aside-dispatch";
 import { INVOICE_GROUP_STAGE_LABEL, isVisibleDispatchedInvoiceGroup, missingInvoiceGroupDispatchRequirements, type InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import type { ShipmentOutputPreview } from "@/lib/wms/shipment-output-context";
 import { DEFAULT_MAX_INVOICE_QUANTITY } from "@/lib/wms/shipment-output-split";
@@ -195,6 +197,30 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     window.history.replaceState(null, "", `${window.location.pathname}${params.size ? `?${params}` : ""}`);
     window.setTimeout(() => autoOutputRef.current?.(), 0);
   }, [groups]);
+
+  // 2026-11-05: 같은 입고예정일인데 아직 어떤 발주묶음에도 담기지 않은 발주서(나중에 추가로 나온 발주)를 찾아 경고한다.
+  // 출력세트(송장·바코드·동봉내역서)는 이미 담긴 묶음만 쓰므로, 이런 발주는 말없이 빠진다(11/3 15:18 발주 2건이 11/6 출력세트에서 빠진 사례).
+  const [missedOrders, setMissedOrders] = useState<SupplierHubPurchaseOrder[]>([]);
+  useEffect(() => {
+    if (groups === null || fixtureMode || !repositoryReady) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [response, allGroups, excluded] = await Promise.all([
+          fetch("/api/wms/supplier-hub-orders", { cache: "no-store" }),
+          invoiceGroupRepository.list(),
+          invoiceGroupRepository.listExcludedPurchaseOrderNumbers().catch(() => [] as string[]),
+        ]);
+        const data = await response.json();
+        if (cancelled || !response.ok) return;
+        const grouped = new Set(allGroups.filter(group => !group.supersededByGroupId).flatMap(group => group.purchaseOrderNumbers));
+        const excludedSet = new Set(excluded);
+        const missed = (data.orders as SupplierHubPurchaseOrder[]).filter(order => order.expectedDate === expectedDate && !grouped.has(order.purchaseOrderNumber) && !excludedSet.has(order.purchaseOrderNumber) && !isAsideCompletedDispatchPurchaseOrder(order.purchaseOrderNumber));
+        setMissedOrders(missed);
+      } catch { /* 경고용 확인 — 실패해도 화면 작업은 계속 */ }
+    })();
+    return () => { cancelled = true; };
+  }, [groups, expectedDate, repositoryReady, fixtureMode, invoiceGroupRepository]);
 
   if (groups === null) return <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "24px 16px", fontFamily: "sans-serif" }}><p>이 날짜 작업을 불러오는 중...</p>{loadError && <><p style={{ color: "#c0392b", fontSize: "13px" }}>{loadError}</p><button type="button" disabled={loadingGroups} onClick={() => void handleRefresh()} style={{ ...wmsPrimaryButton, width: "100%", opacity: loadingGroups ? 0.5 : 1 }}>다시 시도</button></>}</main>;
   if (!groups.length && !doneGroups.length) return <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "24px 16px", fontFamily: "sans-serif" }}><h1 style={{ margin: "0 0 8px", fontSize: "20px" }}>{expectedDate}</h1>{fixtureMode && <p style={{ padding: "10px", background: "#fff4d8", color: "#7a4d00", fontSize: "12px" }}>개발용 예시자료의 출고완료 결과입니다. 실제 출고 기록은 변경하지 않았습니다.</p>}<p>{completedGroupCount ? `이 날짜의 발주묶음 ${completedGroupCount}건은 출고완료 기록으로 남아 있습니다. 새 생성이나 번호 변경 없이 완료 이력으로 유지됩니다.` : loadError || "이 날짜의 발주묶음을 찾지 못했습니다."}</p><a href={`/wms/logistics/new-orders${fixtureMode ? "?logisticsFixture=1" : ""}`}>신규발주서 검색으로</a></main>;
@@ -636,6 +662,14 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
         {groups.length ? <>{fulfillmentCenters.join(", ")} · 진행 중 발주 {purchaseOrderNumbers.length}건 · SKU {skuCount}종 · 총수량 {totalQuantity}개</> : "진행 중인 발주 없음"}
         {doneGroups.length ? ` · 출고완료 발주 ${doneGroups.reduce((sum, group) => sum + group.purchaseOrderNumbers.length, 0)}건` : ""}
       </p>
+      {missedOrders.length > 0 && <section role="alert" style={{ margin: "0 0 16px", padding: "12px", border: "2px solid #c0392b", borderRadius: "10px", background: "#fff4f1", fontSize: "12px", lineHeight: 1.6 }}>
+        <strong style={{ display: "block", fontSize: "14px", color: "#c0392b" }}>⚠ 이 날짜 발주 {missedOrders.length}건이 아직 담기지 않았습니다</strong>
+        <p style={{ margin: "6px 0 8px" }}>아래 발주는 입고예정일이 {expectedDate}인데 이 화면의 발주묶음에 없어서, 지금 만드는 쉽먼트·송장·바코드·동봉내역서에 들어가지 않습니다.</p>
+        <ul style={{ margin: "0 0 8px", paddingLeft: "18px" }}>
+          {missedOrders.map(order => <li key={order.purchaseOrderNumber}>{order.purchaseOrderNumber} · {order.fulfillmentCenter} · {order.items.length}종 {order.items.reduce((sum, item) => sum + item.orderedQuantity, 0)}개</li>)}
+        </ul>
+        <a href="/wms/logistics/new-orders" className="softSageButton" style={{ display: "block", textAlign: "center", padding: "10px", borderRadius: "8px", textDecoration: "none", color: wmsColors.ink }}>신규발주서 검색에서 이 발주 담으러 가기</a>
+      </section>}
       {fixtureMode && <div style={{ margin: "0 0 16px", padding: "12px", borderRadius: "10px", background: "#fff4d8", color: "#7a4d00", fontSize: "12px", fontWeight: 800 }}>개발용 테스트 데이터입니다. 생성 버튼은 실제 파일 API를 호출하지 않습니다.<button type="button" onClick={() => void handleFillFixture()} style={{ ...wmsSecondaryButton, display: "block", width: "100%", marginTop: "8px" }}>테스트 단계 기록 채우기</button></div>}
       {pendingAction && <section ref={pendingActionPanelRef} tabIndex={-1} role="alert" style={{ margin: "0 0 16px", padding: "14px", border: `2px solid ${wmsColors.slateDark}`, borderRadius: "12px", background: wmsColors.surfaceBeige }}>
         <strong style={{ display: "block", fontSize: "14px" }}>{pendingAction === "confirm" ? "발주확정 기록을 저장할까요?" : "출고완료로 기록할까요?"}</strong>
