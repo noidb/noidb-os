@@ -239,6 +239,7 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
                     출력세트 화면
                   </Link>
                 </div>
+                <a href="/noidb-folder-install.reg" download="출력폴더열기_설치.reg" style={{ display: "block", marginTop: "6px", fontSize: "12px", color: wmsColors.muted, textAlign: "right" }}>처음 한 번: 폴더 열기 설정 파일 받기</a>
                   <button type="button" className={styles.taskButtonGrayWhite} disabled={hidingDate === expectedDate} onClick={() => void hideDispatched(expectedDate)} style={{ width: "100%", marginTop: "8px" }}>
                     {hidingDate === expectedDate ? "삭제 중…" : "출고완료 자료 삭제"}
                   </button>
@@ -264,6 +265,7 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
                     출력세트 화면
                   </Link>
                 </div>
+                <a href="/noidb-folder-install.reg" download="출력폴더열기_설치.reg" style={{ display: "block", marginTop: "6px", fontSize: "12px", color: wmsColors.muted, textAlign: "right" }}>처음 한 번: 폴더 열기 설정 파일 받기</a>
                 </>
               ) : (
                 <>
