@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useInvoiceGroupRepositoryState } from "@/lib/wms/invoice-group/context";
 import { applyOutputSetRecord, pendingDispatchRequirements } from "@/lib/wms/invoice-group/output-set";
+import { saveOutputSetToDrive } from "@/lib/wms/output-set-drive-save";
 import { INVOICE_GROUP_STAGE_LABEL, isVisibleDispatchedInvoiceGroup, missingInvoiceGroupDispatchRequirements, type InvoiceGroup } from "@/lib/wms/invoice-group/types";
 import type { ShipmentOutputPreview } from "@/lib/wms/shipment-output-context";
 import { DEFAULT_MAX_INVOICE_QUANTITY } from "@/lib/wms/shipment-output-split";
@@ -531,13 +532,22 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
         { name: "02_동봉내역서_통합.pdf", bytes: manifestsPdf },
         { name: `03_바코드출력_${outputDateToken}_최종.xlsx`, bytes: barcodeXlsx },
       ];
-      const zip = await buildShipmentPrintZip(outputFiles);
-      const fileName = `Shipment_출력세트_${outputDateToken}.zip`;
-      downloadBlobPreservingPage(zip, fileName, downloadTarget);
+      // 2026-11-05: 컴퓨터로 내려받지 않고(탐색기 저장 창 없이) G드라이브 '쉽먼트출력세트/입고예정일' 폴더에 바로 저장한다.
+      // 저장에 실패하면 파일을 잃지 않도록 그때만 예전처럼 ZIP으로 내려받게 한다.
+      let resultMessage: string;
+      try {
+        const saved = await saveOutputSetToDrive(expectedDate, outputFiles, message => setOutputSetMessage(message));
+        resultMessage = `출력세트 생성 완료 · G드라이브 쉽먼트출력세트/${saved.folder} 폴더에 저장 · ${saved.fileNames.join(", ")}`;
+      } catch (saveError) {
+        const zip = await buildShipmentPrintZip(outputFiles);
+        const fileName = `Shipment_출력세트_${outputDateToken}.zip`;
+        downloadBlobPreservingPage(zip, fileName, downloadTarget);
+        resultMessage = `출력세트 생성 완료 · G드라이브에 저장하지 못해 ${fileName}을 컴퓨터로 받았습니다 (${saveError instanceof Error ? saveError.message : "저장 오류"})`;
+      }
       const now = new Date().toISOString();
       // 쉽먼트번호를 채운 최신 묶음(filledGroups)에 기록을 얹는다 — 낡은 groups에 얹으면 번호·등록기록이 지워진다.
       await updateAllGroups(group => applyOutputSetRecord(group, `03_바코드출력_${outputDateToken}_최종.xlsx`, now), filledGroups);
-      setOutputSetMessage(`출력세트 생성 완료 · ${fileName} · 부착문서+동봉내역서+바코드`);
+      setOutputSetMessage(resultMessage);
     } catch (error) {
       closeReservedDownloadTarget(downloadTarget);
       setOutputSetMessage(null);
