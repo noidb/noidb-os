@@ -259,8 +259,16 @@ export function matchesInvoiceTrackingGroups(invoiceGroups: string[][] | undefin
 
 export async function inspectAutoShipmentTracking(requests: HanjinShipmentRequest[], invoiceGroups?: string[][]): Promise<AutoShipmentTrackingPreview> {
   const files = await loadReprintDetailFiles();
-  const candidates = files.map(file => inspectAutoShipmentTrackingCandidate(requests, file.name, fillBlankLabelRows(requests, file.rows, invoiceGroups), file.modifiedTime, invoiceGroups));
-  const exactCandidates = candidates.filter(candidate => candidate.exactMatch);
+  const filledNames = new Set<string>();
+  const candidates = files.map(file => {
+    const rows = fillBlankLabelRows(requests, file.rows, invoiceGroups);
+    if (rows !== file.rows) filledNames.add(file.name);
+    return inspectAutoShipmentTrackingCandidate(requests, file.name, rows, file.modifiedTime, invoiceGroups);
+  });
+  // 문구를 직접 읽어 맞춘 파일이 하나라도 있으면, 센터 이름으로 채워 맞춘 파일은 후보에서 뺀다(같은 발주의 옛 송장과 헷갈리지 않게).
+  const allExact = candidates.filter(candidate => candidate.exactMatch);
+  const labelExact = allExact.filter(candidate => !filledNames.has(candidate.fileName));
+  const exactCandidates = labelExact.length ? labelExact : allExact;
   const selected = exactCandidates.length === 1 ? exactCandidates[0] : undefined;
   const best = selected ?? [...candidates].sort((a, b) =>
     b.matchedPurchaseOrderCount - a.matchedPurchaseOrderCount
@@ -312,11 +320,16 @@ function selectExactReprintFile(
   selectedFileName?: string,
   invoiceGroups?: string[][]
 ): ReprintDetailFile {
+  const filledNames = new Set<string>();
   const candidates = files.map(source => {
     const file = { ...source, rows: fillBlankLabelRows(requests, source.rows, invoiceGroups) };
+    if (file.rows !== source.rows) filledNames.add(file.name);
     return { file, preview: inspectAutoShipmentTrackingCandidate(requests, file.name, file.rows, file.modifiedTime, invoiceGroups) };
   });
-  const exact = candidates.filter(candidate => candidate.preview.exactMatch);
+  // 문구를 직접 읽어 맞춘 파일이 있으면 센터 이름으로 채워 맞춘 파일은 뺀다(같은 발주의 옛 송장과 헷갈리지 않게).
+  const allExact = candidates.filter(candidate => candidate.preview.exactMatch);
+  const labelExact = allExact.filter(candidate => !filledNames.has(candidate.file.name));
+  const exact = labelExact.length ? labelExact : allExact;
   if (selectedFileName) {
     const selected = candidates.find(candidate => candidate.file.name === selectedFileName);
     if (!selected) throw new AutoShipmentBlockedError([`선택한 한진 결과파일을 찾지 못했습니다: ${selectedFileName}`]);
