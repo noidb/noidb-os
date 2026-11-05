@@ -150,6 +150,37 @@ async function loadReprintDetailFiles(): Promise<ReprintDetailFile[]> {
   return parsedFiles;
 }
 
+/** 2026-11-05: 한진이 '내품명1'(K열 문구)을 비워서 돌려주는 경우가 있다(운송장번호·받는분 센터는 정상).
+ *  이때 발주번호를 못 읽어 쉽먼트 연결이 막히므로, 아래 조건이 모두 맞을 때만 센터 이름으로 문구를 채운다(애매하면 그대로 둔다).
+ *  - 문구가 빈 줄이고 운송장번호가 있다
+ *  - 그 센터의 요청 발주가 입고예정일 하나, 송장 묶음 하나뿐이다
+ *  - 이 파일에서 그 센터의 문구 빈 줄이 정확히 하나이고, 같은 센터의 문구 있는 줄은 없다 */
+export function fillBlankLabelRows(requests: HanjinShipmentRequest[], rows: ReprintDetailRow[], invoiceGroups?: string[][]): ReprintDetailRow[] {
+  const blankIndexes = rows.map((row, index) => (!row.kLabel.trim() && row.trackingNumber.trim() ? index : -1)).filter(index => index >= 0);
+  if (blankIndexes.length === 0) return rows;
+  const byCenter = new Map<string, HanjinShipmentRequest[]>();
+  for (const request of requests) {
+    const key = normalizeCenterName(request.fulfillmentCenter);
+    byCenter.set(key, [...(byCenter.get(key) || []), request]);
+  }
+  const next = rows.slice();
+  for (const [centerKey, centerRequests] of byCenter) {
+    const dates = new Set(centerRequests.map(request => request.expectedDate));
+    if (dates.size !== 1) continue;
+    const pos = [...new Set(centerRequests.map(request => normalizeSkuId(request.purchaseOrderNumber)))];
+    if (invoiceGroups) {
+      const touching = invoiceGroups.filter(group => group.some(po => pos.includes(normalizeSkuId(po))));
+      if (touching.length !== 1) continue;
+    }
+    const sameCenterIndexes = rows.map((row, index) => (normalizeCenterName(row.fulfillmentCenter) === centerKey ? index : -1)).filter(index => index >= 0);
+    const blanksOfCenter = sameCenterIndexes.filter(index => blankIndexes.includes(index));
+    if (blanksOfCenter.length !== 1 || sameCenterIndexes.length !== 1) continue;
+    const request = centerRequests[0];
+    next[blanksOfCenter[0]] = { ...rows[blanksOfCenter[0]], kLabel: `${request.fulfillmentCenter} / ${formatMonthDay(request.expectedDate)} / 발주서 번호 ${pos.join(", ")}` };
+  }
+  return next;
+}
+
 function indexReprintRowsByPurchaseOrder(rows: ReprintDetailRow[]) {
   const result = new Map<string, { trackingNumber: string; fulfillmentCenter: string; monthDayText: string }[]>();
   for (const row of rows) {
@@ -228,7 +259,7 @@ export function matchesInvoiceTrackingGroups(invoiceGroups: string[][] | undefin
 
 export async function inspectAutoShipmentTracking(requests: HanjinShipmentRequest[], invoiceGroups?: string[][]): Promise<AutoShipmentTrackingPreview> {
   const files = await loadReprintDetailFiles();
-  const candidates = files.map(file => inspectAutoShipmentTrackingCandidate(requests, file.name, file.rows, file.modifiedTime, invoiceGroups));
+  const candidates = files.map(file => inspectAutoShipmentTrackingCandidate(requests, file.name, fillBlankLabelRows(requests, file.rows, invoiceGroups), file.modifiedTime, invoiceGroups));
   const exactCandidates = candidates.filter(candidate => candidate.exactMatch);
   const selected = exactCandidates.length === 1 ? exactCandidates[0] : undefined;
   const best = selected ?? [...candidates].sort((a, b) =>
@@ -281,7 +312,10 @@ function selectExactReprintFile(
   selectedFileName?: string,
   invoiceGroups?: string[][]
 ): ReprintDetailFile {
-  const candidates = files.map(file => ({ file, preview: inspectAutoShipmentTrackingCandidate(requests, file.name, file.rows, file.modifiedTime, invoiceGroups) }));
+  const candidates = files.map(source => {
+    const file = { ...source, rows: fillBlankLabelRows(requests, source.rows, invoiceGroups) };
+    return { file, preview: inspectAutoShipmentTrackingCandidate(requests, file.name, file.rows, file.modifiedTime, invoiceGroups) };
+  });
   const exact = candidates.filter(candidate => candidate.preview.exactMatch);
   if (selectedFileName) {
     const selected = candidates.find(candidate => candidate.file.name === selectedFileName);
