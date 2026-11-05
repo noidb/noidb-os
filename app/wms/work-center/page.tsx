@@ -1,6 +1,5 @@
 "use client";
 
-import { fetchOutputSetLink } from "@/lib/wms/output-set-drive-save";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { wmsColors } from "@/lib/wms/ui-tokens";
@@ -169,24 +168,6 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
     }
   }
 
-  // 2026-11-05: 출력세트 폴더 바로 열기(출고준비완료·출고완료 카드). 누를 때만 조회하고, 팝업 차단을 피하려고 빈 탭을 먼저 연다.
-  const [openingFolderDate, setOpeningFolderDate] = useState<string | null>(null);
-  async function openOutputFolder(expectedDate: string) {
-    if (openingFolderDate) return;
-    const tab = window.open("about:blank", "_blank");
-    setOpeningFolderDate(expectedDate);
-    setDispatchError(null);
-    try {
-      const url = await fetchOutputSetLink(expectedDate, "folder");
-      if (tab) tab.location.href = url; else window.location.href = url;
-    } catch (error) {
-      tab?.close();
-      setDispatchError({ date: expectedDate, message: error instanceof Error ? error.message : "G드라이브 폴더를 열지 못했습니다." });
-    } finally {
-      setOpeningFolderDate(null);
-    }
-  }
-
   const [hidingDate, setHidingDate] = useState<string | null>(null);
 
   /** 출고완료 자료를 다 본 뒤 "삭제" — 카드에서만 빼고, 입고결과처리에 쓰는 기록은 남긴다. */
@@ -250,9 +231,10 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
                     </Link>
                   </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "8px" }}>
-                  <button type="button" className="softSageButton" disabled={openingFolderDate === expectedDate} onClick={() => void openOutputFolder(expectedDate)} style={{ width: "100%" }}>
-                    {openingFolderDate === expectedDate ? "여는 중…" : "출력 폴더 열기"}
-                  </button>
+                  {/* 2026-11-05: 이 PC의 G:\내 드라이브\쿠팡데이터\쉽먼트업로드완성\쉽먼트출력세트 를 탐색기로 연다(PC마다 설정 파일 1회 설치 필요). */}
+                  <a href="noidbfolder://open" className="softSageButton" style={{ width: "100%", textDecoration: "none", boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    출력 폴더 열기
+                  </a>
                   <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}#output-set-step`} className={styles.taskButtonGrayWhite}>
                     출력세트 화면
                   </Link>
@@ -274,9 +256,10 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
                   </Link>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "8px" }}>
-                  <button type="button" className="softSageButton" disabled={openingFolderDate === expectedDate} onClick={() => void openOutputFolder(expectedDate)} style={{ width: "100%" }}>
-                    {openingFolderDate === expectedDate ? "여는 중…" : "출력 폴더 열기"}
-                  </button>
+                  {/* 2026-11-05: 이 PC의 G:\내 드라이브\쿠팡데이터\쉽먼트업로드완성\쉽먼트출력세트 를 탐색기로 연다(PC마다 설정 파일 1회 설치 필요). */}
+                  <a href="noidbfolder://open" className="softSageButton" style={{ width: "100%", textDecoration: "none", boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    출력 폴더 열기
+                  </a>
                   <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}#output-set-step`} className={styles.taskButtonGrayWhite}>
                     출력세트 화면
                   </Link>

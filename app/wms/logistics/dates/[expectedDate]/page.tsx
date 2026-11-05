@@ -822,7 +822,9 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
         </button>
         {outputSetGeneratedForAll && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "8px", marginTop: "8px" }}>
-            {([["folder", "출력 폴더 열기"], ["labels", "부착문서 열기"], ["manifests", "동봉내역서 열기"], ["barcode", "바코드 파일 열기"]] as [OutputSetLinkKind, string][]).map(([kind, label]) => (
+            <a href="noidbfolder://open" className="softSageButton" style={{ width: "100%", textDecoration: "none", boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center" }}>출력 폴더 열기 (내 PC G드라이브)</a>
+            <a href="/noidb-folder-install.reg" download="출력폴더열기_설치.reg" className="softApricotButton" style={{ width: "100%", textDecoration: "none", boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center" }}>처음 한 번: 폴더 열기 설정 파일 받기</a>
+            {([["folder", "드라이브 웹 폴더 열기"], ["labels", "부착문서 열기"], ["manifests", "동봉내역서 열기"], ["barcode", "바코드 파일 열기"]] as [OutputSetLinkKind, string][]).map(([kind, label]) => (
               <button key={kind} type="button" className={kind === "folder" ? "softSageButton" : "softBeigeButton"} disabled={Boolean(openingLink)} onClick={() => void handleOpenOutputLink(kind)} style={{ width: "100%", opacity: openingLink ? 0.6 : 1 }}>
                 {openingLink === kind ? "여는 중..." : label}
               </button>
