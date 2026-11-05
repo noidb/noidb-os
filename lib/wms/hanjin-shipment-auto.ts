@@ -306,8 +306,9 @@ function selectExactReprintFile(
  *  발주번호(들)로 되돌린다. 한 줄 형식("... / 발주서 번호 A, B")과 너무 길어 두 줄로 나뉜 형식
  *  ("...\n발주서 번호 A / B")을 둘 다 지원한다(구분자가 다르다 — 실제 buildShipmentLabel 규칙
  *  그대로). 형식을 못 알아보면 null(추측 금지). */
-function parseShipmentLabel(kLabel: string): { fulfillmentCenter: string; monthDayText: string; purchaseOrderNumbers: string[] } | null {
-  const lines = kLabel.split("\n").map(line => line.trim());
+export function parseShipmentLabel(kLabel: string): { fulfillmentCenter: string; monthDayText: string; purchaseOrderNumbers: string[] } | null {
+  // 2026-11-05: 문구 끝의 "/ 총수량 N"은 발주번호 읽기에 끼지 않도록 먼저 떼어낸다(옛 파일은 이 부분이 없어도 된다).
+  const lines = kLabel.replace(/\s*\/\s*총수량\s*\d+\s*$/, "").split("\n").map(line => line.trim());
   const firstLineMatch = lines[0]?.match(/^(.+?)\s*\/\s*(\d+월\d+일)(?:\s*\/\s*발주서\s*번호\s*(.+))?$/);
   if (!firstLineMatch) return null;
   const [, fulfillmentCenter, monthDayText, inlinePoText] = firstLineMatch;

@@ -242,12 +242,15 @@ const SINGLE_LINE_MAX_LENGTH = 45;
  * 합배송(같은 물류센터+같은 입고예정일)으로 발주번호가 여러 개면 쉼표로 이어붙이고, 문구가
  * 너무 길어지면 "{물류센터} / {M월D일}" + 줄바꿈 + "발주서 번호 {po1} / {po2} / {po3}"로 바꾼다.
  */
-function buildShipmentLabel(fulfillmentCenter: string, expectedDate: string, purchaseOrderNumbers: string[]): string {
+export function buildShipmentLabel(fulfillmentCenter: string, expectedDate: string, purchaseOrderNumbers: string[], totalQuantity?: number): string {
   const monthDay = formatMonthDay(expectedDate);
   const prefix = `${fulfillmentCenter} / ${monthDay}`;
+  // 2026-11-05: 문구 끝에 "총수량 N"(이 송장 한 줄에 담긴 상품 낱개 합계)을 붙인다. 한 줄/두 줄 나누는 기준은
+  // 예전과 똑같이 총수량을 뺀 길이로 정해서 기존 모양이 바뀌지 않게 한다.
+  const quantityText = typeof totalQuantity === "number" && Number.isFinite(totalQuantity) && totalQuantity > 0 ? ` / 총수량 ${totalQuantity}` : "";
   const singleLine = `${prefix} / 발주서 번호 ${purchaseOrderNumbers.join(", ")}`;
-  if (singleLine.length <= SINGLE_LINE_MAX_LENGTH) return singleLine;
-  return `${prefix}\n발주서 번호 ${purchaseOrderNumbers.join(" / ")}`;
+  if (singleLine.length <= SINGLE_LINE_MAX_LENGTH) return `${singleLine}${quantityText}`;
+  return `${prefix}\n발주서 번호 ${purchaseOrderNumbers.join(" / ")}${quantityText}`;
 }
 
 export interface ShipmentRequestGroup {
@@ -473,7 +476,12 @@ export async function buildHanjinUploadFile(requests: HanjinShipmentRequest[] | 
   for (const group of context.groups) {
     newRowsXml.push(
       buildRowXml(nextRow, {
-        [COL_K]: buildShipmentLabel(group.fulfillmentCenterName, group.expectedArrivalDate, group.purchaseOrderNumbers),
+        [COL_K]: buildShipmentLabel(
+          group.fulfillmentCenterName,
+          group.expectedArrivalDate,
+          group.purchaseOrderNumbers,
+          group.records.reduce((sum, record) => sum + (Number.isFinite(record.orderedQuantity) ? record.orderedQuantity : 0), 0)
+        ),
         [COL_AB]: group.recipientName,
         [COL_AC]: formatPhoneForDisplay(group.phone),
         [COL_AD]: group.postalCode,
