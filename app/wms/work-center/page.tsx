@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchOutputSetLink } from "@/lib/wms/output-set-drive-save";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { wmsColors } from "@/lib/wms/ui-tokens";
@@ -168,6 +169,24 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
     }
   }
 
+  // 2026-11-05: 출력세트 폴더 바로 열기(출고준비완료·출고완료 카드). 누를 때만 조회하고, 팝업 차단을 피하려고 빈 탭을 먼저 연다.
+  const [openingFolderDate, setOpeningFolderDate] = useState<string | null>(null);
+  async function openOutputFolder(expectedDate: string) {
+    if (openingFolderDate) return;
+    const tab = window.open("about:blank", "_blank");
+    setOpeningFolderDate(expectedDate);
+    setDispatchError(null);
+    try {
+      const url = await fetchOutputSetLink(expectedDate, "folder");
+      if (tab) tab.location.href = url; else window.location.href = url;
+    } catch (error) {
+      tab?.close();
+      setDispatchError({ date: expectedDate, message: error instanceof Error ? error.message : "G드라이브 폴더를 열지 못했습니다." });
+    } finally {
+      setOpeningFolderDate(null);
+    }
+  }
+
   const [hidingDate, setHidingDate] = useState<string | null>(null);
 
   /** 출고완료 자료를 다 본 뒤 "삭제" — 카드에서만 빼고, 입고결과처리에 쓰는 기록은 남긴다. */
@@ -230,6 +249,14 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
                     발주제품보기
                     </Link>
                   </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "8px" }}>
+                  <button type="button" className="softSageButton" disabled={openingFolderDate === expectedDate} onClick={() => void openOutputFolder(expectedDate)} style={{ width: "100%" }}>
+                    {openingFolderDate === expectedDate ? "여는 중…" : "출력 폴더 열기"}
+                  </button>
+                  <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}#output-set-step`} className={styles.taskButtonGrayWhite}>
+                    출력세트 화면
+                  </Link>
+                </div>
                   <button type="button" className={styles.taskButtonGrayWhite} disabled={hidingDate === expectedDate} onClick={() => void hideDispatched(expectedDate)} style={{ width: "100%", marginTop: "8px" }}>
                     {hidingDate === expectedDate ? "삭제 중…" : "출고완료 자료 삭제"}
                   </button>
@@ -237,6 +264,7 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
               ) : currentStage === "shipment_completed" ? (
                 // 2026-10-02: 출력세트까지 끝난(출고준비완료) 날짜는 처리 화면으로 갈 필요 없이
                 // 여기서 바로 출고완료 처리 + 피킹용 쉽먼트별 SKU리스트를 연다.
+                <>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "12px" }}>
                   <button type="button" className={styles.primaryPink} disabled={dispatchingDate === expectedDate} onClick={() => void markDispatched(expectedDate)}>
                     {dispatchingDate === expectedDate ? "기록 중…" : "출고완료"}
@@ -245,6 +273,15 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
                     발주제품보기
                   </Link>
                 </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "8px" }}>
+                  <button type="button" className="softSageButton" disabled={openingFolderDate === expectedDate} onClick={() => void openOutputFolder(expectedDate)} style={{ width: "100%" }}>
+                    {openingFolderDate === expectedDate ? "여는 중…" : "출력 폴더 열기"}
+                  </button>
+                  <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}#output-set-step`} className={styles.taskButtonGrayWhite}>
+                    출력세트 화면
+                  </Link>
+                </div>
+                </>
               ) : (
                 <>
                   <Link href={`/wms/logistics/dates/${encodeURIComponent(expectedDate)}`} className={styles.primaryPink}>
