@@ -11,9 +11,13 @@ import { readWeeklyDiscontinueQueue, syncWeeklyDiscontinueQueue } from "@/lib/wm
 import { collectFollowUpDiscontinue, completeFollowUpDiscontinue, previewFollowUpDiscontinue, LOGISTICS_DISCONTINUE_STATUS_RUN_ID } from "@/lib/wms/logistics-discontinue-adapter";
 import { completeStatusRequests, listStatusRequests } from "@/lib/wms/vendor-order-actions";
 import { recordWeeklyCouponChecks, weeklyKoreaDay } from "@/lib/wms/weekly-work-state";
+import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+/** G:\내 드라이브\쿠팡데이터\제품관리\미납sku재발주 */
+const REORDER_DRIVE_FOLDER = ["쿠팡데이터", "제품관리", "미납sku재발주"];
 const headers = { "Cache-Control": "private, no-store, max-age=0" };
 function baseline(): LogisticsAsideBaseline {
   const raw = asideBaseline as typeof asideBaseline & { source?: unknown; sources?: unknown };
@@ -147,6 +151,13 @@ export async function POST(request: NextRequest) {
         workspace.logisticsFollowUp = { ...workspace.logisticsFollowUp, proofs: [...(workspace.logisticsFollowUp?.proofs || []).filter(item => item.outputKey !== generated.outputKey), generated.proof] };
         return { fileName: generated.fileName, base64: generated.base64, outputKey: generated.outputKey, proof: generated.proof, followUp: logisticsFollowUpResponse(workspace, value.board), skippedCoupons: "skippedCoupons" in generated ? generated.skippedCoupons : [] };
       });
+      // 2026-11-06: 미납분 재발주요청 파일은 다른 생성 파일처럼 '파일 생성'만 누르면 G드라이브 폴더에 바로 저장한다.
+      // 저장은 목록 저장이 끝난 뒤에 하고, 실패해도 생성 파일은 그대로 내려받을 수 있다(화면에 실패를 알림).
+      if (body.kind === "reorder") {
+        const saved = await generatedDriveSaveHeaders(Buffer.from(generated.base64, "base64"), generated.fileName, XLSX_MIME, REORDER_DRIVE_FOLDER);
+        const driveSaved = saved["X-NOIDB-Drive-Saved"] === "true";
+        response = { ...response as object, driveSaved, driveFolder: REORDER_DRIVE_FOLDER.join("\\"), driveFileName: driveSaved ? decodeURIComponent(saved["X-NOIDB-Drive-File-Name"] || "") : "", driveWarning: driveSaved ? "" : decodeURIComponent(saved["X-NOIDB-Drive-Save-Warning"] || "") };
+      }
     } else {
       if (body.action === "complete") {
         if (typeof body.outputKey !== "string" || !/^[a-f0-9]{64}$/.test(body.outputKey)) throw new Error("완료할 생성 파일을 확인해 주세요.");

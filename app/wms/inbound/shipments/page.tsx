@@ -3,6 +3,7 @@
 import { SUPPLIER_HUB_EXTENSION } from "@/lib/wms/extension-info";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { FolderInstallLink, OpenFolderButton } from "../../OpenFolderButton";
 import {
   applyLogisticsFollowUpFixture,
   createLogisticsFollowUpFixture,
@@ -189,6 +190,10 @@ export default function ShipmentReceiptsPage() {
   const [generatedDownloads, setGeneratedDownloads] = useState<
     Record<string, { fileName: string; href: string }>
   >({});
+  // 2026-11-06: 생성 파일을 G드라이브 폴더에 자동 저장한 결과(파일별). 저장 실패 때는 경고 문구.
+  const [driveSavedFiles, setDriveSavedFiles] = useState<
+    Record<string, { saved: boolean; fileName: string; folder: string; warning: string }>
+  >({});
   const initialLoad = useRef(false);
   const followUpStale = useRef(false);
   const [routingKeys, setRoutingKeys] = useState<Record<string, boolean>>({});
@@ -367,6 +372,12 @@ export default function ShipmentReceiptsPage() {
             fileName: data.fileName,
             href: `data:${downloadMime(data.fileName)};base64,${data.base64}`,
           },
+        }));
+      }
+      if (data.outputKey && typeof data.driveSaved === "boolean") {
+        setDriveSavedFiles((current) => ({
+          ...current,
+          [data.outputKey]: { saved: data.driveSaved, fileName: String(data.driveFileName || data.fileName || ""), folder: String(data.driveFolder || ""), warning: String(data.driveWarning || "") },
         }));
       }
       if (data.followUp) setFollowUp(data.followUp);
@@ -1419,6 +1430,17 @@ export default function ShipmentReceiptsPage() {
                         ? `현재 파일: ${activeFollowUpProof.fileName} · 생성 파일 대상 ${proofTargetCount(activeFollowUpProof)}건`
                         : "현재 생성 파일 없음"}
                     </p>
+                    {activeFollowUpProof && driveSavedFiles[activeFollowUpProof.outputKey] && (
+                      driveSavedFiles[activeFollowUpProof.outputKey].saved ? (
+                        <p className={styles.meta} role="status">
+                          <strong>저장완료</strong> · {driveSavedFiles[activeFollowUpProof.outputKey].fileName}{driveSavedFiles[activeFollowUpProof.outputKey].folder ? ` (${driveSavedFiles[activeFollowUpProof.outputKey].folder})` : ""}
+                        </p>
+                      ) : (
+                        <p className={styles.meta} role="alert">
+                          저장하지 못했습니다. {driveSavedFiles[activeFollowUpProof.outputKey].warning || "Drive 자동저장에 실패했습니다."} 아래 ‘파일 다운로드’로 직접 받아 주세요.
+                        </p>
+                      )
+                    )}
                     {activeFollowUpProof &&
                       (download ? (
                         <a
@@ -1426,7 +1448,7 @@ export default function ShipmentReceiptsPage() {
                           href={download.href}
                           download={download.fileName}
                         >
-                          파일 다운로드
+                          {driveSavedFiles[activeFollowUpProof.outputKey]?.saved ? "파일 다운로드 (따로 받을 때만)" : "파일 다운로드"}
                         </a>
                       ) : (
                         !fixture && (
@@ -1498,6 +1520,9 @@ export default function ShipmentReceiptsPage() {
                           파일 없이 처리완료
                         </button>
                       )}
+                      {followUpKind === "reorder" && !fixture && (
+                        <OpenFolderButton folder="reorder" label="폴더 열기" className={styles.button} />
+                      )}
                       <button
                         className={`${styles.button} ${styles.buttonPrimary}`}
                         disabled={
@@ -1533,6 +1558,9 @@ export default function ShipmentReceiptsPage() {
                           : "처리완료"}
                       </button>
                     </div>
+                    {followUpKind === "reorder" && !fixture && (
+                      <p className={styles.meta}><FolderInstallLink /></p>
+                    )}
                     <p className={styles.meta}>
                       쿠팡에서 처리한 뒤 눌러주세요. 생성 파일에 포함된 대상만
                       완료됩니다.
