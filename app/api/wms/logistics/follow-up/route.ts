@@ -15,9 +15,13 @@ import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-/** G:\내 드라이브\쿠팡데이터\제품관리\미납sku재발주 */
-const REORDER_DRIVE_FOLDER = ["쿠팡데이터", "제품관리", "미납sku재발주"];
+/** 2026-11-06: 파일을 만들면 종류별 G드라이브 폴더에 바로 저장한다(저장 실패해도 생성 파일은 내려받을 수 있다). */
+const DRIVE_FOLDERS: Record<"reorder" | "marketing" | "discontinue", string[]> = {
+  reorder: ["쿠팡데이터", "제품관리", "미납sku재발주"], // G:\내 드라이브\쿠팡데이터\제품관리\미납sku재발주
+  marketing: ["쿠팡데이터", "마케팅"], // G:\내 드라이브\쿠팡데이터\마케팅
+  discontinue: ["쿠팡데이터", "제품관리", "단종신청"], // G:\내 드라이브\쿠팡데이터\제품관리\단종신청
+};
+const fileMime = (name: string) => /\.zip$/i.test(name) ? "application/zip" : /\.pdf$/i.test(name) ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const headers = { "Cache-Control": "private, no-store, max-age=0" };
 function baseline(): LogisticsAsideBaseline {
   const raw = asideBaseline as typeof asideBaseline & { source?: unknown; sources?: unknown };
@@ -151,12 +155,13 @@ export async function POST(request: NextRequest) {
         workspace.logisticsFollowUp = { ...workspace.logisticsFollowUp, proofs: [...(workspace.logisticsFollowUp?.proofs || []).filter(item => item.outputKey !== generated.outputKey), generated.proof] };
         return { fileName: generated.fileName, base64: generated.base64, outputKey: generated.outputKey, proof: generated.proof, followUp: logisticsFollowUpResponse(workspace, value.board), skippedCoupons: "skippedCoupons" in generated ? generated.skippedCoupons : [] };
       });
-      // 2026-11-06: 미납분 재발주요청 파일은 다른 생성 파일처럼 '파일 생성'만 누르면 G드라이브 폴더에 바로 저장한다.
+      // 2026-11-06: 재발주요청·쿠폰·광고·단종서류는 '파일 생성'만 누르면 G드라이브 폴더에 바로 저장한다.
       // 저장은 목록 저장이 끝난 뒤에 하고, 실패해도 생성 파일은 그대로 내려받을 수 있다(화면에 실패를 알림).
-      if (body.kind === "reorder") {
-        const saved = await generatedDriveSaveHeaders(Buffer.from(generated.base64, "base64"), generated.fileName, XLSX_MIME, REORDER_DRIVE_FOLDER);
+      if (body.kind === "reorder" || body.kind === "marketing" || body.kind === "discontinue") {
+        const folder = DRIVE_FOLDERS[body.kind];
+        const saved = await generatedDriveSaveHeaders(Buffer.from(generated.base64, "base64"), generated.fileName, fileMime(generated.fileName), folder);
         const driveSaved = saved["X-NOIDB-Drive-Saved"] === "true";
-        response = { ...response as object, driveSaved, driveFolder: REORDER_DRIVE_FOLDER.join("\\"), driveFileName: driveSaved ? decodeURIComponent(saved["X-NOIDB-Drive-File-Name"] || "") : "", driveWarning: driveSaved ? "" : decodeURIComponent(saved["X-NOIDB-Drive-Save-Warning"] || "") };
+        response = { ...response as object, driveSaved, driveFolder: folder.join("\\"), driveFileName: driveSaved ? decodeURIComponent(saved["X-NOIDB-Drive-File-Name"] || "") : "", driveWarning: driveSaved ? "" : decodeURIComponent(saved["X-NOIDB-Drive-Save-Warning"] || "") };
       }
     } else {
       if (body.action === "complete") {

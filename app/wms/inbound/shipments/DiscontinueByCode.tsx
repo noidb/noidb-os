@@ -4,6 +4,7 @@ import { discontinueMarkMessage } from "@/lib/wms/discontinue-mark-message";
 import { autoSourceLabel } from "@/lib/wms/discontinue-source-label";
 import { useEffect, useRef, useState } from "react";
 import styles from "./shipments.module.css";
+import { FolderInstallLink, OpenFolderButton } from "../../OpenFolderButton";
 
 type Match = { skuId: string; productName: string; barcode: string; sheetName: string };
 type Lookup = { code: string; matches: Match[] };
@@ -178,9 +179,9 @@ export default function DiscontinueByCode({ autoRows, pendingRows = [], latestOr
       const response = await fetch("/api/wms/logistics/discontinue-file", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuIds: autoRows.map(row => row.skuId), codes }) });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "단종신청 파일을 만들지 못했습니다.");
-      download(data);
+      if (!data.driveSaved) download(data); // 2026-11-06: 단종신청 폴더에 저장됐으면 따로 내려받지 않는다.
       const missing = (data.notFound as string[] | undefined)?.length ? ` 못 찾은 코드 ${data.notFound.length}개는 빠졌습니다.` : "";
-      onDone(`단종신청 엑셀과 공문을 만들었습니다(SKU ${data.count}건).${missing}${discontinueMarkMessage(data.productDb)} 쿠팡에 신청한 뒤 '단종 신청 완료 · 목록 비우기'를 눌러 주세요.`, false);
+      onDone(`${data.driveSaved ? `저장완료 · ${(data.driveFileNames || []).join(", ")} (${data.driveFolder}) · ` : `저장하지 못해 내려받았습니다. ${data.driveWarning || ""} `}단종신청 엑셀과 공문(SKU ${data.count}건).${missing}${discontinueMarkMessage(data.productDb)} 쿠팡에 신청한 뒤 '단종 신청 완료 · 목록 비우기'를 눌러 주세요.`, false);
     } catch (cause) {
       onDone(cause instanceof Error ? cause.message : "단종신청 파일을 만들지 못했습니다.", true);
     } finally { setBusy(null); }
@@ -310,6 +311,10 @@ export default function DiscontinueByCode({ autoRows, pendingRows = [], latestOr
         <button type="button" className={`softPinkButton ${styles.fullButton}`} disabled={(!autoRows.length && !text.trim()) || working} onClick={() => void finish()}>
           {busy === "clear" || clearing ? "비우는 중…" : "단종 신청 완료 · 목록 비우기"}
         </button>
+      </div>
+      <div style={{ marginTop: "8px" }}>
+        <OpenFolderButton folder="discontinue" label="단종신청 폴더 열기" className={`softBeigeButton ${styles.fullButton}`} style={{ width: "100%" }} />
+        <p className={styles.meta}><FolderInstallLink /></p>
       </div>
       {pendingRows.length > 0 && (
         <details style={{ marginTop: "10px", border: "1px solid #d8d3cc", borderRadius: "8px", padding: "6px 10px", background: "#f7f4f0" }}>

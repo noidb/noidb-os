@@ -844,13 +844,19 @@ export default function ShipmentReceiptsPage() {
       const response = await fetch("/api/wms/logistics/status-list-file", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope }) });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "엑셀 파일을 만들지 못했습니다.");
-      const link = document.createElement("a");
-      link.href = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${data.base64}`;
-      link.download = data.fileName;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setMessage(`단종해제 대상 엑셀을 만들었습니다(${scope === "fresh" ? "신청 전" : "전체"} ${data.count}건).`);
+      // 2026-11-06: 단종해제 폴더에 저장됐으면 따로 내려받지 않는다. 저장에 실패했을 때만 내려받는다.
+      if (!data.driveSaved) {
+        const link = document.createElement("a");
+        link.href = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${data.base64}`;
+        link.download = data.fileName;
+        document.body.append(link);
+        link.click();
+        link.remove();
+      }
+      const label = `단종해제 대상 엑셀(${scope === "fresh" ? "신청 전" : "전체"} ${data.count}건)`;
+      setMessage(data.driveSaved
+        ? `저장완료 · ${(data.driveFileNames || []).join(", ")} (${data.driveFolder}) · ${label}`
+        : `${label}을 만들었습니다. 저장하지 못해 내려받았습니다. ${data.driveWarning || ""}`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "엑셀 파일을 만들지 못했습니다.");
     } finally {
@@ -1520,8 +1526,8 @@ export default function ShipmentReceiptsPage() {
                           파일 없이 처리완료
                         </button>
                       )}
-                      {followUpKind === "reorder" && !fixture && (
-                        <OpenFolderButton folder="reorder" label="폴더 열기" className={styles.button} />
+                      {!fixture && (
+                        <OpenFolderButton folder={followUpKind === "reorder" ? "reorder" : followUpKind === "discontinue" ? "discontinue" : "coupon"} label="폴더 열기" className={styles.button} />
                       )}
                       <button
                         className={`${styles.button} ${styles.buttonPrimary}`}
@@ -1558,7 +1564,7 @@ export default function ShipmentReceiptsPage() {
                           : "처리완료"}
                       </button>
                     </div>
-                    {followUpKind === "reorder" && !fixture && (
+                    {!fixture && (
                       <p className={styles.meta}><FolderInstallLink /></p>
                     )}
                     <p className={styles.meta}>
@@ -1963,6 +1969,7 @@ export default function ShipmentReceiptsPage() {
                   const requested = payload?.statusListRequested?.release || {};
                   const freshCount = section.rows.filter((row) => !requested[row.skuId]).length;
                   return (
+                    <>
                     <div className={styles.pairButtons}>
                       <button type="button" className={`softSageButton ${styles.fullButton}`} disabled={routingKeys["release-file"] || !freshCount} onClick={() => void downloadReleaseFile("fresh")}>
                         {routingKeys["release-file"] ? "만드는 중…" : `신청 전만 엑셀 (${freshCount}개)`}
@@ -1971,6 +1978,11 @@ export default function ShipmentReceiptsPage() {
                         {routingKeys["release-file"] ? "만드는 중…" : `전체 엑셀 (${section.rows.length}개)`}
                       </button>
                     </div>
+                    <div style={{ marginTop: "8px" }}>
+                      <OpenFolderButton folder="release" label="단종해제 폴더 열기" className={`softBeigeButton ${styles.fullButton}`} style={{ width: "100%" }} />
+                      <p className={styles.meta}><FolderInstallLink /></p>
+                    </div>
+                    </>
                   );
                 })()}
                 <div className={styles.pairButtons}>

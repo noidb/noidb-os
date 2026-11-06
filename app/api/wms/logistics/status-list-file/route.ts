@@ -5,6 +5,7 @@ import { readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { buildStatusLists } from "@/lib/wms/discontinue-lists";
 import { loadReregistrationLookup } from "@/lib/wms/reregistration-lookup";
 import { loadStatusSourceItems } from "@/lib/wms/status-list-sources";
+import { saveReleaseFile } from "@/lib/wms/discontinue-drive-save";
 import { buildReleaseWorkbook, koreaDateParts, loadReleaseTemplate } from "@/lib/wms/discontinue-files";
 
 export const runtime = "nodejs";
@@ -33,8 +34,10 @@ export async function POST(request: NextRequest) {
     const result = await buildReleaseWorkbook(await loadReleaseTemplate(), rows.map(row => ({ skuId: row.skuId, productName: row.productName })));
     const date = koreaDateParts(new Date());
     const fileName = `단종해제_${scope === "fresh" ? "신청전" : "전체"}_${date.compact}_${rows.length}건.xlsx`;
+    // 2026-11-06: 단종해제 폴더에 바로 저장한다(실패해도 내려받을 수 있다).
+    const drive = await saveReleaseFile(result.buffer, fileName);
     const base64 = result.buffer.toString("base64");
-    return NextResponse.json({ ok: true, fileName, base64, count: rows.length }, { headers });
+    return NextResponse.json({ ok: true, fileName, base64, count: rows.length, ...drive }, { headers });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "엑셀 파일을 만들지 못했습니다." }, { status: 400, headers });
   }

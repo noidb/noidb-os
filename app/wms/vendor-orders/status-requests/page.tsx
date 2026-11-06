@@ -131,7 +131,7 @@ export default function StatusRequestsPage() {
         requestIds: workbook.unique.map(item => item.id), xlsxFileName: workbook.xlsxFileName, pdfFileName: workbook.pdfFileName,
       });
       downloadBlobPreservingPage(workbook.blob, workbook.fileName);
-      setMessage(`생성완료 · 단종 SKU ${workbook.unique.length}개 · XLSX와 PDF의 SKU가 동일합니다.${workbook.driveSaved ? " XLSX·PDF Drive 자동저장 완료." : workbook.driveWarning ? ` ${workbook.driveWarning}` : ""}${workbook.productDbMessage ? ` ${workbook.productDbMessage}` : ""}`);
+      setMessage(`생성완료 · 단종 SKU ${workbook.unique.length}개 · XLSX와 PDF의 SKU가 동일합니다.${workbook.driveSaved ? ` 저장완료 · ${[workbook.xlsxFileName, workbook.pdfFileName].filter(Boolean).join(", ")} (제품관리\\단종신청)` : workbook.driveWarning ? ` ${workbook.driveWarning}` : ""}${workbook.productDbMessage ? ` ${workbook.productDbMessage}` : ""}`);
       await reload();
     } catch (error) { setMessage(error instanceof Error ? error.message : "단종 파일을 만들지 못했습니다."); }
     finally { setSaving(false); }
@@ -146,7 +146,7 @@ export default function StatusRequestsPage() {
         requestIds: workbook.unique.map(item => item.id), xlsxFileName: workbook.fileName,
       });
       downloadBlobPreservingPage(workbook.blob, workbook.fileName);
-      setMessage(`생성완료 · 단종해제 SKU ${workbook.unique.length}개 · 원본의 기존 데이터행은 제거했습니다.${workbook.driveSaved ? " Drive 자동저장 완료." : workbook.driveWarning ? ` ${workbook.driveWarning}` : ""} 기존 처리상태와 제품DB는 변경하지 않았습니다. 이메일 발송 후 아래 완료 버튼을 눌러 주세요.`);
+      setMessage(`생성완료 · 단종해제 SKU ${workbook.unique.length}개 · 원본의 기존 데이터행은 제거했습니다.${workbook.driveSaved ? ` 저장완료 · ${workbook.xlsxFileName || workbook.fileName} (제품관리\\단종해제)` : workbook.driveWarning ? ` ${workbook.driveWarning}` : ""} 기존 처리상태와 제품DB는 변경하지 않았습니다. 이메일 발송 후 아래 완료 버튼을 눌러 주세요.`);
       await reload();
     } catch (error) { setMessage(error instanceof Error ? error.message : "단종해제 파일을 만들지 못했습니다."); }
     finally { setSaving(false); }

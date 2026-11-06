@@ -8,6 +8,7 @@ import { pendingReorderQueue, currentReorderRows, reorderPair, reorderDigest } f
 import { logisticsReorderLines } from "@/lib/wms/logistics-reorder-material";
 import { completeVendorReceiptOrigins } from "@/lib/wms/logistics-follow-up";
 import { weeklyKoreaDay } from "@/lib/wms/weekly-work-state";
+import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -65,7 +66,11 @@ export async function POST(request: NextRequest) {
       if (reorderDigest(rows) !== reorderDigest(checked) || nextWeeklyReorderFriday() !== date) throw new Error("파일 생성 중 미납수량 또는 요청일이 바뀌었습니다. 다시 받아 주세요.");
       if (pendingReorderQueue(await readWeeklyWorkspace()).token !== queue.token) throw new Error("파일 생성 중 대기 목록이 바뀌었습니다. 목록을 새로고침해 주세요.");
       await saveWeeklyFile(`output-${outputKey}.json`, Buffer.from(JSON.stringify({ rows, token: queue.token, date })));
-      return NextResponse.json({ success: true, rows, token: queue.token, outputKey, fileName: `재발주요청_${weeklyKoreaDay()}.xlsx`, base64: buffer.toString("base64") }, { headers });
+      const fileName = `재발주요청_${weeklyKoreaDay()}_${rows.length}건.xlsx`;
+      const folder = ["쿠팡데이터", "제품관리", "미납sku재발주"];
+      const savedHeaders = await generatedDriveSaveHeaders(buffer, fileName, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", folder);
+      const driveSaved = savedHeaders["X-NOIDB-Drive-Saved"] === "true";
+      return NextResponse.json({ success: true, rows, token: queue.token, outputKey, fileName, base64: buffer.toString("base64"), driveSaved, driveFolder: folder.join("\\"), driveFileName: driveSaved ? decodeURIComponent(savedHeaders["X-NOIDB-Drive-File-Name"] || "") : "", driveWarning: driveSaved ? "" : decodeURIComponent(savedHeaders["X-NOIDB-Drive-Save-Warning"] || "") }, { headers });
     }
     if (body.outputKey !== outputKey) throw new Error("미납수량 또는 요청일이 변경됐습니다. 현재 파일을 다시 받아 요청한 뒤 완료해 주세요.");
     const saved = await readWeeklyFile(`output-${outputKey}.json`);

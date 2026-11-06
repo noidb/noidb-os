@@ -33,8 +33,9 @@ export async function POST(request: NextRequest) {
     const pdf = format !== "xlsx"
       ? Buffer.from(await buildDiscontinueLetterFromTemplate(await loadDiscontinueLetterTemplate(), items, date.iso))
       : null;
-    const pdfBaseName = `로켓배송_단종요청_공문_${date.compact}.pdf`;
-    const folder = ["쿠팡데이터", "단종 및 해제"];
+    const pdfBaseName = `로켓배송_단종요청_공문_${date.compact}_${items.length}건.pdf`;
+    // 2026-11-06: 단종 신청 서류는 제품관리\단종신청, 단종 해제 서류는 제품관리\단종해제에 저장한다.
+    const folder = kind === "release" ? ["쿠팡데이터", "제품관리", "단종해제"] : ["쿠팡데이터", "제품관리", "단종신청"];
     if (format === "pdf" && pdf) {
       const saved = await generatedDriveSaveHeaders(pdf, pdfBaseName, "application/pdf", folder);
       const fileName = decodeURIComponent(saved["X-NOIDB-Drive-File-Name"] || encodeURIComponent(pdfBaseName));
@@ -49,8 +50,8 @@ export async function POST(request: NextRequest) {
       ? await buildDiscontinueWorkbook(await loadDiscontinueTemplate(), items, date.iso)
       : await buildReleaseWorkbook(await loadReleaseTemplate(), items);
     const baseName = kind === "discontinue"
-      ? `판매중지_SKU_영구생산중단_${date.compact}.xlsx`
-      : `이메일발송용_노이드비_단종해제 SKU리스트_${date.compact}.xlsx`;
+      ? `단종신청_${date.compact}_${items.length}건.xlsx`
+      : `단종해제_${date.compact}_${items.length}건.xlsx`;
     const driveHeaders = await generatedDriveSaveHeaders(
       result.buffer,
       baseName,
@@ -64,7 +65,7 @@ export async function POST(request: NextRequest) {
       const bundle = new JSZip();
       bundle.file(fileName, result.buffer);
       bundle.file(pdfName, pdf);
-      const zipName = `단종신청_엑셀_공문_${date.compact}.zip`;
+      const zipName = `단종신청_엑셀_공문_${date.compact}_${items.length}건.zip`;
       // 단종서류를 만든 SKU는 제품DB 현재상태를 거래처단종으로 적는다(2026-10-19).
       const productDb = await markDiscontinuedInProductDb(items.map(item => item.skuId), "단종서류 만들기(주간업무)");
       const warnings = [driveHeaders, pdfSaved].map(headers => decodeURIComponent(headers["X-NOIDB-Drive-Save-Warning"] || "")).filter(Boolean);

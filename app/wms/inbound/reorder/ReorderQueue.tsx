@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import styles from "../weekly-work.module.css";
 import layout from "./reorder-queue.module.css";
 import MissedShortages from "./MissedShortages";
+import { FolderInstallLink, OpenFolderButton } from "../../OpenFolderButton";
 type Row = { purchaseOrderNumber: string; skuId: string; productName: string; shortageQuantity: number };
 type Issue = { skuId: string; productName: string; purchaseOrderNumbers: string[]; message: string };
 export default function ReorderQueue() {
@@ -27,10 +28,13 @@ export default function ReorderQueue() {
       if (action === "complete") { setMessage("재발주 요청 완료를 기록했습니다."); await load(); return; }
       if (action === "discardIssue") { setMessage("수량 확인 불가 항목을 삭제했습니다."); await load(); return; }
       setRows(data.rows); setOutputKey(data.outputKey);
-      const bytes = Uint8Array.from(atob(data.base64), character => character.charCodeAt(0));
-      const url = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
-      const link = document.createElement("a"); link.href = url; link.download = data.fileName; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
-      setMessage("저장된 미납수량으로 전체 재발주 파일을 생성했습니다.");
+      if (data.driveSaved) { setMessage(`저장완료 · ${data.driveFileName} (${data.driveFolder})`); }
+      else {
+        const bytes = Uint8Array.from(atob(data.base64), character => character.charCodeAt(0));
+        const url = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+        const link = document.createElement("a"); link.href = url; link.download = data.fileName; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+        setMessage(`저장하지 못해 내려받았습니다. ${data.driveWarning || ""}`);
+      }
     } catch (error) { setError(error instanceof Error ? error.message : "처리하지 못했습니다."); }
     finally { setBusy(false); }
   }
@@ -51,7 +55,9 @@ export default function ReorderQueue() {
       <button type="button" className="softPinkButton" disabled={busy || loadFailed || !rows.length} onClick={() => void act("generate")}>{busy ? "확인 중…" : issues.length ? `수량 확인된 ${rows.length}건 파일 받기` : "재발주요청 파일 받기"}</button>
       <a className="softBeigeButton" href="https://supplier.coupang.com/plan/ticket/reportIssue/Reorder" target="_blank" rel="noreferrer">쿠팡 재발주요청 화면 열기</a>
       <button type="button" className="softSageButton" disabled={busy || loadFailed || !outputKey} onClick={() => void act("complete")}>쿠팡 요청 완료 기록</button>
+      <OpenFolderButton folder="reorder" className="softBeigeButton" />
     </div>
+    <p><FolderInstallLink /></p>
     <MissedShortages onAdded={() => void load()} />
   </main>;
 }

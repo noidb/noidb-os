@@ -2430,8 +2430,22 @@ export default function Home() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "견적서 실패");
       }
-      downloadBlobFile(await res.blob(), `견적서_${model}_${product.category}.xlsx`);
-      setExportMessage("견적서 다운로드 완료");
+      const quoteBlob = await res.blob();
+      const quoteName = `견적서_${model}_${product.category}.xlsx`;
+      // 2026-11-06: 상품DB 폴더가 선택돼 있으면 카테고리/모델명 폴더에 저장(같은 이름은 확인 없이 덮어씀).
+      if (dbHandle && await ensureReadWritePermission(dbHandle)) {
+        try {
+          await writeProductDbFiles(dbHandle, product.category, model, [{ folder: "", filename: quoteName, blob: quoteBlob, path: quoteName }], { overwriteExisting: true });
+          setExportMessage(`저장완료 · ${quoteName} → ${product.category}/${model}/ (같은 이름이 있으면 덮어씀)`);
+          return;
+        } catch (saveError) {
+          downloadBlobFile(quoteBlob, quoteName);
+          setExportMessage(`오류: 모델 폴더에 저장하지 못해 내려받았습니다. ${saveError instanceof Error ? saveError.message : ""}`);
+          return;
+        }
+      }
+      downloadBlobFile(quoteBlob, quoteName);
+      setExportMessage("상품DB 폴더가 선택되지 않아 내려받았습니다. 상단에서 상품DB 폴더를 선택하면 모델 폴더에 자동 저장됩니다.");
     } catch (e) {
       setExportMessage(`오류: ${e instanceof Error ? e.message : "견적서 실패"}`);
     } finally {

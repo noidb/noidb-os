@@ -15,6 +15,7 @@ import { historicalShortagePairKey, type HistoricalShortageEvidence, type Histor
 
 const LegacyInbound = dynamic(() => import("./LegacyInbound"), { loading: () => <p>이전 입고기록을 불러오는 중입니다.</p> });
 import WeeklyCouponHistory from "./WeeklyCouponHistory";
+import { FolderInstallLink, OpenFolderButton } from "../OpenFolderButton";
 type OutputKind = "all" | "coupon" | "vendors" | "discontinue" | "reorder" | "marketing";
 type AdvertisingPreview = { resolved: Array<{ skuId: string; optionId: string }>; optionIds: string[]; missingSkuIds: string[]; conflictingSkuIds: string[] };
 type SaveState = "saved" | "pending" | "saving" | "error";
@@ -551,8 +552,14 @@ export default function WeeklyWork({ processingOnly = false, clearanceMode = fal
       const url = URL.createObjectURL(blob);
       outputUrls.current = [...preparedFiles.map(file => file.url), url];
       setDownloads(preparedFiles); setBundle({ name, url });
-      downloadBlobPreservingPage(blob, name);
-      setOutputProgress("파일 " + preparedFiles.length + "개 준비 완료 · ZIP 다운로드를 요청했습니다.");
+      let savedNote = "";
+      try {
+        const saveResponse = await fetch("/api/wms/weekly-work/save-zip", { method: "POST", headers: { "Content-Type": "application/zip", "x-noidb-file-name": encodeURIComponent(name) }, body: blob });
+        const saveData = await saveResponse.json().catch(() => ({}));
+        if (saveResponse.ok && saveData.driveSaved) savedNote = "저장완료 · " + saveData.driveFileName + " (" + saveData.driveFolder + ")";
+      } catch { /* 저장 실패 시 아래에서 다운로드한다. */ }
+      if (!savedNote) downloadBlobPreservingPage(blob, name);
+      setOutputProgress(savedNote ? savedNote + " · 파일 " + preparedFiles.length + "개" : "저장하지 못해 내려받았습니다. 파일 " + preparedFiles.length + "개 준비 완료 · ZIP 다운로드를 요청했습니다.");
       return true;
     } catch (failure) {
       preparedFiles.forEach(file => URL.revokeObjectURL(file.url));
@@ -708,6 +715,7 @@ export default function WeeklyWork({ processingOnly = false, clearanceMode = fal
           <a className={styles.secondary} href="/wms/inbound/reorder">재발주요청 대기</a>
         </div>
         {outputProgress ? <p role="status">{outputProgress}</p> : null}
+        {outputProgress.startsWith("저장완료") ? <p><OpenFolderButton folder="coupon" label="마케팅 폴더 열기" className="softBeigeButton" /> <FolderInstallLink /></p> : null}
         {outputError ? <p role="alert" className={styles.error}>{outputError}</p> : null}
         {bundle ? <div className={styles.downloads}><strong>{bundle.name}</strong><a href={bundle.url} download={bundle.name}>생성한 서류 다시 받기</a></div> : null}
         <p className={styles.help}>서류를 받는 것과 실제 처리완료는 별개입니다. 완료한 내역은 아래 이력에 남습니다.</p>
