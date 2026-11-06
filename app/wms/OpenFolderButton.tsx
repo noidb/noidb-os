@@ -9,7 +9,7 @@ export const FOLDER_PROTOCOLS = {
   reorder: { protocol: "noidbreorder", path: "쿠팡데이터\\제품관리\\미납sku재발주" },
   discontinue: { protocol: "noidbdiscontinue", path: "쿠팡데이터\\제품관리\\단종신청" },
   release: { protocol: "noidbrelease", path: "쿠팡데이터\\제품관리\\단종해제" },
-  coupon: { protocol: "noidbcoupon", path: "쿠팡데이터\\마케팅\\쿠폰관리" },
+  coupon: { protocol: "noidbcoupon", path: "쿠팡데이터\\마케팅" },
 } as const;
 
 export type FolderKey = keyof typeof FOLDER_PROTOCOLS;
