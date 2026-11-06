@@ -1,3 +1,4 @@
+import { syncSettlementInboundFromDrive } from "@/lib/wms/settlement-inbound-drive";
 import { NextResponse } from "next/server";
 import asideBaseline from "@/lib/wms/logistics-aside-baseline.json";
 import {
@@ -167,6 +168,12 @@ async function responseBoard() {
     await mutateWeeklyWorkspace(workspace => { reconcileIncompleteVendorRoutes(workspace, vendorStore); });
     stored = await readWeeklyWorkspace();
   }
+  const settlementSync = await syncSettlementInboundFromDrive(stored.settlementInbound, new Date().toISOString());
+  if (settlementSync.changed && settlementSync.store) {
+    const nextStore = settlementSync.store;
+    await mutateWeeklyWorkspace(workspace => { workspace.settlementInbound = nextStore; });
+    stored = await readWeeklyWorkspace();
+  }
   const workspace = activeSnapshot(await syncReleasedToNormal(await fillMissingStatuses(stored, catalog), catalog));
   const currentTargets = logisticsTargetsFromSnapshot(workspace.logisticsReceipts);
   // 무조건 제외(같은 모델 전체). 제품DB를 못 읽으면 지정 SKU만 뺀다.
@@ -178,6 +185,7 @@ async function responseBoard() {
     baseline: { ...base, excludedMarketingSkuIds: [...new Set([...base.excludedMarketingSkuIds, ...exclusions.skuIds])] },
     routes: workspace.logisticsReceiptRoutes,
     excludedMarketingLineKeys: [...activeMarketingExclusionKeys(workspace)],
+    settledByPoSku: workspace.settlementInbound?.totals,
   });
   const followUp = logisticsFollowUpResponse(workspace, board);
   const source = await discontinueQueuePromise;
@@ -232,6 +240,8 @@ async function responseBoard() {
   return { shipmentDetails, currentTargets, board, followUp, laterOrders, orderStatuses, marketingPrices, skuNames, productDbStatuses: productDbStatusBySku(catalog, shownSkuIds), productDbLooks: productDbLooksBySku(catalog, shownSkuIds),
     supplyStatusChecks: stored.supplyStatusChecks || {},
     coveredByVendorOrder: stored.coveredByVendorOrder || {},
+    settlementInboundError: settlementSync.error || null,
+    settlementInbound: stored.settlementInbound ? { uploadedAt: stored.settlementInbound.uploadedAt, fileName: stored.settlementInbound.fileName, fileCount: Object.keys(stored.settlementInbound.files || {}).length, firstDate: stored.settlementInbound.firstDate, lastDate: stored.settlementInbound.lastDate, count: Object.keys(stored.settlementInbound.totals).length } : null,
     reorderExcluded: stored.reorderExcluded || {},
     missedListReviewed: missedListReviewedView(stored),
     // 가장 최근에 한꺼번에 비운 묶음(되살리기 버튼용). 하나씩 지운 1건은 되살리기 대상으로 보지 않는다.

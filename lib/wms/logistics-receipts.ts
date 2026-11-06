@@ -110,6 +110,8 @@ export interface LogisticsReceiptBoard {
   targets: LogisticsReceiptTarget[];
   lines: LogisticsReceiptBoardLine[];
   warnings: string[];
+  /** 정산 입고내역(업로드)과 맞춰 보니 이미 입고된 줄이라 미납에서 뺀 목록(2026-11-06, 화면 확인용). */
+  settlementCleared?: Array<{ shipmentNumber: string; purchaseOrderNumber: string; skuId: string; productName: string; deliveredQuantity: number; shipmentReceived: number; settledQuantity: number }>;
   /** 1개 입고 줄이 마케팅 후보가 아닌 이유(2026-10-15, 화면 확인용). 키: `${shipmentNumber}|${skuId}` */
   marketingNotes?: Record<string, string>;
 }
@@ -297,6 +299,8 @@ export function buildLogisticsReceiptBoard(input: {
   routes?: Record<string, LogisticsReceiptRoute>;
   /** Persisted operator exclusions are line-specific; a later shipment of the same SKU stays reviewable. */
   excludedMarketingLineKeys?: readonly string[];
+  /** 정산 입고내역 합계(`발주번호|SKU` → 수량). 납품수량 이상 입고가 확인되면 그 줄은 미납에서 뺀다. */
+  settledByPoSku?: Readonly<Record<string, number>>;
 }): LogisticsReceiptBoard {
   const targets = mergeLogisticsReceiptTargets(input.targets.filter(target => target.source === "dispatch"), input.targets.filter(target => target.source !== "dispatch"));
   const warnings: string[] = [];
@@ -318,6 +322,13 @@ export function buildLogisticsReceiptBoard(input: {
     handledLabels.set(key, `${handled.shipmentNumber} · PO ${handled.purchaseOrderNumber} · SKU ${handled.skuId}`);
   }
   const closedHandledKeys = new Set<string>();
+  // 정산 입고내역 교차 확인: 같은 발주+SKU의 마감 납품 합계 이상이 정산에 입고로 잡혀 있으면 미납이 아니다(보수적으로 전량 확인될 때만).
+  const deliveredByPoSku = new Map<string, number>();
+  for (const shipment of snapshot?.shipments || []) if (shipment.status === "마감") for (const line of shipment.lines) {
+    const key = `${line.purchaseOrderNumber}|${line.skuId}`;
+    deliveredByPoSku.set(key, (deliveredByPoSku.get(key) || 0) + line.deliveredQuantity);
+  }
+  const settlementCleared: NonNullable<LogisticsReceiptBoard["settlementCleared"]> = [];
 
   const lines: LogisticsReceiptBoardLine[] = [];
   let unavailableSkuCount = 0;
@@ -339,7 +350,13 @@ export function buildLogisticsReceiptBoard(input: {
     }
     const zeroReceived = shipment.totalReceived === 0;
     for (const line of [...shipment.lines].sort((a, b) => logisticsReceiptLineKey(shipment.shipmentNumber, a.boxId, a.purchaseOrderNumber, a.skuId).localeCompare(logisticsReceiptLineKey(shipment.shipmentNumber, b.boxId, b.purchaseOrderNumber, b.skuId)))) {
-      const shortage = Math.max(0, line.deliveredQuantity - line.receivedQuantity);
+      let shortage = Math.max(0, line.deliveredQuantity - line.receivedQuantity);
+      const settled = input.settledByPoSku?.[`${line.purchaseOrderNumber}|${line.skuId}`] || 0;
+      if (shortage > 0 && settled > 0 && settled >= (deliveredByPoSku.get(`${line.purchaseOrderNumber}|${line.skuId}`) || Infinity)) {
+        settlementCleared.push({ shipmentNumber: shipment.shipmentNumber, purchaseOrderNumber: line.purchaseOrderNumber, skuId: line.skuId, productName: line.productName,
+          deliveredQuantity: line.deliveredQuantity, shipmentReceived: line.receivedQuantity, settledQuantity: settled });
+        shortage = 0;
+      }
       const marker = JSON.stringify([shipment.shipmentNumber, line.purchaseOrderNumber, line.skuId]);
       const remainingHandled = handledByShipmentPoSku.get(marker) || 0;
       closedHandledKeys.add(marker);
@@ -421,7 +438,7 @@ export function buildLogisticsReceiptBoard(input: {
   }
   if (needsStatusRefresh) warnings.push("이전 수집자료에는 공급상태가 없습니다. 전체 쉽먼트를 다시 수집해 주세요.");
   if (unavailableSkuCount) warnings.push(`공급상태가 정상이 아닌 SKU ${unavailableSkuCount}건(불가·일시중단·조회안됨)은 미납·쿠폰광고 분류에서 뺐습니다.`);
-  return { collectedAt: snapshot?.collectedAt, targets, lines, warnings, unavailableSkus, marketingNotes };
+  return { collectedAt: snapshot?.collectedAt, targets, lines, warnings, unavailableSkus, marketingNotes, settlementCleared: settlementCleared.length ? settlementCleared : undefined };
 }
 
 /** 저장된 쿠팡 목록 수집에서 다시 만든 대상. 사이트 출고기록·예전 Aside 대기목록은 더 이상 쓰지 않는다. */

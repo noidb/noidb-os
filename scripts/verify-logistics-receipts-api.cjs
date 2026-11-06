@@ -17,6 +17,7 @@ const deps = {
   "@/lib/wms/reregistration-lookup": { loadReregistrationLookup: async () => ({ reregisteredSkuIds: new Set(), names: {}, loaded: false }) },
   "@/lib/wms/status-list-sources": { loadStatusSourceItems: async items => ({ items, storageLoaded: false }) },
   "@/lib/wms/discontinue-lists": { buildStatusLists: () => ({ discontinue: [], release: [] }) },
+  "@/lib/wms/settlement-inbound-drive": { syncSettlementInboundFromDrive: async previous => ({ store: previous, changed: false }) },
   "@/lib/wms/open-vendor-orders": { openVendorOrdersBySku: () => ({}) },
   "@/lib/wms/logistics-receipt-routing": { reconcileIncompleteVendorRoutes: () => 0 },
   "@/lib/wms/product-catalog": { fetchProductCatalog: async () => ({ configured: true, items: [] }) },

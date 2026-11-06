@@ -62,6 +62,9 @@ type ApiPayload = {
   coveredByVendorOrder?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; vendors: string[]; sentOn: string; at: string }>;
   /** 미납 SKU 리스트에서 '재발주요청 제외'로 뺀 줄(2026-10-21) */
   reorderExcluded?: Record<string, { skuId: string; productName: string; shipmentNumber: string; quantity: number; at: string }>;
+  /** 정산 입고상세내역 엑셀 업로드 기록(2026-11-06) */
+  settlementInbound?: { uploadedAt: string; fileName: string; fileCount?: number; firstDate?: string; lastDate?: string; count: number } | null;
+  settlementInboundError?: string | null;
   /** 쉽먼트별 내역과 처음 가져온 시각(2026-10-15) */
   shipmentDetails?: Record<string, { firstSeenAt: string; totalDelivered: number | null; totalReceived: number | null; lines: Array<{ purchaseOrderNumber: string; skuId: string; productName: string; deliveredQuantity: number; receivedQuantity: number }> }>;
   /** 공급상태가 정상이 아닌 SKU 확인 결과(단종확인·단종해제) */
@@ -1985,6 +1988,26 @@ export default function ShipmentReceiptsPage() {
             <h2 className={styles.listTitle}>
               미납 SKU 리스트 <span>{missView === "all" ? `전체 ${allMissLines.length}건 · 처리 전 ${allMissTodoCount}건` : `${resultLines.length}건 · 처리 전 ${reorderReadyLines.length}건`}</span>
             </h2>
+            {/* 2026-11-06: 쉽먼트 마감 입고수량 0 가짜 미납은 Drive 입고상세내역 폴더 엑셀과 맞춰 걸러 낸다 */}
+            <p style={{ margin: "0 0 10px", fontSize: 13 }}>
+              {payload.settlementInboundError
+                ? `입고상세내역 폴더를 읽지 못했습니다. 마지막 저장본으로 표시합니다. (${payload.settlementInboundError})`
+                : payload.settlementInbound
+                  ? `입고상세내역 폴더 · 파일 ${payload.settlementInbound.fileCount ?? 1}개 · 마지막 확인 ${payload.settlementInbound.uploadedAt.slice(0, 10)} · ${payload.settlementInbound.firstDate || ""}~${payload.settlementInbound.lastDate || ""} 입고 반영`
+                  : "입고상세내역 폴더에 엑셀이 없습니다. 받은 파일을 쿠팡데이터/입고상세내역에 넣어 주세요."}
+            </p>
+            {(payload.board.settlementCleared?.length || 0) > 0 && (
+              <details style={{ margin: "0 0 10px", fontSize: 13 }}>
+                <summary>입고상세내역으로 확인돼 미납에서 뺀 {payload.board.settlementCleared!.length}건</summary>
+                <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                  {payload.board.settlementCleared!.map((item) => (
+                    <li key={`${item.shipmentNumber}-${item.purchaseOrderNumber}-${item.skuId}`}>
+                      {item.shipmentNumber} · PO {item.purchaseOrderNumber} · SKU {item.skuId} {item.productName} — 납품 {item.deliveredQuantity} / 쉽먼트 입고 {item.shipmentReceived} / 정산 입고 {item.settledQuantity}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
             {/* 2026-10-21: 예전 쉽먼트 미납까지 모두 검토할 수 있게 보기 전환 */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", margin: "0 0 10px" }}>
               <button type="button" className={missView === "todo" ? "softSageButton" : "softApricotButton"} aria-pressed={missView === "todo"} onClick={() => setMissView("todo")}>재발주요청 안 보낸 미납 ({resultLines.length})</button>

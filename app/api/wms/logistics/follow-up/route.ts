@@ -31,7 +31,7 @@ async function current() {
   if (stored.logisticsReceiptEpoch !== LOGISTICS_RECEIPT_EPOCH) throw new Error("먼저 쿠팡 쉽먼트 화면에서 입고결과를 가져와 주세요.");
   const excluded = await marketingExcludedSkuIds(stored.marketingExcludedSkuIds);
   const workspace = stored, raw = baseline(), base = { ...raw, excludedMarketingSkuIds: [...new Set([...raw.excludedMarketingSkuIds, ...excluded])] }; const targets = logisticsTargetsFromSnapshot(workspace.logisticsReceipts);
-  return { workspace, targets, board: buildLogisticsReceiptBoard({ targets, snapshot: workspace.logisticsReceipts, baseline: base, routes: workspace.logisticsReceiptRoutes, excludedMarketingLineKeys: [...activeMarketingExclusionKeys(workspace)] }) };
+  return { workspace, targets, board: buildLogisticsReceiptBoard({ targets, snapshot: workspace.logisticsReceipts, baseline: base, routes: workspace.logisticsReceiptRoutes, excludedMarketingLineKeys: [...activeMarketingExclusionKeys(workspace)], settledByPoSku: workspace.settlementInbound?.totals }) };
 }
 export async function GET(request: Request) {
   try {

@@ -96,6 +96,8 @@ export interface WeeklyWorkspace {
   missedListReviewed?: { keys: Record<string, string>; lastBatch?: { at: string; keys: string[] } };
   /** 사용자가 화면에서 '마케팅 제외'로 누적한 SKU(2026-10-11). 같은 모델 전체가 쿠폰·광고 후보에서 자동으로 빠진다. */
   marketingExcludedSkuIds?: Array<{ skuId: string; productName: string; at: string }>;
+  /** 정산 '입고상세내역' 엑셀 업로드 기록(2026-11-06). 쉽먼트 입고수량 0 가짜 미납을 발주번호+SKU 입고 합계로 걸러 내는 근거. */
+  settlementInbound?: import("./settlement-inbound").SettlementInboundStore;
   /** 입고결과 처리기록을 새로 시작한 기준. 값이 다르면 이전 처리기록을 한 번 비운다. */
   logisticsReceiptEpoch?: string;
   /** 2026-10-23: 제품DB 누적입고 자동계산 기준값(SKU별, 9/13 이후 쉽먼트 입고를 더하기 전 시트 값). */
