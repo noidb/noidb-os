@@ -11,11 +11,12 @@ import {
 import { downloadOAuthDriveFile, listOAuthDriveFolderFiles, resolveDriveFolderPath } from "./google-drive-oauth-reader";
 
 export const DISCONTINUE_TEMPLATE_NAME = "[양식]판매중지_SKU_영구생산중단.xlsx";
-export const RELEASE_TEMPLATE_NAME = "이메일발송용_노이드비_단종해제 SKU리스트.xlsx";
+// 2026-11-06: 쿠팡 이슈 신고(Report Issue Inquires) 양식으로 변경 — 1행 쿠팡 식별값, 2행 머리글(SKU ID·요청사유·첨부 파일·Comment), 3행부터 데이터
+export const RELEASE_TEMPLATE_NAME = "단종해제_Report_Issue_Inquires.xlsx";
 export const DISCONTINUE_LETTER_TEMPLATE_NAME = "[샘플]로켓배송_단종요청_공문_20260723.pdf";
 export const DISCONTINUE_REASON = "리뉴얼 상품 없음 (NRO)";
 export const DISCONTINUE_COMMENT = "영구적 생산 중단에 의한 발주 중단";
-export const RELEASE_REASON = "공급사 공급 재개로 인한 상품 재공급";
+export const RELEASE_REASON = "정상 공급 전환";
 
 const LOCAL_TEMPLATE_FOLDER = "G:\\내 드라이브\\쿠팡데이터\\단종 및 해제";
 const BUNDLED_TEMPLATE_FOLDER = path.join(process.cwd(), "lib", "wms", "data", "discontinue-templates");
@@ -155,12 +156,13 @@ export async function buildReleaseWorkbook(
   const sheet = zip.file("xl/worksheets/sheet1.xml");
   if (!sheet) throw new Error("단종해제 양식의 입력 시트를 찾지 못했습니다.");
   const originalXml = await sheet.async("string");
-  const header = rowXml(originalXml, 1);
+  // 1행(쿠팡 식별값 — 지우거나 바꾸면 안 됨)과 2행(머리글)은 양식 그대로 두고 3행부터 채운다.
+  const keep = rowXml(originalXml, 1) + rowXml(originalXml, 2);
   const dataRows = items.map((item, index) => {
-    const row = index + 2;
-    return `<row r="${row}" spans="1:3" x14ac:dyDescent="0.25">${inlineCell(`A${row}`, item.skuId, 2)}${inlineCell(`B${row}`, RELEASE_REASON, 3)}${inlineCell(`C${row}`, item.productName || "", 2)}</row>`;
+    const row = index + 3;
+    return `<row r="${row}">${inlineCell(`A${row}`, item.skuId, 66)}${inlineCell(`B${row}`, RELEASE_REASON, 58)}${inlineCell(`C${row}`, "", 58)}${inlineCell(`D${row}`, "", 66)}</row>`;
   }).join("");
-  const generatedXml = replaceSheetData(originalXml, header + dataRows, `C${items.length + 1}`);
+  const generatedXml = replaceSheetData(originalXml, keep + dataRows, `D${items.length + 2}`);
   zip.file("xl/worksheets/sheet1.xml", generatedXml, { createFolders: false });
   const generated = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
   return { buffer: generated, itemCount: items.length, preservedWorksheetXml: true };
