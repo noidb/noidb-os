@@ -20,6 +20,7 @@ import type {
 import styles from "./shipments.module.css";
 import DiscontinueByCode from "./DiscontinueByCode";
 import { saveReceiptTabCounts } from "@/lib/wms/receipt-tab-counts";
+import { discontinueActionFor, isHandledMissStatus } from "@/lib/wms/missed-line-handled";
 import { readLastView, saveLastView } from "@/lib/wms/last-view-cache";
 
 /** 서버 규칙(lib/wms/discontinue-lists.ts DISCONTINUE_OLD_TAB_REASONS)과 같게 유지 — 서버 파일을 화면에서 불러오지 않으려고 따로 둠 */
@@ -968,6 +969,11 @@ export default function ShipmentReceiptsPage() {
     .sort((left, right) => missRank(left) - missRank(right)
       || (right.target.expectedDate || "").localeCompare(left.target.expectedDate || "")
       || left.shipmentNumber.localeCompare(right.shipmentNumber) || left.skuId.localeCompare(right.skuId));
+  // 2026-11-06: 이미 처리한 줄(제외·거래처발주·기존 발주·단종)은 기본 목록에서 빼고 맨 아래 접힌 '처리한 SKU' 칸으로 보낸다.
+  const isHandledLine = (line: LogisticsReceiptBoardLine) =>
+    isHandledMissStatus(missStatusOf(line), supplyChecks[line.skuId]?.decision === "release" && currentOrderStatus(line.skuId) !== "정상");
+  const openResultLines = resultLines.filter((line) => !isHandledLine(line));
+  const handledResultLines = resultLines.filter(isHandledLine);
   const routedLines = lines.filter((line) => line.state === "routed");
   // 파일 생성 때 재발주요청으로 함께 보낼 미납 줄(처리 전인 것만 — 제외·거래처발주·단종·기존 발주 처리한 줄은 넣지 않음)
   const reorderReadyLines = resultLines.filter((line) => missStatusOf(line) === "처리 전");
@@ -1048,6 +1054,22 @@ export default function ShipmentReceiptsPage() {
       </tr>
     </thead>
   );
+  // 2026-11-06: 제품DB에 단종으로 적힌 SKU는 '제외' 대신 단종으로 넘긴다(목록에서 완전히 빠짐).
+  const discontinueButton = (line: LogisticsReceiptBoardLine, busyLine: boolean) => {
+    const action = discontinueActionFor(payload?.productDbStatuses?.[line.skuId], currentOrderStatus(line.skuId));
+    if (!action) return null;
+    return action === "send" ? (
+      <button className={`softSageButton ${styles.decisionButton}`} disabled={busyLine}
+        onClick={() => { if (window.confirm(`SKU ${line.skuId}를 단종으로 보낼까요?\n단종 대상 목록에서 신청 엑셀·공문을 만들 수 있어요.`)) void submitDecision(line, "discontinue"); }}>
+        단종으로 보내기
+      </button>
+    ) : (
+      <button className={`softSageButton ${styles.decisionButton}`} disabled={busyLine}
+        onClick={() => { if (window.confirm(`SKU ${line.skuId}는 이미 단종이에요. 이 목록에서 뺄까요?\n(단종확인으로 기록되고, 단종신청 대상에는 넣지 않아요.)`)) void supplyCheck("discontinued", line.skuId, line.productName); }}>
+        단종확인
+      </button>
+    );
+  };
   const renderResultRow = (line: LogisticsReceiptBoardLine) => (
     <tr key={line.lineKey}>
       <td className={styles.shipInfo}>{shipInfo(line.shipmentNumber, line.purchaseOrderNumber, line.target.expectedDate)}</td>
@@ -1078,17 +1100,33 @@ export default function ShipmentReceiptsPage() {
           if (status === "처리 전") return (
             <div className={styles.decisionRow}>
               {releasedToNormal(line.skuId) && <span className={styles.meta} style={{ gridColumn: "span 2", textAlign: "center" }}>정상 전환됨 · 재발주요청 가능</span>}
-              <button className={`softBeigeButton ${styles.decisionButton}`} style={{ gridColumn: "span 2" }} disabled={busyLine} onClick={() => void toggleReorderExclusion(line, "exclude")}>
-                재발주요청 제외
-              </button>
+              {(() => {
+                const discontinue = discontinueButton(line, Boolean(busyLine));
+                return (
+                  <div style={{ gridColumn: "span 2", display: "grid", gridTemplateColumns: discontinue ? "1fr 1fr" : "1fr", gap: "8px" }}>
+                    <button className={`softBeigeButton ${styles.decisionButton}`} disabled={busyLine} onClick={() => void toggleReorderExclusion(line, "exclude")}>
+                      재발주요청 제외
+                    </button>
+                    {discontinue}
+                  </div>
+                );
+              })()}
             </div>
           );
           if (status === "재발주요청 제외함") return (
             <div className={styles.decisionRow}>
               <span className={styles.meta} style={{ gridColumn: "span 2", textAlign: "center" }}>재발주요청 제외함</span>
-              <button className={`softApricotButton ${styles.decisionButton}`} style={{ gridColumn: "span 2" }} disabled={busyLine} onClick={() => void toggleReorderExclusion(line, "undo")}>
-                제외 취소
-              </button>
+              {(() => {
+                const discontinue = discontinueButton(line, Boolean(busyLine));
+                return (
+                  <div style={{ gridColumn: "span 2", display: "grid", gridTemplateColumns: discontinue ? "1fr 1fr" : "1fr", gap: "8px" }}>
+                    <button className={`softApricotButton ${styles.decisionButton}`} disabled={busyLine} onClick={() => void toggleReorderExclusion(line, "undo")}>
+                      제외 취소
+                    </button>
+                    {discontinue}
+                  </div>
+                );
+              })()}
             </div>
           );
           // 거래처발주·단종으로 보냈거나 기존 발주로 처리한 줄 → 재발주요청으로 바꿀 수 있다(단종신청 파일을 만든 뒤면 서버가 막고 이유를 알려 줌).
@@ -1199,7 +1237,7 @@ export default function ShipmentReceiptsPage() {
   const releaseFreshCount = releaseList.filter((row) => !payload?.statusListRequested?.release?.[row.skuId]).length;
   const vendorCount = followUpData?.queues.vendor.length || 0;
   const anytimeCount = discontinueList.length + releaseFreshCount + followUpQueueOf("discontinue").length;
-  const resultsCount = resultLines.length + marketingLines.length + followUpQueueOf("reorder").length + followUpQueueOf("marketing").length;
+  const resultsCount = openResultLines.length + marketingLines.length + followUpQueueOf("reorder").length + followUpQueueOf("marketing").length;
   // 메인 작업 메뉴에 같은 숫자를 보여 주도록 이 브라우저에 기억해 둔다(개발용 예시자료는 저장하지 않음).
   useEffect(() => {
     if (fixture || !payload || !followUpData) return;
@@ -1986,7 +2024,7 @@ export default function ShipmentReceiptsPage() {
         {tab === "results" && payload && (
           <>
             <h2 className={styles.listTitle}>
-              미납 SKU 리스트 <span>{missView === "all" ? `전체 ${allMissLines.length}건 · 처리 전 ${allMissTodoCount}건` : `${resultLines.length}건 · 처리 전 ${reorderReadyLines.length}건`}</span>
+              미납 SKU 리스트 <span>{missView === "all" ? `전체 ${allMissLines.length}건 · 처리 전 ${allMissTodoCount}건` : `${openResultLines.length}건 · 처리 전 ${reorderReadyLines.length}건${handledResultLines.length ? ` · 처리한 ${handledResultLines.length}건은 아래 접힘` : ""}`}</span>
             </h2>
             {/* 2026-11-06: 쉽먼트 마감 입고수량 0 가짜 미납은 Drive 입고상세내역 폴더 엑셀과 맞춰 걸러 낸다 */}
             <p style={{ margin: "0 0 10px", fontSize: 13 }}>
@@ -2010,7 +2048,7 @@ export default function ShipmentReceiptsPage() {
             )}
             {/* 2026-10-21: 예전 쉽먼트 미납까지 모두 검토할 수 있게 보기 전환 */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", margin: "0 0 10px" }}>
-              <button type="button" className={missView === "todo" ? "softSageButton" : "softApricotButton"} aria-pressed={missView === "todo"} onClick={() => setMissView("todo")}>재발주요청 안 보낸 미납 ({resultLines.length})</button>
+              <button type="button" className={missView === "todo" ? "softSageButton" : "softApricotButton"} aria-pressed={missView === "todo"} onClick={() => setMissView("todo")}>재발주요청 안 보낸 미납 ({openResultLines.length})</button>
               <button type="button" className={missView === "all" ? "softSageButton" : "softApricotButton"} aria-pressed={missView === "all"} onClick={() => setMissView("all")}>모든 쉽먼트 미납 전체 ({allMissLines.length})</button>
             </div>
             {missView === "all" ? (
@@ -2073,12 +2111,25 @@ export default function ShipmentReceiptsPage() {
               <table className={`${styles.table} ${styles.fixedTable}`} aria-label="미납 SKU 리스트">
                 {resultColumns}
                 {resultHead}
-                <tbody>{resultLines.map(renderResultRow)}</tbody>
+                <tbody>{openResultLines.map(renderResultRow)}</tbody>
               </table>
             </div>
             )}
-            {missView === "todo" && !resultLines.length && (
+            {missView === "todo" && !openResultLines.length && (
               <p className={styles.empty}>검토할 미납 상품이 없습니다.</p>
+            )}
+            {/* 2026-11-06: 처리 끝난 줄은 접어 둔다. 펼치면 제외 취소·재발주요청으로 바꾸기를 그대로 할 수 있다. */}
+            {missView === "todo" && handledResultLines.length > 0 && (
+              <details className={styles.reviewDetails}>
+                <summary>처리한 SKU {handledResultLines.length}건 (제외·거래처발주·기존 발주·단종)</summary>
+                <div className={styles.tableWrap}>
+                  <table className={`${styles.table} ${styles.fixedTable}`} aria-label="처리한 SKU">
+                    {resultColumns}
+                    {resultHead}
+                    <tbody>{handledResultLines.map(renderResultRow)}</tbody>
+                  </table>
+                </div>
+              </details>
             )}
             {shortageReviewLines.length > 0 && (
               <details className={styles.reviewDetails}>
@@ -2285,7 +2336,7 @@ export default function ShipmentReceiptsPage() {
             )}
             {renderFollowUpWork("marketing")}
             <p className={styles.meta}>
-              미납 검토 {resultLines.length}건
+              미납 검토 {openResultLines.length}건
               {shortageReviewLines.length > 0
                 ? ` · 확인 필요 ${shortageReviewLines.length}건`
                 : ""}{" "}
