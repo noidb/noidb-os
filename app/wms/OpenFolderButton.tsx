@@ -7,7 +7,7 @@
 export const FOLDER_PROTOCOLS = {
   output: { protocol: "noidbfolder", path: "쿠팡데이터\\쉽먼트업로드완성\\쉽먼트출력세트" },
   reorder: { protocol: "noidbreorder", path: "쿠팡데이터\\제품관리\\미납sku재발주" },
-  discontinue: { protocol: "noidbdiscontinue", path: "쿠팡데이터\\단종 및 해제" },
+  discontinue: { protocol: "noidbdiscontinue", path: "쿠팡데이터\\제품관리\\단종신청" },
   coupon: { protocol: "noidbcoupon", path: "쿠팡데이터\\마케팅\\쿠폰관리" },
 } as const;
 
