@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { buildLogisticsReceiptBoard, fillSkuStatusesFromProductDb, needsProductDbStatusFill, LOGISTICS_RECEIPT_EPOCH, logisticsTargetsFromSnapshot, mergeHubClosedSnapshot } from "../lib/wms/logistics-receipts";
+import { applyReleasedSkuNormal, buildLogisticsReceiptBoard, fillSkuStatusesFromProductDb, needsProductDbStatusFill, LOGISTICS_RECEIPT_EPOCH, logisticsTargetsFromSnapshot, mergeHubClosedSnapshot } from "../lib/wms/logistics-receipts";
 import { resetLogisticsReceiptHistory } from "../lib/wms/logistics-receipt-reset";
 import type { WeeklyWorkspace } from "../lib/wms/weekly-work-types";
 
@@ -45,6 +45,16 @@ assert.deepEqual(fillSnap.skuStatuses!.map(s => s.orderStatus), ["정상", "불�
 assert.deepEqual(fillSnap.skuStatusesFromProductDb, ["1"]); assert.equal(needsProductDbStatusFill(fillSnap), false);
 const filledBoard = buildLogisticsReceiptBoard({ targets: logisticsTargetsFromSnapshot(fillSnap), snapshot: fillSnap, baseline: { closedShipmentNumbers: [], pendingTargets: [], completedMarketingSkuIds: [], excludedMarketingSkuIds: [], handledLines: [], source: {} } });
 assert.equal(filledBoard.lines.find(l => l.kind === "shortage" && l.skuId === "1")!.state, "ready");
+// 2026-11-06: 단종해제를 고른 SKU가 제품DB에서 정상이 되면 '단종해제 승인 대기'(review)에서 빠져 재발주요청 대상(ready)이 된다. 단종해제를 안 고른 SKU는 그대로.
+const releaseSnap = mergeHubClosedSnapshot(undefined, payload(new Date(Date.now() - 20_000).toISOString(), { skuStatuses: [{ skuId: "1", orderStatus: "불가" }, { skuId: "2", orderStatus: "불가" }, { skuId: "3", orderStatus: "정상" }] }));
+const releaseBase = { closedShipmentNumbers: [], pendingTargets: [], completedMarketingSkuIds: [], excludedMarketingSkuIds: [], handledLines: [], source: {} };
+const shortageOf = (snap: typeof releaseSnap, sku: string) => buildLogisticsReceiptBoard({ targets: logisticsTargetsFromSnapshot(snap), snapshot: snap, baseline: releaseBase }).lines.find(l => l.kind === "shortage" && l.skuId === sku);
+assert.equal(shortageOf(releaseSnap, "1")!.state, "review");
+assert.equal(applyReleasedSkuNormal(releaseSnap, ["1"], new Map([["1", "불가"]])), 0, "제품DB가 아직 정상이 아니면 그대로");
+assert.equal(applyReleasedSkuNormal(releaseSnap, ["1"], new Map([["1", "정상"], ["2", "정상"]])), 1, "단종해제를 고른 SKU만 바꿈");
+assert.deepEqual(releaseSnap.skuStatuses!.map(s => s.orderStatus), ["정상", "불가", "정상"]);
+assert.equal(shortageOf(releaseSnap, "1")!.state, "ready");
+assert.equal(applyReleasedSkuNormal(releaseSnap, ["1"], new Map([["1", "정상"]])), 0, "다시 실행해도 바뀔 것 없음");
 // 다음 수집에서 예전 마감건이 쿠팡 목록에서 빠져도 남고, 새 마감건이 더해진다. 처리기록(routes)은 같은 줄 키로 유지된다.
 const later = payload(new Date(Date.now() - 10_000).toISOString(), {
   requestedShipmentNumbers: ["50000002", "50000003"], shipments: [ship("50000002", [["A", "222", "2", 2, 2], ["B", "223", "3", 1, 1]]), ship("50000003", [["A", "333", "4", 2, 1]])],

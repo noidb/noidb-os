@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import asideBaseline from "@/lib/wms/logistics-aside-baseline.json";
 import {
+  applyReleasedSkuNormal,
   buildLogisticsReceiptBoard,
   LOGISTICS_RECEIPT_EPOCH,
   LOGISTICS_RECEIPT_SINCE,
@@ -72,6 +73,22 @@ async function fillMissingStatuses(workspace: Awaited<ReturnType<typeof readWeek
     if (next.logisticsReceipts?.collectedAt === collectedAt && needsProductDbStatusFill(next.logisticsReceipts)) {
       fillSkuStatusesFromProductDb(next.logisticsReceipts, statusBySku, new Date().toISOString());
     }
+  });
+  return readWeeklyWorkspace();
+}
+
+/** 2026-11-06: 단종해제를 눌러 둔 SKU가 제품DB에서 정상이 됐으면 저장된 공급상태를 정상으로 바꿔 '단종해제 승인 대기'에서 빼고 재발주요청 대상으로 만든다. */
+async function syncReleasedToNormal(workspace: Awaited<ReturnType<typeof readWeeklyWorkspace>>, catalog: Catalog | null) {
+  const snapshot = workspace.logisticsReceipts;
+  if (!catalog || workspace.logisticsReceiptEpoch !== LOGISTICS_RECEIPT_EPOCH || !snapshot?.skuStatuses?.length) return workspace;
+  const released = Object.entries(workspace.supplyStatusChecks || {}).filter(([, check]) => check.decision === "release").map(([skuId]) => skuId);
+  if (!released.length) return workspace;
+  const statusBySku = new Map(catalog.items.map(item => [item.skuId, item.orderableStatus]));
+  const releasedSet = new Set(released);
+  if (!snapshot.skuStatuses.some(status => releasedSet.has(status.skuId) && status.orderStatus !== "정상" && (statusBySku.get(status.skuId) || "").trim() === "정상")) return workspace;
+  const collectedAt = snapshot.collectedAt;
+  await mutateWeeklyWorkspace(next => {
+    if (next.logisticsReceipts?.collectedAt === collectedAt) applyReleasedSkuNormal(next.logisticsReceipts, released, statusBySku);
   });
   return readWeeklyWorkspace();
 }
@@ -150,7 +167,7 @@ async function responseBoard() {
     await mutateWeeklyWorkspace(workspace => { reconcileIncompleteVendorRoutes(workspace, vendorStore); });
     stored = await readWeeklyWorkspace();
   }
-  const workspace = activeSnapshot(await fillMissingStatuses(stored, catalog));
+  const workspace = activeSnapshot(await syncReleasedToNormal(await fillMissingStatuses(stored, catalog), catalog));
   const currentTargets = logisticsTargetsFromSnapshot(workspace.logisticsReceipts);
   // 무조건 제외(같은 모델 전체). 제품DB를 못 읽으면 지정 SKU만 뺀다.
   const exclusions = expandMarketingExclusions(catalog?.items || [], marketingExcludedListed(workspace.marketingExcludedSkuIds));

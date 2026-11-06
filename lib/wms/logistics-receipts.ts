@@ -510,5 +510,22 @@ export function fillSkuStatusesFromProductDb(snapshot: LogisticsReceiptSnapshot,
   snapshot.productDbStatusFillAt = at;
   return filled;
 }
+/**
+ * 2026-11-06: 단종해제를 눌러 둔 SKU가 제품DB 발주가능상태로 '정상'이 됐으면 저장된 공급상태도 정상으로 바꾼다.
+ * 수집 때의 공급상태(불가·일시중단)가 그대로면 줄이 계속 '단종해제 승인 대기'(검토)로 남아 재발주요청을 보낼 수 없었다.
+ * 단종해제를 고른 SKU만 바꾼다(다른 SKU의 쿠팡 공급상태는 건드리지 않음).
+ */
+export function applyReleasedSkuNormal(snapshot: LogisticsReceiptSnapshot, releasedSkuIds: Iterable<string>, productDbStatusBySku: ReadonlyMap<string, string>): number {
+  const released = new Set(releasedSkuIds);
+  const fromProductDb = new Set(snapshot.skuStatusesFromProductDb || []);
+  let changed = 0;
+  for (const status of snapshot.skuStatuses || []) {
+    if (!released.has(status.skuId) || status.orderStatus === "정상") continue;
+    if ((productDbStatusBySku.get(status.skuId) || "").trim() !== "정상") continue;
+    status.orderStatus = "정상"; fromProductDb.add(status.skuId); changed++;
+  }
+  if (changed) snapshot.skuStatusesFromProductDb = [...fromProductDb].sort();
+  return changed;
+}
 export const needsProductDbStatusFill = (snapshot: LogisticsReceiptSnapshot | undefined) =>
   Boolean(snapshot && !snapshot.productDbStatusFillAt && snapshot.skuStatuses?.some(status => !knownSkuStatuses.has(status.orderStatus)));

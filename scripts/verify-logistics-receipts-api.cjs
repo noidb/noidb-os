@@ -26,7 +26,7 @@ const deps = {
   "@/lib/wms/logistics-receipt-reset": { resetLogisticsReceiptHistory: () => { resetCalls++; return false; } },
   "@/lib/wms/logistics-receipts": {
     LOGISTICS_RECEIPT_EPOCH: "test-epoch", LOGISTICS_RECEIPT_SINCE: "2026-09-13",
-    logisticsTargetsFromSnapshot: () => [], needsProductDbStatusFill: () => false, fillSkuStatusesFromProductDb: () => 0, mergeHubClosedSnapshot: () => ({ ...snapshot, shipments: [] }),
+    logisticsTargetsFromSnapshot: () => [], needsProductDbStatusFill: () => false, fillSkuStatusesFromProductDb: () => 0, applyReleasedSkuNormal: () => 0, mergeHubClosedSnapshot: () => ({ ...snapshot, shipments: [] }),
     buildLogisticsReceiptBoard: input => { boardInput = input; return { lines: [], targets: [], warnings: [] }; },
   },
   "@/lib/wms/weekly-work-store": { mutateWeeklyWorkspace: async callback => callback(structuredClone(workspace)), readWeeklyWorkspace: async () => structuredClone(workspace) },
