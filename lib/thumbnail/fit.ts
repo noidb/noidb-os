@@ -96,7 +96,80 @@ export async function fitToWhiteCanvas(
   return canvas.toDataURL("image/jpeg", 0.95);
 }
 
-type DrawableImage = HTMLImageElement;
+type DrawableImage = HTMLImageElement | HTMLCanvasElement;
+
+function dims(img: DrawableImage) {
+  return img instanceof HTMLImageElement ? { w: img.naturalWidth, h: img.naturalHeight } : { w: img.width, h: img.height };
+}
+
+/**
+ * 크게 줄여 그릴 때 한 번에 줄이면 거칠어진다(깨진 선·계단).
+ * 목표 폭의 2배 안쪽이 될 때까지 절반씩 줄여 두면 마지막 줄이기가 부드럽다. 사진 내용은 만들지 않고 줄이기만 한다.
+ */
+function halveToward(img: DrawableImage, targetWidth: number): DrawableImage {
+  let current: DrawableImage = img;
+  let { w, h } = dims(img);
+  while (w / 2 >= targetWidth && w > 2 && h > 2) {
+    const nw = Math.max(1, Math.round(w / 2));
+    const nh = Math.max(1, Math.round(h / 2));
+    const step = document.createElement("canvas");
+    step.width = nw;
+    step.height = nh;
+    const sc = step.getContext("2d");
+    if (!sc) break;
+    sc.imageSmoothingEnabled = true;
+    sc.imageSmoothingQuality = "high";
+    sc.drawImage(current, 0, 0, nw, nh);
+    current = step;
+    w = nw;
+    h = nh;
+  }
+  return current;
+}
+
+/**
+ * 화면 미리보기용으로 큰 원본을 한 번만 줄여 둔다(긴 변 기본 2400px).
+ * 끌고 확대할 때 수천 px 원본을 매번 다시 그리지 않아 빨라진다. 저장 파일은 이 미리보기가 아니라 원본에서 만든다.
+ */
+export function makePreviewSource(img: HTMLImageElement, maxSide = 2400): DrawableImage {
+  const { w, h } = dims(img);
+  const longSide = Math.max(w, h);
+  if (longSide <= maxSide) return img;
+  const ratio = maxSide / longSide;
+  const tw = Math.max(1, Math.round(w * ratio));
+  const th = Math.max(1, Math.round(h * ratio));
+  const half = halveToward(img, tw);
+  const canvas = document.createElement("canvas");
+  canvas.width = tw;
+  canvas.height = th;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return img;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(half, 0, 0, tw, th);
+  return canvas;
+}
+
+export type CropQuality = {
+  level: "ok" | "warn" | "blur";
+  /** 결과 1px을 만드는 데 쓰는 원본 점 수의 역수. 1보다 크면 원본보다 늘려 그리는 중(흐려짐). */
+  scale: number;
+  /** 지금 잘라 쓰는 원본 부분의 폭(px). 1000보다 작으면 늘려서 쓰는 중. */
+  regionPx: number;
+};
+
+/** 원본 크기와 확대 정도로 화질 단계를 알려준다. 1.0배까지 충분, 1.5배까지 주의, 그 위는 흐려짐. */
+export function cropQuality(sourceWidth: number, sourceHeight: number, zoom: number, size = 1000): CropQuality {
+  const scale = Math.min(size / Math.max(1, sourceWidth), size / Math.max(1, sourceHeight)) * zoom;
+  const level = scale <= 1.001 ? "ok" : scale <= 1.5 ? "warn" : "blur";
+  return { level, scale, regionPx: Math.round(size / scale) };
+}
+
+/** 화질이 흐려지기 직전까지의 최대 확대 배율(원래 크기 1배는 항상 허용). */
+export function maxZoomForQuality(sourceWidth: number, sourceHeight: number, size = 1000, maxScale = 1.5) {
+  const base = Math.min(size / Math.max(1, sourceWidth), size / Math.max(1, sourceHeight));
+  return Math.max(1, maxScale / base);
+}
 
 /**
  * 사진을 (dx,dy,dw,dh) 위치에 그리고, 캔버스에 남는 빈 곳은 사진 가장자리 색을
@@ -197,20 +270,25 @@ export type SquareCrop = { zoom: number; x: number; y: number; brightness?: numb
 export function sharpenAmount(sharpness: number) { return Math.max(0, Math.min(1, sharpness)); }
 
 /** 화면 미리보기와 저장이 같은 결과가 되도록 한 함수로 그린다. */
-export function drawSquareCrop(canvas: HTMLCanvasElement, img: DrawableImage, crop: SquareCrop, size: number) {
+export function drawSquareCrop(canvas: HTMLCanvasElement, img: DrawableImage, crop: SquareCrop, size: number, reference?: { width: number; height: number }) {
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
-  const w = img.naturalWidth;
-  const h = img.naturalHeight;
+  const { w, h } = dims(img);
   const scale = Math.min(size / w, size / h) * crop.zoom;
   const drawW = w * scale;
   const drawH = h * scale;
-  drawWithEdgeFill(ctx, img, (size - drawW) / 2 + crop.x * size, (size - drawH) / 2 + crop.y * size, drawW, drawH, size);
+  // 원본이 그릴 크기의 2배보다 크면 절반씩 줄여 두고 그린다(고화질 축소).
+  const source = scale < 0.5 ? halveToward(img, Math.max(1, Math.round(drawW))) : img;
+  drawWithEdgeFill(ctx, source, (size - drawW) / 2 + crop.x * size, (size - drawH) / 2 + crop.y * size, drawW, drawH, size);
 
   const brightness = crop.brightness || 0;
-  const amount = sharpenAmount(crop.sharpness || 0);
+  // 원본보다 늘려 그린 만큼(scale>1) 아주 약한 선명도만 자동으로 더한다. 없던 모양을 만들지 않고 흐릿함만 살짝 줄이는 정도(최대 0.12).
+  // reference: 미리보기(줄인 사진)로 그릴 때도 원본·1000px 기준으로 계산해 저장 결과와 같게 보이게 한다.
+  const qualityScale = reference ? Math.min(1000 / reference.width, 1000 / reference.height) * crop.zoom : scale;
+  const autoSharpen = qualityScale > 1.001 ? Math.min(0.12, (qualityScale - 1) * 0.12) : 0;
+  const amount = Math.min(1, sharpenAmount(crop.sharpness || 0) + autoSharpen);
   if (!brightness && !amount) return;
   const image = ctx.getImageData(0, 0, size, size);
   const src = image.data;

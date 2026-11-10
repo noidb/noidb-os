@@ -616,6 +616,13 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 .slotCropTune{margin-top:6px;display:flex;flex-direction:column;gap:2px;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,.92);border:1px solid #d8d3cc;font-size:11px}
 .slotCropTune label{display:flex;flex-direction:column;gap:1px}
 .slotCropTune input{width:100%;margin:0}
+/* 2026-11-10 클로즈업 화질 표시(충분/주의/흐려짐) */
+.slotQuality{position:absolute;left:6px;top:6px;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:700;line-height:1.5;pointer-events:auto;cursor:help;border:1px solid transparent}
+.slotQuality-ok{background:#e3ede6;color:#3f574b;border-color:#b9cbbc}
+.slotQuality-warn{background:#f4f1ec;color:#8a5a00;border-color:#e0c98f}
+.slotQuality-blur{background:#fee2e2;color:#b91c1c;border-color:#f3b3b3}
+.slotCropTune .slotZoomLimit{flex-direction:row;align-items:center;gap:6px;margin-top:4px;font-weight:600}
+.slotCropTune .slotZoomLimit input{width:auto}
 
 /* 기존 상세페이지 위·아래 자르기 */
 .pageCutScroll{max-height:640px;overflow-y:auto;border:1px solid #d8d3cc;border-radius:10px;background:#fff;max-width:420px}

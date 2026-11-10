@@ -31,7 +31,7 @@ import QuickDetailRemake, { ensureMinWidth, prependHeader } from "./QuickDetailR
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { loadPreparedDetail, loadPreparedPhotos, type PreparedDetail } from "@/lib/image-search/browser-folder";
-import { coverSquareCanvas, defaultFitAdjust, extendToSquareCanvas, fitToWhiteCanvas, drawSquareCrop, renderSquareCrop, sharpenAmount, type FitAdjust, type SquareCrop } from "@/lib/thumbnail/fit";
+import { coverSquareCanvas, cropQuality, defaultFitAdjust, extendToSquareCanvas, fitToWhiteCanvas, drawSquareCrop, makePreviewSource, maxZoomForQuality, renderSquareCrop, sharpenAmount, type FitAdjust, type SquareCrop } from "@/lib/thumbnail/fit";
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
@@ -73,6 +73,22 @@ type Analysis = {
 
 type ProductPhoto = { id: string; name: string; dataUrl: string };
 type SlotImage = { dataUrl: string; fileName: string; source?: string; crop?: SquareCrop; locked?: boolean };
+
+// 2026-11-10 칸 → 칸 복사. 칸 위에서 Ctrl+C 하면 그 칸 사진을(원본·확대 위치까지) 이 앱 안에 담아 두고,
+// 시스템 클립보드에는 확인용 표시 글자만 넣는다. 다른 칸에서 Ctrl+V 하면 복사본이 들어간다.
+// 그 뒤에 화면 캡처 등 다른 이미지를 복사하면 표시 글자가 사라지므로, 평소 붙여넣기는 그대로 동작한다.
+const SLOT_CLIP_MARK = "noidb-slot-copy:";
+let slotClipboard: { id: string; slot: SlotImage } | null = null;
+let slotCopyCounter = 0;
+function setSlotClipboard(slot: SlotImage) {
+  slotClipboard = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, slot };
+  return slotClipboard.id;
+}
+/** 복사본: 원본(source)과 확대·위치는 그대로 가져가고, 칸마다 따로 조절할 수 있게 잠금은 푼다. */
+function makeSlotCopy(slot: SlotImage): SlotImage {
+  const base = slot.fileName.replace(/\.[^.]+$/, "").replace(/_복사\d+$/, "");
+  return { ...slot, fileName: `${base}_복사${++slotCopyCounter}.jpg`, locked: false };
+}
 type VariantOption = SkuRow & { key: string; label: string };
 type DetailImage = { id: string; name: string; dataUrl: string; zoom?: number; focusX?: number; focusY?: number; frameHeight?: number; caption?: string };
 type CustomSlot = { id: string; type: "all" | "detail" | "wear"; slot: SlotImage | null };
@@ -382,6 +398,7 @@ export default function Home() {
   const [sourcingImages, setSourcingImages] = useState<ProductPhoto[]>([]);
   const [sourcingSaveStatus, setSourcingSaveStatus] = useState("");
   const [uploadPool, setUploadPool] = useState<SlotImage[]>([]);
+  const [slotCopyMessage, setSlotCopyMessage] = useState("");
 
   const [exportLoading, setExportLoading] = useState("");
   const [exportMessage, setExportMessage] = useState("");
@@ -1682,6 +1699,29 @@ export default function Home() {
     if (item.type === "wear") return `착용컷 ${String(3 + sameTypeBefore).padStart(2, "0")}`;
     if (item.type === "detail") return `디테일컷 ${2 + sameTypeBefore}`;
     return `전체옵션 이미지 ${2 + sameTypeBefore}`;
+  };
+
+  // 2026-11-10 복사 버튼: 같은 사진을 다음 빈 칸(메인착용컷 → 착용컷 01·02 → 디테일컷 → 추가 칸)에 넣는다.
+  // 빈 칸이 없으면 착용컷 칸을 하나 더 만든다. 복사본은 원본·확대 위치를 그대로 가져가 칸마다 따로 조절할 수 있다.
+  const copyToNextSlot =(sourceKey: string) => {
+    const source = getSlotValue(sourceKey);
+    if (!source) return;
+    const extra = customSlots.map((item, index) => ({ key: `custom:${item.id}`, title: customSlotTitle(item, index), skip: item.type === "all" }));
+    const order = [
+      { key: "mainWear", title: "메인착용컷" }, { key: "wear01", title: "착용컷 01" },
+      { key: "wear02", title: "착용컷 02" }, { key: "detail", title: "디테일컷" },
+      ...extra.filter(item => !item.skip),
+    ];
+    const target = order.find(item => item.key !== sourceKey && !getSlotValue(item.key));
+    const copy = makeSlotCopy(source);
+    if (target) {
+      setSlotValue(target.key, copy);
+      setSlotCopyMessage(`${target.title} 칸에 복사했습니다. 그 칸에서 확대·위치를 따로 맞추세요.`);
+      return;
+    }
+    const wearCount = customSlots.filter(item => item.type === "wear").length;
+    setCustomSlots(prev => [...prev, { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: "wear", slot: copy }]);
+    setSlotCopyMessage(`빈 칸이 없어 착용컷 ${String(3 + wearCount).padStart(2, "0")} 칸을 새로 만들어 복사했습니다.`);
   };
 
   const saveSourcingUrl = (index: number) => {
@@ -3246,7 +3286,7 @@ export default function Home() {
             {uploadPool.map((item, index) => (
               <div className="uploadPoolItem" key={`${item.fileName}-${index}`} draggable
                 onDragStart={e => e.dataTransfer.setData("application/x-laura-pool-index", String(index))}>
-                <img src={item.dataUrl} alt={item.fileName} />
+                <PoolThumb src={item.dataUrl} alt={item.fileName} />
                 <span>{item.fileName}</span>
                 {/* 2026-11-10 AI 분석에 쓸 사진을 업로드 풀에서 언제든 바꾼다 */}
                 <button type="button" className={photos[0]?.dataUrl === item.dataUrl ? "softSageButton" : "softApricotButton"} disabled={photos[0]?.dataUrl === item.dataUrl}
@@ -3263,6 +3303,7 @@ export default function Home() {
           <button type="button" onClick={() => addCustomSlot("detail")}>+ 디테일컷</button>
           <button type="button" onClick={() => addCustomSlot("wear")}>+ 착용컷</button>
         </div>
+        {slotCopyMessage && <p className="note">{slotCopyMessage}</p>}
         </div>
 
         {variantOptions.error && <p className="error">{variantOptions.error} 색상에는 블랙,화이트처럼 색상만, 사이즈에는 S,M처럼 사이즈만 입력해주세요.</p>}
@@ -3283,6 +3324,7 @@ export default function Home() {
             value={mainWear}
             onChange={setMainWear}
             onPoolDrop={index => assignPoolItem(index, "mainWear")}
+            onCopy={() => copyToNextSlot("mainWear")}
             onReturnToPool={returnToPool}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
@@ -3334,6 +3376,7 @@ export default function Home() {
             value={detailCut}
             onChange={setDetailCut}
             onPoolDrop={index => assignPoolItem(index, "detail")}
+            onCopy={() => copyToNextSlot("detail")}
             onReturnToPool={returnToPool}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
@@ -3347,6 +3390,7 @@ export default function Home() {
             value={wear01}
             onChange={setWear01}
             onPoolDrop={index => assignPoolItem(index, "wear01")}
+            onCopy={() => copyToNextSlot("wear01")}
             onReturnToPool={returnToPool}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
@@ -3360,6 +3404,7 @@ export default function Home() {
             value={wear02}
             onChange={setWear02}
             onPoolDrop={index => assignPoolItem(index, "wear02")}
+            onCopy={() => copyToNextSlot("wear02")}
             onReturnToPool={returnToPool}
             onSlotSwap={swapSlots}
             onExpand={setLightbox}
@@ -3376,6 +3421,7 @@ export default function Home() {
               value={item.slot}
               onChange={slot => setSlotValue(`custom:${item.id}`, slot)}
               onPoolDrop={poolIndex => assignPoolItem(poolIndex, `custom:${item.id}`)}
+              onCopy={item.type === "all" ? undefined : () => copyToNextSlot(`custom:${item.id}`)}
               onReturnToPool={returnToPool}
               onSlotSwap={swapSlots}
               onExpand={setLightbox}
@@ -3767,9 +3813,57 @@ async function checkModelInGoogleDb(model: string): Promise<{ duplicate: boolean
   }
 }
 
+// 2026-11-10 사진 목록은 수천 px 원본을 그대로 띄우면 화면을 내리거나 끌 때 느려진다 → 작은 미리보기만 보여준다(원본은 그대로 보관).
+const poolThumbCache = new Map<string, string>();
+const poolThumbKey = (src: string) => `${src.length}:${src.slice(32, 96)}:${src.slice(-64)}`;
+function PoolThumb({ src, alt }: { src: string; alt: string }) {
+  const [thumb, setThumb] = useState<string>(() => poolThumbCache.get(poolThumbKey(src)) || "");
+  useEffect(() => {
+    const key = poolThumbKey(src);
+    const cached = poolThumbCache.get(key);
+    if (cached) { setThumb(cached); return; }
+    let alive = true;
+    const img = new Image();
+    img.onload = () => {
+      if (!alive) return;
+      const longSide = Math.max(img.naturalWidth, img.naturalHeight);
+      let result = src;
+      if (longSide > 320) {
+        const ratio = 320 / longSide;
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.naturalWidth * ratio));
+        canvas.height = Math.max(1, Math.round(img.naturalHeight * ratio));
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = "high";
+          ctx.drawImage(makePreviewSource(img, 1280), 0, 0, canvas.width, canvas.height);
+          result = canvas.toDataURL("image/jpeg", 0.82);
+        }
+      }
+      if (poolThumbCache.size > 120) poolThumbCache.delete(poolThumbCache.keys().next().value as string);
+      poolThumbCache.set(key, result);
+      setThumb(result);
+    };
+    img.src = src;
+    return () => { alive = false; };
+  }, [src]);
+  return <img src={thumb || undefined} alt={alt} />;
+}
+
 function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage; title: string; onChange: (v: SlotImage | null) => void; tuneHost: HTMLElement | null }) {
   const source = value.source || value.dataUrl;
   const [loadedImg, setLoadedImg] = useState<HTMLImageElement | null>(null);
+  // 2026-11-10 화면에서 끌 때는 줄여 둔 미리보기로 그려 빠르게 하고, 저장 파일은 원본에서 만든다.
+  const [previewImg, setPreviewImg] = useState<HTMLImageElement | HTMLCanvasElement | null>(null);
+  const loadedImgRef = useRef<HTMLImageElement | null>(null);
+  loadedImgRef.current = loadedImg;
+  // 흐려지는 구간에서는 더 확대되지 않게 막는 선택(이 컴퓨터에 기억).
+  const [zoomLimit, setZoomLimit] = useState<boolean>(() => {
+    try { return window.localStorage.getItem("noidb-zoom-limit") === "1"; } catch { return false; }
+  });
+  const zoomLimitRef = useRef(zoomLimit);
+  zoomLimitRef.current = zoomLimit;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [view, setView] = useState<SquareCrop>(value.crop || { zoom: 1, x: 0, y: 0 });
   const [tuneOpen, setTuneOpen] = useState(false);
@@ -3792,7 +3886,11 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
   useEffect(() => {
     let alive = true;
     const img = new Image();
-    img.onload = () => { if (alive) setLoadedImg(img); };
+    img.onload = () => {
+      if (!alive) return;
+      setPreviewImg(makePreviewSource(img));
+      setLoadedImg(img);
+    };
     img.src = source;
     return () => { alive = false; };
   }, [source]);
@@ -3819,8 +3917,10 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
   };
 
   const update = (next: SquareCrop) => {
+    const img = loadedImgRef.current;
+    const maxZoom = zoomLimitRef.current && img ? Math.min(5, maxZoomForQuality(img.naturalWidth, img.naturalHeight)) : 5;
     const clamped = {
-      zoom: Math.max(0.3, Math.min(5, next.zoom)),
+      zoom: Math.max(0.3, Math.min(maxZoom, next.zoom)),
       x: Math.max(-1.5, Math.min(1.5, next.x)),
       y: Math.max(-1.5, Math.min(1.5, next.y)),
       brightness: Math.max(-60, Math.min(60, next.brightness || 0)),
@@ -3857,9 +3957,24 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
 
   const sharp = sharpenAmount(view.sharpness || 0);
 
+  // 끄는 동안 마우스 이동마다 다시 그리지 않고 화면 한 장(프레임)에 한 번만 그린다.
   useEffect(() => {
-    if (canvasRef.current && loadedImg) drawSquareCrop(canvasRef.current, loadedImg, view, 540);
-  }, [loadedImg, view]);
+    if (!canvasRef.current || !previewImg || !loadedImg) return;
+    const canvas = canvasRef.current;
+    const frame = requestAnimationFrame(() => {
+      drawSquareCrop(canvas, previewImg, view, 540, { width: loadedImg.naturalWidth, height: loadedImg.naturalHeight });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [previewImg, loadedImg, view]);
+
+  const quality = loadedImg ? cropQuality(loadedImg.naturalWidth, loadedImg.naturalHeight, view.zoom) : null;
+  const qualityText = quality
+    ? quality.level === "ok" ? "화질 충분"
+      : `${quality.level === "warn" ? "화질 주의" : "화질 흐려짐"} · 원본 ${quality.regionPx}px`
+    : "";
+  const qualityHint = quality && quality.level !== "ok"
+    ? `잘라 쓰는 원본 부분이 ${quality.regionPx}px라 1000px로 늘려 쓰는 중입니다. 선명하게 쓰려면 확대를 줄이거나 더 큰 원본·Upscayl로 키운 사진을 쓰세요.`
+    : "원본 사진 점이 충분해서 선명하게 저장됩니다.";
 
   return (
     <div
@@ -3886,6 +4001,7 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
       title={locked ? "저장됨 · 수정 버튼을 누르면 다시 조절할 수 있습니다." : active ? "끌어서 위치 이동 · 마우스 휠로 확대/축소 · 더블클릭으로 처음 상태 · 칸 바깥을 누르면 휠 확대 끔" : "사진을 한 번 클릭하면 마우스 휠로 확대/축소할 수 있습니다."}
     >
       <canvas ref={canvasRef} className="slotCropCanvas" aria-label={title} />
+      {quality && <span className={`slotQuality slotQuality-${quality.level}`} title={qualityHint}>{qualityText}</span>}
       {!locked && <div className="slotCropTools" onPointerDown={event => event.stopPropagation()}>
         <button type="button" onClick={() => update({ zoom: 1, x: 0, y: 0, brightness: 0, sharpness: 0 })} title="처음 상태로 되돌리기">↻</button>
         <button type="button" onClick={() => setTuneOpen(open => !open)} title="밝기·선명도">☀</button>
@@ -3901,6 +4017,17 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
           <label>선명도 {Math.round(sharp * 100)}%
             <input type="range" min={0} max={1} step={0.05} value={sharp}
               onChange={event => update({ ...viewRef.current, sharpness: Number(event.target.value) })} />
+          </label>
+          <label className="slotZoomLimit">
+            <input type="checkbox" checked={zoomLimit}
+              onChange={event => {
+                const on = event.target.checked;
+                setZoomLimit(on);
+                zoomLimitRef.current = on;
+                try { window.localStorage.setItem("noidb-zoom-limit", on ? "1" : "0"); } catch { /* 저장 공간 없음 */ }
+                update({ ...viewRef.current });
+              }} />
+            흐려지면 확대 막기
           </label>
         </div>,
         tuneHost
@@ -3922,6 +4049,7 @@ function ImageSlot({
   onReturnToPool,
   onSlotSwap,
   onRemoveSlot,
+  onCopy,
   coverSquare = false,
   pickOnClick = true,
   detailOnly = false,
@@ -3939,6 +4067,8 @@ function ImageSlot({
   onReturnToPool?: (slot: SlotImage) => void;
   onSlotSwap?: (sourceKey: string, targetKey: string) => void;
   onRemoveSlot?: () => void;
+  /** 이 칸의 사진을 다음 빈 칸에 복사한다(복사 버튼). */
+  onCopy?: () => void;
   coverSquare?: boolean;
   /** false면 빈 칸을 눌러도 파일 선택 창(탐색기)을 열지 않는다. 붙여넣기 전용 칸에서 칸을 눌러 붙여넣기를 준비할 때 창이 뜨지 않게 한다. */
   pickOnClick?: boolean;
@@ -3954,16 +4084,46 @@ function ImageSlot({
   // 2026-11-04 칸 위에 마우스를 올리고 Ctrl+V 하면 복사한 이미지를 이 칸에 넣는다.
   const hovered = useRef(false);
   const applyFileRef = useRef<(file: File | undefined) => Promise<void>>(async () => {});
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const changeRef = useRef(onChange);
+  changeRef.current = onChange;
+  const returnRef = useRef(onReturnToPool);
+  returnRef.current = onReturnToPool;
   useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
       if (!hovered.current) return;
+      // 2026-11-10 칸에서 복사한 사진(표시 글자가 있는 경우)은 원본·확대 위치까지 그대로 이 칸에 넣는다.
+      const text = event.clipboardData?.getData("text/plain") || "";
+      if (text.startsWith(SLOT_CLIP_MARK)) {
+        if (slotClipboard && text === SLOT_CLIP_MARK + slotClipboard.id) {
+          event.preventDefault();
+          if (valueRef.current) returnRef.current?.(valueRef.current);
+          changeRef.current(makeSlotCopy(slotClipboard.slot));
+        }
+        return;
+      }
       const image = Array.from(event.clipboardData?.files || []).find(file => file.type.startsWith("image/"));
       if (!image) return;
       event.preventDefault();
       void applyFileRef.current(image);
     };
+    // 칸 위에 마우스를 올리고 Ctrl+C 하면 그 칸 사진을 복사한다(입력칸·글자 선택 복사는 건드리지 않음).
+    const onCopyKey = (event: ClipboardEvent) => {
+      if (!hovered.current || !valueRef.current) return;
+      const target = event.target as HTMLElement | null;
+      if (target && target.closest("input,textarea,select,[contenteditable='true']")) return;
+      if (window.getSelection()?.toString()) return;
+      const id = setSlotClipboard(valueRef.current);
+      event.clipboardData?.setData("text/plain", SLOT_CLIP_MARK + id);
+      event.preventDefault();
+    };
     document.addEventListener("paste", onPaste);
-    return () => document.removeEventListener("paste", onPaste);
+    document.addEventListener("copy", onCopyKey);
+    return () => {
+      document.removeEventListener("paste", onPaste);
+      document.removeEventListener("copy", onCopyKey);
+    };
   }, []);
 
   const applyFile = async (file: File | undefined) => {
@@ -4042,6 +4202,7 @@ function ImageSlot({
       />
       <div className="slotActions">
         {value && <button type="button" className={value.locked ? "secondaryButton" : "green"} onClick={() => onChange({ ...value, locked: !value.locked })}>{value.locked ? "수정" : "저장"}</button>}
+        {value && onCopy && <button type="button" onClick={onCopy} title="같은 사진을 다음 빈 칸에 복사합니다. 복사본은 확대·위치를 따로 조절할 수 있습니다. (칸 위에서 Ctrl+C → 다른 칸 위에서 Ctrl+V도 됩니다)">복사</button>}
         {value && <button type="button" className="removeButton" onClick={() => { pendingFileRevision.current += 1; onReturnToPool?.(value); onChange(null); }} title="칸에서 빼서 위쪽 이미지 목록으로 되돌립니다.">삭제</button>}
         {onRemoveSlot && <button type="button" className="removeButton" onClick={onRemoveSlot}>칸 삭제</button>}
       </div>
