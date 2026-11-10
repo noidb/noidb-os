@@ -461,27 +461,10 @@ export default function WimsRegistrationImportPanel() {
             </div>
           )}
           <details style={{ marginTop: "4px" }}>
-          <summary style={{ cursor: "pointer", color: wmsColors.muted, fontSize: "12px", fontWeight: 700 }}>자세히 보기 (전체 현황 · 조치할 상품 · 지난 항목)</summary>
-          <div className="wms-supply-audit-grid wimsSummaryGrid" style={{ marginTop: "10px" }}>
-            <Summary label="검수중" value={snapshot.reviewingCount} />
-            <Summary label="검수완료" value={snapshot.approvedCount} good />
-            <Summary label="반려" value={snapshot.rejectedCount} warning />
-          </div>
+          <summary style={{ cursor: "pointer", color: wmsColors.muted, fontSize: "12px", fontWeight: 700 }}>자세히 보기 (승인대기 정렬 · 지난 확인 필요 항목)</summary>
           {auditing && <p style={{ fontSize: "11px", margin: "8px 0 0", color: wmsColors.muted }}>제품DB와 대조 중...</p>}
           {audit && (audit.approvedCandidateCount + audit.reviewingCandidateCount) > 0 && <button type="button" onClick={applyApprovedCandidates} disabled={applying} className="softBeigeButton" style={{ width: "100%", marginTop: "10px", fontSize: "15px" }}>{applying ? "백업 후 반영·검증 중..." : `검수상태 ${audit.approvedCandidateCount + audit.reviewingCandidateCount}건 반영`}</button>}
           <button type="button" onClick={regroupPendingModels} disabled={applying} className="softSageButton" style={{ width: "100%", marginTop: "10px", fontSize: "15px" }}>{applying ? "처리 중..." : "승인대기 옵션 모델별 정렬"}</button>
-          {audit && (
-            <div style={{ marginTop: "13px" }}>
-              <strong style={{ display: "block", fontSize: "13px" }}>지금 조치할 상품</strong>
-              {actionRows.length === 0 ? (
-                <p style={{ margin: "7px 0 0", padding: "10px", borderRadius: "9px", background: wmsColors.greenSoft, color: wmsColors.greenDark, fontSize: "11px", fontWeight: 700 }}>현재 WIMS에서 조치할 상품이 없습니다.</p>
-              ) : (
-                <div className="wimsActionGrid">
-                  {actionRows.map((row, index) => renderActionRow(row, index))}
-                </div>
-              )}
-            </div>
-          )}
           {audit && (pastRows.length > 0 || audit.pendingNotInWims.length > 0) && (
             <details style={{ marginTop: "10px" }}>
               <summary style={{ cursor: "pointer", color: wmsColors.muted, fontSize: "11px", fontWeight: 700 }}>지난 확인 필요 항목 {pastRows.length + audit.pendingNotInWims.length}건 보기 ({RECENT_DAYS}일 이전 등록 건 등)</summary>
@@ -497,17 +480,6 @@ export default function WimsRegistrationImportPanel() {
               </div>
             </details>
           )}
-          <details style={{ marginTop: "10px" }}>
-            <summary style={{ cursor: "pointer", color: wmsColors.muted, fontSize: "11px", fontWeight: 700 }}>정상 상품을 포함한 WIMS 전체 {snapshot.rows.length}건 보기</summary>
-            <div style={{ display: "grid", gap: "6px", marginTop: "9px", maxHeight: "260px", overflowY: "auto" }}>
-              {snapshot.rows.map((row, index) => (
-                <div key={`${row.estimateId}-${row.modelSku}-${index}`} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: "8px", padding: "8px 10px", fontSize: "11px" }}>
-                  <strong style={{ color: row.status === "rejected" ? "#c0392b" : row.status === "approved" ? wmsColors.greenDark : wmsColors.ink }}>{row.modelSku || "모델SKU 확인 필요"} · {statusText[row.status]}</strong>
-                  <div>{row.productName}</div>
-                </div>
-              ))}
-            </div>
-          </details>
           </details>
         </div>
       )}
