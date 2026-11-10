@@ -2035,6 +2035,9 @@ export default function Home() {
     // 임시저장에 들어 있던 순서는 사용자가 정한 순서일 수 있으니 그대로 지킨다.
     detailOrderEditedRef.current = Array.isArray(data.detailImages) && data.detailImages.length > 0;
     dismissedDetailSlotsRef.current.clear();
+    // 2026-11-10 불러온 직후에도 5번 칸에 있는데 임시저장 목록에서 빠진 사진을 자동으로 다시 넣는다(순서는 그대로 지킴).
+    detailForceSyncRef.current = true;
+    setDetailRestoreRevision(value => value + 1);
     setDetailHeader(data.detailHeader || null);
     setDetailFooter(data.detailFooter || null);
     setDetailPreview(data.detailPreview || "");
