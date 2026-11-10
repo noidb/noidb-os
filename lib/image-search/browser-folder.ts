@@ -602,14 +602,16 @@ export async function deletePhotoFiles(root: FileSystemDirectoryHandle, ids: str
 
 /**
  * 2026-11-10 제품DB에 없는 신상품(예: 신상등록대기 폴더) 사진 폴더를 이름으로 찾는다.
- * 연결 폴더 아래 3단계까지, 폴더 이름이 검색어로 시작하는 폴더만 고른다(사진 파일은 열지 않음).
+ * 연결 폴더 아래 4단계까지, 폴더 이름에 검색어(모델번호)가 들어간 폴더를 고른다(사진 파일은 열지 않음).
+ * 예: "wn041713"은 "wb041708 wn041713 리본 팔찌 목걸이" 폴더와도 맞는다.
  * 아주 큰 01/_제품별 폴더는 건너뛴다(그 안은 기존 제품이라 제품DB 검색으로 찾는다).
  */
 export type NewProductFolder = { path: string; name: string };
 
-export async function findNewProductFolders(query: string, maxDepth = 3): Promise<NewProductFolder[]> {
+export async function findNewProductFolders(query: string, maxDepth = 4): Promise<NewProductFolder[]> {
   const needle = query.trim().toLowerCase();
   if (needle.length < 3) return [];
+  const matches = termMatcher([needle]);
   const root = await connectedRoot();
   const found: NewProductFolder[] = [];
   async function walk(dir: FileSystemDirectoryHandle, prefix: string[], depth: number) {
@@ -618,7 +620,7 @@ export async function findNewProductFolders(query: string, maxDepth = 3): Promis
       if (entry.kind !== "directory" || name.startsWith(".")) continue;
       if (depth === 0 && name === "01") continue;
       const path = [...prefix, name];
-      if (name.toLowerCase().startsWith(needle)) { found.push({ path: path.join("/"), name }); continue; }
+      if (matches(name).length) { found.push({ path: path.join("/"), name }); continue; }
       if (depth + 1 < maxDepth) await walk(entry, path, depth + 1);
     }
   }

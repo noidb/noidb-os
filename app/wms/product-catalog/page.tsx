@@ -1283,7 +1283,8 @@ export default function ProductCatalogPage() {
   async function sendNewProductFolder(folder: NewProductFolder) {
     let tab: Window | null = null;
     try { tab = window.open("about:blank", "_blank"); } catch { tab = null; }
-    const model = folder.name.match(/^[a-z]{2}\d+/i)?.[0].toLowerCase() || newFolders?.query.trim().toLowerCase() || folder.name;
+    // 폴더에 모델번호가 여러 개 있어도(wb041708 wn041713 …) 검색한 모델번호로 등록한다.
+    const model = newFolders?.query.trim().toLowerCase() || folder.name.match(/^[a-z]{2}\d+/i)?.[0].toLowerCase() || folder.name;
     setPreparing(model);
     try {
       const photos = await openNewProductFolder(folder.path);
@@ -1689,7 +1690,7 @@ export default function ProductCatalogPage() {
               {newFolders && !newFolders.loading && newFolders.query === query.trim() && (newFolders.error
                 ? <p style={{ color: wmsColors.warnText, fontSize: 13, fontWeight: 700, margin: 0 }}>{newFolders.error}</p>
                 : newFolders.folders.length === 0
-                  ? <p style={{ color: wmsColors.muted, fontSize: 13, margin: 0 }}>연결한 사진 폴더(3단계 아래까지)에 &apos;{newFolders.query}&apos;로 시작하는 폴더가 없습니다.</p>
+                  ? <p style={{ color: wmsColors.muted, fontSize: 13, margin: 0 }}>연결한 사진 폴더(4단계 아래까지)에 이름에 &apos;{newFolders.query}&apos;가 들어간 폴더가 없습니다.</p>
                   : newFolders.folders.map(folder => <div key={folder.path} style={{ display: "grid", gridTemplateColumns: "1fr 190px", gap: 8, alignItems: "center", borderTop: `1px solid ${wmsColors.border}`, paddingTop: 8 }}>
                     <div style={{ minWidth: 0 }}><div style={{ fontWeight: 800, color: wmsColors.ink }}>{folder.name}</div><div style={{ color: wmsColors.muted, fontSize: 12, overflowWrap: "anywhere" }}>{folder.path}</div></div>
                     <button type="button" className="softPinkButton" disabled={Boolean(preparing)} onClick={() => void sendNewProductFolder(folder)} style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: preparing ? "wait" : "pointer" }}>{preparing ? "보내는 중…" : "AI 상품등록으로 보내기"}</button>
