@@ -1,3 +1,4 @@
+import { decodeTextFile } from "@/lib/product-info";
 // The photo root is local to this browser. No files are uploaded or moved.
 export type LocalPhoto = { id: string; name: string; file: File; matchedBy: string[] };
 export type PreparedPhoto = { id: string; name: string; dataUrl: string };
@@ -669,6 +670,21 @@ export async function openNewProductFolder(path: string): Promise<LocalPhoto[]> 
   await collect(dir, [root.name, path].join("/"));
   const corrected = (photo: LocalPhoto) => /\/보정\//.test(photo.id) ? 0 : 1;
   return photos.sort((a, b) => corrected(a) - corrected(b) || a.id.localeCompare(b.id, "ko"));
+}
+
+/**
+ * 2026-11-10 신상품 모델 폴더 안의 '상품정보.txt' 내용을 읽는다(폴더를 탐색기로 열지 않고 사이트에서 보기).
+ * 파일이 없으면 null. 글자 깨짐을 막으려고 UTF-8 → 안 되면 CP949 순서로 읽는다.
+ */
+export async function readProductInfoText(folderPath: string): Promise<string | null> {
+  const root = await connectedRoot();
+  const dir = await descend(root, folderPath.split("/").filter(Boolean));
+  for await (const [name, entry] of (dir as any).entries() as AsyncIterable<[string, any]>) {
+    if (entry.kind !== "file" || name.normalize("NFC").toLowerCase() !== "상품정보.txt") continue;
+    const file = await entry.getFile() as File;
+    return decodeTextFile(await file.arrayBuffer());
+  }
+  return null;
 }
 
 /**

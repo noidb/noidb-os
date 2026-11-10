@@ -36,7 +36,8 @@ import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDr
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 import { CategoryExtraFields, CategoryManager, ColorFamilyFields, ManageLink, OptionListManager, OptionSelect, useProductOptions } from "./ProductOptionsPanel";
-import { BUILTIN_CATEGORIES, DEFAULT_SUPPLIER, canonicalSupplierName, categoryLetter, categoryNames } from "@/lib/product-options/defaults";
+import { BUILTIN_CATEGORIES, DEFAULT_GENDERS, DEFAULT_MATERIALS, DEFAULT_SUPPLIER, canonicalSupplierName, categoryLetter, categoryNames } from "@/lib/product-options/defaults";
+import { PRODUCT_INFO_STORAGE_KEY, parseProductInfo, parseProductTitle } from "@/lib/product-info";
 import type { OptionListKey, ProductOptionsConfig } from "@/lib/product-options/types";
 
 type Product = {
@@ -588,8 +589,41 @@ export default function Home() {
       const letters = model.match(/^([wmu])([a-z]+?)\d/);
       const gender = letters?.[1] === "m" ? "남성" : letters?.[1] === "u" ? "남녀공용" : "여성";
       const category = (productOptionsSnapshot?.categories || BUILTIN_CATEGORIES).find(item => item.letter === letters?.[2])?.name || DEFAULT_PRODUCT.category;
-      setCostExVatInput("");
-      setProduct({ ...DEFAULT_PRODUCT, gender, category, modelNo: model.match(/\d+/)?.[0] || "", sizes: defaultSizes(gender, category), dimension: defaultDimension(category) });
+      // 2026-11-10 신상품 폴더의 상품정보.txt(거래처·원가(부가세 미포함)·판매가·상품명·치수)가 넘어왔으면 기본정보 칸을 채운다.
+      let info: ReturnType<typeof parseProductInfo> | null = null;
+      try {
+        const saved = JSON.parse(window.localStorage.getItem(PRODUCT_INFO_STORAGE_KEY) || "null");
+        if (saved?.modelName === model && typeof saved.text === "string") info = parseProductInfo(saved.text);
+      } catch { /* 저장된 정보가 없거나 깨졌으면 예전처럼 빈 상품으로 시작 */ }
+      const config = productOptionsSnapshot;
+      const titleParts = info?.titleText
+        ? parseProductTitle(info.titleText, { genders: config?.genders || DEFAULT_GENDERS, materials: config?.materials || DEFAULT_MATERIALS, categories: categoryNames(config) })
+        : null;
+      const nextGender = titleParts?.gender || gender;
+      const nextCategory = titleParts?.category || category;
+      const supplierName = info?.supplier ? normalizeSupplierName(info.supplier) : "";
+      const knownSupplier = supplierName ? [...(config?.suppliers || []), ...DEFAULT_SUPPLIERS].some(name => normalizeSupplierName(name) === supplierName) : false;
+      const costVat = info?.costExVat ? String(costWithVat(parseNumber(info.costExVat))) : "";
+      setCostExVatInput(info?.costExVat || "");
+      setProduct({
+        ...DEFAULT_PRODUCT,
+        supplier: supplierName || DEFAULT_PRODUCT.supplier,
+        gender: nextGender,
+        category: nextCategory,
+        material: titleParts?.material || DEFAULT_PRODUCT.material,
+        modelNo: model.match(/\d+/)?.[0] || "",
+        sizes: defaultSizes(nextGender, nextCategory),
+        keyword: titleParts?.keyword || DEFAULT_PRODUCT.keyword,
+        dimension: info?.dimension || defaultDimension(nextCategory),
+        cost: costVat || DEFAULT_PRODUCT.cost,
+        price: info?.price || DEFAULT_PRODUCT.price,
+      });
+      if (info) {
+        const notes = [`상품정보.txt로 ${[supplierName && "거래처", costVat && "원가", info.price && "판매가", titleParts && "상품명(성별·소재·카테고리·키워드)", info.dimension && "치수"].filter(Boolean).join("·")}을 채웠습니다.`];
+        if (supplierName && !knownSupplier) notes.push(`거래처 '${supplierName}'는 목록에 없습니다. 맞는지 확인해주세요.`);
+        if (info.problems.length) notes.push(`상품정보.txt 형식 확인 필요: ${info.problems.join(" ")}`);
+        setMessage(notes.join(" "));
+      }
       if (!prepared.length) { setPhotoMessage(`${model} 사진을 찾지 못했습니다. 사진선택 화면에서 다시 보내주세요.`); return; }
       setPhotos([{ id: prepared[0].id, name: prepared[0].name, dataUrl: prepared[0].dataUrl }]);
       setUploadPool(prepared.map(photo => ({ dataUrl: photo.dataUrl, fileName: photo.name })));

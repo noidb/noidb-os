@@ -9,13 +9,15 @@ import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { MAX_SELECTED_PHOTOS, clearPhotoSearch, connectPhotoFolder, FOLDER_TIER_LABELS, loadPhotoSearch, loadSavedThumbnail, saveThumbnail, openPhotoFolders, openModelFolderDirect, openSavedPhotos, photoFolderName, photoFolderReady, savePhotoSearch, searchPhotoFolder, savePreparedPhotos, type FolderTier, type LocalPhoto } from "@/lib/image-search/browser-folder";
-import { findNewProductFolders, loadWaitingFolders, openNewProductFolder, refreshWaitingFolders, type NewProductFolder, type WaitingFolders } from "@/lib/image-search/browser-folder";
+import { findNewProductFolders, loadWaitingFolders, openNewProductFolder, readProductInfoText, refreshWaitingFolders, type NewProductFolder, type WaitingFolders } from "@/lib/image-search/browser-folder";
 import { deletePhotoFiles, loadPreparedDetail, requestPhotoDeletePermission, savePreparedDetail } from "@/lib/image-search/browser-folder";
 import { identifyPhoto, photoPriority, photoTier, type PhotoIdentity, type PhotoTier } from "@/lib/image-search/photo-kind";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 import type { ReregistrationExclusion } from "@/lib/wms/reregistration-exclusions";
 import { REREGISTRATION_TAB_TIER } from "@/lib/wms/reregistration-tab-tier";
 import LegacySkuCandidates from "./LegacySkuCandidates";
+import ProductInfoBox from "./ProductInfoBox";
+import { PRODUCT_INFO_STORAGE_KEY } from "@/lib/product-info";
 
 type PhotoHit = LocalPhoto & { fileName: string; preview: string; selected: boolean; identity: PhotoIdentity };
 /**
@@ -1295,6 +1297,14 @@ export default function ProductCatalogPage() {
         .join("&");
       const reregisterHref = `/?reregisterModel=${encodeURIComponent(modelName)}${selectedSkuParams ? `&${selectedSkuParams}` : ""}`;
       const newProduct = Boolean(newModelFolders.current[modelName.toLowerCase()]);
+      // 2026-11-10 신상품이면 폴더의 상품정보.txt를 읽어 등록 화면이 기본정보 칸을 채우게 넘긴다(없거나 못 읽으면 그냥 빈 칸으로 연다).
+      if (newProduct) {
+        try {
+          const infoText = await readProductInfoText(newModelFolders.current[modelName.toLowerCase()]);
+          if (infoText) window.localStorage.setItem(PRODUCT_INFO_STORAGE_KEY, JSON.stringify({ modelName: modelName.toLowerCase(), text: infoText, savedAt: Date.now() }));
+          else window.localStorage.removeItem(PRODUCT_INFO_STORAGE_KEY);
+        } catch { /* 상품정보.txt를 못 읽어도 등록 준비는 계속한다 */ }
+      }
       const targetHref = newProduct ? `/?newPhotoModel=${encodeURIComponent(modelName.toLowerCase())}` : rocketOnly ? `/?rocketModel=${encodeURIComponent(modelName)}` : reregisterHref;
       // 먼저 열어 둔 새 탭에 등록 화면을 연다. 새 탭을 못 열었으면(팝업 차단) 다시 한 번 열어 보고, 그래도 안 되면 이 창에서 연다.
       if (registrationTab && !registrationTab.closed) {
@@ -1545,7 +1555,7 @@ export default function ProductCatalogPage() {
           if (category.children.length === 0) newModelFolders.current[category.name.toLowerCase()] = category.path;
           category.children.forEach(child => { newModelFolders.current[child.name.toLowerCase()] = child.path; });
         });
-        const productCard = (folder: { name: string; path: string }) => renderGroupCard({ key: `wait:${folder.path}`, modelName: folder.name, productName: folder.name, items: [newProductItem(folder.name, folder)], topInbound: 0 }, <div style={{ color: wmsColors.muted, fontSize: 12, marginTop: 4, overflowWrap: "anywhere" }}>신상품 폴더: {folder.path}</div>, wmsColors.slate);
+        const productCard = (folder: { name: string; path: string }) => renderGroupCard({ key: `wait:${folder.path}`, modelName: folder.name, productName: folder.name, items: [newProductItem(folder.name, folder)], topInbound: 0 }, <><div style={{ color: wmsColors.muted, fontSize: 12, marginTop: 4, overflowWrap: "anywhere" }}>신상품 폴더: {folder.path}</div><ProductInfoBox folderPath={folder.path} /></>, wmsColors.slate);
         return <section style={{ border: `2px solid ${wmsColors.slate}`, background: wmsColors.surface, borderRadius: 14, padding: 16, marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div style={{ color: wmsColors.ink, fontWeight: 900, fontSize: 18 }}>신상등록대기 · {waiting ? `${waiting.categories.length}개 카테고리 · ${total}개 폴더` : "목록 없음"}</div>
@@ -1797,7 +1807,7 @@ export default function ProductCatalogPage() {
                     {folderMessage && <p role="status" style={{ color: wmsColors.warnText, fontSize: 13, margin: 0 }}>{folderMessage}</p>}
                   </div>
                   : newFolders.folders.map((folder, index) => index === 0
-                    ? <div key={folder.path}>{renderGroupCard({ key: `new:${folder.path}`, modelName: newFolders.query.toLowerCase(), productName: folder.name, items: [newProductItem(newFolders.query.toLowerCase(), folder)], topInbound: 0 }, <div style={{ color: wmsColors.muted, fontSize: 12, marginTop: 4, overflowWrap: "anywhere" }}>신상품 폴더: {folder.path}</div>, wmsColors.slate)}</div>
+                    ? <div key={folder.path}>{renderGroupCard({ key: `new:${folder.path}`, modelName: newFolders.query.toLowerCase(), productName: folder.name, items: [newProductItem(newFolders.query.toLowerCase(), folder)], topInbound: 0 }, <><div style={{ color: wmsColors.muted, fontSize: 12, marginTop: 4, overflowWrap: "anywhere" }}>신상품 폴더: {folder.path}</div><ProductInfoBox folderPath={folder.path} /></>, wmsColors.slate)}</div>
                     : <div key={folder.path} style={{ color: wmsColors.muted, fontSize: 12, overflowWrap: "anywhere" }}>같은 번호 폴더가 더 있습니다: {folder.path}</div>))}
             </div>}
           </div>}
