@@ -471,6 +471,8 @@ export default function Home() {
   // 상세페이지 목록에서 사용자가 지운 5번 칸 사진(id → 그때의 이미지). 같은 사진은 자동으로 다시 넣지 않는다.
   const dismissedDetailSlotsRef = useRef(new Map<string, string>());
   const [draftRestoreRevision, setDraftRestoreRevision] = useState(0);
+  // 2026-11-10 상세페이지 목록에서 실수로 지운 사진을 '지운 사진 되살리기'로 다시 넣을 때 동기화를 다시 돌리는 번호.
+  const [detailRestoreRevision, setDetailRestoreRevision] = useState(0);
   const [modelDuplicate, setModelDuplicate] = useState(false);
   const [modelCheckMessage, setModelCheckMessage] = useState("");
   const [modelReregisterable, setModelReregisterable] = useState(false);
@@ -884,7 +886,7 @@ export default function Home() {
     if (changed && detailPreviewRef.current) {
       setDetailMessage("상세페이지 사진 목록이 바뀌었습니다. 반영하려면 780px 상세페이지 만들기를 다시 눌러주세요.");
     }
-  }, [mainWear, allOptions, activeVariantThumbs, variants, detailCut, wear01, wear02, customSlots, draftRestoreRevision, reregisterModelName]);
+  }, [mainWear, allOptions, activeVariantThumbs, variants, detailCut, wear01, wear02, customSlots, draftRestoreRevision, detailRestoreRevision, reregisterModelName]);
 
   const update = (key: keyof Product, value: string) => {
     setProduct(prev => {
@@ -3388,6 +3390,15 @@ export default function Home() {
           }}
         />
 
+        {dismissedDetailSlotsRef.current.size > 0 && (
+          <div className="detailActions">
+            <button type="button" className="softSageButton" onClick={() => {
+              dismissedDetailSlotsRef.current.clear();
+              setDetailRestoreRevision(value => value + 1);
+              setDetailPreview("");
+            }}>지운 사진 되살리기 ({dismissedDetailSlotsRef.current.size}장)</button>
+          </div>
+        )}
         <div className="detailList">
           {detailImages.map((item, index) => (
             <div
