@@ -473,6 +473,7 @@ export default function Home() {
   const [draftRestoreRevision, setDraftRestoreRevision] = useState(0);
   // 2026-11-10 상세페이지 목록에서 실수로 지운 사진을 '지운 사진 되살리기'로 다시 넣을 때 동기화를 다시 돌리는 번호.
   const [detailRestoreRevision, setDetailRestoreRevision] = useState(0);
+  const detailForceSyncRef = useRef(false);
   const [modelDuplicate, setModelDuplicate] = useState(false);
   const [modelCheckMessage, setModelCheckMessage] = useState("");
   const [modelReregisterable, setModelReregisterable] = useState(false);
@@ -825,9 +826,11 @@ export default function Home() {
   }, [quoteQueue]);
 
   useEffect(() => {
+    const forced = detailForceSyncRef.current;
+    detailForceSyncRef.current = false;
     if (restoringDraftRef.current) {
       restoringDraftRef.current = false;
-      return;
+      if (!forced) return;
     }
     const automatic: DetailImage[] = [];
     const add = (id: string, name: string, slot: SlotImage | null | undefined) => {
@@ -843,7 +846,7 @@ export default function Home() {
     // 상세페이지를 한 번 만든 뒤에도 5번 칸에 새로 넣은 사진이 목록에 들어오도록 항상 동기화한다.
     // 사용자가 정한 순서는 유지하고, 새 사진만 뒤에 붙이며, 사용자가 목록에서 지운 사진은 다시 넣지 않는다.
     const prev = detailImagesRef.current;
-    if (reregisterModelName && prev.some(item => !item.id.startsWith("slot:"))) return;
+    if (!forced && reregisterModelName && prev.some(item => !item.id.startsWith("slot:"))) return;
     let changed = false;
     {
       const byId = new Map(automatic.map(item => [item.id, item]));
@@ -3390,15 +3393,15 @@ export default function Home() {
           }}
         />
 
-        {dismissedDetailSlotsRef.current.size > 0 && (
-          <div className="detailActions">
-            <button type="button" className="softSageButton" onClick={() => {
-              dismissedDetailSlotsRef.current.clear();
-              setDetailRestoreRevision(value => value + 1);
-              setDetailPreview("");
-            }}>지운 사진 되살리기 ({dismissedDetailSlotsRef.current.size}장)</button>
-          </div>
-        )}
+        <div className="detailActions">
+          <button type="button" className="softSageButton" onClick={() => {
+            dismissedDetailSlotsRef.current.clear();
+            detailForceSyncRef.current = true;
+            setDetailRestoreRevision(value => value + 1);
+            setDetailPreview("");
+            setDetailMessage("5번 칸에 있는 사진 중 목록에 빠진 것을 다시 넣었습니다.");
+          }}>빠진 사진 다시 넣기 (5번 칸 기준)</button>
+        </div>
         <div className="detailList">
           {detailImages.map((item, index) => (
             <div
