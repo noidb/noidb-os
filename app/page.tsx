@@ -36,7 +36,7 @@ import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDr
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 import { CategoryExtraFields, CategoryManager, ColorFamilyFields, ManageLink, OptionListManager, OptionSelect, useProductOptions } from "./ProductOptionsPanel";
-import { BUILTIN_CATEGORIES, categoryLetter, categoryNames } from "@/lib/product-options/defaults";
+import { BUILTIN_CATEGORIES, DEFAULT_SUPPLIER, canonicalSupplierName, categoryLetter, categoryNames } from "@/lib/product-options/defaults";
 import type { OptionListKey, ProductOptionsConfig } from "@/lib/product-options/types";
 
 type Product = {
@@ -124,7 +124,7 @@ const DEFAULT_LABEL_YEAR_MONTH = (() => {
   return `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, "0")}`;
 })();
 const DEFAULT_SUPPLIERS = [
-  "프리스타일", "JK인터내셔널", "닝구네", "단종", "모건쥬얼리", "블루", "비에이블리",
+  "비에이블리", "JK인터내셔널", "닝구네", "단종", "모건쥬얼리", "블루",
   "샬롬", "세븐", "스콜피온", "실버데이", "아트피어싱", "자체제작", "제작", "쥬얼리김",
   "창성", "캐럿", "케이원", "태양사", "팝비즈도매", "피어싱도매닷컴", "한나도매", "현", "기타",
 ];
@@ -132,15 +132,15 @@ const DEFAULT_SUPPLIERS = [
 function normalizeSupplierName(value: string) {
   let supplier = String(value || "").trim();
   supplier = supplier.replace(/\s*\((?:여성|남성|여자|남자|남녀공용)\)\s*$/u, "").trim();
-  if (!supplier || /^(?:부산|여성 거래처|남성 거래처|공용 거래처|공용거래처)$/u.test(supplier)) return "프리스타일";
-  return supplier;
+  if (!supplier || /^(?:부산|여성 거래처|남성 거래처|공용 거래처|공용거래처)$/u.test(supplier)) return DEFAULT_SUPPLIER;
+  return canonicalSupplierName(supplier);
 }
 
 function mergeSupplierOptions(values: string[]) {
   const unique = [...new Set(values.map(normalizeSupplierName).filter(Boolean))];
   return [
-    "프리스타일",
-    ...unique.filter(value => value !== "프리스타일" && value !== "기타").sort((a, b) => a.localeCompare(b, "ko")),
+    DEFAULT_SUPPLIER,
+    ...unique.filter(value => value !== DEFAULT_SUPPLIER && value !== "기타").sort((a, b) => a.localeCompare(b, "ko")),
     ...(unique.includes("기타") ? ["기타"] : []),
   ];
 }
@@ -176,7 +176,7 @@ function openExternalUrl(url: string) {
 }
 
 const DEFAULT_PRODUCT: Product = {
-  supplier: "프리스타일",
+  supplier: DEFAULT_SUPPLIER,
   category: "반지",
   gender: "여성",
   material: "써지컬스틸",

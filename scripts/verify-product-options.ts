@@ -15,7 +15,7 @@ const payload = (category: string, extraFields?: Record<string, string>): Export
   title: "써지컬스틸 리본 여성 집게핀",
   tags: "집게핀",
   product: {
-    supplier: "프리스타일", category, gender: "여성", material: "써지컬스틸", colors: "골드,실버", sizes: "",
+    supplier: "비에이블리", category, gender: "여성", material: "써지컬스틸", colors: "골드,실버", sizes: "",
     modelNo: "1", warehouse: "", replacementSku: "", keyword: "리본", dimension: "폭 3cm", cost: "2000", price: "9900",
     extraFields,
   },

@@ -12,8 +12,16 @@ export const BUILTIN_CATEGORIES: CategoryConfig[] = [
   { name: "세트", letter: "x" },
 ];
 
+/** 2026-11-10 '프리스타일' 이름은 더 쓰지 않는다. 옛 기록에 남은 이름은 비에이블리로 바꿔 읽는다. */
+export const DEFAULT_SUPPLIER = "비에이블리";
+const LEGACY_SUPPLIER_NAMES = new Set(["프리스타일"]);
+export function canonicalSupplierName(value: string): string {
+  const name = String(value ?? "").trim();
+  return LEGACY_SUPPLIER_NAMES.has(name) ? DEFAULT_SUPPLIER : name;
+}
+
 export const DEFAULT_SUPPLIER_LIST = [
-  "프리스타일", "JK인터내셔널", "닝구네", "단종", "모건쥬얼리", "블루", "비에이블리",
+  "비에이블리", "JK인터내셔널", "닝구네", "단종", "모건쥬얼리", "블루",
   "샬롬", "세븐", "스콜피온", "실버데이", "아트피어싱", "자체제작", "제작", "쥬얼리김",
   "창성", "캐럿", "케이원", "태양사", "팝비즈도매", "피어싱도매닷컴", "한나도매", "현", "기타",
 ];
@@ -49,10 +57,17 @@ export function normalizeProductOptions(raw: unknown): ProductOptionsConfig {
         letter: String(category.letter || "").trim().toLowerCase(),
       }))
     : base.categories;
+  // 저장된 목록에 옛 '프리스타일'이 있으면 비에이블리로 바꾸고, 비에이블리를 맨 위에 둔다.
+  const savedSuppliers = Array.isArray(value.suppliers)
+    ? [...new Set(cleanList(value.suppliers).map(canonicalSupplierName))]
+    : base.suppliers;
+  const suppliers = savedSuppliers.includes(DEFAULT_SUPPLIER)
+    ? [DEFAULT_SUPPLIER, ...savedSuppliers.filter(item => item !== DEFAULT_SUPPLIER)]
+    : [DEFAULT_SUPPLIER, ...savedSuppliers];
   return {
     version: 1,
-    suppliers: Array.isArray(value.suppliers) ? cleanList(value.suppliers) : base.suppliers,
-    removedSuppliers: cleanList(value.removedSuppliers),
+    suppliers,
+    removedSuppliers: cleanList(value.removedSuppliers).map(canonicalSupplierName).filter(item => item !== DEFAULT_SUPPLIER),
     categories: categories.length ? categories : base.categories,
     genders: Array.isArray(value.genders) && cleanList(value.genders).length ? cleanList(value.genders) : base.genders,
     materials: Array.isArray(value.materials) && cleanList(value.materials).length ? cleanList(value.materials) : base.materials,

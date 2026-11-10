@@ -198,9 +198,9 @@ export function supplierLabel(supplier: string, gender: string) {
     .replace(/\s*\((?:여성|남성|여자|남자|남녀공용)\)\s*$/u, "")
     .trim();
   if (!normalized || /^(?:부산|여성 거래처|남성 거래처|공용 거래처|공용거래처)$/u.test(normalized)) {
-    return "프리스타일";
+    return "비에이블리";
   }
-  return normalized;
+  return normalized === "프리스타일" ? "비에이블리" : normalized;
 }
 
 export function detectStone(keyword: string) {
