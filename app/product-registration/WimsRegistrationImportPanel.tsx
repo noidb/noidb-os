@@ -434,8 +434,6 @@ export default function WimsRegistrationImportPanel() {
                           </button>
                           {open && (
                             <div style={{ display: "grid", gap: "7px", marginTop: "7px" }}>
-                              {dayCards.length > 0 && <p style={{ margin: 0, color: wmsColors.muted, fontSize: "12px" }}>반려된 등록 건은 SKU·바코드를 제품DB에 자동 반영하지 않습니다.</p>}
-                              {dayCards.map((row, index) => renderActionRow(row, index))}
                               {otherRows.map((row, index) => {
                                 const color = row.status === "rejected" || row.status === "unknown" ? "#c0392b" : wmsColors.greenDark;
                                 return (
@@ -445,6 +443,8 @@ export default function WimsRegistrationImportPanel() {
                                   </div>
                                 );
                               })}
+                              {dayCards.length > 0 && <p style={{ margin: 0, color: wmsColors.muted, fontSize: "12px" }}>반려된 등록 건은 SKU·바코드를 제품DB에 자동 반영하지 않습니다.</p>}
+                              {dayCards.map((row, index) => renderActionRow(row, index))}
                             </div>
                           )}
                         </div>
