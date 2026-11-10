@@ -284,7 +284,7 @@ export default function WimsRegistrationImportPanel() {
     .sort((a, b) => Number(isRejectedPending(b)) - Number(isRejectedPending(a))), [allActionRows]);
   const pastRows = useMemo(() => allActionRows.filter(row => !isRejectedPending(row) && !isApplicable(row) && !isRecent(row)), [allActionRows]);
 
-  // 2026-11-04: 맨 위에는 '최근 14일 등록분 결과'만 간단히 보여준다(나머지는 '자세히 보기'로 접음).
+  // 2026-11-04: 맨 위에는 '최근 14일 등록분 결과'만 간단히 보여준다.
   // 검수 결과(완료·반려)는 보통 1~2주 뒤에 나오므로 오늘 건만 보면 결과를 놓친다.
   const resultSummary = useMemo(() => {
     if (!snapshot) return null;
@@ -408,7 +408,7 @@ export default function WimsRegistrationImportPanel() {
                             <strong style={{ color: row.status === "rejected" ? "#c0392b" : wmsColors.greenDark, whiteSpace: "nowrap" }}>{row.status === "rejected" ? "✖ 반려" : "✔ 검수완료"}</strong>
                           </div>
                         ))}
-                        {resultSummary.newResults.length > 20 && <span style={{ color: wmsColors.muted }}>외 {resultSummary.newResults.length - 20}건은 '자세히 보기'에서 확인</span>}
+                        {resultSummary.newResults.length > 20 && <span style={{ color: wmsColors.muted }}>외 {resultSummary.newResults.length - 20}건은 아래 날짜 줄을 펼쳐 확인</span>}
                       </div>
                     </div>
                   )}
@@ -460,27 +460,8 @@ export default function WimsRegistrationImportPanel() {
               )}
             </div>
           )}
-          <details style={{ marginTop: "4px" }}>
-          <summary style={{ cursor: "pointer", color: wmsColors.muted, fontSize: "12px", fontWeight: 700 }}>자세히 보기 (승인대기 정렬 · 지난 확인 필요 항목)</summary>
           {auditing && <p style={{ fontSize: "11px", margin: "8px 0 0", color: wmsColors.muted }}>제품DB와 대조 중...</p>}
           {audit && (audit.approvedCandidateCount + audit.reviewingCandidateCount) > 0 && <button type="button" onClick={applyApprovedCandidates} disabled={applying} className="softBeigeButton" style={{ width: "100%", marginTop: "10px", fontSize: "15px" }}>{applying ? "백업 후 반영·검증 중..." : `검수상태 ${audit.approvedCandidateCount + audit.reviewingCandidateCount}건 반영`}</button>}
-          <button type="button" onClick={regroupPendingModels} disabled={applying} className="softSageButton" style={{ width: "100%", marginTop: "10px", fontSize: "15px" }}>{applying ? "처리 중..." : "승인대기 옵션 모델별 정렬"}</button>
-          {audit && (pastRows.length > 0 || audit.pendingNotInWims.length > 0) && (
-            <details style={{ marginTop: "10px" }}>
-              <summary style={{ cursor: "pointer", color: wmsColors.muted, fontSize: "11px", fontWeight: 700 }}>지난 확인 필요 항목 {pastRows.length + audit.pendingNotInWims.length}건 보기 ({RECENT_DAYS}일 이전 등록 건 등)</summary>
-              <div style={{ display: "grid", gap: "7px", marginTop: "8px", maxHeight: "320px", overflowY: "auto" }}>
-                {pastRows.map((row, index) => renderActionRow(row, index))}
-                {audit.pendingNotInWims.map(item => (
-                  <div key={`pending-${item.sheetRowNumber}`} style={{ border: "1px solid #a0611855", borderLeft: "4px solid #a06118", borderRadius: "9px", padding: "9px 10px", fontSize: "11px" }}>
-                    <strong style={{ color: "#a06118" }}>{item.modelSku || "모델SKU 확인 필요"} · WIMS 범위에서 미확인</strong>
-                    <div style={{ marginTop: "2px" }}>{item.productName}</div>
-                    <div style={{ color: wmsColors.muted }}>{capture ? "현재 검색 조건 밖에 있거나 아직 WIMS에 등록되지 않았는지 확인하세요." : "다른 등록일 또는 다음 WIMS 페이지에 있는지 확인하세요."} 제품DB {item.sheetRowNumber}행</div>
-                  </div>
-                ))}
-              </div>
-            </details>
-          )}
-          </details>
         </div>
       )}
     </section>
