@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { buildLogisticsReceiptBoard, logisticsReceiptLineKey, type LogisticsAsideBaseline, type LogisticsReceiptTarget } from "../lib/wms/logistics-receipts";
-import { activeMarketingExclusionKeys, completeLogisticsFollowUp, generateLogisticsFollowUp, logisticsFollowUpResponse, logisticsFollowUpToken, queueMarketing, setMarketingExclusion } from "../lib/wms/logistics-follow-up";
+import { activeMarketingExclusionKeys, completeLogisticsFollowUp, generateLogisticsFollowUp, logisticsFollowUpResponse, logisticsFollowUpToken, queueMarketing, setMarketingExclusion, dismissDiscontinue } from "../lib/wms/logistics-follow-up";
 import { reserveLogisticsReceiptRoute } from "../lib/wms/logistics-receipt-routing";
 import { emptyWeeklyWorkspace, weeklyKoreaDay } from "../lib/wms/weekly-work-state";
 
@@ -45,6 +45,19 @@ assert.throws(() => setMarketingExclusion(workspace, board, { token: restoreToke
     const blockedBoard = buildLogisticsReceiptBoard({ targets: discontinueTargets, snapshot: discontinueFirst.logisticsReceipts, baseline, routes: discontinueFirst.logisticsReceiptRoutes });
     assert(activeMarketingExclusionKeys(discontinueFirst).has(keys[0]), "단종 선처리는 대기 중인 같은 SKU의 정확한 마케팅 출처만 제외합니다.");
     assert.throws(() => setMarketingExclusion(discontinueFirst, blockedBoard, { token: logisticsFollowUpToken(discontinueFirst, blockedBoard), expectedCollectedAt: at, lineKeys: [keys[0]] }, true, at), /단종 분류된 SKU/);
+    // 2026-11-10 이미 단종된 상품은 파일 없이 단종서류 대기에서 뺀다.
+    {
+      const before = logisticsFollowUpResponse(discontinueFirst, blockedBoard).queues.discontinue;
+      assert.equal(before.length, 1, "단종 분류한 줄이 단종서류 대기에 있습니다.");
+      assert.throws(() => dismissDiscontinue(discontinueFirst, blockedBoard, { token: "old", expectedCollectedAt: at, lineKeys: [before[0].lineKey] }, at), /목록이 변경됐습니다/);
+      assert.throws(() => dismissDiscontinue(discontinueFirst, blockedBoard, { token: logisticsFollowUpToken(discontinueFirst, blockedBoard), expectedCollectedAt: at, lineKeys: ["없는줄"] }, at), /단종서류 대기 목록에 있는 상품만/);
+      const after = dismissDiscontinue(discontinueFirst, blockedBoard, { token: logisticsFollowUpToken(discontinueFirst, blockedBoard), expectedCollectedAt: at, lineKeys: [before[0].lineKey] }, at);
+      assert.equal(after.queues.discontinue.length, 0, "뺀 줄은 단종서류 대기에서 사라집니다.");
+      const dismissedRun = discontinueFirst.runs.find(run => run.logisticsReceiptLine && run.reviews[run.logisticsReceiptLine.skuId]?.decision === "discontinue")!;
+      assert.equal(dismissedRun.discontinueDismissedAt, at, "이미 단종으로 뺀 시각이 남습니다.");
+      assert.equal(dismissedRun.completedAt, at, "처리완료와 같은 완료 상태가 됩니다.");
+      assert.equal((discontinueFirst.logisticsFollowUp?.proofs || []).filter(proof => proof.kind === "discontinue").length, 0, "단종서류 파일 증빙은 만들지 않습니다.");
+    }
     const changed = structuredClone(workspace);
     changed.logisticsReceipts!.shipments[0].totalDelivered = 2;
     changed.logisticsReceipts!.shipments[0].lines[0].deliveredQuantity = 2;

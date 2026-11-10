@@ -150,6 +150,27 @@ export function unqueueMarketing(workspace: WeeklyWorkspace, board: LogisticsRec
   workspace.logisticsReceiptRoutes = routes;
   return logisticsFollowUpResponse(workspace, board);
 }
+/**
+ * 2026-11-10 사용자 요청: 이미 단종된 상품은 단종서류 대기 목록에서 파일 없이 바로 뺀다.
+ * 파일을 만들어 처리완료한 것과 같은 완료 상태(처리됨)로 바꾸되, 쿠팡에 낼 파일은 만들지 않고 '이미 단종으로 제외'한 시각만 남긴다.
+ * 이미 만든 단종서류 파일(처리완료 전)에 들어간 줄은 그 파일을 처리완료해야 하므로 뺄 수 없다.
+ */
+export function dismissDiscontinue(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, input: { token: unknown; expectedCollectedAt: unknown; lineKeys: unknown }, at = now()) {
+  assertCurrent(workspace, board, input.token, input.expectedCollectedAt); const keys = exactKeys(input.lineKeys);
+  const openProofKeys = new Set((workspace.logisticsFollowUp?.proofs || []).filter(proof => proof.kind === "discontinue" && !proof.completedAt).flatMap(proof => proof.sourceKeys));
+  const runs = keys.map(key => {
+    const run = workspace.runs.find(item => isDiscontinue(item) && sourceKey(item) === key && !item.completedAt && !item.discontinueSubmittedAt && !item.discontinueSubmittedSkuIds?.includes(item.logisticsReceiptLine!.skuId));
+    if (!run) throw new Error("단종서류 대기 목록에 있는 상품만 뺄 수 있습니다.");
+    if (openProofKeys.has(key)) throw new Error("이미 단종서류 파일을 만든 상품입니다. 그 파일을 처리완료한 뒤에 확인해 주세요.");
+    return run;
+  });
+  for (const run of runs) {
+    const skuId = run.logisticsReceiptLine!.skuId;
+    run.discontinueSubmittedSkuIds = [...new Set([...(run.discontinueSubmittedSkuIds || []), skuId])];
+    run.discontinueSubmittedAt ||= at; run.discontinueDismissedAt = at; run.completedAt ||= at; run.revision++; run.updatedAt = at;
+  }
+  return logisticsFollowUpResponse(workspace, board);
+}
 function batchRuns(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, kind: "marketing" | "discontinue") {
   const rows = allSourceLines(board); const excluded = activeMarketingExclusionKeys(workspace); const rejectedSku = new Set([...(workspace.logisticsFollowUp?.blockedMarketingSkuIds || []), ...workspace.runs.filter(isDiscontinue).map(run => run.logisticsReceiptLine!.skuId)]);
   const candidates = workspace.runs.filter(kind === "marketing" ? isMarketing : isDiscontinue).filter(run => !run.completedAt && (kind === "marketing" ? !run.couponUploadedAt && !excluded.has(sourceKey(run)) && !mergedIntoCompletedCoupon(workspace, run) : !run.discontinueSubmittedAt && !run.discontinueSubmittedSkuIds?.includes(run.logisticsReceiptLine!.skuId)));

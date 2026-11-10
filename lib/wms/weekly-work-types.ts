@@ -52,7 +52,7 @@ export interface WeeklyRun {
   id: string; snapshot: WeeklySnapshot; reviews: Record<string, WeeklyReview>;
   reviewedSkuIds?: string[];
   revision: number; updatedAt: string;
-  couponUploadedAt?: string; discontinueSubmittedAt?: string; completedAt?: string;
+  couponUploadedAt?: string; discontinueSubmittedAt?: string; /** 2026-11-10 이미 단종된 상품이라 파일 없이 단종서류 대기에서 뺀 시각 */ discontinueDismissedAt?: string; completedAt?: string;
   couponStartsOn?: string;
   couponExpiresOn?: string;
   previouslyDiscontinuedSkuIds?: string[];

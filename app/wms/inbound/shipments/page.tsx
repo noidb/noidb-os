@@ -1358,14 +1358,14 @@ export default function ShipmentReceiptsPage() {
                       <col className={styles.colInfo} />
                       <col />
                       {followUpKind !== "marketing" && <col className={styles.colNum} />}
-                      {followUpKind === "marketing" && !fixture && <col className={styles.colDecision} />}
+                      {(followUpKind === "marketing" || followUpKind === "discontinue") && !fixture && <col className={styles.colDecision} />}
                     </colgroup>
                     <thead>
                       <tr>
                         <th>쉽먼트 정보</th>
                         <th>상품명</th>
                         {followUpKind !== "marketing" && <th>미납</th>}
-                        {followUpKind === "marketing" && !fixture && <th className={styles.decisionCell}>처리</th>}
+                        {(followUpKind === "marketing" || followUpKind === "discontinue") && !fixture && <th className={styles.decisionCell}>처리</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -1386,6 +1386,24 @@ export default function ShipmentReceiptsPage() {
                               </div>
                             </td>
                             {followUpKind !== "marketing" && <td className={styles.shortageQty}>{extra.shortageQuantity || "-"}</td>}
+                            {followUpKind === "discontinue" && !fixture && (
+                              <td className={styles.decisionCell}>
+                                <div className={styles.decisionRow}>
+                                  {/* 2026-11-10 이미 단종된 상품은 파일 없이 바로 대기에서 뺀다 */}
+                                  <button
+                                    type="button"
+                                    className={`softBeigeButton ${styles.decisionButton}`}
+                                    disabled={busy}
+                                    onClick={() => {
+                                      if (!window.confirm(`${line.productName || `SKU ${line.skuId}`}\n\n이미 단종된 상품이라 단종서류 대기에서 뺄까요? (파일은 만들지 않습니다)`)) return;
+                                      void followUpAction({ action: "dismissDiscontinue", lineKeys: [line.lineKey] }, `${line.productName} · 이미 단종으로 단종서류 대기에서 뺐습니다.`);
+                                    }}
+                                  >
+                                    이미 단종 · 빼기
+                                  </button>
+                                </div>
+                              </td>
+                            )}
                             {followUpKind === "marketing" && !fixture && (
                               <td className={styles.decisionCell}>
                                 <div className={styles.decisionRow}>

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import asideBaseline from "@/lib/wms/logistics-aside-baseline.json";
 import { buildLogisticsReceiptBoard, LOGISTICS_RECEIPT_EPOCH, logisticsTargetsFromSnapshot, type LogisticsAsideBaseline } from "@/lib/wms/logistics-receipts";
-import { activeMarketingExclusionKeys, completeLogisticsFollowUp, completeVendorReceiptOrigins, generateLogisticsFollowUp, logisticsFollowUpResponse, logisticsFollowUpToken, queueMarketing, setMarketingExclusion, unqueueMarketing } from "@/lib/wms/logistics-follow-up";
+import { activeMarketingExclusionKeys, completeLogisticsFollowUp, completeVendorReceiptOrigins, generateLogisticsFollowUp, logisticsFollowUpResponse, logisticsFollowUpToken, queueMarketing, setMarketingExclusion, unqueueMarketing, dismissDiscontinue } from "@/lib/wms/logistics-follow-up";
 import { readPickingWaveStore } from "@/lib/wms/picking-wave/server-store";
 import { mutateWeeklyWorkspace, readWeeklyWorkspace } from "@/lib/wms/weekly-work-store";
 import { readWeeklyFile, saveWeeklyFile } from "@/lib/wms/weekly-work-files";
@@ -195,6 +195,7 @@ export async function POST(request: NextRequest) {
         if (body.action === "queueMarketing") return queueMarketing(workspace, value.targets, value.board, body as any);
         if (body.action === "excludeMarketing") return setMarketingExclusion(workspace, value.board, body as any, false);
         if (body.action === "unqueueMarketing") return unqueueMarketing(workspace, value.board, body as any);
+        if (body.action === "dismissDiscontinue") return dismissDiscontinue(workspace, value.board, body as any);
         if (body.action === "restoreMarketing") return setMarketingExclusion(workspace, value.board, body as any, true);
         if (body.action === "complete") {
           const proof = completeLogisticsFollowUp(workspace, value.board, { ...(body as any), token: logisticsFollowUpToken(workspace, value.board) });
