@@ -3214,6 +3214,10 @@ export default function Home() {
                 onDragStart={e => e.dataTransfer.setData("application/x-laura-pool-index", String(index))}>
                 <img src={item.dataUrl} alt={item.fileName} />
                 <span>{item.fileName}</span>
+                {/* 2026-11-10 AI 분석에 쓸 사진을 업로드 풀에서 언제든 바꾼다 */}
+                <button type="button" className={photos[0]?.dataUrl === item.dataUrl ? "softSageButton" : "softApricotButton"} disabled={photos[0]?.dataUrl === item.dataUrl}
+                  onClick={() => { setPhotos([{ id: `pool:${index}:${item.fileName}`, name: item.fileName, dataUrl: item.dataUrl }]); setPhotoMessage(`AI 분석용 사진을 '${item.fileName}'(으)로 바꿨습니다. 'AI 분석'을 다시 누르면 이 사진으로 분석합니다.`); }}
+                  style={{ borderRadius: 8, fontSize: 12, fontWeight: 700 }}>{photos[0]?.dataUrl === item.dataUrl ? "★ 분석용" : "분석용으로"}</button>
                 <button type="button" onClick={() => setUploadPool(prev => prev.filter((_, i) => i !== index))}>삭제</button>
               </div>
             ))}

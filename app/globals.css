@@ -846,3 +846,8 @@ html,body{overflow-x:clip}
 
 /* 2026-11-04 카테고리 전용 칸: 직접 쓰는 칸 아래에 쿠팡 양식 예시를 계속 보여준다 */
 .templateFieldName .templateFieldExample{color:#3f574b;font-weight:700;white-space:normal;overflow:visible;text-overflow:clip;font-size:12px}
+
+/* 2026-11-10 업로드 풀 '분석용으로' 버튼(삭제 버튼 위) */
+.uploadPoolItem button+button{margin-top:4px}
+.uploadPoolItem button.softSageButton{background:#e3ede6;color:#3f574b}
+.uploadPoolItem button.softApricotButton{background:#f4f1ec;color:#4b4744;border:1px solid #d8d3cc}

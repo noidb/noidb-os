@@ -161,6 +161,16 @@ function findWimsRow(item: ProductCatalogItem, rows: WimsRegistrationRow[]): Wim
   return matches.length === 1 ? matches[0] : null;
 }
 
+/** 2026-11-10 제품DB에 없는 신상품(사진 폴더에서 찾은 모델)을 기존 모델 카드로 보여 주기 위한 빈 항목. */
+function newProductItem(model: string, folder: { name: string; path: string }): ProductCatalogItem {
+  return {
+    skuId: "", modelSku: "", modelName: model, category: "", gender: "", productName: folder.name, optionLabel: "", imageUrl: "",
+    warehouseNumber: "", boxNumber: "", currentStock: "", currentStatus: "신상품(제품DB 없음)", orderableStatus: "", costVatIncluded: "",
+    vendorName: "", barcode: "", countryOfOrigin: "", productLink: "", productCode: "", reregistrationTier: "", photoFolder: folder.path,
+    jewelrySize: "", dimension: "", salePrice: "", cumulativeInbound: "",
+  };
+}
+
 type ModelGroup = { key: string; modelName: string; productName: string; items: ProductCatalogItem[]; topInbound: number };
 /** 위쪽 진행 섹션에 올라간 모델. 여기 있는 모델은 아래 재등록 목록에서 빠진다. */
 type StagedGroup = { group: ModelGroup; kind: "rejected" | "progress"; step: number; label: string; wimsRows: WimsRegistrationRow[]; dbStatuses: string[] };
@@ -290,6 +300,8 @@ export default function ProductCatalogPage() {
   // 2026-11-10 제품DB에 없는 신상품: 검색 결과가 0건이면 사진 폴더(신상등록대기 등)에서 같은 이름 폴더를 찾는다.
   const [newFolders, setNewFolders] = useState<{ query: string; loading: boolean; wide: boolean; folders: NewProductFolder[]; error: string } | null>(null);
   const newFolderAbort = useRef<AbortController | null>(null);
+  /** 신상품 모델 → 찾은 사진 폴더 경로. 이 모델 카드의 '사진검색'은 연결표 대신 이 폴더를 연다. */
+  const newModelFolders = useRef<Record<string, string>>({});
   const [preparing, setPreparing] = useState("");
   const photoUrls = useRef<string[]>([]);
   useEffect(() => {
@@ -919,6 +931,17 @@ export default function ProductCatalogPage() {
         if (stopped()) return;
         if (restored) { setPhotoStates(current => ({ ...current, [key]: restored })); return; }
       }
+      const newFolder = newModelFolders.current[modelName.toLowerCase()];
+      if (newFolder) {
+        const found = await openNewProductFolder(newFolder);
+        if (stopped()) return;
+        const keep = new Set((previous?.hits || []).filter(hit => hit.selected).map(hit => hit.id));
+        const hits = await toHits(found, keep);
+        if (stopped()) return;
+        const analysisId = hits.some(hit => hit.selected && hit.id === previous?.analysisId) ? previous!.analysisId : (hits.find(hit => hit.selected)?.id || "");
+        setPhotoStates(current => ({ ...current, [key]: { loading: false, hits, analysisId, level: 3, grouped: false, hasFolders: true, hiddenIds: previous?.hiddenIds || [], visualGroups: previous?.visualGroups || {}, photoDecisions: previous?.photoDecisions || {}, source: "신상품 폴더", note: found.length ? undefined : "이 폴더에 사진(jpg·png·webp)이 없습니다." } }));
+        return;
+      }
       const link = fetchLinkTable(modelName, relatedItems);
       const { found, grouped, level, hasFolders } = await loadPhotoLevels(1, modelName, relatedItems, link, fresh);
       const keepSelected = new Set((previous?.hits || []).filter(hit => hit.selected).map(hit => hit.id));
@@ -1066,8 +1089,19 @@ export default function ProductCatalogPage() {
     }
   }
 
-  // 분석용 사진은 따로 지정하지 않는다: 처음 선택한 사진이 자동으로 분석용이 된다(★).
+  // 처음 선택한 사진이 자동으로 분석용(★)이 된다. 2026-11-10부터 사진마다 '분석용으로' 버튼으로 언제든 바꿀 수 있다.
   // 그 사진의 선택을 풀면 남은 선택 중 화면 순서상 첫 사진으로 넘어간다.
+  /** 2026-11-10 분석용 사진을 언제든 바꾼다. 선택 안 된 사진이면 선택하면서 분석용으로 정한다. */
+  function setAnalysisPhoto(model: string, photoId: string) {
+    setPhotoStates(current => {
+      const state = current[model];
+      const target = state?.hits.find(photo => photo.id === photoId);
+      if (!state || !target || target.identity.kind === "detail" || brokenPhotoIds.has(photoId) || state.hiddenIds?.includes(photoId)) return current;
+      if (!target.selected && state.hits.filter(photo => photo.selected).length >= MAX_SELECTED_PHOTOS) return current;
+      return { ...current, [model]: { ...state, analysisId: photoId, hits: state.hits.map(photo => photo.id === photoId ? { ...photo, selected: true } : photo) } };
+    });
+  }
+
   function setPhotoSelected(model: string, photoId: string, selected: boolean) {
     setPhotoStates(current => {
       const state = current[model];
@@ -1251,7 +1285,8 @@ export default function ProductCatalogPage() {
         .map(sku => `reregisterSku=${encodeURIComponent(sku)}`)
         .join("&");
       const reregisterHref = `/?reregisterModel=${encodeURIComponent(modelName)}${selectedSkuParams ? `&${selectedSkuParams}` : ""}`;
-      const targetHref = rocketOnly ? `/?rocketModel=${encodeURIComponent(modelName)}` : reregisterHref;
+      const newProduct = Boolean(newModelFolders.current[modelName.toLowerCase()]);
+      const targetHref = newProduct ? `/?newPhotoModel=${encodeURIComponent(modelName.toLowerCase())}` : rocketOnly ? `/?rocketModel=${encodeURIComponent(modelName)}` : reregisterHref;
       // 먼저 열어 둔 새 탭에 등록 화면을 연다. 새 탭을 못 열었으면(팝업 차단) 다시 한 번 열어 보고, 그래도 안 되면 이 창에서 연다.
       if (registrationTab && !registrationTab.closed) {
         registrationTab.location.href = targetHref;
@@ -1277,31 +1312,18 @@ export default function ProductCatalogPage() {
     setNewFolders({ query: term, loading: true, wide, folders: [], error: "" });
     try {
       const folders = await findNewProductFolders(term, { wide, signal: controller.signal });
-      if (newFolderAbort.current === controller) setNewFolders({ query: term, loading: false, wide, folders, error: "" });
+      if (newFolderAbort.current !== controller) return;
+      setNewFolders({ query: term, loading: false, wide, folders, error: "" });
+      // 찾은 폴더는 기존 모델 카드로 보여 주고, 사진을 바로 연다(사진 선택·분석용·상세페이지·등록 준비 모두 기존과 같음).
+      if (folders[0]) {
+        const model = term.toLowerCase();
+        newModelFolders.current[model] = folders[0].path;
+        const item = newProductItem(model, folders[0]);
+        void searchPhotos(item, [item], true);
+      }
     } catch (cause) {
       if (newFolderAbort.current === controller) setNewFolders({ query: term, loading: false, wide, folders: [], error: cause instanceof Error ? cause.message : "사진 폴더를 찾지 못했습니다." });
     }
-  }
-
-  /** 신상품 폴더 사진을 등록 화면(AI 상품등록)으로 넘긴다. 사진은 업로드 풀에 들어가고 슬롯은 사용자가 고른다. */
-  async function sendNewProductFolder(folder: NewProductFolder) {
-    let tab: Window | null = null;
-    try { tab = window.open("about:blank", "_blank"); } catch { tab = null; }
-    // 폴더에 모델번호가 여러 개 있어도(wb041708 wn041713 …) 검색한 모델번호로 등록한다.
-    const model = newFolders?.query.trim().toLowerCase() || folder.name.match(/^[a-z]{2}\d+/i)?.[0].toLowerCase() || folder.name;
-    setPreparing(model);
-    try {
-      const photos = await openNewProductFolder(folder.path);
-      if (!photos.length) throw new Error(`${folder.name} 폴더에 사진(jpg·png·webp)이 없습니다.`);
-      await savePreparedPhotos(model, photos, photos[0].id);
-      const href = `/?newPhotoModel=${encodeURIComponent(model)}`;
-      if (tab && !tab.closed) tab.location.href = href;
-      else if (!window.open(href, "_blank")) router.push(href);
-      setFolderMessage(`${model}: 사진 ${Math.min(photos.length, MAX_SELECTED_PHOTOS)}장을 새 탭 AI 상품등록 화면으로 보냈습니다.`);
-    } catch (cause) {
-      try { tab?.close(); } catch { /* 이미 닫힘 */ }
-      setFolderMessage(cause instanceof Error ? cause.message : "사진을 보내지 못했습니다.");
-    } finally { setPreparing(""); }
   }
 
   const [downloading, setDownloading] = useState("");
@@ -1385,6 +1407,7 @@ export default function ProductCatalogPage() {
                          <Thumbnail photoId={hit.id} file={hit.file} alt={hit.fileName} onBroken={() => setBrokenPhotoIds(current => new Set(current).add(hit.id))} />
                       </button>
                        {hit.identity.kind !== "detail" && <label title={isAnalysis ? "AI 분석에 쓰는 사진 (처음 선택한 사진)" : "선택"} style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 3, padding: "5px 6px", border: `1px solid ${hit.selected ? wmsColors.slate : wmsColors.border}`, borderRadius: 6, background: hit.selected ? wmsColors.surface : "#fff", cursor: full || brokenPhotoIds.has(hit.id) || photos.hiddenIds?.includes(hit.id) ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={hit.selected} disabled={full || brokenPhotoIds.has(hit.id) || photos.hiddenIds?.includes(hit.id)} onChange={event => setPhotoSelected(group.modelName, hit.id, event.target.checked)} style={{ width: 20, height: 20, margin: 0, cursor: "inherit" }} />{isAnalysis && <span style={{ color: wmsColors.greenDark }}>★</span>}</label>}
+                       {hit.identity.kind !== "detail" && <button type="button" className={isAnalysis ? "softSageButton" : "softApricotButton"} onClick={() => setAnalysisPhoto(group.modelName, hit.id)} disabled={isAnalysis || brokenPhotoIds.has(hit.id) || Boolean(photos.hiddenIds?.includes(hit.id))} title="AI 분석에 이 사진을 씁니다" style={{ width: "100%", marginTop: 3, minHeight: 26, padding: "2px 0", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: isAnalysis ? "default" : "pointer" }}>{isAnalysis ? "★ 분석용" : "분석용으로"}</button>}
                        {brokenPhotoIds.has(hit.id) && <div style={{ color: wmsColors.warnText }}>미리보기를 열지 못해 선택을 막았습니다.</div>}
                        <div>{hit.fileName}</div><div style={{ color: wmsColors.muted }}>{hit.identity.folder} · {hit.identity.width && hit.identity.height ? `${hit.identity.width}×${hit.identity.height}` : "크기 미확인"}</div>
                        <button type="button" onClick={() => void deletePhotos(group.modelName, [hit.id])} disabled={Boolean(deletingPhotos)} title="이 사진을 MYBOX에서 삭제합니다" style={{ width: "100%", marginTop: 3, padding: "3px 0", border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 6, background: wmsColors.warnSoft, color: wmsColors.warnText, fontSize: 11, fontWeight: 700, cursor: deletingPhotos ? "wait" : "pointer" }}>삭제</button>
@@ -1699,10 +1722,9 @@ export default function ProductCatalogPage() {
                 ? <p style={{ color: wmsColors.warnText, fontSize: 13, fontWeight: 700, margin: 0 }}>{newFolders.error}</p>
                 : newFolders.folders.length === 0
                   ? <p style={{ color: wmsColors.muted, fontSize: 13, margin: 0 }}>{newFolders.wide ? "전체 사진 폴더(4단계 아래까지)" : "이름에 '신상'이 들어간 폴더"}에 &apos;{newFolders.query}&apos;가 들어간 폴더가 없습니다. 다른 곳에 있으면 '전체 사진 폴더에서 찾기'를 눌러주세요.</p>
-                  : newFolders.folders.map(folder => <div key={folder.path} style={{ display: "grid", gridTemplateColumns: "1fr 190px", gap: 8, alignItems: "center", borderTop: `1px solid ${wmsColors.border}`, paddingTop: 8 }}>
-                    <div style={{ minWidth: 0 }}><div style={{ fontWeight: 800, color: wmsColors.ink }}>{folder.name}</div><div style={{ color: wmsColors.muted, fontSize: 12, overflowWrap: "anywhere" }}>{folder.path}</div></div>
-                    <button type="button" className="softPinkButton" disabled={Boolean(preparing)} onClick={() => void sendNewProductFolder(folder)} style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: preparing ? "wait" : "pointer" }}>{preparing ? "보내는 중…" : "AI 상품등록으로 보내기"}</button>
-                  </div>))}
+                  : newFolders.folders.map((folder, index) => index === 0
+                    ? <div key={folder.path}>{renderGroupCard({ key: `new:${folder.path}`, modelName: newFolders.query.toLowerCase(), productName: folder.name, items: [newProductItem(newFolders.query.toLowerCase(), folder)], topInbound: 0 }, <div style={{ color: wmsColors.muted, fontSize: 12, marginTop: 4, overflowWrap: "anywhere" }}>신상품 폴더: {folder.path}</div>, wmsColors.slate)}</div>
+                    : <div key={folder.path} style={{ color: wmsColors.muted, fontSize: 12, overflowWrap: "anywhere" }}>같은 번호 폴더가 더 있습니다: {folder.path}</div>))}
             </div>}
           </div>}
         </div>
@@ -1716,6 +1738,7 @@ export default function ProductCatalogPage() {
         <div onClick={event => event.stopPropagation()} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "center", marginTop: 12, color: "#fff", fontSize: 13 }}>
           <span>{viewer.index + 1} / {viewerState.hits.length} · {viewerHit.fileName} · {viewerHit.identity.folder}</span>
           {viewerHit.identity.kind !== "detail" && <label style={{ display: "flex", gap: 6, alignItems: "center", padding: "6px 12px", borderRadius: 6, background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}><input type="checkbox" checked={viewerHit.selected} disabled={brokenPhotoIds.has(viewerHit.id) || viewerState.hiddenIds?.includes(viewerHit.id)} onChange={event => setPhotoSelected(viewer.model, viewerHit.id, event.target.checked)} style={{ width: 20, height: 20, margin: 0 }} />{viewerState.analysisId === viewerHit.id && <span style={{ color: wmsColors.greenDark }}>★</span>}</label>}
+          {viewerHit.identity.kind !== "detail" && <button type="button" onClick={() => setAnalysisPhoto(viewer.model, viewerHit.id)} disabled={viewerState.analysisId === viewerHit.id} style={{ border: 0, borderRadius: 8, padding: "6px 12px", background: viewerState.analysisId === viewerHit.id ? "#e3ede6" : "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>{viewerState.analysisId === viewerHit.id ? "★ 분석용 사진" : "이 사진을 분석용으로"}</button>}
           <button type="button" onClick={() => downloadOriginal(viewerHit)} style={{ border: 0, borderRadius: 6, padding: "6px 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>이 파일 저장 ({(viewerHit.file.size / 1024 / 1024).toFixed(1)}MB)</button>
           <button type="button" onClick={() => void deletePhotos(viewer.model, [viewerHit.id])} disabled={Boolean(deletingPhotos)} style={{ border: 0, borderRadius: 6, padding: "6px 12px", background: wmsColors.warnSoft, color: wmsColors.warnText, fontWeight: 700, cursor: deletingPhotos ? "wait" : "pointer" }}>{deletingPhotos ? "삭제 중…" : "이 사진 삭제 (Del)"}</button>
           <button type="button" onClick={() => setViewer(null)} style={{ border: 0, borderRadius: 6, padding: "6px 12px", cursor: "pointer" }}>닫기 (Esc)</button>
