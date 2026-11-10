@@ -599,3 +599,52 @@ export async function deletePhotoFiles(root: FileSystemDirectoryHandle, ids: str
   }
   return { deleted, failed };
 }
+
+/**
+ * 2026-11-10 제품DB에 없는 신상품(예: 신상등록대기 폴더) 사진 폴더를 이름으로 찾는다.
+ * 연결 폴더 아래 3단계까지, 폴더 이름이 검색어로 시작하는 폴더만 고른다(사진 파일은 열지 않음).
+ * 아주 큰 01/_제품별 폴더는 건너뛴다(그 안은 기존 제품이라 제품DB 검색으로 찾는다).
+ */
+export type NewProductFolder = { path: string; name: string };
+
+export async function findNewProductFolders(query: string, maxDepth = 3): Promise<NewProductFolder[]> {
+  const needle = query.trim().toLowerCase();
+  if (needle.length < 3) return [];
+  const root = await connectedRoot();
+  const found: NewProductFolder[] = [];
+  async function walk(dir: FileSystemDirectoryHandle, prefix: string[], depth: number) {
+    for await (const [name, entry] of (dir as any).entries() as AsyncIterable<[string, any]>) {
+      if (found.length >= 20) return;
+      if (entry.kind !== "directory" || name.startsWith(".")) continue;
+      if (depth === 0 && name === "01") continue;
+      const path = [...prefix, name];
+      if (name.toLowerCase().startsWith(needle)) { found.push({ path: path.join("/"), name }); continue; }
+      if (depth + 1 < maxDepth) await walk(entry, path, depth + 1);
+    }
+  }
+  await walk(root, [], 0);
+  return found.sort((a, b) => a.path.localeCompare(b.path, "ko"));
+}
+
+/** 찾은 신상품 폴더의 사진(하위 폴더 포함). 보정 폴더 사진을 앞에 둔다. */
+export async function openNewProductFolder(path: string): Promise<LocalPhoto[]> {
+  const root = await connectedRoot();
+  const dir = await descend(root, path.split("/").filter(Boolean));
+  const photos: LocalPhoto[] = [];
+  const seen = new Set<string>();
+  async function collect(current: FileSystemDirectoryHandle, prefix: string) {
+    for await (const [name, entry] of (current as any).entries() as AsyncIterable<[string, any]>) {
+      if (photos.length >= MAX_PHOTOS || name.startsWith(".")) continue;
+      const id = `${prefix}/${name}`;
+      if (entry.kind === "directory") { await collect(entry, id); continue; }
+      if (!IMAGE_FILE.test(name)) continue;
+      const file = await entry.getFile() as File;
+      if (seen.has(duplicateKey(file))) continue;
+      seen.add(duplicateKey(file));
+      photos.push({ id, name, file, matchedBy: ["신상품 폴더"] });
+    }
+  }
+  await collect(dir, [root.name, path].join("/"));
+  const corrected = (photo: LocalPhoto) => /\/보정\//.test(photo.id) ? 0 : 1;
+  return photos.sort((a, b) => corrected(a) - corrected(b) || a.id.localeCompare(b.id, "ko"));
+}

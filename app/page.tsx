@@ -36,7 +36,7 @@ import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDr
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 import { CategoryExtraFields, CategoryManager, ColorFamilyFields, ManageLink, OptionListManager, OptionSelect, useProductOptions } from "./ProductOptionsPanel";
-import { categoryLetter, categoryNames } from "@/lib/product-options/defaults";
+import { BUILTIN_CATEGORIES, categoryLetter, categoryNames } from "@/lib/product-options/defaults";
 import type { OptionListKey, ProductOptionsConfig } from "@/lib/product-options/types";
 
 type Product = {
@@ -521,7 +521,7 @@ export default function Home() {
     })();
 
     try {
-      if (new URLSearchParams(window.location.search).has("reregisterModel") || new URLSearchParams(window.location.search).has("rocketModel")) return;
+      if (["reregisterModel", "rocketModel", "newPhotoModel"].some(key => new URLSearchParams(window.location.search).has(key))) return;
       // 제품사진선택에서 등록 준비 없이(뒤로 가기 등) 돌아온 경우에도 나가기 전 작업을 다시 연다.
       if (readPhotoSelectReturn()) {
         void restoreWorkAfterPhotoSelect();
@@ -575,6 +575,27 @@ export default function Home() {
     } catch {
       /* ignore */
     }
+  }, []);
+
+  // 2026-11-10 사진선택 화면에서 제품DB에 없는 신상품 폴더를 보낸 경우: 새 상품으로 시작하고 그 폴더 사진을 업로드 풀에 넣는다.
+  useEffect(() => {
+    const model = new URLSearchParams(window.location.search).get("newPhotoModel")?.trim().toLowerCase() || "";
+    if (!model) return;
+    let active = true;
+    void (async () => {
+      const prepared = await loadPreparedPhotos(model).catch(() => []);
+      if (!active) return;
+      const letters = model.match(/^([wmu])([a-z]+?)\d/);
+      const gender = letters?.[1] === "m" ? "남성" : letters?.[1] === "u" ? "남녀공용" : "여성";
+      const category = (productOptionsSnapshot?.categories || BUILTIN_CATEGORIES).find(item => item.letter === letters?.[2])?.name || DEFAULT_PRODUCT.category;
+      setCostExVatInput("");
+      setProduct({ ...DEFAULT_PRODUCT, gender, category, modelNo: model.match(/\d+/)?.[0] || "", sizes: defaultSizes(gender, category), dimension: defaultDimension(category) });
+      if (!prepared.length) { setPhotoMessage(`${model} 사진을 찾지 못했습니다. 사진선택 화면에서 다시 보내주세요.`); return; }
+      setPhotos([{ id: prepared[0].id, name: prepared[0].name, dataUrl: prepared[0].dataUrl }]);
+      setUploadPool(prepared.map(photo => ({ dataUrl: photo.dataUrl, fileName: photo.name })));
+      setPhotoMessage(`${model} 신상품 폴더 사진 ${prepared.length}장을 업로드 풀에 넣었습니다. 첫 장으로 분석하고, 슬롯은 직접 지정해주세요.`);
+    })();
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {

@@ -9,6 +9,7 @@ import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { MAX_SELECTED_PHOTOS, clearPhotoSearch, connectPhotoFolder, FOLDER_TIER_LABELS, loadPhotoSearch, loadSavedThumbnail, saveThumbnail, openPhotoFolders, openModelFolderDirect, openSavedPhotos, photoFolderName, photoFolderReady, savePhotoSearch, searchPhotoFolder, savePreparedPhotos, type FolderTier, type LocalPhoto } from "@/lib/image-search/browser-folder";
+import { findNewProductFolders, openNewProductFolder, type NewProductFolder } from "@/lib/image-search/browser-folder";
 import { deletePhotoFiles, loadPreparedDetail, requestPhotoDeletePermission, savePreparedDetail } from "@/lib/image-search/browser-folder";
 import { identifyPhoto, photoPriority, photoTier, type PhotoIdentity, type PhotoTier } from "@/lib/image-search/photo-kind";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
@@ -286,6 +287,8 @@ export default function ProductCatalogPage() {
   const router = useRouter();
   const [folderName, setFolderName] = useState("");
   const [folderMessage, setFolderMessage] = useState("");
+  // 2026-11-10 제품DB에 없는 신상품: 검색 결과가 0건이면 사진 폴더(신상등록대기 등)에서 같은 이름 폴더를 찾는다.
+  const [newFolders, setNewFolders] = useState<{ query: string; loading: boolean; folders: NewProductFolder[]; error: string } | null>(null);
   const [preparing, setPreparing] = useState("");
   const photoUrls = useRef<string[]>([]);
   useEffect(() => {
@@ -1264,6 +1267,38 @@ export default function ProductCatalogPage() {
     } finally { setPreparing(""); }
   }
 
+  async function searchNewProductFolders(text: string) {
+    const term = text.trim();
+    if (!term) return;
+    setNewFolders({ query: term, loading: true, folders: [], error: "" });
+    try {
+      const folders = await findNewProductFolders(term);
+      setNewFolders({ query: term, loading: false, folders, error: "" });
+    } catch (cause) {
+      setNewFolders({ query: term, loading: false, folders: [], error: cause instanceof Error ? cause.message : "사진 폴더를 찾지 못했습니다." });
+    }
+  }
+
+  /** 신상품 폴더 사진을 등록 화면(AI 상품등록)으로 넘긴다. 사진은 업로드 풀에 들어가고 슬롯은 사용자가 고른다. */
+  async function sendNewProductFolder(folder: NewProductFolder) {
+    let tab: Window | null = null;
+    try { tab = window.open("about:blank", "_blank"); } catch { tab = null; }
+    const model = folder.name.match(/^[a-z]{2}\d+/i)?.[0].toLowerCase() || newFolders?.query.trim().toLowerCase() || folder.name;
+    setPreparing(model);
+    try {
+      const photos = await openNewProductFolder(folder.path);
+      if (!photos.length) throw new Error(`${folder.name} 폴더에 사진(jpg·png·webp)이 없습니다.`);
+      await savePreparedPhotos(model, photos, photos[0].id);
+      const href = `/?newPhotoModel=${encodeURIComponent(model)}`;
+      if (tab && !tab.closed) tab.location.href = href;
+      else if (!window.open(href, "_blank")) router.push(href);
+      setFolderMessage(`${model}: 사진 ${Math.min(photos.length, MAX_SELECTED_PHOTOS)}장을 새 탭 AI 상품등록 화면으로 보냈습니다.`);
+    } catch (cause) {
+      try { tab?.close(); } catch { /* 이미 닫힘 */ }
+      setFolderMessage(cause instanceof Error ? cause.message : "사진을 보내지 못했습니다.");
+    } finally { setPreparing(""); }
+  }
+
   const [downloading, setDownloading] = useState("");
   // 선택한 사진을 바로 내려받는다. 1장이면 그대로, 여러 장이면 모델명 zip 하나로.
   async function downloadSelectedPhotos(modelName: string) {
@@ -1647,7 +1682,20 @@ export default function ProductCatalogPage() {
             </article>;
           })}
           {!MODEL_LIST_STATUSES.has(status) && status !== "rocket-new" && unnamedItems.length > 200 && <p style={{ color: wmsColors.muted, fontSize: 12 }}>검색 결과가 많아 처음 200개만 표시합니다. 검색어를 좁혀 주세요.</p>}
-          {!MODEL_LIST_STATUSES.has(status) && (status !== "rocket-new" || rocketItems) && filteredItems.length === 0 && <p style={{ color: wmsColors.muted }}>조건에 맞는 상품이 없습니다.</p>}
+          {!MODEL_LIST_STATUSES.has(status) && (status !== "rocket-new" || rocketItems) && filteredItems.length === 0 && <div>
+            <p style={{ color: wmsColors.muted, margin: "0 0 8px" }}>조건에 맞는 상품이 없습니다.{query.trim() ? " 제품DB에 없는 신상품이면 사진 폴더에서 찾아 바로 등록할 수 있습니다." : ""}</p>
+            {query.trim().length >= 3 && <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 12, background: "#fff", padding: 12, display: "grid", gap: 8 }}>
+              <button type="button" className="softSageButton" disabled={newFolders?.loading} onClick={() => void searchNewProductFolders(query)} style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: newFolders?.loading ? "wait" : "pointer", justifySelf: "start", padding: "0 16px" }}>{newFolders?.loading ? "사진 폴더 찾는 중…" : `사진 폴더에서 '${query.trim()}' 찾기`}</button>
+              {newFolders && !newFolders.loading && newFolders.query === query.trim() && (newFolders.error
+                ? <p style={{ color: wmsColors.warnText, fontSize: 13, fontWeight: 700, margin: 0 }}>{newFolders.error}</p>
+                : newFolders.folders.length === 0
+                  ? <p style={{ color: wmsColors.muted, fontSize: 13, margin: 0 }}>연결한 사진 폴더(3단계 아래까지)에 &apos;{newFolders.query}&apos;로 시작하는 폴더가 없습니다.</p>
+                  : newFolders.folders.map(folder => <div key={folder.path} style={{ display: "grid", gridTemplateColumns: "1fr 190px", gap: 8, alignItems: "center", borderTop: `1px solid ${wmsColors.border}`, paddingTop: 8 }}>
+                    <div style={{ minWidth: 0 }}><div style={{ fontWeight: 800, color: wmsColors.ink }}>{folder.name}</div><div style={{ color: wmsColors.muted, fontSize: 12, overflowWrap: "anywhere" }}>{folder.path}</div></div>
+                    <button type="button" className="softPinkButton" disabled={Boolean(preparing)} onClick={() => void sendNewProductFolder(folder)} style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: preparing ? "wait" : "pointer" }}>{preparing ? "보내는 중…" : "AI 상품등록으로 보내기"}</button>
+                  </div>))}
+            </div>}
+          </div>}
         </div>
       )}
       {viewerHit && viewerState && viewer && <div role="dialog" aria-modal="true" aria-label="사진 크게 보기" onClick={() => setViewer(null)} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.82)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16 }}>
