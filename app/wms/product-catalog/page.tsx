@@ -9,6 +9,8 @@ import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { MAX_SELECTED_PHOTOS, clearPhotoSearch, connectPhotoFolder, FOLDER_TIER_LABELS, loadPhotoSearch, loadSavedThumbnail, saveThumbnail, openPhotoFolders, openModelFolderDirect, openSavedPhotos, photoFolderName, photoFolderReady, savePhotoSearch, searchPhotoFolder, savePreparedPhotos, type FolderTier, type LocalPhoto } from "@/lib/image-search/browser-folder";
+import { finishWaitingFolder, modelsInFolderName } from "@/lib/image-search/browser-folder";
+import { ensureReadWritePermission, loadDirectoryHandle } from "@/lib/product-db/idb";
 import { findNewProductFolders, loadWaitingFolders, openNewProductFolder, readProductInfoText, refreshWaitingFolders, type NewProductFolder, type WaitingFolders } from "@/lib/image-search/browser-folder";
 import { deletePhotoFiles, loadPreparedDetail, requestPhotoDeletePermission, savePreparedDetail } from "@/lib/image-search/browser-folder";
 import { identifyPhoto, photoPriority, photoTier, type PhotoIdentity, type PhotoTier } from "@/lib/image-search/photo-kind";
@@ -311,6 +313,9 @@ export default function ProductCatalogPage() {
   /** 신상품 모델 → 찾은 사진 폴더 경로. 이 모델 카드의 '사진검색'은 연결표 대신 이 폴더를 연다. */
   const newModelFolders = useRef<Record<string, string>>({});
   const [preparing, setPreparing] = useState("");
+  // 2026-11-10 신상등록대기 '등록완료 정리' 진행 중인 폴더 / 카드별 안내
+  const [finishing, setFinishing] = useState("");
+  const [finishMessages, setFinishMessages] = useState<Record<string, string>>({});
   const photoUrls = useRef<string[]>([]);
   useEffect(() => {
     void loadWaitingFolders().then(saved => { if (saved) setWaiting(saved); });
@@ -1322,6 +1327,26 @@ export default function ProductCatalogPage() {
     } finally { setPreparing(""); }
   }
 
+  /** 등록·제품DB 반영이 끝난 신상품 폴더의 사진을 상품이미지DB/카테고리/모델/원본 으로 옮기고 신상등록대기에서 뺀다. */
+  async function finishWaiting(folder: { name: string; path: string }) {
+    if (finishing) return;
+    const models = modelsInFolderName(folder.name);
+    if (!window.confirm(`${folder.name}\n\n이 폴더의 사진을 상품이미지DB의 ${models.join(", ")} 모델 폴더 안 '원본'으로 옮기고, 신상등록대기에서는 지웁니다. 진행할까요?`)) return;
+    setFinishing(folder.path);
+    setFinishMessages(current => ({ ...current, [folder.path]: "" }));
+    try {
+      const dbRoot = await loadDirectoryHandle();
+      if (!dbRoot) throw new Error("상품이미지DB 폴더가 이 컴퓨터에 연결되어 있지 않습니다. 메인(상품등록) 화면에서 상품DB 폴더를 먼저 선택해주세요.");
+      if (!(await ensureReadWritePermission(dbRoot))) throw new Error("상품이미지DB 폴더에 쓰기 권한이 필요합니다. 허용을 눌러주세요.");
+      const result = await finishWaitingFolder(folder.path, dbRoot);
+      setFolderMessage(`저장완료 · ${folder.name}: ${result.targets.map(target => `${target.folder} ${target.copied}장`).join(" · ")} (신상등록대기에서 정리됨)`);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      void reloadWaitingFolders();
+    } catch (cause) {
+      setFinishMessages(current => ({ ...current, [folder.path]: cause instanceof Error ? cause.message : "정리하지 못했습니다." }));
+    } finally { setFinishing(""); }
+  }
+
   async function reloadWaitingFolders() {
     if (waitingLoading) return;
     setWaitingLoading(true);
@@ -1555,7 +1580,15 @@ export default function ProductCatalogPage() {
           if (category.children.length === 0) newModelFolders.current[category.name.toLowerCase()] = category.path;
           category.children.forEach(child => { newModelFolders.current[child.name.toLowerCase()] = child.path; });
         });
-        const productCard = (folder: { name: string; path: string }) => renderGroupCard({ key: `wait:${folder.path}`, modelName: folder.name, productName: folder.name, items: [newProductItem(folder.name, folder)], topInbound: 0 }, <><div style={{ color: wmsColors.muted, fontSize: 12, marginTop: 4, overflowWrap: "anywhere" }}>신상품 폴더: {folder.path}</div><ProductInfoBox folderPath={folder.path} /></>, wmsColors.slate);
+        const productCard = (folder: { name: string; path: string }) => renderGroupCard({ key: `wait:${folder.path}`, modelName: folder.name, productName: folder.name, items: [newProductItem(folder.name, folder)], topInbound: 0 }, <><div style={{ color: wmsColors.muted, fontSize: 12, marginTop: 4, overflowWrap: "anywhere" }}>신상품 폴더: {folder.path}</div><ProductInfoBox folderPath={folder.path} />{(() => {
+          const models = modelsInFolderName(folder.name);
+          const registered = models.length > 0 && models.every(model => items.some(item => clean(item.modelName).toLowerCase() === model || clean(item.modelSku).toLowerCase().startsWith(model)));
+          return <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+            <button type="button" className="softSageButton" disabled={!registered || Boolean(finishing)} onClick={() => void finishWaiting(folder)} title={registered ? "사진을 상품이미지DB 모델 폴더의 원본으로 옮기고 이 목록에서 뺍니다." : "제품DB에 모델이 모두 올라간 뒤에 누를 수 있습니다."} style={{ minHeight: 36, padding: "0 14px", borderRadius: 8, fontWeight: 700, cursor: finishing ? "wait" : registered ? "pointer" : "not-allowed" }}>{finishing === folder.path ? "옮기는 중…" : "등록완료 정리"}</button>
+            <span style={{ fontSize: 12, color: registered ? wmsColors.greenDark : wmsColors.muted }}>{registered ? "제품DB 등록됨" : "제품DB에 아직 없음"}</span>
+            {finishMessages[folder.path] && <span role="alert" style={{ fontSize: 12, color: wmsColors.warnText, fontWeight: 700 }}>{finishMessages[folder.path]}</span>}
+          </div>;
+        })()}</>, wmsColors.slate);
         return <section style={{ border: `2px solid ${wmsColors.slate}`, background: wmsColors.surface, borderRadius: 14, padding: 16, marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div style={{ color: wmsColors.ink, fontWeight: 900, fontSize: 18 }}>신상등록대기 · {waiting ? `${waiting.categories.length}개 카테고리 · ${total}개 폴더` : "목록 없음"}</div>

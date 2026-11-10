@@ -733,3 +733,87 @@ export async function refreshWaitingFolders(): Promise<WaitingFolders> {
   await write(WAITING_KEY, result).catch(() => {});
   return result;
 }
+
+/**
+ * 2026-11-10 신상등록대기 '등록완료 정리'.
+ * 사이트에서 등록·제품DB 반영까지 끝난 신상품 폴더의 사진을 상품이미지DB/카테고리/모델폴더/원본 으로 옮기고,
+ * 다 옮겨진 것을 확인한 뒤에만 신상등록대기의 폴더를 지운다. 폴더 이름에 모델이 둘이면 두 모델 모두의 원본에 넣는다.
+ * 같은 이름의 파일이 이미 있으면 덮어쓰지 않고 _02, _03을 붙인다. 상품이미지DB에서 모델 폴더를 못 찾으면 아무것도 옮기지 않는다.
+ */
+export function modelsInFolderName(name: string): string[] {
+  return [...new Set((name.match(/(?<![a-z0-9])[a-z]{1,3}\d{5,}(?!\d)/gi) || []).map(value => value.toLowerCase()))];
+}
+
+export type FinishWaitingResult = { targets: { model: string; folder: string; copied: number }[]; fileCount: number };
+
+export async function finishWaitingFolder(folderPath: string, dbRoot: FileSystemDirectoryHandle): Promise<FinishWaitingResult> {
+  const root = await connectedRoot();
+  const write = { mode: "readwrite" as const };
+  if (await (root as any).queryPermission(write) !== "granted" && await (root as any).requestPermission(write) !== "granted") {
+    throw new Error("사진 폴더(★전체제품사진)에 쓰기 권한이 필요합니다. 허용을 눌러주세요.");
+  }
+  const segments = folderPath.split("/").filter(Boolean);
+  const name = segments[segments.length - 1];
+  const parent = await descend(root, segments.slice(0, -1));
+  const source = await parent.getDirectoryHandle(name);
+  const models = modelsInFolderName(name);
+  if (!models.length) throw new Error(`폴더 이름에서 모델번호를 찾지 못했습니다: ${name}`);
+
+  // 1) 상품이미지DB 안에서 모델 폴더 찾기(카테고리/모델폴더). 하나라도 없으면 여기서 멈춘다.
+  const found = new Map<string, { handle: FileSystemDirectoryHandle; label: string }>();
+  for await (const [categoryName, category] of (dbRoot as any).entries() as AsyncIterable<[string, any]>) {
+    if (category.kind !== "directory" || categoryName.startsWith(".")) continue;
+    for await (const [childName, child] of (category as any).entries() as AsyncIterable<[string, any]>) {
+      if (child.kind !== "directory") continue;
+      const lower = childName.toLowerCase();
+      for (const model of models) {
+        if (!found.has(model) && (lower === model || lower.startsWith(`${model} `))) found.set(model, { handle: child, label: `${categoryName}/${childName}` });
+      }
+    }
+    if (found.size === models.length) break;
+  }
+  const missing = models.filter(model => !found.has(model));
+  if (missing.length) throw new Error(`상품이미지DB에서 모델 폴더를 찾지 못했습니다: ${missing.join(", ")} (아무것도 옮기지 않았습니다)`);
+
+  // 2) 원본 폴더에 넣을 파일 모으기(하위 폴더 포함, 숨김·시스템 파일 제외)
+  const files: { name: string; file: File }[] = [];
+  async function collect(dir: FileSystemDirectoryHandle) {
+    for await (const [entryName, entry] of (dir as any).entries() as AsyncIterable<[string, any]>) {
+      if (entryName.startsWith(".") || /^(thumbs\.db|desktop\.ini)$/i.test(entryName)) continue;
+      if (entry.kind === "directory") await collect(entry);
+      else files.push({ name: entryName, file: await entry.getFile() as File });
+    }
+  }
+  await collect(source);
+  if (!files.length) throw new Error("옮길 파일이 없습니다. 폴더가 비어 있습니다.");
+
+  // 3) 복사 + 크기 확인
+  const targets: FinishWaitingResult["targets"] = [];
+  for (const model of models) {
+    const target = found.get(model)!;
+    const originals = await target.handle.getDirectoryHandle("원본", { create: true });
+    const existing = new Set<string>();
+    for await (const [entryName] of (originals as any).entries() as AsyncIterable<[string]>) existing.add(entryName.toLowerCase());
+    let copied = 0;
+    for (const item of files) {
+      let finalName = item.name;
+      for (let n = 2; existing.has(finalName.toLowerCase()); n++) {
+        const dot = item.name.lastIndexOf(".");
+        const suffix = `_${String(n).padStart(2, "0")}`;
+        finalName = dot > 0 ? `${item.name.slice(0, dot)}${suffix}${item.name.slice(dot)}` : `${item.name}${suffix}`;
+      }
+      existing.add(finalName.toLowerCase());
+      const handle = await originals.getFileHandle(finalName, { create: true });
+      const writable = await (handle as any).createWritable();
+      await writable.write(item.file);
+      await writable.close();
+      if ((await handle.getFile()).size !== item.file.size) throw new Error(`복사 확인에 실패했습니다: ${finalName} (신상등록대기 폴더는 그대로 둡니다)`);
+      copied++;
+    }
+    targets.push({ model, folder: `${target.label}/원본`, copied });
+  }
+
+  // 4) 모두 확인된 뒤에만 신상등록대기 폴더 삭제
+  await (parent as any).removeEntry(name, { recursive: true });
+  return { targets, fileCount: files.length };
+}
