@@ -23,6 +23,18 @@ import DiscontinueByCode from "./DiscontinueByCode";
 import { saveReceiptTabCounts } from "@/lib/wms/receipt-tab-counts";
 import { discontinueActionFor, isHandledMissStatus } from "@/lib/wms/missed-line-handled";
 import { readLastView, saveLastView } from "@/lib/wms/last-view-cache";
+import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
+
+/**
+ * 2026-11-10 상품 사진 작은 칸. 구글드라이브 사진 주소(새로 승인된 SKU)는 브라우저가 직접 못 열어 깨져 보였으므로
+ * 서버 경유 주소로 바꿔 보여주고, 그래도 안 열리면 깨진 그림 대신 '사진 없음'을 보여준다.
+ */
+function ThumbImage({ src, className, emptyClassName }: { src: string; className: string; emptyClassName: string }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [src]);
+  if (failed) return <span className={emptyClassName}>사진 없음</span>;
+  return <img className={className} src={getWmsDisplayImageUrl(src)} alt="" loading="lazy" onError={() => setFailed(true)} />;
+}
 
 /** 서버 규칙(lib/wms/discontinue-lists.ts DISCONTINUE_OLD_TAB_REASONS)과 같게 유지 — 서버 파일을 화면에서 불러오지 않으려고 따로 둠 */
 const DISCONTINUE_OLD_TAB_REASONS = ["비관리SKU", "판매중지SKU", "실적저조SKU", "그 외 재등록SKU"];
@@ -1035,7 +1047,7 @@ export default function ShipmentReceiptsPage() {
   // 상품 사진(작은 썸네일)과 상품명. 제품링크가 있으면 상품명을 눌러 새 창으로 연다.
   const productThumb = (skuId: string) => {
     const imageUrl = payload?.productDbLooks?.[skuId]?.imageUrl;
-    return imageUrl ? <img className={styles.thumb} src={imageUrl} alt="" loading="lazy" /> : <span className={styles.thumbEmpty}>사진 없음</span>;
+    return imageUrl ? <ThumbImage src={imageUrl} className={styles.thumb} emptyClassName={styles.thumbEmpty} /> : <span className={styles.thumbEmpty}>사진 없음</span>;
   };
   const productTitle = (skuId: string, name: string) => {
     const link = payload?.productDbLooks?.[skuId]?.productLink;
