@@ -302,10 +302,10 @@ export default function ProductCatalogPage() {
   const newFolderAbort = useRef<AbortController | null>(null);
   // 2026-11-10 신상등록대기 폴더 목록: 폴더 이름 그대로 카드로 보여 주고, 읽은 목록은 저장해 두었다가 새로고침을 누를 때만 다시 읽는다.
   const [waiting, setWaiting] = useState<WaitingFolders | null>(null);
-  const [waitingOpen, setWaitingOpen] = useState(false);
   const [waitingLoading, setWaitingLoading] = useState(false);
   const [waitingError, setWaitingError] = useState("");
   const [waitingLimit, setWaitingLimit] = useState(30);
+  const [waitingCatOpen, setWaitingCatOpen] = useState<Record<string, boolean>>({});
   /** 신상품 모델 → 찾은 사진 폴더 경로. 이 모델 카드의 '사진검색'은 연결표 대신 이 폴더를 연다. */
   const newModelFolders = useRef<Record<string, string>>({});
   const [preparing, setPreparing] = useState("");
@@ -1319,7 +1319,6 @@ export default function ProductCatalogPage() {
     try {
       const result = await refreshWaitingFolders();
       setWaiting(result);
-      setWaitingOpen(true);
     } catch (cause) {
       setWaitingError(cause instanceof Error ? cause.message : "신상등록대기 폴더를 읽지 못했습니다.");
     } finally { setWaitingLoading(false); }
@@ -1524,7 +1523,7 @@ export default function ProductCatalogPage() {
           {query && <button type="button" onClick={() => { setQuery(""); try { window.sessionStorage.setItem(VIEW_KEY, JSON.stringify({ status, query: "" })); } catch {} }} title="검색어를 지웁니다." style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: "pointer" }}>검색 초기화</button>}
           <button type="button" onClick={() => void loadCatalog()} disabled={loading} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 12px", background: "#fff", color: wmsColors.ink, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>{loading ? "새로 읽는 중…" : "제품DB 새로고침"}</button>
           <select value={status} onChange={event => setStatus(event.target.value)} style={{ minHeight: 42, border: `1px solid ${wmsColors.border}`, borderRadius: 9, padding: "0 10px", background: "#fff" }}>
-            <option value="all">전체 상태</option><option value="reregister">실적저조 SKU (실적저조SKU 탭)</option>{summary.otherModels > 0 && <option value="other-rereg">그 외 재등록 SKU (그 외 재등록SKU 탭)</option>}<option value="stopped">판매중지 SKU (판매중지SKU 탭)</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="rocket-new">Wing 등록검토 (Wing에만 있음)</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
+            <option value="all">전체 상태</option><option value="waiting">신상등록대기 (사진 폴더)</option><option value="reregister">실적저조 SKU (실적저조SKU 탭)</option>{summary.otherModels > 0 && <option value="other-rereg">그 외 재등록 SKU (그 외 재등록SKU 탭)</option>}<option value="stopped">판매중지 SKU (판매중지SKU 탭)</option><option value="rocket-pending">로켓 등록 증빙 확인 필요</option><option value="rocket-new">Wing 등록검토 (Wing에만 있음)</option><option value="pending">DB에 SKU 없음</option><option value="issued">DB에 SKU 있음</option><option value="wims">WIMS 대조 후보 있음</option>
           </select>
         </div>
       </div>
@@ -1533,36 +1532,53 @@ export default function ProductCatalogPage() {
       {error && <div style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{error}</div>}
       {exclusionError && <div role="alert" style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{exclusionError}</div>}
 
-      {/* 2026-11-10 신상등록대기: 폴더 이름 그대로 목록을 만들고, 카드의 사진검색은 그 폴더를 바로 연다. */}
-      {(() => {
+      {/* 2026-11-10 신상등록대기: 상태 선택에서 고르면 카테고리 폴더와 그 안의 개별 제품 폴더를 이름 그대로 보여 준다. */}
+      {status === "waiting" && (() => {
         const needle = clean(query);
-        const shown = (waiting?.folders || []).filter(folder => !needle || clean(folder.name).includes(needle));
-        const expanded = waitingOpen || Boolean(query.trim());
-        shown.forEach(folder => { newModelFolders.current[folder.name.toLowerCase()] = folder.path; });
+        const categories = (waiting?.categories || []).map(category => {
+          const categoryHit = !needle || clean(category.name).includes(needle);
+          const children = categoryHit ? category.children : category.children.filter(child => clean(child.name).includes(needle));
+          return { ...category, children, show: categoryHit || children.length > 0 };
+        }).filter(category => category.show);
+        const total = (waiting?.categories || []).reduce((sum, category) => sum + (category.children.length || 1), 0);
+        (waiting?.categories || []).forEach(category => {
+          if (category.children.length === 0) newModelFolders.current[category.name.toLowerCase()] = category.path;
+          category.children.forEach(child => { newModelFolders.current[child.name.toLowerCase()] = child.path; });
+        });
+        const productCard = (folder: { name: string; path: string }) => renderGroupCard({ key: `wait:${folder.path}`, modelName: folder.name, productName: folder.name, items: [newProductItem(folder.name, folder)], topInbound: 0 }, <div style={{ color: wmsColors.muted, fontSize: 12, marginTop: 4, overflowWrap: "anywhere" }}>신상품 폴더: {folder.path}</div>, wmsColors.slate);
         return <section style={{ border: `2px solid ${wmsColors.slate}`, background: wmsColors.surface, borderRadius: 14, padding: 16, marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <div style={{ color: wmsColors.ink, fontWeight: 900, fontSize: 18 }}>신상등록대기 · {waiting ? `${waiting.folders.length}개 폴더` : "목록 없음"}</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="button" className="softSageButton" disabled={waitingLoading} onClick={() => void reloadWaitingFolders()} style={{ minHeight: 36, minWidth: 110, padding: "0 14px", borderRadius: 8, fontWeight: 700, cursor: waitingLoading ? "wait" : "pointer" }}>{waitingLoading ? "읽는 중…" : waiting ? "목록 새로고침" : "목록 불러오기"}</button>
-              {!query.trim() && <button type="button" className="softBeigeButton" onClick={() => setWaitingOpen(open => !open)} style={{ minHeight: 36, minWidth: 90, padding: "0 14px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>{waitingOpen ? "접기" : "펼치기"}</button>}
-            </div>
+            <div style={{ color: wmsColors.ink, fontWeight: 900, fontSize: 18 }}>신상등록대기 · {waiting ? `${waiting.categories.length}개 카테고리 · ${total}개 폴더` : "목록 없음"}</div>
+            <button type="button" className="softSageButton" disabled={waitingLoading} onClick={() => void reloadWaitingFolders()} style={{ minHeight: 36, minWidth: 110, padding: "0 14px", borderRadius: 8, fontWeight: 700, cursor: waitingLoading ? "wait" : "pointer" }}>{waitingLoading ? "읽는 중…" : waiting ? "목록 새로고침" : "목록 불러오기"}</button>
           </div>
-          <p style={{ margin: "6px 0 0", color: wmsColors.muted, fontSize: 12 }}>{waiting ? <>{waiting.base} 폴더 안의 폴더를 이름 그대로 보여 줍니다. 새 폴더를 넣었으면 &apos;목록 새로고침&apos;을 누르세요.</> : "신상등록대기 폴더 안의 폴더 목록을 아직 읽지 않았습니다. '목록 불러오기'를 눌러주세요."}</p>
+          <p style={{ margin: "6px 0 0", color: wmsColors.muted, fontSize: 12 }}>{waiting ? <>{waiting.base} 폴더 안의 카테고리를 누르면 그 안의 폴더가 이름 그대로 나옵니다. 새 폴더를 넣었으면 &apos;목록 새로고침&apos;을 누르세요.</> : "신상등록대기 폴더 안의 폴더 목록을 아직 읽지 않았습니다. '목록 불러오기'를 눌러주세요."}</p>
           {waitingError && <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
             <p role="alert" style={{ color: wmsColors.warnText, fontSize: 13, fontWeight: 700, margin: 0 }}>{waitingError}</p>
             <p style={{ color: wmsColors.ink, fontSize: 13, margin: 0 }}>{folderName ? <>지금 이 컴퓨터에 연결된 사진 폴더: <b>{folderName}</b></> : "이 컴퓨터에는 사진 폴더가 아직 연결되지 않았습니다."}</p>
             <button type="button" className="softBeigeButton" style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: "pointer", maxWidth: 260 }}
               onClick={() => void connectPhotoFolder().then(name => { setFolderName(name); setWaitingError(""); void reloadWaitingFolders(); }).catch(error => { if (error?.name !== "AbortError") setWaitingError(error instanceof Error ? error.message : "사진 폴더 연결 실패"); })}>사진 폴더 다시 연결</button>
           </div>}
-          {expanded && waiting && <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
-            {shown.length === 0 && <p style={{ color: wmsColors.muted, fontSize: 13, margin: 0 }}>{waiting.folders.length ? "검색어에 맞는 폴더가 없습니다." : "신상등록대기 폴더 안에 폴더가 없습니다."}</p>}
-            {shown.slice(0, waitingLimit).map(folder => renderGroupCard({ key: `wait:${folder.path}`, modelName: folder.name, productName: folder.name, items: [newProductItem(folder.name, folder)], topInbound: 0 }, <div style={{ color: wmsColors.muted, fontSize: 12, marginTop: 4, overflowWrap: "anywhere" }}>신상품 폴더: {folder.path}</div>, wmsColors.slate))}
-            {shown.length > waitingLimit && <button type="button" className="softBeigeButton" onClick={() => setWaitingLimit(limit => limit + 30)} style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>더 보기 ({shown.length - waitingLimit}개 남음)</button>}
+          {waiting && <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+            {categories.length === 0 && <p style={{ color: wmsColors.muted, fontSize: 13, margin: 0 }}>{waiting.categories.length ? "검색어에 맞는 폴더가 없습니다." : "신상등록대기 폴더 안에 폴더가 없습니다."}</p>}
+            {categories.map(category => {
+              if (category.children.length === 0) return <div key={category.path}>{productCard(category)}</div>;
+              const expanded = waitingCatOpen[category.path] ?? Boolean(needle);
+              return <div key={category.path} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 12, background: "#fff", padding: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                  <div style={{ color: wmsColors.ink, fontWeight: 900, fontSize: 16 }}>{category.name} · {category.children.length}개 폴더</div>
+                  <button type="button" className="softBeigeButton" onClick={() => setWaitingCatOpen(current => ({ ...current, [category.path]: !expanded }))} style={{ minHeight: 36, minWidth: 90, padding: "0 14px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>{expanded ? "접기" : "펼치기"}</button>
+                </div>
+                {expanded && <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+                  {category.children.slice(0, waitingLimit).map(child => <div key={child.path}>{productCard(child)}</div>)}
+                  {category.children.length > waitingLimit && <button type="button" className="softBeigeButton" onClick={() => setWaitingLimit(limit => limit + 30)} style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>더 보기 ({category.children.length - waitingLimit}개 남음)</button>}
+                </div>}
+              </div>;
+            })}
           </div>}
         </section>;
       })()}
 
-      {rejectedGroups.length > 0 && <section style={{ border: `2px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 16 }}>
+      {status !== "waiting" && rejectedGroups.length > 0 && <section style={{ border: `2px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
           <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 18 }}>반려 · 보완 후 재등록 · {rejectedGroups.length}건</div>
           {!query.trim() && <button type="button" className="softBeigeButton" onClick={() => setRejectedOpen(open => !open)} style={{ minHeight: 36, minWidth: 90, padding: "0 14px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>{rejectedOpen ? "접기" : "펼치기"}</button>}
@@ -1576,7 +1592,7 @@ export default function ProductCatalogPage() {
       </section>}
       {/* 모델SKU가 없어 제품DB 모델과 연결되지 않은 WIMS 반려 기록 — 대부분 사이트 사용 전 반려 후 이미 다시 올린 상품이라
           조치 대상이 아니다(2026-10-07 사용자 확인). 지우지 않고 접어서만 보관한다. */}
-      {unmatchedRejectedRows.length > 0 && <details style={{ marginBottom: 16, border: `1px solid ${wmsColors.border}`, borderRadius: 12, background: "#fff", padding: "10px 14px" }}>
+      {status !== "waiting" && unmatchedRejectedRows.length > 0 && <details style={{ marginBottom: 16, border: `1px solid ${wmsColors.border}`, borderRadius: 12, background: "#fff", padding: "10px 14px" }}>
         <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 800, color: wmsColors.muted }}>지난 WIMS 반려 기록 {unmatchedRejectedRows.length}건 보기 (모델 미연결 · 이미 다시 올린 상품)</summary>
         <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
           {unmatchedRejectedRows.map((row, index) => <article key={`${row.modelSku}|${row.estimateId}|${index}`} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: "#fff", borderRadius: 10, padding: 10 }}>
@@ -1589,7 +1605,7 @@ export default function ProductCatalogPage() {
         </div>
       </details>}
 
-      {progressGroups.length > 0 && <section style={{ border: `2px solid ${wmsColors.slate}`, background: wmsColors.surface, borderRadius: 14, padding: 16, marginBottom: 16 }}>
+      {status !== "waiting" && progressGroups.length > 0 && <section style={{ border: `2px solid ${wmsColors.slate}`, background: wmsColors.surface, borderRadius: 14, padding: 16, marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
           <div style={{ color: wmsColors.ink, fontWeight: 900, fontSize: 18 }}>등록 진행 중 · {progressGroups.length}개 모델</div>
           {!query.trim() && <button type="button" className="softBeigeButton" onClick={() => setProgressOpen(open => !open)} style={{ minHeight: 36, minWidth: 90, padding: "0 14px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>{progressOpen ? "접기" : "펼치기"}</button>}
@@ -1601,7 +1617,7 @@ export default function ProductCatalogPage() {
       </section>}
 
       {/* 창을 다시 누를 때의 자동 새로고침은 목록을 그대로 둔 채 뒤에서 읽는다(처음 한 번만 로딩 화면). */}
-      {loading && !items.length ? <p style={{ color: wmsColors.muted }}>상품 연결 대장을 읽는 중입니다.</p> : (
+      {status === "waiting" ? null : loading && !items.length ? <p style={{ color: wmsColors.muted }}>상품 연결 대장을 읽는 중입니다.</p> : (
         <div style={{ display: "grid", gap: 10 }}>
           {(MODEL_LIST_STATUSES.has(status) || reregistrationGroups.length > 0) && <section style={{ border: `2px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 2 }}>
             <div style={{ color: wmsColors.warnText, fontWeight: 900, fontSize: 16 }}>{status === "reregister" ? "실적저조 SKU · 재등록 작업 묶음" : status === "other-rereg" ? "그 외 재등록 SKU · 재등록 작업 묶음" : status === "stopped" ? "판매중지 SKU · 재등록 작업 묶음" : status === "rocket-new" ? "Wing 등록검토 · Wing에만 있는 상품" : "모델별 목록"} · {reregistrationGroups.length}개 모델</div>
