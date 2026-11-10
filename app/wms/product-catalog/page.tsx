@@ -991,6 +991,33 @@ export default function ProductCatalogPage() {
     setPhotoStates(current => current[model] ? { ...current, [model]: { ...current[model], analysisId: "", hits: current[model].hits.map(photo => ({ ...photo, selected: false })) } } : current);
   }
 
+  // 2026-11-10 폴더 묶음(보정본·원본)마다 그 폴더 사진만 전체 선택/해제. 선택은 최대 20장까지만 채우고 넘으면 안내한다.
+  function selectTierPhotos(model: string, tier: PhotoTier, on: boolean) {
+    const state = photoStatesRef.current[model];
+    if (!state) return;
+    const usable = (photo: PhotoHit) => photo.identity.kind !== "detail" && !state.hiddenIds?.includes(photo.id) && !brokenPhotoIds.has(photo.id);
+    const inTier = (photo: PhotoHit) => photoTier(photo.identity.kind) === tier;
+    if (on) {
+      const wanted = state.hits.filter(photo => usable(photo) && inTier(photo) && !photo.selected).length;
+      const room = MAX_SELECTED_PHOTOS - state.hits.filter(photo => photo.selected).length;
+      setDragNotice(wanted > room ? `사진은 최대 ${MAX_SELECTED_PHOTOS}장까지만 선택됩니다. ${Math.max(room, 0)}장만 선택했고 나머지 ${wanted - Math.max(room, 0)}장은 선택하지 않았습니다.` : "");
+    } else setDragNotice("");
+    setPhotoStates(current => {
+      const now = current[model];
+      if (!now) return current;
+      let left = MAX_SELECTED_PHOTOS - now.hits.filter(photo => photo.selected).length;
+      const hits = now.hits.map(photo => {
+        if (!inTier(photo)) return photo;
+        if (!on) return photo.selected ? { ...photo, selected: false } : photo;
+        if (!usable(photo) || photo.selected || left <= 0) return photo;
+        left--;
+        return { ...photo, selected: true };
+      });
+      const analysisId = hits.some(photo => photo.selected && photo.id === now.analysisId) ? now.analysisId : (hits.find(photo => photo.selected)?.id || "");
+      return { ...current, [model]: { ...now, analysisId, hits } };
+    });
+  }
+
   function hidePhoto(model: string, photoId: string, hidden: boolean) {
     setPhotoStates(current => {
       const state = current[model];
@@ -1298,10 +1325,14 @@ export default function ProductCatalogPage() {
                 const editedSlice = editedHits.filter(({ hit }) => limited.has(hit.id));
                 const originalSlice = originalHits.filter(({ hit }) => limited.has(hit.id));
                 const tierHeader = (tier: "edited" | "original", label: string, count: number) => (
-                  <button key={`tier-${tier}`} type="button" onClick={() => setOpenTiers(current => ({ ...current, [`${group.key}|${tier}`]: !tierOpen(tier) }))}
-                    style={{ flexBasis: "100%", textAlign: "left", minHeight: 30, padding: "6px 10px", border: "1px solid #d8d3cc", borderRadius: 8, background: "#f4f1ec", color: "#4b4744", fontWeight: 700, fontSize: 12, cursor: "pointer" }}>
-                    {tierOpen(tier) ? "▾" : "▸"} {label} · {count}장
-                  </button>
+                  <div key={`tier-${tier}`} data-no-drag style={{ flexBasis: "100%", display: "flex", gap: 8, alignItems: "stretch" }}>
+                    <button type="button" onClick={() => setOpenTiers(current => ({ ...current, [`${group.key}|${tier}`]: !tierOpen(tier) }))}
+                      style={{ flex: 1, textAlign: "left", minHeight: 30, padding: "6px 10px", border: "1px solid #d8d3cc", borderRadius: 8, background: "#f4f1ec", color: "#4b4744", fontWeight: 700, fontSize: 12, cursor: "pointer" }}>
+                      {tierOpen(tier) ? "▾" : "▸"} {label} · {count}장
+                    </button>
+                    <button type="button" className="softSageButton" onClick={() => selectTierPhotos(group.modelName, tier, true)} title="이 폴더 사진을 선택합니다(전체 최대 20장)" style={{ minHeight: 30, padding: "0 12px", borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>이 폴더 전체 선택</button>
+                    <button type="button" className="softBeigeButton" onClick={() => selectTierPhotos(group.modelName, tier, false)} title="이 폴더 사진의 선택을 모두 풉니다" style={{ minHeight: 30, padding: "0 12px", borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>이 폴더 전체 해제</button>
+                  </div>
                 );
                 const renderHit = ({ hit, index: hitIndex }: { hit: PhotoHit; index: number }) => {
                   const photos = photoStates[group.modelName];
@@ -1356,10 +1387,14 @@ export default function ProductCatalogPage() {
                   {photos?.error && <div style={{ color: wmsColors.warnText, fontSize: 11, marginTop: 7 }}>{photos.error}</div>}
                   {photos && (photos.hiddenIds?.length || 0) > 0 && <button type="button" onClick={() => setShowHiddenPhotos(current => ({ ...current, [group.modelName]: !current[group.modelName] }))} style={{ marginTop: 6 }}>{showHiddenPhotos[group.modelName] ? "숨긴 사진 접기" : `패키지·기타로 숨긴 사진 ${photos.hiddenIds?.length}장 보기`}</button>}
                   {detailHits.length > 1 && <div style={{ marginTop: 6, fontSize: 12 }}><label>상세페이지 후보: <select value={detailChoices[group.modelName] || detailHits[0].id} onChange={event => setDetailChoices(current => ({ ...current, [group.modelName]: event.target.value }))}>{detailHits.map(hit => <option key={hit.id} value={hit.id}>{hit.fileName} ({hit.identity.width}×{hit.identity.height})</option>)}<option value="none">사용하지 않음</option></select></label></div>}
-                  {photos && photos.hits.length > 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
-                    <button type="button" onClick={() => selectAllPhotos(group.modelName)} disabled={photos.hits.filter(hit => hit.selected).length >= MAX_SELECTED_PHOTOS} style={{ border: `1px solid ${wmsColors.slate}`, borderRadius: 8, background: "#fff", padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.slate }}>전체 선택 (최대 {MAX_SELECTED_PHOTOS}장)</button>
-                    <button type="button" onClick={() => clearPhotoSelection(group.modelName)} disabled={!photos.hits.some(hit => hit.selected)} style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.ink }}>전체 해제</button>
+                  {photos && photos.hits.length > 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
+                    <button type="button" className="softSageButton" onClick={() => selectAllPhotos(group.modelName)} disabled={photos.hits.filter(hit => hit.selected).length >= MAX_SELECTED_PHOTOS} style={{ minHeight: 36, padding: "0 14px", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>전체 선택 (최대 {MAX_SELECTED_PHOTOS}장)</button>
+                    <button type="button" className="softBeigeButton" onClick={() => { setDragNotice(""); clearPhotoSelection(group.modelName); }} disabled={!photos.hits.some(hit => hit.selected)} style={{ minHeight: 36, padding: "0 14px", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>전체 해제</button>
                     {(() => { const ids = photos.hits.filter(hit => hit.selected).map(hit => hit.id); return <button type="button" onClick={() => void deletePhotos(group.modelName, ids)} disabled={!ids.length || Boolean(deletingPhotos)} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 8, background: wmsColors.warnSoft, padding: "7px 12px", cursor: ids.length ? "pointer" : "not-allowed", fontWeight: 700, fontSize: 13, color: wmsColors.warnText, opacity: ids.length ? 1 : 0.55 }}>{deletingPhotos === group.modelName ? "삭제 중…" : `선택 사진 삭제 (${ids.length}장)`}</button>; })()}
+                  </div>}
+                  {photos && photos.hits.length > 0 && <div style={{ marginTop: 6, fontSize: 12, fontWeight: 700, color: photos.hits.filter(hit => hit.selected).length >= MAX_SELECTED_PHOTOS ? wmsColors.warnText : wmsColors.muted }}>
+                    {photos.hits.filter(hit => hit.selected).length >= MAX_SELECTED_PHOTOS ? `선택 ${MAX_SELECTED_PHOTOS}장이 가득 찼습니다. 더 고르려면 먼저 선택을 풀어 주세요. ` : ""}{dragNotice ? `${dragNotice} ` : ""}
+                    <span style={{ fontWeight: 500, color: wmsColors.muted }}>사진 위에서 마우스를 누른 채 끌면 여러 장 선택 · 이미 선택된 사진에서 끌기 시작하면 해제</span>
                   </div>}
                   {photos && photos.hits.length > 0 && <div onPointerDown={event => startPhotoDrag(group.modelName, event)} onDragStart={event => event.preventDefault()} title="빈 곳에서 마우스를 누른 채 끌면 여러 장이 한꺼번에 선택됩니다. 이미 선택된 사진에서 끌면 해제됩니다." style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8, paddingBottom: 6 }}>
                      {primarySlice.map(item => renderHit(item))}
@@ -1370,7 +1405,6 @@ export default function ProductCatalogPage() {
                      {shownFlat.length > shownLimit && <button type="button" onClick={() => setShownCounts(current => ({ ...current, [group.modelName]: shownLimit + THUMBNAIL_PAGE }))} style={{ alignSelf: "center", border: `1px solid ${wmsColors.border}`, borderRadius: 8, background: "#fff", padding: "10px 14px", cursor: "pointer", fontWeight: 700, color: wmsColors.ink }}>사진 {Math.min(THUMBNAIL_PAGE, shownFlat.length - shownLimit)}장 더 표시 ({shownFlat.length - shownLimit}장 남음)</button>}
                     {photos.hits.length >= 400 && <p>사진이 많아 처음 400장만 표시합니다. 필요한 사진이 없으면 연결표의 사진폴더 지정을 고쳐야 하니 알려주세요.</p>}
                   </div>}
-                  {dragNotice && photos && photos.hits.length > 0 && <div style={{ color: wmsColors.warnText, fontSize: 12, fontWeight: 700, marginTop: 7 }}>{dragNotice}</div>}
                   {photos?.note && <div style={{ color: wmsColors.ink, fontSize: 12, marginTop: 7 }}>{photos.note}</div>}
                   {photos && !photos.error && nextPhotoLevel(photos) > 0 && <div style={{ marginTop: 8 }}><button type="button" onClick={() => photos.loading ? stopPhotoSearch(group.modelName) : void expandPhotos(first, group.items)} title={photos.loading ? "지금까지 찾은 사진은 그대로 두고 검색을 멈춥니다." : undefined} style={{ border: `1px solid ${wmsColors.slate}`, borderRadius: 8, background: "#fff", padding: "8px 12px", cursor: "pointer", fontWeight: 700, fontSize: 13, color: wmsColors.slate }}>{photos.loading ? "사진 찾는 중… (누르면 검색 멈춤)" : `${LEVEL_BUTTON_LABELS[nextPhotoLevel(photos)]} →`}</button></div>}
                   {photos && !photos.loading && <div style={{ color: wmsColors.muted, fontSize: 11, marginTop: 7 }}>사진 후보 {photos.hits.length}개{photos.source ? ` · ${photos.source}` : ""} · 선택 {photos.hits.filter(hit => hit.selected).length}/{MAX_SELECTED_PHOTOS}장</div>}
