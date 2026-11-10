@@ -332,18 +332,29 @@ export default function WimsRegistrationImportPanel() {
 
   function renderActionRow(row: WimsRegistrationAudit["rows"][number], index: number) {
     const action = actionLabel(row);
+    // 2026-11-10: 반려 카드는 검수중 줄처럼 간단히(모델SKU·상품명) + 오른쪽에 색 있는 버튼 두 개.
+    if (row.type === "rejected") {
+      return (
+        <div key={`${row.wims.estimateId}-${row.wims.modelSku}-${index}`} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px", border: `1px solid ${action.color}55`, borderLeft: `4px solid ${action.color}`, borderRadius: "9px", padding: "8px 12px", fontSize: "12px", background: "#fff" }}>
+          <div style={{ minWidth: 0 }}>
+            <strong style={{ color: action.color }}>{row.wims.modelSku || "모델SKU 확인 필요"} · 반려</strong>
+            <div style={{ marginTop: "2px", overflowWrap: "anywhere" }}>{row.wims.productName}</div>
+          </div>
+          {row.sheetRowNumber && (
+            <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
+              <button type="button" className="softPinkButton" style={{ minHeight: "32px", padding: "4px 12px", fontSize: "12px" }} disabled={decidingRow !== null} onClick={() => void setRejectionDecision(row.sheetRowNumber!, "등록불가")}>등록불가</button>
+              <button type="button" className="softSageButton" style={{ minHeight: "32px", padding: "4px 12px", fontSize: "12px" }} disabled={decidingRow !== null} onClick={() => void setRejectionDecision(row.sheetRowNumber!, "재등록시도")}>재등록시도</button>
+            </div>
+          )}
+        </div>
+      );
+    }
     return (
       <div key={`${row.wims.estimateId}-${row.wims.modelSku}-${index}`} style={{ border: `1px solid ${action.color}55`, borderLeft: `4px solid ${action.color}`, borderRadius: "9px", padding: "10px 12px", fontSize: "12px", background: "#fff" }}>
         <strong style={{ color: action.color }}>{row.wims.modelSku || "모델SKU 확인 필요"} · {action.title}</strong>
         <div style={{ marginTop: "2px" }}>{row.wims.productName}</div>
         <div style={{ color: wmsColors.muted, marginTop: "2px" }}>{action.guide}</div>
         <div style={{ color: wmsColors.muted }}>{[row.wims.skuId && `SKU ${row.wims.skuId}`, row.wims.barcode, row.wims.estimateId && `견적서 ${row.wims.estimateId}`].filter(Boolean).join(" · ") || "SKU·바코드 없음"}</div>
-        {row.type === "rejected" && row.sheetRowNumber && (
-          <div className="wimsRejectionDecisionButtons">
-            <button type="button" disabled={decidingRow !== null} onClick={() => void setRejectionDecision(row.sheetRowNumber!, "등록불가")}>등록불가</button>
-            <button type="button" disabled={decidingRow !== null} onClick={() => void setRejectionDecision(row.sheetRowNumber!, "재등록시도")}>재등록시도</button>
-          </div>
-        )}
       </div>
     );
   }
@@ -423,6 +434,7 @@ export default function WimsRegistrationImportPanel() {
                           </button>
                           {open && (
                             <div style={{ display: "grid", gap: "7px", marginTop: "7px" }}>
+                              {dayCards.length > 0 && <p style={{ margin: 0, color: wmsColors.muted, fontSize: "12px" }}>반려된 등록 건은 SKU·바코드를 제품DB에 자동 반영하지 않습니다.</p>}
                               {dayCards.map((row, index) => renderActionRow(row, index))}
                               {otherRows.map((row, index) => {
                                 const color = row.status === "rejected" || row.status === "unknown" ? "#c0392b" : wmsColors.greenDark;
