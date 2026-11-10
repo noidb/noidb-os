@@ -288,7 +288,8 @@ export default function ProductCatalogPage() {
   const [folderName, setFolderName] = useState("");
   const [folderMessage, setFolderMessage] = useState("");
   // 2026-11-10 제품DB에 없는 신상품: 검색 결과가 0건이면 사진 폴더(신상등록대기 등)에서 같은 이름 폴더를 찾는다.
-  const [newFolders, setNewFolders] = useState<{ query: string; loading: boolean; folders: NewProductFolder[]; error: string } | null>(null);
+  const [newFolders, setNewFolders] = useState<{ query: string; loading: boolean; wide: boolean; folders: NewProductFolder[]; error: string } | null>(null);
+  const newFolderAbort = useRef<AbortController | null>(null);
   const [preparing, setPreparing] = useState("");
   const photoUrls = useRef<string[]>([]);
   useEffect(() => {
@@ -1267,15 +1268,18 @@ export default function ProductCatalogPage() {
     } finally { setPreparing(""); }
   }
 
-  async function searchNewProductFolders(text: string) {
+  async function searchNewProductFolders(text: string, wide = false) {
     const term = text.trim();
     if (!term) return;
-    setNewFolders({ query: term, loading: true, folders: [], error: "" });
+    newFolderAbort.current?.abort();
+    const controller = new AbortController();
+    newFolderAbort.current = controller;
+    setNewFolders({ query: term, loading: true, wide, folders: [], error: "" });
     try {
-      const folders = await findNewProductFolders(term);
-      setNewFolders({ query: term, loading: false, folders, error: "" });
+      const folders = await findNewProductFolders(term, { wide, signal: controller.signal });
+      if (newFolderAbort.current === controller) setNewFolders({ query: term, loading: false, wide, folders, error: "" });
     } catch (cause) {
-      setNewFolders({ query: term, loading: false, folders: [], error: cause instanceof Error ? cause.message : "사진 폴더를 찾지 못했습니다." });
+      if (newFolderAbort.current === controller) setNewFolders({ query: term, loading: false, wide, folders: [], error: cause instanceof Error ? cause.message : "사진 폴더를 찾지 못했습니다." });
     }
   }
 
@@ -1686,11 +1690,15 @@ export default function ProductCatalogPage() {
           {!MODEL_LIST_STATUSES.has(status) && (status !== "rocket-new" || rocketItems) && filteredItems.length === 0 && <div>
             <p style={{ color: wmsColors.muted, margin: "0 0 8px" }}>조건에 맞는 상품이 없습니다.{query.trim() ? " 제품DB에 없는 신상품이면 사진 폴더에서 찾아 바로 등록할 수 있습니다." : ""}</p>
             {query.trim().length >= 3 && <div style={{ border: `1px solid ${wmsColors.border}`, borderRadius: 12, background: "#fff", padding: 12, display: "grid", gap: 8 }}>
-              <button type="button" className="softSageButton" disabled={newFolders?.loading} onClick={() => void searchNewProductFolders(query)} style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: newFolders?.loading ? "wait" : "pointer", justifySelf: "start", padding: "0 16px" }}>{newFolders?.loading ? "사진 폴더 찾는 중…" : `사진 폴더에서 '${query.trim()}' 찾기`}</button>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 260px))", gap: 8 }}>
+                {newFolders?.loading
+                  ? <><span style={{ display: "flex", alignItems: "center", fontWeight: 700, color: wmsColors.ink }}>{newFolders.wide ? "전체 사진 폴더 찾는 중…" : "신상 폴더 찾는 중…"}</span><button type="button" className="softApricotButton" onClick={() => newFolderAbort.current?.abort()} style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>찾기 멈춤</button></>
+                  : <><button type="button" className="softSageButton" onClick={() => void searchNewProductFolders(query)} style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>신상 폴더에서 &apos;{query.trim()}&apos; 찾기</button><button type="button" className="softBeigeButton" onClick={() => void searchNewProductFolders(query, true)} title="연결한 사진 폴더 전체를 찾습니다. MYBOX라 몇 분 걸릴 수 있습니다." style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>전체 사진 폴더에서 찾기(느림)</button></>}
+              </div>
               {newFolders && !newFolders.loading && newFolders.query === query.trim() && (newFolders.error
                 ? <p style={{ color: wmsColors.warnText, fontSize: 13, fontWeight: 700, margin: 0 }}>{newFolders.error}</p>
                 : newFolders.folders.length === 0
-                  ? <p style={{ color: wmsColors.muted, fontSize: 13, margin: 0 }}>연결한 사진 폴더(4단계 아래까지)에 이름에 &apos;{newFolders.query}&apos;가 들어간 폴더가 없습니다.</p>
+                  ? <p style={{ color: wmsColors.muted, fontSize: 13, margin: 0 }}>{newFolders.wide ? "전체 사진 폴더(4단계 아래까지)" : "이름에 '신상'이 들어간 폴더"}에 &apos;{newFolders.query}&apos;가 들어간 폴더가 없습니다. 다른 곳에 있으면 '전체 사진 폴더에서 찾기'를 눌러주세요.</p>
                   : newFolders.folders.map(folder => <div key={folder.path} style={{ display: "grid", gridTemplateColumns: "1fr 190px", gap: 8, alignItems: "center", borderTop: `1px solid ${wmsColors.border}`, paddingTop: 8 }}>
                     <div style={{ minWidth: 0 }}><div style={{ fontWeight: 800, color: wmsColors.ink }}>{folder.name}</div><div style={{ color: wmsColors.muted, fontSize: 12, overflowWrap: "anywhere" }}>{folder.path}</div></div>
                     <button type="button" className="softPinkButton" disabled={Boolean(preparing)} onClick={() => void sendNewProductFolder(folder)} style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: preparing ? "wait" : "pointer" }}>{preparing ? "보내는 중…" : "AI 상품등록으로 보내기"}</button>

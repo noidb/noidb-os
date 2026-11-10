@@ -608,23 +608,43 @@ export async function deletePhotoFiles(root: FileSystemDirectoryHandle, ids: str
  */
 export type NewProductFolder = { path: string; name: string };
 
-export async function findNewProductFolders(query: string, maxDepth = 4): Promise<NewProductFolder[]> {
+export async function findNewProductFolders(query: string, options: { wide?: boolean; signal?: AbortSignal } = {}): Promise<NewProductFolder[]> {
   const needle = query.trim().toLowerCase();
   if (needle.length < 3) return [];
   const matches = termMatcher([needle]);
   const root = await connectedRoot();
   const found: NewProductFolder[] = [];
-  async function walk(dir: FileSystemDirectoryHandle, prefix: string[], depth: number) {
+  const stopped = () => Boolean(options.signal?.aborted) || found.length >= 20;
+  const subfolders = async (dir: FileSystemDirectoryHandle) => {
+    const list: [string, FileSystemDirectoryHandle][] = [];
     for await (const [name, entry] of (dir as any).entries() as AsyncIterable<[string, any]>) {
-      if (found.length >= 20) return;
-      if (entry.kind !== "directory" || name.startsWith(".")) continue;
-      if (depth === 0 && name === "01") continue;
+      if (entry.kind === "directory" && !name.startsWith(".")) list.push([name, entry]);
+    }
+    return list;
+  };
+  async function walk(dir: FileSystemDirectoryHandle, prefix: string[], depth: number, maxDepth: number) {
+    for (const [name, entry] of await subfolders(dir)) {
+      if (stopped()) return;
+      if (prefix.length === 0 && name === "01") continue;
       const path = [...prefix, name];
       if (matches(name).length) { found.push({ path: path.join("/"), name }); continue; }
-      if (depth + 1 < maxDepth) await walk(entry, path, depth + 1);
+      if (depth + 1 < maxDepth) await walk(entry, path, depth + 1, maxDepth);
     }
   }
-  await walk(root, [], 0);
+  if (options.wide) {
+    await walk(root, [], 0, 4);
+  } else {
+    // MYBOX는 폴더를 열 때마다 느려서, 이름에 '신상'이 들어간 폴더(신상등록대기·신상 등, 2단계 안)만 먼저 깊게 찾는다.
+    const starts: [string[], FileSystemDirectoryHandle][] = [];
+    for (const [name, entry] of await subfolders(root)) {
+      if (name === "01") continue;
+      if (/신상/.test(name)) { starts.push([[name], entry]); continue; }
+      if (options.signal?.aborted) break;
+      for (const [child, childEntry] of await subfolders(entry)) if (/신상/.test(child)) starts.push([[name, child], childEntry]);
+    }
+    for (const [prefix, dir] of starts) { if (stopped()) break; await walk(dir, prefix, 0, 3); }
+  }
+  if (options.signal?.aborted && !found.length) throw new Error("사진 폴더 찾기를 멈췄습니다.");
   return found.sort((a, b) => a.path.localeCompare(b.path, "ko"));
 }
 
