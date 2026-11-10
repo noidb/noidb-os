@@ -670,3 +670,39 @@ export async function openNewProductFolder(path: string): Promise<LocalPhoto[]> 
   const corrected = (photo: LocalPhoto) => /\/보정\//.test(photo.id) ? 0 : 1;
   return photos.sort((a, b) => corrected(a) - corrected(b) || a.id.localeCompare(b.id, "ko"));
 }
+
+/**
+ * 2026-11-10 신상등록대기 폴더 목록. 연결한 사진 폴더(★전체제품사진) 바로 아래의 '신상등록대기' 폴더 안에 있는
+ * 폴더를 이름 그대로(예: "wb041708 wn041713 리본 팔찌 목걸이") 목록으로 만든다. 사진 파일은 열지 않는다.
+ * 읽은 목록은 이 컴퓨터에 저장해 두고, 새로고침 버튼을 누를 때만 다시 읽는다.
+ */
+const WAITING_FOLDER = "신상등록대기";
+const WAITING_KEY = "waiting-folders";
+export type WaitingFolders = { folders: NewProductFolder[]; base: string; readAt: number };
+
+export async function loadWaitingFolders(): Promise<WaitingFolders | undefined> {
+  return read<WaitingFolders>(WAITING_KEY).catch(() => undefined);
+}
+
+export async function refreshWaitingFolders(): Promise<WaitingFolders> {
+  const root = await connectedRoot();
+  // 연결한 폴더 바로 아래를 먼저 보고, 없으면 한두 단계 아래까지만 찾는다(MYBOX는 폴더를 열 때마다 느림).
+  let basePath: string[] | null = null;
+  let base: FileSystemDirectoryHandle | null = null;
+  try { base = await root.getDirectoryHandle(WAITING_FOLDER); basePath = [WAITING_FOLDER]; } catch { /* 아래에서 계속 찾는다 */ }
+  if (!base) {
+    for await (const [name, entry] of (root as any).entries() as AsyncIterable<[string, any]>) {
+      if (entry.kind !== "directory" || name.startsWith(".") || name === "01") continue;
+      try { base = await (entry as FileSystemDirectoryHandle).getDirectoryHandle(WAITING_FOLDER); basePath = [name, WAITING_FOLDER]; break; } catch { /* 다음 폴더 */ }
+    }
+  }
+  if (!base || !basePath) throw new Error(`연결된 사진 폴더(${root.name}) 안에서 '${WAITING_FOLDER}' 폴더를 찾지 못했습니다. 사진 폴더를 ★전체제품사진 폴더로 다시 연결해 주세요.`);
+  const folders: NewProductFolder[] = [];
+  for await (const [name, entry] of (base as any).entries() as AsyncIterable<[string, any]>) {
+    if (entry.kind === "directory" && !name.startsWith(".")) folders.push({ name, path: [...basePath, name].join("/") });
+  }
+  folders.sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  const result: WaitingFolders = { folders, base: basePath.join("/"), readAt: Date.now() };
+  await write(WAITING_KEY, result).catch(() => {});
+  return result;
+}

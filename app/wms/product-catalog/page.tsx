@@ -9,7 +9,7 @@ import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
 import type { ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { MAX_SELECTED_PHOTOS, clearPhotoSearch, connectPhotoFolder, FOLDER_TIER_LABELS, loadPhotoSearch, loadSavedThumbnail, saveThumbnail, openPhotoFolders, openModelFolderDirect, openSavedPhotos, photoFolderName, photoFolderReady, savePhotoSearch, searchPhotoFolder, savePreparedPhotos, type FolderTier, type LocalPhoto } from "@/lib/image-search/browser-folder";
-import { findNewProductFolders, openNewProductFolder, type NewProductFolder } from "@/lib/image-search/browser-folder";
+import { findNewProductFolders, loadWaitingFolders, openNewProductFolder, refreshWaitingFolders, type NewProductFolder, type WaitingFolders } from "@/lib/image-search/browser-folder";
 import { deletePhotoFiles, loadPreparedDetail, requestPhotoDeletePermission, savePreparedDetail } from "@/lib/image-search/browser-folder";
 import { identifyPhoto, photoPriority, photoTier, type PhotoIdentity, type PhotoTier } from "@/lib/image-search/photo-kind";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
@@ -300,10 +300,19 @@ export default function ProductCatalogPage() {
   // 2026-11-10 제품DB에 없는 신상품: 검색 결과가 0건이면 사진 폴더(신상등록대기 등)에서 같은 이름 폴더를 찾는다.
   const [newFolders, setNewFolders] = useState<{ query: string; loading: boolean; wide: boolean; folders: NewProductFolder[]; error: string } | null>(null);
   const newFolderAbort = useRef<AbortController | null>(null);
+  // 2026-11-10 신상등록대기 폴더 목록: 폴더 이름 그대로 카드로 보여 주고, 읽은 목록은 저장해 두었다가 새로고침을 누를 때만 다시 읽는다.
+  const [waiting, setWaiting] = useState<WaitingFolders | null>(null);
+  const [waitingOpen, setWaitingOpen] = useState(false);
+  const [waitingLoading, setWaitingLoading] = useState(false);
+  const [waitingError, setWaitingError] = useState("");
+  const [waitingLimit, setWaitingLimit] = useState(30);
   /** 신상품 모델 → 찾은 사진 폴더 경로. 이 모델 카드의 '사진검색'은 연결표 대신 이 폴더를 연다. */
   const newModelFolders = useRef<Record<string, string>>({});
   const [preparing, setPreparing] = useState("");
   const photoUrls = useRef<string[]>([]);
+  useEffect(() => {
+    void loadWaitingFolders().then(saved => { if (saved) setWaiting(saved); });
+  }, []);
   useEffect(() => {
     void photoFolderName().then(setFolderName).catch(() => {});
     return () => { photoUrls.current.forEach(url => URL.revokeObjectURL(url)); };
@@ -1303,6 +1312,19 @@ export default function ProductCatalogPage() {
     } finally { setPreparing(""); }
   }
 
+  async function reloadWaitingFolders() {
+    if (waitingLoading) return;
+    setWaitingLoading(true);
+    setWaitingError("");
+    try {
+      const result = await refreshWaitingFolders();
+      setWaiting(result);
+      setWaitingOpen(true);
+    } catch (cause) {
+      setWaitingError(cause instanceof Error ? cause.message : "신상등록대기 폴더를 읽지 못했습니다.");
+    } finally { setWaitingLoading(false); }
+  }
+
   async function searchNewProductFolders(text: string, wide = false) {
     const term = text.trim();
     if (!term) return;
@@ -1510,6 +1532,35 @@ export default function ProductCatalogPage() {
       {!configured && !loading && <div style={{ border: `1px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>Google Sheets 연결 설정이 없어 상품을 읽지 못했습니다.</div>}
       {error && <div style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{error}</div>}
       {exclusionError && <div role="alert" style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, background: wmsColors.warnSoft, borderRadius: 12, padding: 14, marginBottom: 14 }}>{exclusionError}</div>}
+
+      {/* 2026-11-10 신상등록대기: 폴더 이름 그대로 목록을 만들고, 카드의 사진검색은 그 폴더를 바로 연다. */}
+      {(() => {
+        const needle = clean(query);
+        const shown = (waiting?.folders || []).filter(folder => !needle || clean(folder.name).includes(needle));
+        const expanded = waitingOpen || Boolean(query.trim());
+        shown.forEach(folder => { newModelFolders.current[folder.name.toLowerCase()] = folder.path; });
+        return <section style={{ border: `2px solid ${wmsColors.slate}`, background: wmsColors.surface, borderRadius: 14, padding: 16, marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ color: wmsColors.ink, fontWeight: 900, fontSize: 18 }}>신상등록대기 · {waiting ? `${waiting.folders.length}개 폴더` : "목록 없음"}</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" className="softSageButton" disabled={waitingLoading} onClick={() => void reloadWaitingFolders()} style={{ minHeight: 36, minWidth: 110, padding: "0 14px", borderRadius: 8, fontWeight: 700, cursor: waitingLoading ? "wait" : "pointer" }}>{waitingLoading ? "읽는 중…" : waiting ? "목록 새로고침" : "목록 불러오기"}</button>
+              {!query.trim() && <button type="button" className="softBeigeButton" onClick={() => setWaitingOpen(open => !open)} style={{ minHeight: 36, minWidth: 90, padding: "0 14px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>{waitingOpen ? "접기" : "펼치기"}</button>}
+            </div>
+          </div>
+          <p style={{ margin: "6px 0 0", color: wmsColors.muted, fontSize: 12 }}>{waiting ? <>{waiting.base} 폴더 안의 폴더를 이름 그대로 보여 줍니다. 새 폴더를 넣었으면 &apos;목록 새로고침&apos;을 누르세요.</> : "신상등록대기 폴더 안의 폴더 목록을 아직 읽지 않았습니다. '목록 불러오기'를 눌러주세요."}</p>
+          {waitingError && <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+            <p role="alert" style={{ color: wmsColors.warnText, fontSize: 13, fontWeight: 700, margin: 0 }}>{waitingError}</p>
+            <p style={{ color: wmsColors.ink, fontSize: 13, margin: 0 }}>{folderName ? <>지금 이 컴퓨터에 연결된 사진 폴더: <b>{folderName}</b></> : "이 컴퓨터에는 사진 폴더가 아직 연결되지 않았습니다."}</p>
+            <button type="button" className="softBeigeButton" style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: "pointer", maxWidth: 260 }}
+              onClick={() => void connectPhotoFolder().then(name => { setFolderName(name); setWaitingError(""); void reloadWaitingFolders(); }).catch(error => { if (error?.name !== "AbortError") setWaitingError(error instanceof Error ? error.message : "사진 폴더 연결 실패"); })}>사진 폴더 다시 연결</button>
+          </div>}
+          {expanded && waiting && <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+            {shown.length === 0 && <p style={{ color: wmsColors.muted, fontSize: 13, margin: 0 }}>{waiting.folders.length ? "검색어에 맞는 폴더가 없습니다." : "신상등록대기 폴더 안에 폴더가 없습니다."}</p>}
+            {shown.slice(0, waitingLimit).map(folder => renderGroupCard({ key: `wait:${folder.path}`, modelName: folder.name, productName: folder.name, items: [newProductItem(folder.name, folder)], topInbound: 0 }, <div style={{ color: wmsColors.muted, fontSize: 12, marginTop: 4, overflowWrap: "anywhere" }}>신상품 폴더: {folder.path}</div>, wmsColors.slate))}
+            {shown.length > waitingLimit && <button type="button" className="softBeigeButton" onClick={() => setWaitingLimit(limit => limit + 30)} style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>더 보기 ({shown.length - waitingLimit}개 남음)</button>}
+          </div>}
+        </section>;
+      })()}
 
       {rejectedGroups.length > 0 && <section style={{ border: `2px solid ${wmsColors.warn}`, background: wmsColors.warnSoft, borderRadius: 14, padding: 16, marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
