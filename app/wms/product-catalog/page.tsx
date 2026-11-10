@@ -1721,7 +1721,14 @@ export default function ProductCatalogPage() {
               {newFolders && !newFolders.loading && newFolders.query === query.trim() && (newFolders.error
                 ? <p style={{ color: wmsColors.warnText, fontSize: 13, fontWeight: 700, margin: 0 }}>{newFolders.error}</p>
                 : newFolders.folders.length === 0
-                  ? <p style={{ color: wmsColors.muted, fontSize: 13, margin: 0 }}>{newFolders.wide ? "전체 사진 폴더(4단계 아래까지)" : "이름에 '신상'이 들어간 폴더"}에 &apos;{newFolders.query}&apos;가 들어간 폴더가 없습니다. 다른 곳에 있으면 '전체 사진 폴더에서 찾기'를 눌러주세요.</p>
+                  ? <div style={{ display: "grid", gap: 8 }}>
+                    <p style={{ color: wmsColors.muted, fontSize: 13, margin: 0 }}>{newFolders.wide ? "전체 사진 폴더(4단계 아래까지)" : "이름에 '신상'이 들어간 폴더"}에 &apos;{newFolders.query}&apos;가 들어간 폴더가 없습니다. 다른 곳에 있으면 '전체 사진 폴더에서 찾기'를 눌러주세요.</p>
+                    {/* 2026-11-10 사진 검색은 이 컴퓨터에 연결한 폴더 안만 찾는다. 컴퓨터마다 결과가 다른 이유를 바로 알 수 있게 연결 폴더를 보여 준다. */}
+                    <p style={{ color: wmsColors.ink, fontSize: 13, margin: 0 }}>{folderName ? <>지금 이 컴퓨터에 연결된 사진 폴더: <b>{folderName}</b>. 사진 검색은 이 컴퓨터에서 연결한 폴더 안만 찾습니다. 다른 컴퓨터와 결과가 다르면 같은 맨 위 폴더로 다시 연결해 주세요.</> : "이 컴퓨터에는 사진 폴더가 아직 연결되지 않았습니다. 아래 버튼으로 연결해 주세요."}</p>
+                    <button type="button" className="softBeigeButton" style={{ minHeight: 40, borderRadius: 8, fontWeight: 700, cursor: "pointer", maxWidth: 260 }}
+                      onClick={() => void connectPhotoFolder().then(name => { setFolderName(name); setFolderMessage(""); }).catch(error => { if (error?.name !== "AbortError") setFolderMessage(error instanceof Error ? error.message : "사진 폴더 연결 실패"); })}>사진 폴더 다시 연결</button>
+                    {folderMessage && <p role="status" style={{ color: wmsColors.warnText, fontSize: 13, margin: 0 }}>{folderMessage}</p>}
+                  </div>
                   : newFolders.folders.map((folder, index) => index === 0
                     ? <div key={folder.path}>{renderGroupCard({ key: `new:${folder.path}`, modelName: newFolders.query.toLowerCase(), productName: folder.name, items: [newProductItem(newFolders.query.toLowerCase(), folder)], topInbound: 0 }, <div style={{ color: wmsColors.muted, fontSize: 12, marginTop: 4, overflowWrap: "anywhere" }}>신상품 폴더: {folder.path}</div>, wmsColors.slate)}</div>
                     : <div key={folder.path} style={{ color: wmsColors.muted, fontSize: 12, overflowWrap: "anywhere" }}>같은 번호 폴더가 더 있습니다: {folder.path}</div>))}
