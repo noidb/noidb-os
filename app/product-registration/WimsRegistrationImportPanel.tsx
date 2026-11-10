@@ -78,6 +78,8 @@ export default function WimsRegistrationImportPanel() {
   const [applying, setApplying] = useState(false);
   const [decidingRow, setDecidingRow] = useState<number | null>(null);
   const [message, setMessage] = useState("");
+  // 2026-11-10: '최근 14일 등록분 결과'의 날짜 줄은 기본 접힘. 누르면 그날 건(검수중 포함)이 펼쳐진다.
+  const [openDays, setOpenDays] = useState<Record<number, boolean>>({});
   // 2026-11-04: 지난 전송 때의 상태(새 결과 표시용). 서버가 상태가 달라질 때만 갱신한다.
   const [previous, setPrevious] = useState<PreviousStatuses | null>(null);
 
@@ -295,7 +297,7 @@ export default function WimsRegistrationImportPanel() {
       const stamp = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).getTime();
       return { label: `${pad(Number(match[2]))}/${pad(Number(match[3]))}`, sortKey: stamp, age: Math.round((todayStart - stamp) / 86400000) };
     };
-    type DayGroup = { label: string; sortKey: number; age: number; reviewing: number; approved: number; rejected: number; unknown: number; total: number };
+    type DayGroup = { label: string; sortKey: number; age: number; reviewing: number; approved: number; rejected: number; unknown: number; total: number; rows: WimsRegistrationSnapshot["rows"] };
     const days = new Map<number, DayGroup>();
     let slow = 0, slowMax = 0, rejectedRecent = 0;
     for (const row of snapshot.rows) {
@@ -303,9 +305,10 @@ export default function WimsRegistrationImportPanel() {
       if (!day) continue;
       if (row.status === "reviewing" && day.age > RECENT_DAYS && day.age <= 60) { slow += 1; slowMax = Math.max(slowMax, day.age); }
       if (day.age < 0 || day.age > RECENT_DAYS) continue;
-      const group = days.get(day.sortKey) || { ...day, reviewing: 0, approved: 0, rejected: 0, unknown: 0, total: 0 };
+      const group = days.get(day.sortKey) || { ...day, reviewing: 0, approved: 0, rejected: 0, unknown: 0, total: 0, rows: [] };
       group[row.status] += 1;
       group.total += 1;
+      group.rows.push(row);
       if (row.status === "rejected") rejectedRecent += 1;
       days.set(day.sortKey, group);
     }
@@ -402,10 +405,36 @@ export default function WimsRegistrationImportPanel() {
                     {resultSummary.days.map(group => {
                       const bad = group.rejected + group.unknown > 0;
                       const parts = [group.reviewing > 0 && `검수중 ${group.reviewing}`, group.approved > 0 && `검수완료 ${group.approved}`, group.rejected > 0 && `반려 ${group.rejected}`, group.unknown > 0 && `확인필요 ${group.unknown}`].filter(Boolean).join(" · ");
+                      const open = Boolean(openDays[group.sortKey]);
+                      // 그날 반려 카드(등록불가·재등록시도 버튼 있음) + 나머지(검수중·검수완료 등)는 간단한 줄
+                      const dayCards = recentRejectedRows.filter(row => {
+                        const match = String(row.wims.registeredAt || "").trim().match(/^(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})/);
+                        return match && new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).getTime() === group.sortKey;
+                      });
+                      const cardKeys = new Set(dayCards.map(row => wimsRowKey(row.wims)));
+                      const statusOrder = { rejected: 0, unknown: 1, reviewing: 2, approved: 3 } as const;
+                      const otherRows = group.rows.filter(row => !cardKeys.has(wimsRowKey(row))).sort((a, b) => statusOrder[a.status] - statusOrder[b.status]);
                       return (
-                        <div key={group.sortKey} style={{ display: "flex", justifyContent: "space-between", gap: "10px", fontSize: "13px", padding: "7px 10px", borderRadius: "8px", background: bad ? "#fdecea" : wmsColors.greenSoft }}>
-                          <span>{group.label} ({group.age === 0 ? "오늘" : `${group.age}일째`}) · {group.total}건</span>
-                          <strong style={{ color: bad ? "#c0392b" : wmsColors.greenDark, textAlign: "right" }}>{bad ? "✖" : "✔"} {parts}</strong>
+                        <div key={group.sortKey}>
+                          <button type="button" aria-expanded={open} onClick={() => setOpenDays(current => ({ ...current, [group.sortKey]: !current[group.sortKey] }))}
+                            style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center", gap: "10px", fontSize: "13px", padding: "7px 10px", borderRadius: "8px", border: 0, background: bad ? "#fdecea" : wmsColors.greenSoft, cursor: "pointer", textAlign: "left", font: "inherit" }}>
+                            <span>{open ? "▼" : "▶"} {group.label} ({group.age === 0 ? "오늘" : `${group.age}일째`}) · {group.total}건</span>
+                            <strong style={{ color: bad ? "#c0392b" : wmsColors.greenDark, textAlign: "right" }}>{bad ? "✖" : "✔"} {parts}</strong>
+                          </button>
+                          {open && (
+                            <div style={{ display: "grid", gap: "7px", marginTop: "7px" }}>
+                              {dayCards.map((row, index) => renderActionRow(row, index))}
+                              {otherRows.map((row, index) => {
+                                const color = row.status === "rejected" || row.status === "unknown" ? "#c0392b" : wmsColors.greenDark;
+                                return (
+                                  <div key={`${wimsRowKey(row)}-${index}`} style={{ border: `1px solid ${color}55`, borderLeft: `4px solid ${color}`, borderRadius: "9px", padding: "8px 12px", fontSize: "12px", background: "#fff" }}>
+                                    <strong style={{ color }}>{row.modelSku || "모델SKU 확인 필요"} · {statusText[row.status]}</strong>
+                                    <div style={{ marginTop: "2px" }}>{row.productName}</div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -414,11 +443,6 @@ export default function WimsRegistrationImportPanel() {
                     <p style={{ margin: "10px 0 0", padding: "8px 10px", borderRadius: "8px", background: "#fff3d6", color: "#a06118", fontSize: "13px", fontWeight: 700 }}>
                       검수중이 {RECENT_DAYS}일을 넘긴 건 {resultSummary.slow}건 (최대 {resultSummary.slowMax}일째) · 쿠팡에서 멈췄는지 확인하세요.
                     </p>
-                  )}
-                  {recentRejectedRows.length > 0 && (
-                    <div style={{ display: "grid", gap: "7px", marginTop: "10px" }}>
-                      {recentRejectedRows.map((row, index) => renderActionRow(row, index))}
-                    </div>
                   )}
                 </>
               )}
