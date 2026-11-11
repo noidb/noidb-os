@@ -31,7 +31,7 @@ import QuickDetailRemake, { ensureMinWidth, prependHeader } from "./QuickDetailR
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { loadPreparedDetail, loadPreparedPhotos, type PreparedDetail } from "@/lib/image-search/browser-folder";
-import { coverSquareCanvas, cropQuality, defaultFitAdjust, extendToSquareCanvas, fitToWhiteCanvas, drawSquareCrop, makePreviewSource, maxZoomForQuality, renderSquareCrop, sharpenAmount, type FitAdjust, type SquareCrop } from "@/lib/thumbnail/fit";
+import { cropQuality, defaultFitAdjust, extendToSquareCanvas, fitToWhiteCanvas, drawSquareCrop, makePreviewSource, maxZoomForQuality, renderSquareCrop, sharpenAmount, type FitAdjust, type SquareCrop } from "@/lib/thumbnail/fit";
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
@@ -77,6 +77,26 @@ type SlotImage = { dataUrl: string; fileName: string; source?: string; crop?: Sq
 // 2026-11-10 칸 → 칸 복사. 칸 위에서 Ctrl+C 하면 그 칸 사진을(원본·확대 위치까지) 이 앱 안에 담아 두고,
 // 시스템 클립보드에는 확인용 표시 글자만 넣는다. 다른 칸에서 Ctrl+V 하면 복사본이 들어간다.
 // 그 뒤에 화면 캡처 등 다른 이미지를 복사하면 표시 글자가 사라지므로, 평소 붙여넣기는 그대로 동작한다.
+/**
+ * 2026-11-11 썸네일 칸: 원본을 그대로 보관하고, 가운데 정사각형(여백 없이 꽉 차게) 위치만 정해 둔다.
+ * 예전에는 칸에 넣는 순간 1000×1000으로 줄인 복사본만 남겨, 확대하면 줄인 사진을 늘려 흐려졌다.
+ * 저장 파일(dataUrl)만 원본에서 잘라 1000×1000으로 만든다.
+ */
+async function coverSquareSlot(slot: SlotImage): Promise<SlotImage> {
+  if (slot.crop) return slot;
+  const source = slot.source || slot.dataUrl;
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("이미지를 읽지 못했습니다."));
+    image.src = source;
+  });
+  const w = img.naturalWidth, h = img.naturalHeight;
+  if (w === 1000 && h === 1000) return { ...slot, source };
+  const crop: SquareCrop = { zoom: Math.max(w, h) / Math.max(1, Math.min(w, h)), x: 0, y: 0 };
+  return { ...slot, dataUrl: await renderSquareCrop(source, crop), source, crop };
+}
+
 const SLOT_CLIP_MARK = "noidb-slot-copy:";
 let slotClipboard: { id: string; slot: SlotImage } | null = null;
 let slotCopyCounter = 0;
@@ -365,6 +385,29 @@ export default function Home() {
   const [adjustResult, setAdjustResult] = useState("");
   const [lightbox, setLightbox] = useState("");
   const [lightboxInfo, setLightboxInfo] = useState("");
+  // 2026-11-11 사진 목록에서 연 확대 보기는 ◀ ▶(키보드 ← →)로 다음 사진을 본다.
+  const [lightboxList, setLightboxList] = useState<string[]>([]);
+  const closeLightbox = () => { setLightbox(""); setLightboxInfo(""); setLightboxList([]); };
+  const lightboxIndex = lightbox ? lightboxList.indexOf(lightbox) : -1;
+  const lightboxStep = (direction: number) => {
+    if (lightboxIndex < 0 || lightboxList.length < 2) return;
+    setLightboxInfo("");
+    setLightbox(lightboxList[(lightboxIndex + direction + lightboxList.length) % lightboxList.length]);
+  };
+  const lightboxStepRef = useRef(lightboxStep);
+  lightboxStepRef.current = lightboxStep;
+  const closeLightboxRef = useRef(closeLightbox);
+  closeLightboxRef.current = closeLightbox;
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "ArrowLeft") { event.preventDefault(); lightboxStepRef.current(-1); }
+      else if (event.key === "ArrowRight") { event.preventDefault(); lightboxStepRef.current(1); }
+      else if (event.key === "Escape") closeLightboxRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightbox]);
 
   const [detailImages, setDetailImages] = useState<DetailImage[]>([]);
   // 2026-11-04 사진 아래 글 칸은 평소엔 숨기고, 그 사진의 '텍스트 넣기'를 누를 때만 연다(이미 글이 있으면 계속 보임).
@@ -1760,8 +1803,8 @@ export default function Home() {
       setOptionThumb(option, null);
       return;
     }
-    const dataUrl = await coverSquareCanvas(slot.dataUrl);
-    if (variantUploadRevision.current[option] === revision) setOptionThumb(option, { ...slot, dataUrl });
+    const covered = await coverSquareSlot(slot);
+    if (variantUploadRevision.current[option] === revision) setOptionThumb(option, covered);
   };
 
   const openAdjust = (key: string, dataUrl: string) => {
@@ -2675,9 +2718,8 @@ export default function Home() {
       return;
     }
     try {
-      const dataUrl = await coverSquareCanvas(await readFile(file));
       // 붙여넣은 이미지는 파일 이름이 항상 같아서(image.png) 칸이 새 이미지로 바뀌도록 이름을 매번 다르게 한다.
-      setThumbOnlySlot({ dataUrl, fileName: `붙여넣기_${Date.now()}.png` });
+      setThumbOnlySlot(await coverSquareSlot({ dataUrl: await readFile(file), fileName: `붙여넣기_${Date.now()}.png` }));
       setExportMessage("");
     } catch (e) {
       setExportMessage(`오류: ${e instanceof Error ? e.message : "이미지를 붙여넣지 못했습니다."}`);
@@ -3287,7 +3329,7 @@ export default function Home() {
             {uploadPool.map((item, index) => (
               <div className="uploadPoolItem" key={`${item.fileName}-${index}`} draggable
                 onDragStart={e => e.dataTransfer.setData("application/x-laura-pool-index", String(index))}>
-                <PoolThumb src={item.dataUrl} alt={item.fileName} onOpen={() => setLightbox(item.dataUrl)} />
+                <PoolThumb src={item.dataUrl} alt={item.fileName} onOpen={() => { setLightboxList(uploadPool.map(pool => pool.dataUrl)); setLightboxInfo(""); setLightbox(item.dataUrl); }} />
                 <span>{item.fileName}</span>
                 {/* 2026-11-10 AI 분석에 쓸 사진을 업로드 풀에서 언제든 바꾼다 */}
                 <button type="button" className={photos[0]?.dataUrl === item.dataUrl ? "softSageButton" : "softApricotButton"} disabled={photos[0]?.dataUrl === item.dataUrl}
@@ -3769,13 +3811,17 @@ export default function Home() {
       {/* 2026-10-21: '9. 등록 진행상황(WIMS 상품등록상태)'은 입고센터 '최신정보 업데이트' 5번으로 옮겨 여기서는 뺐다. */}
 
       {lightbox && (
-        <div className="lightbox" onClick={() => { setLightbox(""); setLightboxInfo(""); }}>
+        <div className="lightbox" onClick={closeLightbox}>
+          {lightboxIndex >= 0 && lightboxList.length > 1 && <>
+            <button type="button" className="lightboxArrow lightboxPrev" aria-label="이전 사진" onClick={e => { e.stopPropagation(); lightboxStep(-1); }}>‹</button>
+            <button type="button" className="lightboxArrow lightboxNext" aria-label="다음 사진" onClick={e => { e.stopPropagation(); lightboxStep(1); }}>›</button>
+          </>}
           <img src={lightbox} alt="확대" onClick={e => e.stopPropagation()}
             onLoad={e => {
               const image = e.currentTarget;
               setLightboxInfo(`${image.naturalWidth}×${image.naturalHeight}${lightbox.startsWith("data:") ? ` · ${formatBytes(dataUrlBytes(lightbox))}` : ""}`);
             }} />
-          {lightboxInfo && <span className="lightboxInfo">원본 {lightboxInfo}</span>}
+          {(lightboxInfo || lightboxIndex >= 0) && <span className="lightboxInfo">{lightboxIndex >= 0 && lightboxList.length > 1 ? `${lightboxIndex + 1} / ${lightboxList.length}` : ""}{lightboxInfo && lightboxIndex >= 0 && lightboxList.length > 1 ? " · " : ""}{lightboxInfo ? `원본 ${lightboxInfo}` : ""}</span>}
         </div>
       )}
     </main>
@@ -4158,10 +4204,10 @@ function ImageSlot({
     if (!ACCEPTED.includes(file.type) && !/\.(jpe?g|png)$/i.test(file.name)) return;
     const revision = ++pendingFileRevision.current;
     const sourceDataUrl = await readFile(file);
-    const dataUrl = coverSquare ? await coverSquareCanvas(sourceDataUrl) : sourceDataUrl;
+    const next = coverSquare ? await coverSquareSlot({ dataUrl: sourceDataUrl, fileName: file.name }) : { dataUrl: sourceDataUrl, fileName: file.name };
     if (pendingFileRevision.current !== revision) return;
     if (value) onReturnToPool?.(value);
-    onChange({ dataUrl, fileName: file.name });
+    onChange(next);
   };
   applyFileRef.current = applyFile;
 
