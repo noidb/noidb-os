@@ -158,17 +158,27 @@ const WEAR_LOOK_OPTIONS: { skin: string[]; eyes: string[]; hair: string[]; cloth
   background: ["soft cream", "pale ivory", "light warm gray", "pale pink-beige"],
 };
 
+/** '밝은 주얼리 화이트' 전용: 피부는 밝고 중립적으로(분홍·피치·베이지 기운 없이), 옷은 거의 흰색, 배경은 흰색. */
+const CLEAN_WEAR_LOOK_OPTIONS: typeof WEAR_LOOK_OPTIONS = {
+  skin: ["bright fair neutral skin tone, clean and luminous, with no pink, peach or beige cast", "light fair skin tone with a very faint neutral undertone, bright and even"],
+  eyes: WEAR_LOOK_OPTIONS.eyes,
+  hair: WEAR_LOOK_OPTIONS.hair,
+  clothing: ["pure white", "soft white", "off-white"],
+  background: ["pure white"],
+};
+
 function pickOne<T>(items: T[]): T {
   return items[Math.floor(Math.random() * items.length)];
 }
 
-function makeWearLook(): WearLook {
+function makeWearLook(style: QuickDetailStyle = "clean"): WearLook {
+  const options = style === "clean" ? CLEAN_WEAR_LOOK_OPTIONS : WEAR_LOOK_OPTIONS;
   return {
-    skin: pickOne(WEAR_LOOK_OPTIONS.skin),
-    eyes: pickOne(WEAR_LOOK_OPTIONS.eyes),
-    hair: pickOne(WEAR_LOOK_OPTIONS.hair),
-    clothing: pickOne(WEAR_LOOK_OPTIONS.clothing),
-    background: pickOne(WEAR_LOOK_OPTIONS.background),
+    skin: pickOne(options.skin),
+    eyes: pickOne(options.eyes),
+    hair: pickOne(options.hair),
+    clothing: pickOne(options.clothing),
+    background: pickOne(options.background),
   };
 }
 
@@ -454,7 +464,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
 
   async function editSection(section: QuickDetailSection, lookAnchor?: QuickDetailSection) {
     const isWear = section.kind === "wear";
-    if (isWear && !wearLookRef.current) wearLookRef.current = makeWearLook();
+    if (isWear && !wearLookRef.current) wearLookRef.current = makeWearLook(style);
     const references: Array<{ dataUrl: string; role: string }> = [{ dataUrl: section.dataUrl, role: section.kind || "detail-section" }];
     // 먼저 완성된 착용컷이 있으면 두 번째 참고 사진으로 보내 같은 모델·같은 분위기로 맞춘다.
     if (isWear && lookAnchor) references.push({ dataUrl: lookAnchor.dataUrl, role: "approved-look" });

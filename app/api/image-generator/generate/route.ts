@@ -30,11 +30,18 @@ function promptFor(body: Record<string, unknown>) {
     if (sectionKind === "wear") {
     const look = (body.look || null) as { skin?: string; eyes?: string; hair?: string; clothing?: string; background?: string } | null;
     const hasLookReference = body.hasLookReference === true;
-    const skinLine = look?.skin ? `skin tone: exactly ${look.skin}` : "skin tone: a noticeably different natural skin tone and undertone";
+    const isClean = style !== "ivory" && style !== "modern";
+    const skinLine = isClean
+      ? "skin tone: bright, clean and luminous fair skin that stays as light as the input photo or lighter; neutral and natural, with NO pink, rosy, peach, orange, yellow or beige cast and never darker or duller than the input"
+      : look?.skin ? `skin tone: exactly ${look.skin}` : "skin tone: a noticeably different natural skin tone and undertone";
     const eyesLine = look?.eyes ? `eyes: ${look.eyes}, without changing where the eyes are` : "eyes: a different natural eye shape and eye color, without changing where the eyes are";
     const hairLine = look?.hair ? `hair color: exactly ${look.hair}, the same shade on every photo of this set` : "hair color: a clearly different natural hair color";
-    const clothingLine = look?.clothing ? `clothing color: exactly ${look.clothing} (keep the same neckline and garment position)` : "clothing color: a clearly different clothing color (keep the same neckline and garment position)";
-    const backgroundLine = look?.background ? `background color: exactly ${look.background}, keeping the same soft studio feel and depth` : "background color: a clearly different background color and tone, keeping the same soft studio feel and depth";
+    const clothingLine = isClean
+      ? "clothing color: white or off-white ONLY (keep the same neckline and garment position). Any blue, floral, patterned, pink, colored or dark clothing in the input must be repainted plain white so nothing distracts from the jewelry; the garment pattern may change"
+      : look?.clothing ? `clothing color: exactly ${look.clothing} (keep the same neckline and garment position)` : "clothing color: a clearly different clothing color (keep the same neckline and garment position)";
+    const backgroundLine = isClean
+      ? "background color: bright pure white (#FFFFFF), clean and even, with no beige, pink, cream or gray tint. Only if the white clothing and the white background would be hard to tell apart, change the background alone to a very light, bright beige or light gray so the garment edge stays readable; the skin must still look bright and neutral, never darkened by that background"
+      : look?.background ? `background color: exactly ${look.background}, keeping the same soft studio feel and depth` : "background color: a clearly different background color and tone, keeping the same soft studio feel and depth";
     const lookNote = look
       ? `\n\nSET CONSISTENCY: this photo belongs to the same product detail page as other wear shots, so the model must look like the SAME woman or man in every photo: use the exact appearance values below, the same overall face impression, the same hair color and texture, the same skin tone, the same clothing color and the same background tone and lighting.${hasLookReference ? " The SECOND input image is an already finished photo of this same set: copy ONLY the model's appearance from it (face impression, skin tone, eye color, hair color and texture, clothing color, background tone, lighting). Never copy its composition, pose, crop or jewelry. The FIRST input image is still the photograph to edit, and its jewelry and composition must be kept." : ""}`
       : "";
@@ -47,7 +54,9 @@ This is a WEAR SHOT. Keep the photograph's composition exactly as it is: the sam
 - hairstyle design: restyle ONLY the hair that already exists in the input, within the same head position and never covering the jewelry. Keep the same hair length and roughly the same amount of hair: short hair stays short, long hair stays long. Change only the parting, fringe direction, texture, wave or neatness within that same length. Never add hair that is not there: no longer hair, extensions, ponytails, buns, bangs or strands falling on the neck, shoulders or ears;
 - ${clothingLine};
 - ${backgroundLine}.
-Both the clothing color and the background color must ALWAYS be very light, pale, low-saturation colors chosen only from this palette: light beige, pale pink, light gray, cream, ivory, white, pale mint. Never use dark, deep, saturated, vivid or strongly colored clothing or backgrounds, and never black, brown, camel, navy or red.
+${isClean
+  ? "Overall brightness: the whole photo must look bright, airy and clean like a white-background jewelry shop photo; exposure and white balance neutral, no warm, pink or beige color cast over the skin or background. Never use dark, deep, saturated, vivid or strongly colored clothing or backgrounds, and never black, brown, camel, navy, blue, red or pink."
+  : "Both the clothing color and the background color must ALWAYS be very light, pale, low-saturation colors chosen only from this palette: light beige, pale pink, light gray, cream, ivory, white, pale mint. Never use dark, deep, saturated, vivid or strongly colored clothing or backgrounds, and never black, brown, camel, navy or red."}
 Keep exactly the same gender and age range as the input. If the model is a man, he must stay clearly a man: masculine face and jawline, masculine short men's hairstyle if the hair is short, no makeup, no feminine styling. Never turn a man into a woman or a woman into a man. Keep realistic pores, natural professional retouching and correct anatomy; do not reshape the body, hands, fingers or ears.
 
 Lock the jewelry and copy it from the input as a rigid, unchangeable object: exact design, silhouette, real-world scale, position and orientation on the body. Reproduce with pixel-level fidelity the thickness and width of every hoop, band or bar and its flat or rounded cross-section, the exact size ratio between each part, the exact shape, size and cut of every stone, and every engraved letter, initial, motif or pattern (for example an "H" shape inside or beside a stone) with the same lines and orientation. Keep the same metal color, finish and highlights. Do not thin, thicken, shrink, enlarge, blur, simplify, restyle or redraw any part. Never replace, add or remove any jewelry. The jewelry must stay clearly visible and unobstructed.
