@@ -364,6 +364,7 @@ export default function Home() {
   const [adjustPreview, setAdjustPreview] = useState("");
   const [adjustResult, setAdjustResult] = useState("");
   const [lightbox, setLightbox] = useState("");
+  const [lightboxInfo, setLightboxInfo] = useState("");
 
   const [detailImages, setDetailImages] = useState<DetailImage[]>([]);
   // 2026-11-04 사진 아래 글 칸은 평소엔 숨기고, 그 사진의 '텍스트 넣기'를 누를 때만 연다(이미 글이 있으면 계속 보임).
@@ -3286,7 +3287,7 @@ export default function Home() {
             {uploadPool.map((item, index) => (
               <div className="uploadPoolItem" key={`${item.fileName}-${index}`} draggable
                 onDragStart={e => e.dataTransfer.setData("application/x-laura-pool-index", String(index))}>
-                <PoolThumb src={item.dataUrl} alt={item.fileName} />
+                <PoolThumb src={item.dataUrl} alt={item.fileName} onOpen={() => setLightbox(item.dataUrl)} />
                 <span>{item.fileName}</span>
                 {/* 2026-11-10 AI 분석에 쓸 사진을 업로드 풀에서 언제든 바꾼다 */}
                 <button type="button" className={photos[0]?.dataUrl === item.dataUrl ? "softSageButton" : "softApricotButton"} disabled={photos[0]?.dataUrl === item.dataUrl}
@@ -3768,8 +3769,13 @@ export default function Home() {
       {/* 2026-10-21: '9. 등록 진행상황(WIMS 상품등록상태)'은 입고센터 '최신정보 업데이트' 5번으로 옮겨 여기서는 뺐다. */}
 
       {lightbox && (
-        <div className="lightbox" onClick={() => setLightbox("")}>
-          <img src={lightbox} alt="확대" onClick={e => e.stopPropagation()} />
+        <div className="lightbox" onClick={() => { setLightbox(""); setLightboxInfo(""); }}>
+          <img src={lightbox} alt="확대" onClick={e => e.stopPropagation()}
+            onLoad={e => {
+              const image = e.currentTarget;
+              setLightboxInfo(`${image.naturalWidth}×${image.naturalHeight}${lightbox.startsWith("data:") ? ` · ${formatBytes(dataUrlBytes(lightbox))}` : ""}`);
+            }} />
+          {lightboxInfo && <span className="lightboxInfo">원본 {lightboxInfo}</span>}
         </div>
       )}
     </main>
@@ -3814,22 +3820,31 @@ async function checkModelInGoogleDb(model: string): Promise<{ duplicate: boolean
 }
 
 // 2026-11-10 사진 목록은 수천 px 원본을 그대로 띄우면 화면을 내리거나 끌 때 느려진다 → 작은 미리보기만 보여준다(원본은 그대로 보관).
-const poolThumbCache = new Map<string, string>();
+// 2026-11-11 목록 사진을 누르면 원본을 크게 보고, 사진마다 픽셀·용량을 보여준다(미리보기는 480px·품질 0.88로 올림).
+type PoolThumbInfo = { thumb: string; w: number; h: number };
+const poolThumbCache = new Map<string, PoolThumbInfo>();
 const poolThumbKey = (src: string) => `${src.length}:${src.slice(32, 96)}:${src.slice(-64)}`;
-function PoolThumb({ src, alt }: { src: string; alt: string }) {
-  const [thumb, setThumb] = useState<string>(() => poolThumbCache.get(poolThumbKey(src)) || "");
+function dataUrlBytes(src: string) {
+  const comma = src.indexOf(",");
+  return Math.round((comma >= 0 ? src.length - comma - 1 : src.length) * 3 / 4);
+}
+function formatBytes(bytes: number) {
+  return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(bytes / 1024))}KB`;
+}
+function PoolThumb({ src, alt, onOpen }: { src: string; alt: string; onOpen?: () => void }) {
+  const [info, setInfo] = useState<PoolThumbInfo | null>(() => poolThumbCache.get(poolThumbKey(src)) || null);
   useEffect(() => {
     const key = poolThumbKey(src);
     const cached = poolThumbCache.get(key);
-    if (cached) { setThumb(cached); return; }
+    if (cached) { setInfo(cached); return; }
     let alive = true;
     const img = new Image();
     img.onload = () => {
       if (!alive) return;
       const longSide = Math.max(img.naturalWidth, img.naturalHeight);
       let result = src;
-      if (longSide > 320) {
-        const ratio = 320 / longSide;
+      if (longSide > 480) {
+        const ratio = 480 / longSide;
         const canvas = document.createElement("canvas");
         canvas.width = Math.max(1, Math.round(img.naturalWidth * ratio));
         canvas.height = Math.max(1, Math.round(img.naturalHeight * ratio));
@@ -3838,17 +3853,28 @@ function PoolThumb({ src, alt }: { src: string; alt: string }) {
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = "high";
           ctx.drawImage(makePreviewSource(img, 1280), 0, 0, canvas.width, canvas.height);
-          result = canvas.toDataURL("image/jpeg", 0.82);
+          result = canvas.toDataURL("image/jpeg", 0.88);
         }
       }
+      const next = { thumb: result, w: img.naturalWidth, h: img.naturalHeight };
       if (poolThumbCache.size > 120) poolThumbCache.delete(poolThumbCache.keys().next().value as string);
-      poolThumbCache.set(key, result);
-      setThumb(result);
+      poolThumbCache.set(key, next);
+      setInfo(next);
     };
     img.src = src;
     return () => { alive = false; };
   }, [src]);
-  return <img src={thumb || undefined} alt={alt} />;
+  // 결과 이미지는 1000×1000이라, 긴 변이 1000px보다 작은 원본은 늘려 쓰게 되어 흐려진다.
+  const low = info ? Math.max(info.w, info.h) < 1000 : false;
+  return (
+    <>
+      <img src={info?.thumb || undefined} alt={alt} className={onOpen ? "poolThumbImg" : undefined} onClick={onOpen}
+        title={onOpen ? "누르면 원본을 크게 봅니다." : undefined} />
+      {info && <small className={low ? "poolInfo poolInfoLow" : "poolInfo"} title={low ? "원본이 1000px보다 작아 1000×1000 결과로 늘려 쓰면 흐려집니다." : undefined}>
+        {info.w}×{info.h} · {formatBytes(dataUrlBytes(src))}{low ? " · 화질 낮음" : ""}
+      </small>}
+    </>
+  );
 }
 
 function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage; title: string; onChange: (v: SlotImage | null) => void; tuneHost: HTMLElement | null }) {
@@ -3969,12 +3995,13 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
 
   const quality = loadedImg ? cropQuality(loadedImg.naturalWidth, loadedImg.naturalHeight, view.zoom) : null;
   const qualityText = quality
-    ? quality.level === "ok" ? "화질 충분"
+    ? quality.level === "ok" ? `화질 충분 · 원본 ${loadedImg!.naturalWidth}×${loadedImg!.naturalHeight}`
       : `${quality.level === "warn" ? "화질 주의" : "화질 흐려짐"} · 원본 ${quality.regionPx}px`
     : "";
+  const sourceSizeText = loadedImg ? `(원본 ${loadedImg.naturalWidth}×${loadedImg.naturalHeight}) ` : "";
   const qualityHint = quality && quality.level !== "ok"
-    ? `잘라 쓰는 원본 부분이 ${quality.regionPx}px라 1000px로 늘려 쓰는 중입니다. 선명하게 쓰려면 확대를 줄이거나 더 큰 원본·Upscayl로 키운 사진을 쓰세요.`
-    : "원본 사진 점이 충분해서 선명하게 저장됩니다.";
+    ? `${sourceSizeText}잘라 쓰는 원본 부분이 ${quality.regionPx}px라 1000px로 늘려 쓰는 중입니다. 선명하게 쓰려면 확대를 줄이거나 더 큰 원본·Upscayl로 키운 사진을 쓰세요.`
+    : `${sourceSizeText}원본 사진 점이 충분해서 선명하게 저장됩니다.`;
 
   return (
     <div
