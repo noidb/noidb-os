@@ -879,8 +879,11 @@ html,body{overflow-x:clip}
 .floatingSaveBar{position:fixed;right:14px;top:50%;transform:translateY(-50%);z-index:60;display:flex;flex-direction:column;gap:8px;width:108px}
 .floatingSaveBar button{width:100%;min-height:46px;padding:8px 6px;font-size:13px;line-height:1.25;box-shadow:0 2px 8px rgba(0,0,0,.12)!important}
 .floatingSaveSpacer{display:none}
+/* 내용 칸 바로 옆에 붙일 때(위치는 화면에서 재서 left로 지정) */
+.floatingSaveBar.floatingSaveBarBeside{right:auto;width:108px}
 @media (max-width:1320px) and (min-width:761px){
   .floatingSaveBar{width:96px;right:8px}
+  .floatingSaveBar.floatingSaveBarBeside{width:108px}
 }
 @media (max-width:760px){
   .floatingSaveBar{top:auto;bottom:0;left:0;right:0;transform:none;width:auto;flex-direction:row;padding:8px 10px;gap:8px;background:rgba(246,241,233,.96);border-top:1px solid #d8d0c5}

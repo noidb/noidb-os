@@ -522,6 +522,24 @@ export default function Home() {
   const [draftStatus, setDraftStatus] = useState("");
   const [draftSaving, setDraftSaving] = useState(false);
   const draftSavingRef = useRef(false);
+  // 2026-11-11 따라다니는 저장 메뉴를 내용 칸 바로 옆에 붙인다: 내용 칸 오른쪽 끝을 재서 그 옆 위치를 정한다(자리가 없으면 null → 화면 오른쪽 끝).
+  const mainRef = useRef<HTMLElement>(null);
+  const [saveBarLeft, setSaveBarLeft] = useState<number | null>(null);
+  useEffect(() => {
+    const place = () => {
+      const card = mainRef.current?.querySelector(".card") as HTMLElement | null;
+      const edge = (card || mainRef.current)?.getBoundingClientRect().right;
+      if (!edge || window.innerWidth <= 760) { setSaveBarLeft(null); return; }
+      const left = Math.round(edge + 10);
+      setSaveBarLeft(left + 108 <= window.innerWidth - 4 ? left : null);
+    };
+    place();
+    window.addEventListener("resize", place);
+    const timer = window.setTimeout(place, 800);
+    const observer = typeof ResizeObserver !== "undefined" && mainRef.current ? new ResizeObserver(place) : null;
+    if (observer && mainRef.current) observer.observe(mainRef.current);
+    return () => { window.removeEventListener("resize", place); window.clearTimeout(timer); observer?.disconnect(); };
+  }, []);
   // 2026-11-11 검수 요청: 다른 사용자가 저장한 상품을 사장님이 검수한다(사진까지 서버에 올림).
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewMessage, setReviewMessage] = useState("");
@@ -3017,18 +3035,38 @@ export default function Home() {
 
   const counterfeitAlert = ["확인필요", "높음"].includes(analysis.counterfeitRisk?.trim() || "");
 
+  const photoSelectHref = `/wms/product-catalog?status=${rocketNewModel ? "rocket-new" : "reregister"}${reregisterModelName ? `&model=${encodeURIComponent(reregisterModelName)}` : ""}`;
+
+  // 2026-11-11 따라다니는 메뉴 동작
+  // 제품사진선택: 새 탭에서 연다. 지금 작업 탭은 그대로 남으므로 따로 저장·이동하지 않는다.
+  const openPhotoSelectInNewTab = () => { window.open(photoSelectHref, "_blank"); };
+  // 임시저장 불러오기: 목록을 열고(항상 열림) 그 위치로 화면을 옮긴다.
+  const openDraftsAndScroll = () => {
+    setShowDrafts(true);
+    void refreshDrafts();
+    refreshReviewItems();
+    window.setTimeout(() => document.getElementById("product-draft-list")?.scrollIntoView({ behavior: "smooth", block: "start" }), 150);
+  };
+  // 전체 파일 저장: 저장이 끝나면 '실제 등록파일 준비 완료' 칸(없으면 저장된 파일 목록, 오류면 오류 문구)으로 화면을 옮긴다.
+  const saveAllAndGo = async () => {
+    await batchSave();
+    window.setTimeout(() => {
+      const status = document.getElementById("batch-status");
+      const failed = Boolean(status?.textContent?.startsWith("오류"));
+      const target = failed ? status : (document.getElementById("registration-next-step") || document.getElementById("db-saved-files") || status);
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 200);
+  };
+
   return (
-    <main className="shell">
+    <main className="shell" ref={mainRef}>
       {reregistrationMessage && <p role="status" className="message">{reregistrationMessage}</p>}
       <AppNavigation active="product-registration" />
       <header className="hero">
         <div className="heroBrandArea">
           <h1>AI 상품등록 도우미</h1>
           <div className="heroUtilityActions">
-            {(() => {
-              const photoSelectHref = `/wms/product-catalog?status=${rocketNewModel ? "rocket-new" : "reregister"}${reregisterModelName ? `&model=${encodeURIComponent(reregisterModelName)}` : ""}`;
-              return <Link className="imageGeneratorLink" href={photoSelectHref} onClick={event => void openPhotoSelect(event, photoSelectHref)}>제품사진선택</Link>;
-            })()}
+            <Link className="imageGeneratorLink" href={photoSelectHref} onClick={event => void openPhotoSelect(event, photoSelectHref)}>제품사진선택</Link>
             <button className="draftLoadButton" type="button" onClick={() => {
               setShowDrafts(value => !value);
               if (!showDrafts) { void refreshDrafts(); refreshReviewItems(); }
@@ -3761,12 +3799,12 @@ export default function Home() {
         </div>
         {draftStatus && <p className="detailMessage" role="status" aria-live="polite">{draftStatus}</p>}
         {!dbSupported && <p className="saveExplain">모바일에서는 상품DB ZIP이 다운로드됩니다. 다운로드 완료 후 공유 또는 파일 앱에서 Google Drive에 저장하세요.</p>}
-        {batchStatus && <p className={batchStatus.startsWith("오류") ? "error" : "detailMessage"}>{batchStatus}</p>}
+        {batchStatus && <p id="batch-status" className={batchStatus.startsWith("오류") ? "error" : "detailMessage"}>{batchStatus}</p>}
         {dbSavedFiles.length > 0 && (
-          <div className="dbFileList"><h3>저장된 파일</h3><ul>{dbSavedFiles.slice(0, 40).map(f => <li key={f}>{f}</li>)}</ul></div>
+          <div id="db-saved-files" className="dbFileList"><h3>저장된 파일</h3><ul>{dbSavedFiles.slice(0, 40).map(f => <li key={f}>{f}</li>)}</ul></div>
         )}
         {registrationUploadReady?.model === model && (
-          <div className="registrationNextStep" role="status">
+          <div id="registration-next-step" className="registrationNextStep" role="status">
             <div>
               <strong>실제 등록파일 준비 완료</strong>
               <span>{model} · {registrationUploadReady.files.length.toLocaleString()}개 파일 · Google 제품DB 반영 완료</span>
@@ -3939,12 +3977,13 @@ export default function Home() {
       )}
 
       {/* 2026-11-11 자주 쓰는 저장 메뉴: 스크롤 위치와 상관없이 화면에 따라다닌다(7번 칸의 같은 버튼과 같은 동작). */}
-      <nav className="floatingSaveBar" aria-label="자주 쓰는 저장 메뉴">
-        {dbSupported && <button type="button" className="softBeigeButton" onClick={pickFolder} title="상품DB 저장 폴더 선택">폴더 선택</button>}
+      <nav className={"floatingSaveBar" + (saveBarLeft !== null ? " floatingSaveBarBeside" : "")} style={saveBarLeft !== null ? { left: saveBarLeft } : undefined} aria-label="자주 쓰는 저장 메뉴">
+        <button type="button" className="softBeigeButton" onClick={openPhotoSelectInNewTab} title="새 탭에서 제품사진선택 화면을 엽니다">제품사진선택</button>
         <button type="button" className="softSageButton" disabled={draftSaving} onClick={() => void saveDraft()}>
           {draftSaving ? "저장 중..." : "임시저장"}
         </button>
-        <button type="button" className="softPinkButton" disabled={batchBusy} onClick={batchSave}>
+        <button type="button" className="softApricotButton" onClick={openDraftsAndScroll} title="임시저장 목록을 열고 그 위치로 이동합니다">임시저장 불러오기</button>
+        <button type="button" className="softPinkButton" disabled={batchBusy} onClick={() => void saveAllAndGo()}>
           {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP" : batchMode === "edit" ? "수정 파일 저장" : "전체 파일 저장"}
         </button>
       </nav>
