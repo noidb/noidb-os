@@ -22,6 +22,10 @@ function promptFor(body: Record<string, unknown>) {
       : style === "modern"
         ? "modern pale-gray luxury studio, crisp restrained lighting and contemporary styling"
         : "bright clean white luxury jewelry studio, natural soft lighting";
+    const metalName = ({ rosegold: "rose gold (a warm pinkish copper-gold)", silver: "polished silver (a cool white-gray metal)", gold: "yellow gold (a warm classic gold)" } as Record<string, string>)[String(body.color || "original")];
+    const colorRule = metalName
+      ? `\n\nCOLOR CHANGE (this overrides every earlier instruction to keep the metal color): recolor ONLY the metal parts of the jewelry to ${metalName}, evenly on every metal part (hoops, posts, chains, settings, clasps), keeping the same finish, reflections and highlights. Do not recolor stones, pearls, shell, enamel, leather, epoxy or black decoration. Everything else about the jewelry (shape, thickness, size, stone count and cut, engravings, position) stays identical, and all other instructions above still apply.`
+      : "";
     const shared = `The single input image is the exact photograph to edit. Leave any letters, words, logos or graphics that appear on the photograph exactly as they are: do not erase, blur, cover or paint over them, and never create white patches, blank areas, borders or empty margins where they were. The output must contain the same exact jewelry—not a similar or redesigned item.`;
     if (sectionKind === "wear") {
     const look = (body.look || null) as { skin?: string; eyes?: string; hair?: string; clothing?: string; background?: string } | null;
@@ -50,14 +54,14 @@ Lock the jewelry and copy it from the input as a rigid, unchangeable object: exa
 
 Fill the complete square with no embedded white border, frame, panel or letterboxing.
 
-Visual direction: ${mood}. Keep a square 1:1 composition suitable for a Korean online jewelry shop. No text, logo, border, watermark or props that hide the product.`;
+Visual direction: ${mood}. Keep a square 1:1 composition suitable for a Korean online jewelry shop. No text, logo, border, watermark or props that hide the product.${colorRule}`;
     }
 
     return `${shared}
 
 This is definitely a PRODUCT-ONLY SHOT. Preserve the jewelry pixels and exact identity as aggressively as possible: silhouette, engraving, grooves, facets, stone count and placement, clasp, thickness, proportions, metal and non-metal colors. Do not rotate, bend, redraw, reinterpret or generate a new camera side of the product. Keep the same product-facing angle; change only the surrounding studio background, lighting, shadows, crop and placement. Remove all original props and replace any gray, brown, colored or non-white background with a bright white-on-white studio setting. Select only one or two subtle new props: sheer white curtain folds, a plain white ceramic plate, a closed white book with absolutely no visible text, an ivory pedestal, or softly folded white fabric. Props must stay behind or beside the product, never overlap it, and never introduce strong colors. Reframe and enlarge the unchanged product naturally so the square is visually full with no embedded margins, screenshot frames, panels or letterboxing.
 
-Visual direction: ${mood}. Keep a square 1:1 composition suitable for a Korean online jewelry shop. No text, logo, border or watermark. This must look like a new studio setting around the exact same product.`;
+Visual direction: ${mood}. Keep a square 1:1 composition suitable for a Korean online jewelry shop. No text, logo, border or watermark. This must look like a new studio setting around the exact same product.${colorRule}`;
   }
   const product = (body.product || {}) as Record<string, unknown>;
   const profile = categoryProfile(String(product.category || "귀걸이"));

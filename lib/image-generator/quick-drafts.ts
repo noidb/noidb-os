@@ -1,4 +1,4 @@
-import type { QuickDetailSection, QuickDetailStyle } from "./quick-detail";
+import type { QuickDetailColor, QuickDetailSection, QuickDetailStyle } from "./quick-detail";
 
 export type QuickDraftResult = {
   dataUrl: string;
@@ -18,6 +18,8 @@ export type QuickDetailDraft = {
   footerUrl: string;
   footerName: string;
   style: QuickDetailStyle;
+  /** 예전 보관 작업에는 없을 수 있다(없으면 원본 유지). */
+  color?: QuickDetailColor;
   originalSections: QuickDetailSection[];
   editedSections: QuickDetailSection[];
   finalSections: QuickDetailSection[];

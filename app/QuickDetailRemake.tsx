@@ -3,7 +3,7 @@
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
 import { extendToSquareCanvas } from "@/lib/thumbnail/fit";
-import { composeQuickDetailPage, readImageFile, resizeSectionTo1000, splitDetailPage, type QuickDetailSection, type QuickDetailStyle } from "@/lib/image-generator/quick-detail";
+import { composeQuickDetailPage, readImageFile, resizeSectionTo1000, splitDetailPage, type QuickDetailColor, type QuickDetailSection, type QuickDetailStyle } from "@/lib/image-generator/quick-detail";
 import { deleteQuickDraft, listQuickDrafts, MAX_QUICK_DRAFTS, saveQuickDraft, type QuickDetailDraft } from "@/lib/image-generator/quick-drafts";
 import styles from "./quick-detail.module.css";
 
@@ -11,6 +11,14 @@ const STYLE_OPTIONS: Array<{ value: QuickDetailStyle; title: string; description
   { value: "clean", title: "밝은 주얼리 화이트", description: "밝고 깨끗한 쇼핑몰 제품사진 분위기" },
   { value: "ivory", title: "고급 아이보리", description: "따뜻하고 부드러운 고급 주얼리 분위기" },
   { value: "modern", title: "모던 그레이", description: "차분하고 세련된 현대적인 분위기" },
+];
+
+/** 제품 컬러 견본. swatch는 화면에 보이는 동그란 색(금속 느낌의 그라데이션). */
+const COLOR_OPTIONS: Array<{ value: QuickDetailColor; title: string; swatch: string }> = [
+  { value: "original", title: "원본 유지", swatch: "#ffffff" },
+  { value: "rosegold", title: "로즈골드", swatch: "linear-gradient(135deg,#f3d2c4,#d9a28f)" },
+  { value: "silver", title: "실버", swatch: "linear-gradient(135deg,#f2f3f4,#b9bcc0)" },
+  { value: "gold", title: "골드", swatch: "linear-gradient(135deg,#f3e2a6,#d4b04a)" },
 ];
 
 type Result = { dataUrl: string; sectionCount: number; width: number; height: number };
@@ -180,6 +188,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   const [source, setSource] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [style, setStyle] = useState<QuickDetailStyle>("clean");
+  const [color, setColor] = useState<QuickDetailColor>("original");
   const [originalSections, setOriginalSections] = useState<QuickDetailSection[]>([]);
   const [editedSections, setEditedSections] = useState<QuickDetailSection[]>([]);
   const [sectionActions, setSectionActions] = useState<Record<string, "edit" | "original">>({});
@@ -216,14 +225,14 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       if (!draftId) setDraftId(id);
       const draft: QuickDetailDraft = {
         id, savedAt: new Date().toISOString(), modelName, source, sourceName, headerUrl: "", headerName: "", footerUrl: "", footerName: "",
-        style, originalSections, editedSections, finalSections, sectionActions, result, scanSummary,
+        style, color, originalSections, editedSections, finalSections, sectionActions, result, scanSummary,
         preview: editedSections[0]?.dataUrl || originalSections[0]?.dataUrl || source,
       };
       void saveQuickDraft(draft).then(items => setDrafts(items)).catch(() => undefined);
     }, 700);
     return () => window.clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftsReady, draftId, source, sourceName, modelName, style, originalSections, editedSections, finalSections, sectionActions, result, scanSummary]);
+  }, [draftsReady, draftId, source, sourceName, modelName, style, color, originalSections, editedSections, finalSections, sectionActions, result, scanSummary]);
 
   useEffect(() => {
     if (incomingFile) void startUpload(incomingFile);
@@ -452,7 +461,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     const response = await fetch("/api/image-generator/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "quick-detail", style, sectionKind: section.kind, look: isWear ? wearLookRef.current : undefined, hasLookReference: isWear && Boolean(lookAnchor), references }),
+      body: JSON.stringify({ kind: "quick-detail", style, color, sectionKind: section.kind, look: isWear ? wearLookRef.current : undefined, hasLookReference: isWear && Boolean(lookAnchor), references }),
     });
     const data = await response.json() as { imageDataUrl?: string; error?: string };
     if (!response.ok || !data.imageDataUrl) throw new Error(data.error || "사진을 새로 만들지 못했습니다.");
@@ -546,6 +555,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     setSource(draft.source);
     setSourceName(draft.sourceName);
     setStyle(draft.style);
+    setColor(draft.color || "original");
     setOriginalSections(draft.originalSections);
     setEditedSections(draft.editedSections);
     setFinalSections(draft.finalSections);
@@ -571,7 +581,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
 
   return <div className={styles.quickPanel} style={{ maxWidth: "none", margin: 0 }}>
     <div className={styles.quickIntro}>
-      <div><span>AI DETAIL REMAKE</span><h3 style={{ fontSize: 20, margin: "0 0 6px" }}>같은 제품으로 새로운 상세페이지 만들기</h3></div>
+      <div><span>AI DETAIL REMAKE</span><h3 style={{ fontSize: 20, margin: "0 0 6px" }}>AI 사진편집</h3></div>
     </div>
     <div className={styles.quickSteps} onDragEnter={event => { event.preventDefault(); if (!busy) setDragging(true); }} onDragOver={event => { event.preventDefault(); if (!busy) setDragging(true); }} onDragLeave={event => { event.preventDefault(); setDragging(false); }} onDrop={dropFile}>
       <article>
@@ -594,8 +604,19 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         {sourceName && <small>{sourceName}</small>}
       </article>
       <article>
-        <span>2</span><h3>새로운 분위기 선택</h3>
+        <span>2</span><h3>분위기·컬러 선택</h3>
         <div className={styles.styleChoices}>{STYLE_OPTIONS.map(option => <label key={option.value} className={style === option.value ? styles.selectedStyle : ""}><input type="radio" name="quick-style" value={option.value} checked={style === option.value} onChange={() => { setStyle(option.value); setEditedSections([]); invalidateResult(); setProgress(0); }} /><strong>{option.title}</strong><small>{option.description}</small></label>)}</div>
+        <div className={styles.colorPick}>
+          <strong>제품 컬러</strong>
+          <div role="radiogroup" aria-label="제품 컬러">
+            {COLOR_OPTIONS.map(option => <button key={option.value} type="button" role="radio" aria-checked={color === option.value} disabled={busy}
+              className={color === option.value ? styles.colorSelected : ""}
+              onClick={() => { if (color === option.value) return; setColor(option.value); setEditedSections([]); invalidateResult(); setProgress(0); }}>
+              <i style={{ background: option.swatch }} />{option.title}
+            </button>)}
+          </div>
+          <small>{color === "original" ? "제품 색은 그대로 두고 분위기만 바꿉니다." : "분위기는 그대로, 제품 금속 색만 바뀝니다. 제품컷·착용컷 모두 적용됩니다."}</small>
+        </div>
       </article>
       <article>
         <span>3</span><h3>AI 사진편집</h3>

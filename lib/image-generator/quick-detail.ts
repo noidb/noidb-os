@@ -1,6 +1,8 @@
 import { extendToSquareCanvas } from "@/lib/thumbnail/fit";
 
 export type QuickDetailStyle = "clean" | "ivory" | "modern";
+/** 제품 컬러 변경: original=원본 유지. 분위기는 그대로 두고 제품 금속 색만 바꾼다. */
+export type QuickDetailColor = "original" | "rosegold" | "silver" | "gold";
 
 export type QuickDetailSection = {
   id: string;

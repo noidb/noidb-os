@@ -69,3 +69,13 @@
 .quickSteps .quickCreate{background:#e3ede6;border:1px solid #b9cbbc;color:#3f574b;border-radius:8px;min-height:46px}
 .quickSteps .quickCreate:hover:not(:disabled){background:#d3e3d9}
 .splitButton{min-height:46px}
+/* 2026-11-11: 제품 컬러 — 동그란 색 견본 4개(원본 유지·로즈골드·실버·골드), 한 번에 하나만 선택 */
+.colorPick{margin-top:12px;padding-top:12px;border-top:1px solid #ece8e2;display:grid;gap:8px}
+.colorPick>strong{font-size:13px}
+.colorPick>div{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.colorPick button{display:flex;flex-direction:column;align-items:center;gap:5px;min-height:62px;padding:8px 2px;border:1px solid #ded8d1;border-radius:8px;background:#fff;color:#4b4744;font-size:11px;font-weight:800;letter-spacing:-.03em;line-height:1.2;white-space:nowrap;cursor:pointer}
+.colorPick button i{display:block;width:24px;height:24px;border-radius:50%;border:1px solid #c9c2b9}
+.colorPick button:hover:not(:disabled){background:#f4f1ec}
+.colorPick button:disabled{opacity:.5;cursor:not-allowed}
+.colorPick .colorSelected{border-color:#60766a;background:#f1f5f2;box-shadow:0 0 0 1px #60766a}
+.colorPick>small{font-size:11px;color:#77716a;line-height:1.4}
