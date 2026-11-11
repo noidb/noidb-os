@@ -1594,6 +1594,13 @@ export default function ProductCatalogPage() {
             <div style={{ color: wmsColors.ink, fontWeight: 900, fontSize: 18 }}>신상등록대기 · {waiting ? `${waiting.categories.length}개 카테고리 · ${total}개 폴더` : "목록 없음"}</div>
             <button type="button" className="softSageButton" disabled={waitingLoading} onClick={() => void reloadWaitingFolders()} style={{ minHeight: 36, minWidth: 110, padding: "0 14px", borderRadius: 8, fontWeight: 700, cursor: waitingLoading ? "wait" : "pointer" }}>{waitingLoading ? "읽는 중…" : waiting ? "목록 새로고침" : "목록 불러오기"}</button>
           </div>
+          {/* 2026-11-11 목록은 컴퓨터마다 따로 저장되므로, 읽은 지 12시간이 넘었으면 새로고침을 누르라고 안내한다. */}
+          {waiting && (() => {
+            const readAt = new Date(waiting.readAt);
+            const old = Date.now() - waiting.readAt > 12 * 60 * 60 * 1000;
+            const label = `${readAt.getMonth() + 1}월 ${readAt.getDate()}일 ${String(readAt.getHours()).padStart(2, "0")}:${String(readAt.getMinutes()).padStart(2, "0")}`;
+            return <p role={old ? "alert" : undefined} style={{ margin: "6px 0 0", color: old ? wmsColors.warnText : wmsColors.muted, fontSize: 12, fontWeight: old ? 700 : 400 }}>{old ? `이 컴퓨터에서 ${label}에 읽은 목록입니다. 그 뒤 폴더가 바뀌었을 수 있으니 '목록 새로고침'을 눌러 주세요.` : `이 컴퓨터에서 ${label}에 읽은 목록입니다.`}</p>;
+          })()}
           <p style={{ margin: "6px 0 0", color: wmsColors.muted, fontSize: 12 }}>{waiting ? <>{waiting.base} 폴더 안의 카테고리를 누르면 그 안의 폴더가 이름 그대로 나옵니다. 새 폴더를 넣었으면 &apos;목록 새로고침&apos;을 누르세요.</> : "신상등록대기 폴더 안의 폴더 목록을 아직 읽지 않았습니다. '목록 불러오기'를 눌러주세요."}</p>
           {waitingError && <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
             <p role="alert" style={{ color: wmsColors.warnText, fontSize: 13, fontWeight: 700, margin: 0 }}>{waitingError}</p>
