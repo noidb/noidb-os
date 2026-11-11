@@ -156,7 +156,11 @@ function doPost(e) {
     if (data.action === 'importPurchaseOrders') return importPurchaseOrders_(ss, db, data.items || []);
 
     if (data.action === 'checkModel') {
-      return json_(Object.assign({ ok: true }, reregistrationEligibility_(db, String(data.model || '').trim())));
+      const checkedModel = String(data.model || '').trim();
+      const eligibility = reregistrationEligibility_(db, checkedModel);
+      // 2026-11-11: 기존 모델에 컬러만 추가하는 등록을 위해, 모든 탭에 이미 있는 모델SKU 목록도 함께 돌려준다.
+      const existingSkus = eligibility.duplicate ? existingModelSkuKeys_(ss, db, checkedModel) : [];
+      return json_(Object.assign({ ok: true }, eligibility, { existingSkus: existingSkus }));
     }
 
     const model = Array.isArray(data.productInputRow) ? String(data.productInputRow[4] || '').trim() : '';
@@ -171,6 +175,18 @@ function doPost(e) {
     try {
       const cached = operationCache.get(operationKey);
       if (cached) return json_(JSON.parse(cached));
+
+      // 2026-11-11: 기존 모델에 컬러만 추가. 기존 행은 건드리지 않고, 어느 탭에도 없는 새 모델SKU 행만 제품DB에 붙인다.
+      if (data.syncMode === 'addColors') {
+        if (String(data.replacementSku || '').trim()) {
+          return json_({ ok: false, error: '재등록 상품에는 컬러 추가를 쓸 수 없습니다.' });
+        }
+        const addResult = addColorsToExistingModel_(ss, db, model, data);
+        if (data.quoteRecord) saveQuoteQueue_(ss, data.quoteRecord);
+        const colorResult = Object.assign({ ok: true, duplicate: false, colorsAdded: true, quoteQueued: Boolean(data.quoteRecord) }, addResult);
+        operationCache.put(operationKey, JSON.stringify(colorResult), 21600);
+        return json_(colorResult);
+      }
 
       const duplicate = model && (registrationUsesCurrentLayout ? reregistrationEligibility_(db, model).duplicate : modelExists_(db, model));
       if (duplicate && data.syncMode !== 'reregisterStopped') {
@@ -447,6 +463,104 @@ function moveSameModelRowsBelow_(db, model, destinationRow, order) {
     moved++;
   }
   return moved;
+}
+
+/**
+ * 2026-11-11: 같은 모델의 모델SKU(대문자)를 모든 탭에서 모은다.
+ * 제품DB + 재등록 목록 탭(판매중지SKU·실적저조SKU·그 외 재등록SKU) + 비관리SKU. 시트는 바꾸지 않는다.
+ */
+function existingModelSkuKeys_(ss, db, model) {
+  const wanted = String(model || '').trim().toLowerCase();
+  const keys = [];
+  if (!wanted) return keys;
+  const sheets = [db].concat(REREGISTRATION_SOURCE_TABS_.concat(['비관리SKU']).map(name => ss.getSheetByName(name)).filter(Boolean));
+  sheets.forEach(sheet => {
+    if (sheet.getLastRow() < 2) return;
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0].map(value => String(value || '').trim());
+    const modelAt = headers.indexOf('모델명/품번');
+    const skuAt = headers.indexOf('모델SKU');
+    if (modelAt < 0 || skuAt < 0) return;
+    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getDisplayValues();
+    values.forEach(row => {
+      if (String(row[modelAt] || '').trim().toLowerCase() !== wanted) return;
+      const key = String(row[skuAt] || '').trim().toUpperCase();
+      if (key && keys.indexOf(key) < 0) keys.push(key);
+    });
+  });
+  return keys;
+}
+
+/**
+ * 2026-11-11: 기존 모델에 컬러만 추가 등록한다.
+ * - 기존 행(제품DB·재등록 목록 탭·비관리SKU)은 읽기만 하고 절대 바꾸지 않는다.
+ * - 어느 탭에도 없는 모델SKU(옛 표기 S·SS·SG 포함 비교)만 제품DB에 새 행으로 붙인다(현재상태 '신상승인대기').
+ * - 새 행은 같은 모델 기존 행 바로 아래에 둔다. 새로 붙일 줄이 하나도 없으면 아무것도 바꾸지 않고 오류로 알린다.
+ */
+function addColorsToExistingModel_(ss, db, model, data) {
+  if (!model) throw new Error('모델명이 없습니다.');
+  const existing = existingModelSkuKeys_(ss, db, model);
+  if (!existing.length) throw new Error(model + ': 기존 모델을 찾지 못했습니다. 새 모델은 일반 신상 등록으로 저장해주세요.');
+  // 기존 모델명과 대소문자까지 같아야 같은 모델로 붙일 수 있다(다르면 모델 행이 따로 갈라진다).
+  const modelColumn = dbColumn_('모델명/품번');
+  if (dbMatrix_(db).some(row => {
+    const name = String(row[modelColumn] || '').trim();
+    return name && name !== model && name.toLowerCase() === model.toLowerCase();
+  })) throw new Error(model + ': 기존 모델명과 대소문자까지 정확히 같아야 컬러를 추가할 수 있습니다.');
+  const skuColumn = dbColumn_('모델SKU');
+  const exact = {};
+  const legacy = {};
+  existing.forEach(key => { exact[key] = true; legacy[legacySkuKey_(key, model)] = true; });
+  const incoming = (Array.isArray(data.productDbRows) ? data.productDbRows : []).map(source => {
+    const row = source.slice(0, PRODUCT_DB_HEADERS.length);
+    while (row.length < PRODUCT_DB_HEADERS.length) row.push('');
+    return row;
+  });
+  const skipped = [];
+  const fresh = incoming.filter(row => {
+    const key = String(row[skuColumn] || '').trim().toUpperCase();
+    if (!key) return false;
+    if (exact[key] || legacy[legacySkuKey_(key, model)]) { skipped.push(key); return false; }
+    return true;
+  });
+  if (!fresh.length) throw new Error(model + ': 추가할 새 컬러(모델SKU)가 없습니다. 입력한 옵션이 모두 이미 등록되어 있어 제품DB는 변경하지 않았습니다.');
+  assertUniqueProductKeys_(fresh, '컬러 추가 옵션');
+  assertNoExistingProductKeyCollisions_(db, fresh);
+
+  const imageColumn = dbColumn_('이미지');
+  const wantedImages = {};
+  fresh.forEach(row => { wantedImages[String(row[imageColumn] || '').trim()] = true; });
+  const images = (Array.isArray(data.productImages) ? data.productImages : []).filter(item => wantedImages[String(item.filename || '').trim()]);
+  // 새 SKU 파일명이라 기존 이미지를 지울 일이 없다. true = 같은 이름 파일이 있어도 지우지 않는다.
+  const imageFormulas = saveProductImages_(images, true);
+
+  const orderColumn = dbColumn_('기본순서');
+  const existingRows = productDbRowsForModel_(db, model);
+  const sameOrder = existingRows.length ? number_(existingRows[0].values[orderColumn]) : 0;
+  const newOrder = sameOrder || (8000000000000000 + Date.now());
+  fresh.forEach(row => {
+    const filename = String(row[imageColumn] || '').trim();
+    if (imageFormulas[filename]) row[imageColumn] = imageFormulas[filename];
+    if (!String(row[dbColumn_('SKU ID')] || '').trim() && !String(row[dbColumn_('현재상태')] || '').trim()) row[dbColumn_('현재상태')] = '신상승인대기';
+    row[orderColumn] = newOrder;
+    row[dbColumn_('마진')] = number_(row[dbColumn_('공급가')]) - number_(row[dbColumn_('원가(부가세포함)')]);
+  });
+
+  backupProductDbSheet_(ss, db, '컬러추가');
+  const startRow = db.getLastRow() + 1;
+  db.getRange(startRow, 1, fresh.length, PRODUCT_DB_HEADERS.length).setValues(fresh);
+  db.getRange(startRow, dbColumn_('원가(부가세포함)') + 1, fresh.length, 4).setNumberFormat('#,##0');
+  db.getRange(startRow, dbColumn_('마진') + 1, fresh.length, 1).setNumberFormat('#,##0');
+  for (let row = startRow; row < startRow + fresh.length; row++) db.setRowHeight(row, 82);
+  // 같은 모델 기존 행이 제품DB에 있으면 그 바로 아래로, 없으면(재등록 탭에만 있는 모델) 새 모델처럼 맨 위로 옮긴다.
+  const destination = existingRows.length ? existingRows[existingRows.length - 1].sheetRow + 1 : 2;
+  if (startRow > destination) db.moveRows(db.getRange(startRow, 1, fresh.length, 1), destination);
+  formatProductDb_(db);
+  return {
+    added: fresh.length,
+    skippedExisting: skipped.length,
+    addedSkus: fresh.map(row => String(row[skuColumn] || '').trim()),
+    registrationStage: { updatedRows: fresh.length, status: '신상승인대기' }
+  };
 }
 
 function replacementOptionKey_(row) {

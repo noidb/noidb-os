@@ -227,7 +227,7 @@ function buildGoogleSheetPayload(input: CollectInput, optionImages: Record<strin
   };
 }
 
-export async function syncProductDbToGoogleSheet(input: CollectInput): Promise<GoogleSheetSyncResult> {
+export async function syncProductDbToGoogleSheet(input: CollectInput, options: { addColorsOnly?: boolean } = {}): Promise<GoogleSheetSyncResult> {
   if (!input.title) return { ok: false, message: "Google 시트 (상품명 없음)" };
   try {
     const sheetImages = Object.fromEntries(await Promise.all(
@@ -237,7 +237,7 @@ export async function syncProductDbToGoogleSheet(input: CollectInput): Promise<G
       ])
     ));
     const operationId = globalThis.crypto?.randomUUID?.() || `registration-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const requestBody = JSON.stringify({ ...buildGoogleSheetPayload(input, input.skuImages !== undefined ? {} : sheetImages, input.skuImages !== undefined ? sheetImages : undefined), syncMode: "reregisterStopped", operationId });
+    const requestBody = JSON.stringify({ ...buildGoogleSheetPayload(input, input.skuImages !== undefined ? {} : sheetImages, input.skuImages !== undefined ? sheetImages : undefined), syncMode: options.addColorsOnly ? "addColors" : "reregisterStopped", operationId });
     let syncRes: Response | null = null;
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -260,6 +260,7 @@ export async function syncProductDbToGoogleSheet(input: CollectInput): Promise<G
     if (sync?.duplicate) return { ok: false, message: "Google 시트 (중복 모델명이라 건너뜀)" };
     if (!sync?.synced) return { ok: false, message: "Google 시트 (저장 결과를 확인하지 못함)" };
     const staged = Number(sync?.registrationStage?.updatedRows || 0);
+    if (sync?.result?.colorsAdded) return { ok: true, message: `Google 제품DB에 새 컬러 ${Number(sync.result.added || 0)}행 추가 완료 · 기존 행은 변경하지 않음` };
     if (sync?.reregistered) return { ok: true, message: `Google 시트 기존 ${staged}행 재등록 완료 · 누적정보 보존 · SKU/바코드/발주가능상태/제품링크/노출상품ID/옵션ID 초기화` };
     return { ok: true, message: staged > 0 ? `Google 시트 상품DB 누적 완료 · 등록파일생성 ${staged}행` : "Google 시트 상품DB 누적 완료" };
   } catch (error) {

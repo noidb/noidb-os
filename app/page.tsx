@@ -24,6 +24,7 @@ import { buildSkuRows, costWithVat, parseNumber } from "@/lib/excel/common";
 import type { SkuRow } from "@/lib/excel/types";
 import { assertProductDbFilesWritable, ensureProductFolderTree, rootFolderFileExists, writeCategoryFile, writeProductDbFiles, writeRootFolderFile } from "@/lib/product-db/fs";
 import { dataUrlToBlob } from "@/lib/product-db/files";
+import { legacyModelSkuKey } from "@/lib/wms/sku-normalize";
 import { buildProductDbZip } from "@/lib/product-db/zip";
 import { compressImageDataUrl } from "@/lib/image/compress";
 import { splitDetailPage, type QuickDetailSection } from "@/lib/image-generator/quick-detail";
@@ -563,6 +564,8 @@ export default function Home() {
   const [modelDuplicate, setModelDuplicate] = useState(false);
   const [modelCheckMessage, setModelCheckMessage] = useState("");
   const [modelReregisterable, setModelReregisterable] = useState(false);
+  // 2026-11-11 기존 모델에 컬러만 추가: 제품DB·재등록 목록·비관리 탭에 이미 있는 모델SKU(대문자) 목록
+  const [modelExistingSkus, setModelExistingSkus] = useState<string[]>([]);
   const [pendingReplacementCleanup, setPendingReplacementCleanup] = useState<PendingReplacementCleanup | null>(null);
   const [reregistrationMessage, setReregistrationMessage] = useState("");
   const [dimensionOcrBusy, setDimensionOcrBusy] = useState(false);
@@ -882,6 +885,7 @@ export default function Home() {
   useEffect(() => {
     let active = true;
     setModelReregisterable(false);
+    setModelExistingSkus([]);
     setModelCheckMessage("");
     if (!model) {
       setModelDuplicate(false);
@@ -893,6 +897,7 @@ export default function Home() {
       if (!active) return;
       setModelDuplicate(result.duplicate);
       setModelReregisterable(result.reregisterable);
+      setModelExistingSkus(result.existingSkus);
       setModelCheckMessage(result.message);
     }, 450);
     return () => { active = false; window.clearTimeout(timer); };
@@ -940,6 +945,8 @@ export default function Home() {
     }
   }, [product.category, product.colors, product.sizes]);
   const variants = variantOptions.rows;
+  // 판매중지가 아닌 기존 모델은 일괄 저장 대신 '새 컬러만 추가'로 저장한다(batchSave 참고).
+  const colorAddReady = batchMode === "actual" && modelDuplicate && !modelReregisterable && modelExistingSkus.length > 0;
   const activeVariantThumbs = useMemo(() => Object.fromEntries(variants.map(variant => [
     variant.key,
     Object.prototype.hasOwnProperty.call(variantThumbs, variant.key)
@@ -2360,9 +2367,14 @@ export default function Home() {
     }
   };
 
-  const buildCollectInput = async (detailOverride?: string) => {
+  // colorAddExisting가 있으면(기존 모델에 컬러만 추가) 이미 등록된 모델SKU는 빼고 새 컬러 옵션만으로 파일·시트 입력을 만든다.
+  const buildCollectInput = async (detailOverride?: string, colorAddExisting?: string[]) => {
+    const collectVariants = colorAddExisting ? variants.filter(variant => !modelSkuExists(`${model}${variant.sku}`, model, colorAddExisting)) : variants;
+    const collectProduct = colorAddExisting
+      ? { ...product, colors: [...new Set(collectVariants.map(variant => variant.color))].join(",") }
+      : product;
     const thumbs: Record<string, string> = {};
-    await Promise.all(variants.map(async variant => {
+    await Promise.all(collectVariants.map(async variant => {
       const source = activeVariantThumbs[variant.key]?.dataUrl;
       if (source) thumbs[`${model}${variant.sku}`] = await normalizeCoupangImage(source);
     }));
@@ -2385,7 +2397,7 @@ export default function Home() {
       model,
       title,
       tags,
-      product: product as unknown as Record<string, string>,
+      product: collectProduct as unknown as Record<string, string>,
       analysis,
       ready,
       photos: photos.map(p => p.dataUrl),
@@ -2411,8 +2423,8 @@ export default function Home() {
     };
   };
 
-  const collectInput = async (detailOverride?: string, syncGoogleSheet = true, editOnly = false) =>
-    collectProductDbFiles(await buildCollectInput(detailOverride), { syncGoogleSheet, editOnly });
+  const collectInput = async (detailOverride?: string, syncGoogleSheet = true, editOnly = false, colorAddExisting?: string[]) =>
+    collectProductDbFiles(await buildCollectInput(detailOverride, colorAddExisting), { syncGoogleSheet, editOnly });
 
   const migrateExistingDbToGoogle = async () => {
     if (!dbHandle) {
@@ -2562,7 +2574,7 @@ export default function Home() {
       return;
     }
 
-    let check = { duplicate: modelDuplicate, reregisterable: modelReregisterable, message: modelCheckMessage };
+    let check = { duplicate: modelDuplicate, reregisterable: modelReregisterable, message: modelCheckMessage, existingSkus: modelExistingSkus };
     // 화면의 중복확인은 모델명이 정해진 뒤 몇 초 늦게 끝나거나 Google 일시 오류로 실패할 수 있다.
     // 확인이 아직 안 끝났거나 실패한 상태로 저장을 누르면 막지 않고, 저장 직전에 Google DB를 다시 조회한다.
     // 중복·재등록 불가 결과도 다시 조회한다. 화면을 연 뒤 구글시트 상태(판매중지 등)를 고쳤을 수 있고,
@@ -2572,21 +2584,34 @@ export default function Home() {
       check = await checkModelInGoogleDb(model);
       setModelDuplicate(check.duplicate);
       setModelReregisterable(check.reregisterable);
+      setModelExistingSkus(check.existingSkus);
       setModelCheckMessage(check.message);
     }
     const reregisterable = check.reregisterable;
+    // 2026-11-11 판매중지가 아닌 기존 모델이라도 새 컬러(모델SKU)만 추가하는 등록은 허용한다.
+    // 기존 행은 건드리지 않고, 어느 탭에도 없는 새 모델SKU 행만 제품DB에 붙이며 등록파일도 새 컬러분만 만든다.
+    const colorAdd = isActual && check.duplicate && !reregisterable && check.existingSkus.length > 0;
+    const colorAddExisting = colorAdd ? check.existingSkus : undefined;
 
-    if (isActual && check.duplicate && !reregisterable) {
+    if (isActual && check.duplicate && !reregisterable && !colorAdd) {
       setBatchStatus("기존 모델의 일괄 저장은 안전을 위해 차단했습니다. 필요한 파일만 개별 다운로드하세요.");
       return;
     }
-    if (isActual && check.message !== "사용 가능한 모델명" && !reregisterable) {
+    if (isActual && check.message !== "사용 가능한 모델명" && !reregisterable && !colorAdd) {
       setBatchStatus("실제 등록은 Google DB에서 사용 가능한 모델명 확인이 끝난 뒤에만 저장할 수 있습니다.");
       return;
     }
 
     try {
-      requireVariantImages();
+      if (colorAddExisting) {
+        if (variantOptions.error) throw new Error(variantOptions.error);
+        const newVariants = variants.filter(variant => !modelSkuExists(`${model}${variant.sku}`, model, colorAddExisting));
+        if (!newVariants.length) throw new Error("이 모델에 추가할 새 컬러가 없습니다. 색상 칸에 새 컬러를 입력해주세요. 제품DB는 변경하지 않았습니다.");
+        const missing = newVariants.filter(variant => !activeVariantThumbs[variant.key]?.dataUrl);
+        if (missing.length) throw new Error(`새 컬러 옵션 사진을 올려주세요: ${missing.map(variant => variant.label).join(", ")}`);
+      } else {
+        requireVariantImages();
+      }
     } catch (error) {
       setBatchStatus(`오류: ${error instanceof Error ? error.message : "옵션 사진을 확인해주세요."}`);
       return;
@@ -2619,12 +2644,26 @@ export default function Home() {
         setDetailPreview(preview);
       }
 
-      const { files, skipped, readyFiles } = await collectInput(preview, false);
+      const { files, skipped, readyFiles } = await collectInput(preview, false, false, colorAddExisting);
       if (!isActual) {
         const blob = await buildProductDbZip(product.category, model, files);
         downloadBlobFile(blob, `연습용_상품DB_${model}.zip`);
         setDbSavedFiles(readyFiles);
         setBatchStatus("테스트·교육용 ZIP 생성 완료 · 실제 상품 폴더와 Google 제품DB는 변경하지 않았습니다.");
+      } else if (colorAddExisting && dbHandle) {
+        // 새 컬러만 추가: 제품DB에는 새 모델SKU 행만 붙이고, 기존 모델 폴더의 파일은 덮어쓰지 않도록 새 폴더(모델명_컬러추가_월일)에 저장한다.
+        const sync = await syncProductDbToGoogleSheet(await buildCollectInput(preview, colorAddExisting), { addColorsOnly: true });
+        if (!sync.ok) throw new Error(`${sync.message} · 상품 폴더는 변경하지 않았습니다.`);
+        const today = new Date();
+        const folderName = `${model}_컬러추가_${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
+        const saved = await writeProductDbFiles(dbHandle, product.category, folderName, files);
+        const fileSkips = skipped.filter(item => !item.startsWith("Google 시트"));
+        setDbSavedFiles(saved);
+        setBatchStatus(
+          `새 컬러 등록 완료 · ${saved.length}개 저장 → ${product.category}/${folderName}/` +
+            (fileSkips.length ? ` · 미저장: ${fileSkips.join(", ")}` : "") +
+            ` · ${sync.message}`
+        );
       } else if (dbHandle) {
         // 파일 충돌 여부를 Google 시트 변경보다 먼저 확인하여 기존 상품과 시트가 모두 보존되게 한다.
         // 2026-11-04 같은 모델 파일이 이미 있으면(임시저장·이전 저장) 바로 막지 않고, 덮어쓸지 물어본다. 취소하면 아무것도 바꾸지 않는다.
@@ -2656,9 +2695,9 @@ export default function Home() {
         );
       } else {
         const blob = await buildProductDbZip(product.category, model, files);
-        downloadBlobFile(blob, `상품DB_${model}.zip`);
+        downloadBlobFile(blob, colorAddExisting ? `상품DB_${model}_컬러추가.zip` : `상품DB_${model}.zip`);
         setDbSavedFiles(readyFiles);
-        const sync = await syncProductDbToGoogleSheet((await buildCollectInput(preview)));
+        const sync = await syncProductDbToGoogleSheet((await buildCollectInput(preview, colorAddExisting)), { addColorsOnly: Boolean(colorAddExisting) });
         if (!sync.ok) throw new Error(`${sync.message} · ZIP은 다운로드됐지만 Google 제품DB는 변경되지 않았습니다. 같은 모델로 다시 실행할 수 있습니다.`);
         setBatchStatus(`상품 생성 완료 · ZIP 다운로드 (${files.length}개 파일) · ${sync.message}`);
       }
@@ -3791,10 +3830,12 @@ export default function Home() {
             <strong>테스트·교육용</strong><span>ZIP만 생성 · 폴더와 제품DB 변경 없음</span>
           </button>
         </div>
-        {batchMode === "actual" && modelDuplicate && !modelReregisterable && <p className="dangerAlert">기존 모델입니다. 판매중지 상태가 아닌 모델의 일괄 등록은 차단됩니다.</p>}
+        {batchMode === "actual" && modelDuplicate && !modelReregisterable && (colorAddReady
+          ? <p className="detailMessage">기존 모델입니다. 새 컬러만 제품DB에 추가합니다. 기존 행은 바꾸지 않고, 파일은 새 컬러분만 &apos;{model}_컬러추가_월일&apos; 폴더에 저장합니다.</p>
+          : <p className="dangerAlert">기존 모델입니다. 판매중지 상태가 아닌 모델의 일괄 등록은 차단됩니다.</p>)}
         <div className="finalSaveActions">
           <button className="finalSaveAll" type="button" disabled={batchBusy} onClick={batchSave}>
-            {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP 생성" : batchMode === "edit" ? "수정 파일 저장" : "전체 파일 저장"}
+            {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP 생성" : batchMode === "edit" ? "수정 파일 저장" : colorAddReady ? "새 컬러만 저장" : "전체 파일 저장"}
           </button>
         </div>
         {draftStatus && <p className="detailMessage" role="status" aria-live="polite">{draftStatus}</p>}
@@ -3984,7 +4025,7 @@ export default function Home() {
         </button>
         <button type="button" className="softApricotButton" onClick={openDraftsAndScroll} title="임시저장 목록을 열고 그 위치로 이동합니다">임시저장 불러오기</button>
         <button type="button" className="softPinkButton" disabled={batchBusy} onClick={() => void saveAllAndGo()}>
-          {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP" : batchMode === "edit" ? "수정 파일 저장" : "전체 파일 저장"}
+          {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP" : batchMode === "edit" ? "수정 파일 저장" : colorAddReady ? "새 컬러만 저장" : "전체 파일 저장"}
         </button>
       </nav>
       <div className="floatingSaveSpacer" aria-hidden="true" />
@@ -4005,14 +4046,22 @@ function Result({ label, value, status, alert }: { label: string; value: string;
   );
 }
 
+// 모델SKU가 이미 등록돼 있는지(옛 표기 S·SS·SG는 SI·GO와 같은 옵션으로 본다). Apps Script의 legacySkuKey_와 같은 규칙.
+function modelSkuExists(sku: string, model: string, existing: string[]) {
+  const key = sku.trim().toUpperCase();
+  const legacy = legacyModelSkuKey(key, model);
+  return existing.some(item => item === key || legacyModelSkuKey(item, model) === legacy);
+}
+
 // Google DB(Apps Script)는 가끔 일시적으로 404·지연을 내므로 한 번 더 시도한 뒤 실패로 본다.
-async function checkModelInGoogleDb(model: string): Promise<{ duplicate: boolean; reregisterable: boolean; message: string }> {
+async function checkModelInGoogleDb(model: string): Promise<{ duplicate: boolean; reregisterable: boolean; message: string; existingSkus: string[] }> {
   for (let attempt = 0; ; attempt++) {
     try {
       const res = await fetch(`/api/google-sheet?model=${encodeURIComponent(model)}`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || "중복확인 실패");
       return {
+        existingSkus: Array.isArray(data.existingSkus) ? data.existingSkus.map((sku: unknown) => String(sku).toUpperCase()) : [],
         duplicate: Boolean(data.duplicate),
         reregisterable: Boolean(data.reregisterable),
         message: data.reregisterable ? (data.reason || "기존 행 재등록 가능") : data.duplicate ? (data.reason || "중복번호") : data.configured === false ? "Google DB 연결 후 중복확인" : "사용 가능한 모델명",
@@ -4024,7 +4073,7 @@ async function checkModelInGoogleDb(model: string): Promise<{ duplicate: boolean
       }
       // Apps Script 오류 본문(HTML)은 길어서 첫 구간만 보여준다.
       const detail = error instanceof Error ? error.message.split(" · ")[0].trim() : "";
-      return { duplicate: false, reregisterable: false, message: detail && detail !== "중복확인 실패" ? `중복확인 실패 · ${detail}` : "중복확인 실패" };
+      return { duplicate: false, reregisterable: false, existingSkus: [], message: detail && detail !== "중복확인 실패" ? `중복확인 실패 · ${detail}` : "중복확인 실패" };
     }
   }
 }

@@ -70,6 +70,7 @@ export async function GET(req: NextRequest) {
       configured: called.configured,
       duplicate: Boolean(called.result?.duplicate),
       reregisterable: called.result?.reregisterable === true,
+      existingSkus: Array.isArray(called.result?.existingSkus) ? called.result.existingSkus.map((sku: unknown) => String(sku)) : [],
       reason: String(called.result?.reason || ""),
       rowCount: Number(called.result?.rowCount || 0),
     });
