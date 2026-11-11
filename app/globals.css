@@ -867,8 +867,8 @@ html,body{overflow-x:clip}
 .poolInfoLow{color:#d92d20;font-weight:700}
 
 /* 2026-11-11 사진 확대 보기 ◀ ▶ 화살표 */
-.lightboxArrow{position:fixed;top:50%;transform:translateY(-50%);width:56px;height:56px;border:0;border-radius:50%;background:rgba(255,255,255,.88);color:#4b4744;font-size:38px;line-height:1;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0 0 4px;box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:1001}
+.lightboxStage{display:flex;align-items:center;justify-content:center;gap:12px;position:relative;max-width:100%}
+.lightboxStage img{max-width:min(1600px,calc(96vw - 160px))}
+.lightboxArrow{flex:0 0 auto;width:56px;height:56px;border:0;border-radius:50%;background:rgba(255,255,255,.88);color:#4b4744;font-size:38px;line-height:1;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0 0 4px;box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:1001}
 .lightboxArrow:hover{background:#fff}
-.lightboxPrev{left:18px}
-.lightboxNext{right:18px}
-@media(max-width:720px){.lightboxArrow{width:44px;height:44px;font-size:30px}.lightboxPrev{left:8px}.lightboxNext{right:8px}}
+@media(max-width:720px){.lightboxStage img{max-width:96vw}.lightboxArrow{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;font-size:30px}.lightboxPrev{left:8px}.lightboxNext{right:8px}}

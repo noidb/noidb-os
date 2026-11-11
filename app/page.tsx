@@ -3812,15 +3812,20 @@ export default function Home() {
 
       {lightbox && (
         <div className="lightbox" onClick={closeLightbox}>
-          {lightboxIndex >= 0 && lightboxList.length > 1 && <>
-            <button type="button" className="lightboxArrow lightboxPrev" aria-label="이전 사진" onClick={e => { e.stopPropagation(); lightboxStep(-1); }}>‹</button>
-            <button type="button" className="lightboxArrow lightboxNext" aria-label="다음 사진" onClick={e => { e.stopPropagation(); lightboxStep(1); }}>›</button>
-          </>}
-          <img src={lightbox} alt="확대" onClick={e => e.stopPropagation()}
-            onLoad={e => {
-              const image = e.currentTarget;
-              setLightboxInfo(`${image.naturalWidth}×${image.naturalHeight}${lightbox.startsWith("data:") ? ` · ${formatBytes(dataUrlBytes(lightbox))}` : ""}`);
-            }} />
+          {/* 2026-11-11: 화살표를 화면 끝이 아니라 사진 바로 옆에 둔다(사진·화살표를 한 묶음으로). */}
+          <div className="lightboxStage">
+            {lightboxIndex >= 0 && lightboxList.length > 1 && (
+              <button type="button" className="lightboxArrow lightboxPrev" aria-label="이전 사진" onClick={e => { e.stopPropagation(); lightboxStep(-1); }}>‹</button>
+            )}
+            <img src={lightbox} alt="확대" onClick={e => e.stopPropagation()}
+              onLoad={e => {
+                const image = e.currentTarget;
+                setLightboxInfo(`${image.naturalWidth}×${image.naturalHeight}${lightbox.startsWith("data:") ? ` · ${formatBytes(dataUrlBytes(lightbox))}` : ""}`);
+              }} />
+            {lightboxIndex >= 0 && lightboxList.length > 1 && (
+              <button type="button" className="lightboxArrow lightboxNext" aria-label="다음 사진" onClick={e => { e.stopPropagation(); lightboxStep(1); }}>›</button>
+            )}
+          </div>
           {(lightboxInfo || lightboxIndex >= 0) && <span className="lightboxInfo">{lightboxIndex >= 0 && lightboxList.length > 1 ? `${lightboxIndex + 1} / ${lightboxList.length}` : ""}{lightboxInfo && lightboxIndex >= 0 && lightboxList.length > 1 ? " · " : ""}{lightboxInfo ? `원본 ${lightboxInfo}` : ""}</span>}
         </div>
       )}
