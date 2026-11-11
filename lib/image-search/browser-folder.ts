@@ -1,4 +1,4 @@
-import { decodeTextFile } from "@/lib/product-info";
+import { decodeTextFile, PRODUCT_INFO_FILE_NAMES } from "@/lib/product-info";
 // The photo root is local to this browser. No files are uploaded or moved.
 export type LocalPhoto = { id: string; name: string; file: File; matchedBy: string[] };
 export type PreparedPhoto = { id: string; name: string; dataUrl: string };
@@ -679,12 +679,18 @@ export async function openNewProductFolder(path: string): Promise<LocalPhoto[]> 
 export async function readProductInfoText(folderPath: string): Promise<string | null> {
   const root = await connectedRoot();
   const dir = await descend(root, folderPath.split("/").filter(Boolean));
+  // 2026-11-11 파일 이름이 '상품설명.txt'여도 읽는다. 정해진 이름이 없고 txt가 하나뿐이면 그 파일을 쓴다.
+  const texts: { name: string; entry: any }[] = [];
   for await (const [name, entry] of (dir as any).entries() as AsyncIterable<[string, any]>) {
-    if (entry.kind !== "file" || name.normalize("NFC").toLowerCase() !== "상품정보.txt") continue;
-    const file = await entry.getFile() as File;
-    return decodeTextFile(await file.arrayBuffer());
+    if (entry.kind !== "file" || !/\.txt$/i.test(name)) continue;
+    texts.push({ name: name.normalize("NFC").toLowerCase(), entry });
   }
-  return null;
+  let chosen: { name: string; entry: any } | undefined;
+  for (const wanted of PRODUCT_INFO_FILE_NAMES) { chosen = texts.find(item => item.name === wanted); if (chosen) break; }
+  if (!chosen && texts.length === 1) chosen = texts[0];
+  if (!chosen) return null;
+  const file = await chosen.entry.getFile() as File;
+  return decodeTextFile(await file.arrayBuffer());
 }
 
 /**

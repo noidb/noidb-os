@@ -7,7 +7,7 @@
  */
 import { useState } from "react";
 import { readProductInfoText } from "@/lib/image-search/browser-folder";
-import { PRODUCT_INFO_LABELS, parseProductInfo } from "@/lib/product-info";
+import { parseProductInfo } from "@/lib/product-info";
 import { wmsColors } from "@/lib/wms/ui-tokens";
 
 /** 경로 복사에 쓰는 앞부분. 사진 폴더가 있는 위치가 PC마다 다르면 '기준 경로 바꾸기'로 고친다. */
@@ -94,16 +94,16 @@ export default function ProductInfoBox({ folderPath }: { folderPath: string }) {
       {open && !loading && loaded && (
         <div style={{ marginTop: 8, border: `1px solid ${wmsColors.border}`, borderRadius: 10, background: "#fff", padding: "10px 12px" }}>
           {"error" in loaded && <div role="alert" style={{ color: wmsColors.warnText, fontSize: 13, fontWeight: 700 }}>{loaded.error}</div>}
-          {"text" in loaded && loaded.text === null && <div style={{ color: wmsColors.muted, fontSize: 13 }}>이 폴더에 상품정보.txt가 없습니다.</div>}
+          {"text" in loaded && loaded.text === null && <div style={{ color: wmsColors.muted, fontSize: 13 }}>이 폴더에 상품정보.txt(또는 상품설명.txt)가 없습니다.</div>}
           {parsed && (
             <div style={{ display: "grid", gap: 6 }}>
               {parsed.problems.length > 0 && <div role="alert" style={{ color: wmsColors.warnText, fontSize: 12, fontWeight: 700 }}>상품정보.txt 형식 확인 필요: {parsed.problems.join(" ")}</div>}
-              {parsed.lines.map((line, index) => (
+              {parsed.entries.map((entry, index) => (
                 <div key={index} style={{ display: "grid", gridTemplateColumns: "130px 1fr 64px", gap: 8, alignItems: "center" }}>
-                  <span style={{ color: wmsColors.muted, fontSize: 12, fontWeight: 700 }}>{PRODUCT_INFO_LABELS[index] || `${index + 1}번째 줄`}</span>
-                  {/* 글자를 끌어서 선택·복사할 수 있게 selectable 로 둔다. */}
-                  <span style={{ userSelect: "text", cursor: "text", fontSize: 14, overflowWrap: "anywhere" }}>{line}</span>
-                  <button type="button" className="softApricotButton" style={{ ...buttonStyle, minHeight: 30, padding: "0 8px" }} onClick={() => void copy(`line${index}`, line)}>{copiedAt === `line${index}` ? "복사됨" : "복사"}</button>
+                  <span style={{ color: wmsColors.muted, fontSize: 12, fontWeight: 700 }}>{entry.label}</span>
+                  {/* 글자를 끌어서 선택·복사할 수 있게 selectable 로 둔다. 이름표(거래처: 등)는 빼고 값만 복사한다. */}
+                  <span style={{ userSelect: "text", cursor: "text", fontSize: 14, overflowWrap: "anywhere" }}>{entry.value}</span>
+                  <button type="button" className="softApricotButton" style={{ ...buttonStyle, minHeight: 30, padding: "0 8px" }} onClick={() => void copy(`line${index}`, entry.value)}>{copiedAt === `line${index}` ? "복사됨" : "복사"}</button>
                 </div>
               ))}
               <div style={{ display: "flex", gap: 8, marginTop: 4 }}>

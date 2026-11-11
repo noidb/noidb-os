@@ -670,7 +670,8 @@ export default function Home() {
       const nextCategory = titleParts?.category || category;
       const supplierName = info?.supplier ? normalizeSupplierName(info.supplier) : "";
       const knownSupplier = supplierName ? [...(config?.suppliers || []), ...DEFAULT_SUPPLIERS].some(name => normalizeSupplierName(name) === supplierName) : false;
-      const costVat = info?.costExVat ? String(costWithVat(parseNumber(info.costExVat))) : "";
+      // 'vat포함'이라 적힌 원가는 그대로 원가(부가세포함)로, 그 외(미포함·표기 없음)는 ×1.1.
+      const costVat = info?.costIncVat ? info.costIncVat : info?.costExVat ? String(costWithVat(parseNumber(info.costExVat))) : "";
       setCostExVatInput(info?.costExVat || "");
       setProduct({
         ...DEFAULT_PRODUCT,
@@ -684,11 +685,13 @@ export default function Home() {
         dimension: info?.dimension || defaultDimension(nextCategory),
         cost: costVat || DEFAULT_PRODUCT.cost,
         price: info?.price || DEFAULT_PRODUCT.price,
+        // 2026-11-11 txt에 적은 상품명은 그대로 고정한다(자동 조립·사진 분석이 바꾸지 않게). '자동 상품명 사용' 버튼으로 풀 수 있다.
+        coupangTitle: info?.titleText || "",
       });
       if (info) {
-        const notes = [`상품정보.txt로 ${[supplierName && "거래처", costVat && "원가", info.price && "판매가", titleParts && "상품명(성별·소재·카테고리·키워드)", info.dimension && "치수"].filter(Boolean).join("·")}을 채웠습니다.`];
+        const notes = [`상품정보 파일로 ${[supplierName && "거래처", costVat && "원가", info.price && "판매가", titleParts && "상품명(성별·소재·카테고리·키워드)", info.dimension && "치수"].filter(Boolean).join("·")}을 채웠습니다.`];
         if (supplierName && !knownSupplier) notes.push(`거래처 '${supplierName}'는 목록에 없습니다. 맞는지 확인해주세요.`);
-        if (info.problems.length) notes.push(`상품정보.txt 형식 확인 필요: ${info.problems.join(" ")}`);
+        if (info.problems.length) notes.push(`상품정보 파일 형식 확인 필요: ${info.problems.join(" ")}`);
         setMessage(notes.join(" "));
       }
       if (!prepared.length) { setPhotoMessage(`${model} 사진을 찾지 못했습니다. 사진선택 화면에서 다시 보내주세요.`); return; }
