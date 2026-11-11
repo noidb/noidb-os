@@ -140,10 +140,36 @@ function newDraftId() {
   return `quick-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+type WearLook = { skin: string; eyes: string; hair: string; clothing: string; background: string };
+
+const WEAR_LOOK_OPTIONS: { skin: string[]; eyes: string[]; hair: string[]; clothing: string[]; background: string[] } = {
+  skin: ["light warm-ivory skin tone with a soft peach undertone", "fair neutral skin tone with a faint rosy undertone", "light beige skin tone with a gentle golden undertone"],
+  eyes: ["soft dark-brown eyes with a natural almond shape", "warm hazel-brown eyes with a gentle natural shape"],
+  hair: ["soft chestnut brown", "natural dark brown", "warm medium brown", "soft espresso brown"],
+  clothing: ["cream", "ivory", "pale pink", "light beige"],
+  background: ["soft cream", "pale ivory", "light warm gray", "pale pink-beige"],
+};
+
+function pickOne<T>(items: T[]): T {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+function makeWearLook(): WearLook {
+  return {
+    skin: pickOne(WEAR_LOOK_OPTIONS.skin),
+    eyes: pickOne(WEAR_LOOK_OPTIONS.eyes),
+    hair: pickOne(WEAR_LOOK_OPTIONS.hair),
+    clothing: pickOne(WEAR_LOOK_OPTIONS.clothing),
+    background: pickOne(WEAR_LOOK_OPTIONS.background),
+  };
+}
+
 export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, incomingFile, incomingToken, onComplete, onAddToList, poolImages = [] }: Props) {
   const [pickingPool, setPickingPool] = useState(false);
   /** 이미 5번 목록에 넣은 AI 사진 — "이어서 만들기"를 다시 눌러도 같은 사진이 두 번 들어가지 않게 한다. */
   const alreadyAdded = useRef(new Set<string>());
+  /** 같은 상세페이지의 착용컷은 모두 같은 모델 느낌(머리색·피부·옷·배경)이 되도록 한 번만 정해서 계속 쓴다. */
+  const wearLookRef = useRef<WearLook | null>(null);
   const [pickedPool, setPickedPool] = useState<string[]>([]);
   const [draftId, setDraftId] = useState("");
   const [drafts, setDrafts] = useState<QuickDetailDraft[]>([]);
@@ -205,6 +231,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   }, [incomingToken]);
 
   function resetWork() {
+    wearLookRef.current = null;
     setOriginalSections([]);
     setEditedSections([]);
     setSectionActions({});
@@ -416,11 +443,16 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     setMessage("제품컷·착용컷 구분을 바꿨습니다. 이 사진은 새 구분에 맞춰 편집합니다.");
   }
 
-  async function editSection(section: QuickDetailSection) {
+  async function editSection(section: QuickDetailSection, lookAnchor?: QuickDetailSection) {
+    const isWear = section.kind === "wear";
+    if (isWear && !wearLookRef.current) wearLookRef.current = makeWearLook();
+    const references: Array<{ dataUrl: string; role: string }> = [{ dataUrl: section.dataUrl, role: section.kind || "detail-section" }];
+    // 먼저 완성된 착용컷이 있으면 두 번째 참고 사진으로 보내 같은 모델·같은 분위기로 맞춘다.
+    if (isWear && lookAnchor) references.push({ dataUrl: lookAnchor.dataUrl, role: "approved-look" });
     const response = await fetch("/api/image-generator/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "quick-detail", style, sectionKind: section.kind, references: [{ dataUrl: section.dataUrl, role: section.kind || "detail-section" }] }),
+      body: JSON.stringify({ kind: "quick-detail", style, sectionKind: section.kind, look: isWear ? wearLookRef.current : undefined, hasLookReference: isWear && Boolean(lookAnchor), references }),
     });
     const data = await response.json() as { imageDataUrl?: string; error?: string };
     if (!response.ok || !data.imageDataUrl) throw new Error(data.error || "사진을 새로 만들지 못했습니다.");
@@ -444,7 +476,10 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         if (!edited) {
           setProgress(editIndex);
           setMessage(`AI 편집 ${expectedEdits}장 중 ${editIndex + 1}번째를 만들고 있습니다. 완성된 사진은 그대로 보관됩니다.`);
-          edited = await editSection(section);
+          const lookAnchor = section.kind === "wear"
+            ? originalSections.map(item => byId.get(item.id)).find((item): item is QuickDetailSection => Boolean(item) && item!.kind === "wear")
+            : undefined;
+          edited = await editSection(section, lookAnchor);
           byId.set(section.id, edited);
           setEditedSections(Array.from(byId.values()));
           editIndex += 1;

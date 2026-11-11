@@ -23,15 +23,26 @@ function promptFor(body: Record<string, unknown>) {
         ? "modern pale-gray luxury studio, crisp restrained lighting and contemporary styling"
         : "bright clean white luxury jewelry studio, natural soft lighting";
     const shared = `The single input image is the exact photograph to edit. Leave any letters, words, logos or graphics that appear on the photograph exactly as they are: do not erase, blur, cover or paint over them, and never create white patches, blank areas, borders or empty margins where they were. The output must contain the same exact jewelry—not a similar or redesigned item.`;
-    if (sectionKind === "wear") return `${shared}
+    if (sectionKind === "wear") {
+    const look = (body.look || null) as { skin?: string; eyes?: string; hair?: string; clothing?: string; background?: string } | null;
+    const hasLookReference = body.hasLookReference === true;
+    const skinLine = look?.skin ? `skin tone: exactly ${look.skin}` : "skin tone: a noticeably different natural skin tone and undertone";
+    const eyesLine = look?.eyes ? `eyes: ${look.eyes}, without changing where the eyes are` : "eyes: a different natural eye shape and eye color, without changing where the eyes are";
+    const hairLine = look?.hair ? `hair color: exactly ${look.hair}, the same shade on every photo of this set` : "hair color: a clearly different natural hair color";
+    const clothingLine = look?.clothing ? `clothing color: exactly ${look.clothing} (keep the same neckline and garment position)` : "clothing color: a clearly different clothing color (keep the same neckline and garment position)";
+    const backgroundLine = look?.background ? `background color: exactly ${look.background}, keeping the same soft studio feel and depth` : "background color: a clearly different background color and tone, keeping the same soft studio feel and depth";
+    const lookNote = look
+      ? `\n\nSET CONSISTENCY: this photo belongs to the same product detail page as other wear shots, so the model must look like the SAME woman or man in every photo: use the exact appearance values below, the same overall face impression, the same hair color and texture, the same skin tone, the same clothing color and the same background tone and lighting.${hasLookReference ? " The SECOND input image is an already finished photo of this same set: copy ONLY the model's appearance from it (face impression, skin tone, eye color, hair color and texture, clothing color, background tone, lighting). Never copy its composition, pose, crop or jewelry. The FIRST input image is still the photograph to edit, and its jewelry and composition must be kept." : ""}`
+      : "";
+    return `${shared}${lookNote}
 
 This is a WEAR SHOT. Keep the photograph's composition exactly as it is: the same framing, crop, camera angle and distance, the same pose, the same head and body position and orientation, the same position and scale of the face, ear, neck, hand and shoulders. Nothing may move, rotate, zoom or reframe. Only the following appearance attributes must change, and each change must be clearly visible when the output is compared side by side with the input:
-- skin tone: a noticeably different natural skin tone and undertone;
-- eyes: a different natural eye shape and eye color, without changing where the eyes are;
-- hair color: a clearly different natural hair color;
+- ${skinLine};
+- ${eyesLine};
+- ${hairLine};
 - hairstyle design: restyle ONLY the hair that already exists in the input, within the same head position and never covering the jewelry. Keep the same hair length and roughly the same amount of hair: short hair stays short, long hair stays long. Change only the parting, fringe direction, texture, wave or neatness within that same length. Never add hair that is not there: no longer hair, extensions, ponytails, buns, bangs or strands falling on the neck, shoulders or ears;
-- clothing color: a clearly different clothing color (keep the same neckline and garment position);
-- background color: a clearly different background color and tone, keeping the same soft studio feel and depth.
+- ${clothingLine};
+- ${backgroundLine}.
 Both the clothing color and the background color must ALWAYS be very light, pale, low-saturation colors chosen only from this palette: light beige, pale pink, light gray, cream, ivory, white, pale mint. Never use dark, deep, saturated, vivid or strongly colored clothing or backgrounds, and never black, brown, camel, navy or red.
 Keep exactly the same gender and age range as the input. If the model is a man, he must stay clearly a man: masculine face and jawline, masculine short men's hairstyle if the hair is short, no makeup, no feminine styling. Never turn a man into a woman or a woman into a man. Keep realistic pores, natural professional retouching and correct anatomy; do not reshape the body, hands, fingers or ears.
 
@@ -40,6 +51,7 @@ Lock the jewelry and copy it from the input as a rigid, unchangeable object: exa
 Fill the complete square with no embedded white border, frame, panel or letterboxing.
 
 Visual direction: ${mood}. Keep a square 1:1 composition suitable for a Korean online jewelry shop. No text, logo, border, watermark or props that hide the product.`;
+    }
 
     return `${shared}
 
