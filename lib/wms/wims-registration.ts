@@ -155,3 +155,32 @@ export function wimsStatusMap(rows: Pick<WimsRegistrationRow, "modelSku" | "prod
   for (const row of rows) map[wimsRowKey(row)] = row.status;
   return map;
 }
+
+/** 2026-11-11: 지난 수집본과 비교해 바뀐 것. 서버가 저장하는 상태 표(wimsStatusMap)와 같은 식별자로 맞춰, 같은 식별자가 겹쳐도 가짜 변경이 생기지 않게 한다. */
+export interface WimsChanges {
+  /** 지난 수집본에 없던 새 등록건 */
+  added: WimsRegistrationRow[];
+  /** 반려로 바뀐 건 */
+  rejected: WimsRegistrationRow[];
+  /** 검수완료로 바뀐 건 */
+  approved: WimsRegistrationRow[];
+  /** 그 밖의 상태 변화(예: 반려 → 검수중) */
+  other: { row: WimsRegistrationRow; before: string }[];
+  total: number;
+}
+
+export function diffWimsStatuses(rows: WimsRegistrationRow[], before: Record<string, string>): WimsChanges {
+  const latest = new Map<string, WimsRegistrationRow>();
+  for (const row of rows) latest.set(wimsRowKey(row), row);
+  const changes: WimsChanges = { added: [], rejected: [], approved: [], other: [], total: 0 };
+  for (const [key, row] of latest) {
+    const old = before[key];
+    if (old === undefined) changes.added.push(row);
+    else if (old === row.status) continue;
+    else if (row.status === "rejected") changes.rejected.push(row);
+    else if (row.status === "approved") changes.approved.push(row);
+    else changes.other.push({ row, before: old });
+  }
+  changes.total = changes.added.length + changes.rejected.length + changes.approved.length + changes.other.length;
+  return changes;
+}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { parseWimsClipboard, wimsRowKey, type WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
+import { diffWimsStatuses, parseWimsClipboard, wimsRowKey, type WimsRegistrationRow, type WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 import type { WimsRegistrationAudit } from "@/lib/wms/wims-registration-audit";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 import { wmsColors } from "@/lib/wms/ui-tokens";
@@ -36,8 +36,19 @@ interface PreviousStatuses {
   statuses: Record<string, string>;
 }
 
+/** 등록일(2026/11/10 …)을 날짜 키와 며칠째인지로 바꾼다. 읽을 수 없으면 null. */
+function registrationDay(registeredAt: string) {
+  const match = String(registeredAt || "").trim().match(/^(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})/);
+  if (!match) return null;
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const stamp = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).getTime();
+  return { sortKey: stamp, age: Math.round((todayStart - stamp) / 86400000) };
+}
+
 interface SavedSnapshot {
   previous?: PreviousStatuses | null;
+  ackedBaseline?: string | null;
   capturedAt: string;
   snapshot: WimsRegistrationSnapshot;
   capture: ExtensionCaptureSummary | null;
@@ -82,6 +93,8 @@ export default function WimsRegistrationImportPanel() {
   const [openDays, setOpenDays] = useState<Record<number, boolean>>({});
   // 2026-11-04: 지난 전송 때의 상태(새 결과 표시용). 서버가 상태가 달라질 때만 갱신한다.
   const [previous, setPrevious] = useState<PreviousStatuses | null>(null);
+  // 2026-11-11: '바뀐 것' 상자에서 [확인했어요]를 누른 비교 기준 시각. 서버에도 저장돼 다른 PC에서도 같이 사라진다.
+  const [ackedBaseline, setAckedBaseline] = useState<string | null>(null);
 
   // 2026-10-15: 새로 가져오기 전까지 마지막 결과를 계속 보여준다. 이 기기 저장본을 바로 보여주고,
   // 서버 저장본(다른 PC·모바일에서 가져온 것)이 더 새로우면 그것으로 바꾼다. 수집 중에도 지난 결과는 남겨 둔다.
@@ -96,6 +109,7 @@ export default function WimsRegistrationImportPanel() {
       setCapturedAt(saved.capturedAt);
       setCapture(saved.capture || null);
       setPrevious(saved.previous || null);
+      setAckedBaseline(saved.ackedBaseline ?? null);
       setAudit(null);
       void auditRows(visible.rows);
     };
@@ -112,6 +126,8 @@ export default function WimsRegistrationImportPanel() {
       .then(data => {
         if (!data?.saved) return;
         show(data.saved as SavedSnapshot);
+        // 같은 수집본이라 show가 건너뛰어도, 다른 PC에서 누른 확인 표시는 반영한다.
+        if (!cancelled) setAckedBaseline((data.saved as SavedSnapshot).ackedBaseline ?? null);
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data.saved)); } catch { /* 저장 공간 부족 등 — 화면 표시는 그대로 */ }
       })
       .catch(() => { /* 오프라인 등 — 이 기기 저장본으로 계속 */ });
@@ -125,10 +141,37 @@ export default function WimsRegistrationImportPanel() {
       .then(data => {
         if (!data?.ok) return;
         const nextPrevious = (data.previous || null) as PreviousStatuses | null;
+        const nextAcked = typeof data.ackedBaseline === "string" ? data.ackedBaseline : null;
         setPrevious(nextPrevious);
-        try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...saved, previous: nextPrevious })); } catch { /* 화면 표시는 그대로 */ }
+        setAckedBaseline(nextAcked);
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...saved, previous: nextPrevious, ackedBaseline: nextAcked })); } catch { /* 화면 표시는 그대로 */ }
       })
       .catch(() => undefined);
+  }
+
+  /** [확인했어요]: 지금 보이는 변경을 확인한 것으로 표시한다. 바로 사라지고, 서버 저장이 실패해도 이 화면에서는 유지. */
+  function acknowledgeChanges() {
+    if (!previous) return;
+    const baseline = previous.capturedAt;
+    setAckedBaseline(baseline);
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...(JSON.parse(raw) as SavedSnapshot), ackedBaseline: baseline }));
+    } catch { /* 이 기기 저장 실패해도 서버에는 남긴다 */ }
+    void fetch("/api/wms/wims-registration/last", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ack: true }) }).catch(() => undefined);
+  }
+
+  /** 상자의 모델을 누르면 아래 날짜 줄을 펼치고 그 건으로 이동한다. 최근 14일 밖의 건은 아래 목록에 없어 이동하지 않는다. */
+  function jumpToRow(row: WimsRegistrationRow) {
+    const day = registrationDay(row.registeredAt);
+    if (!day || day.age < 0 || day.age > RECENT_DAYS) return;
+    setOpenDays(current => ({ ...current, [day.sortKey]: true }));
+    window.setTimeout(() => {
+      const wanted = wimsRowKey(row);
+      const target = Array.from(document.querySelectorAll<HTMLElement>("[data-wims-key]")).find(node => node.dataset.wimsKey === wanted)
+        || document.getElementById(`wims-day-${day.sortKey}`);
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 80);
   }
 
   useEffect(() => {
@@ -312,14 +355,12 @@ export default function WimsRegistrationImportPanel() {
       if (row.status === "rejected") rejectedRecent += 1;
       days.set(day.sortKey, group);
     }
-    // 지난 전송과 비교해 검수중 → 완료/반려로 바뀐 건
-    const newResults = previous ? snapshot.rows.filter(row => {
-      const before = previous.statuses[wimsRowKey(row)];
-      return before && (before === "reviewing" || before === "unknown") && (row.status === "approved" || row.status === "rejected");
-    }) : [];
     const recentTotal = [...days.values()].reduce((sum, group) => sum + group.total, 0);
-    return { days: [...days.values()].sort((a, b) => b.sortKey - a.sortKey), recentTotal, rejectedRecent, slow, slowMax, newResults };
-  }, [snapshot, previous]);
+    return { days: [...days.values()].sort((a, b) => b.sortKey - a.sortKey), recentTotal, rejectedRecent, slow, slowMax };
+  }, [snapshot]);
+  // 2026-11-11: 지난 수집본과 비교해 바뀐 것(새 반려·승인·새 등록). 맨 위 '바뀐 것' 상자에 보여준다.
+  const changes = useMemo(() => (snapshot && previous ? diffWimsStatuses(snapshot.rows, previous.statuses) : null), [snapshot, previous]);
+  const changesAcknowledged = Boolean(previous && ackedBaseline && ackedBaseline === previous.capturedAt);
   const recentRejectedRows = useMemo(() => audit?.rows.filter(row => row.wims.status === "rejected" && !["등록불가", "재등록시도"].includes(row.productDbStatus || "") && isRecent(row)) || [], [audit]);
 
   function actionLabel(row: WimsRegistrationAudit["rows"][number]) {
@@ -335,7 +376,7 @@ export default function WimsRegistrationImportPanel() {
     // 2026-11-10: 반려 카드는 검수중 줄처럼 간단히(모델SKU·상품명) + 오른쪽에 색 있는 버튼 두 개.
     if (row.type === "rejected") {
       return (
-        <div key={`${row.wims.estimateId}-${row.wims.modelSku}-${index}`} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px", border: `1px solid ${action.color}55`, borderLeft: `4px solid ${action.color}`, borderRadius: "9px", padding: "8px 12px", fontSize: "12px", background: "#fff" }}>
+        <div key={`${row.wims.estimateId}-${row.wims.modelSku}-${index}`} data-wims-key={wimsRowKey(row.wims)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px", border: `1px solid ${action.color}55`, borderLeft: `4px solid ${action.color}`, borderRadius: "9px", padding: "8px 12px", fontSize: "12px", background: "#fff" }}>
           <div style={{ minWidth: 0 }}>
             <strong style={{ color: action.color }}>{row.wims.modelSku || "모델SKU 확인 필요"} · 반려</strong>
             <div style={{ marginTop: "2px", overflowWrap: "anywhere" }}>{row.wims.productName}</div>
@@ -381,6 +422,48 @@ export default function WimsRegistrationImportPanel() {
       {message && <p style={{ color: wmsColors.greenDark, fontSize: "12px", margin: "8px 0 0", fontWeight: 700 }}>{message}</p>}
       {snapshot && (
         <div style={{ marginTop: "12px" }}>
+          {/* 2026-11-11: 지난 수집 이후 바뀐 것. 맨 위에 두고, 확인하면 사라진다(다음에 또 바뀌면 다시 뜬다). */}
+          {changes && (() => {
+            const since = new Date(previous!.capturedAt).toLocaleString("ko-KR");
+            if (changes.total === 0 || changesAcknowledged) {
+              return <p style={{ margin: "0 0 10px", color: wmsColors.muted, fontSize: "13px" }}>{changes.total === 0 ? `지난 수집(${since}) 이후 바뀐 것 없음` : `지난 수집(${since}) 이후 바뀐 ${changes.total}건은 이미 확인했습니다.`}</p>;
+            }
+            const groups: { label: string; color: string; rows: WimsRegistrationRow[] }[] = [
+              { label: "새로 반려", color: "#c0392b", rows: changes.rejected },
+              { label: "검수완료", color: wmsColors.greenDark, rows: changes.approved },
+              { label: "새로 등록", color: wmsColors.ink, rows: changes.added },
+              { label: "그 밖의 상태 변화", color: "#a06118", rows: changes.other.map(item => item.row) },
+            ].filter(group => group.rows.length > 0);
+            return (
+              <div style={{ border: "1px solid #f0d58a", background: "#fff8e6", borderRadius: "12px", padding: "12px 14px", marginBottom: "12px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
+                  <strong style={{ fontSize: "15px" }}>지난 수집 이후 바뀐 것 · {changes.total}건 <small style={{ fontWeight: 500, color: wmsColors.muted }}>({since} 수집 대비)</small></strong>
+                  <button type="button" className="softSageButton" onClick={acknowledgeChanges} style={{ minHeight: "34px", minWidth: "96px", padding: "4px 14px", fontSize: "13px", flexShrink: 0 }}>확인했어요</button>
+                </div>
+                <div style={{ display: "grid", gap: "8px", marginTop: "10px" }}>
+                  {groups.map(group => (
+                    <div key={group.label} style={{ display: "flex", gap: "10px", alignItems: "flex-start", fontSize: "13px" }}>
+                      <strong style={{ color: group.color, whiteSpace: "nowrap", minWidth: "110px" }}>{group.label} {group.rows.length}건</strong>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                        {group.rows.slice(0, 30).map((row, index) => {
+                          const day = registrationDay(row.registeredAt);
+                          const canJump = Boolean(day && day.age >= 0 && day.age <= RECENT_DAYS);
+                          return (
+                            <button key={`${wimsRowKey(row)}-${index}`} type="button" disabled={!canJump} onClick={() => jumpToRow(row)}
+                              title={canJump ? "누르면 아래 목록의 해당 건으로 이동합니다." : row.productName}
+                              style={{ border: `1px solid ${group.color}66`, borderRadius: "8px", background: "#fff", color: group.color, padding: "3px 9px", fontSize: "12px", fontWeight: 700, cursor: canJump ? "pointer" : "default" }}>
+                              {row.modelSku || row.productName.slice(0, 18)}
+                            </button>
+                          );
+                        })}
+                        {group.rows.length > 30 && <span style={{ color: wmsColors.muted, alignSelf: "center" }}>외 {group.rows.length - 30}건</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "8px" }}>
             <span style={{ color: capture ? wmsColors.greenDark : wmsColors.muted, fontSize: "12px", fontWeight: capture ? 800 : 400 }}>
               {capture
@@ -396,22 +479,8 @@ export default function WimsRegistrationImportPanel() {
               ) : (
                 <>
                   <p style={{ margin: "8px 0 0", fontSize: "18px", fontWeight: 800, color: resultSummary.rejectedRecent > 0 ? "#c0392b" : wmsColors.greenDark }}>
-                    {resultSummary.rejectedRecent > 0 ? `반려 ${resultSummary.rejectedRecent}건 확인 필요` : resultSummary.newResults.length > 0 ? `새 결과 ${resultSummary.newResults.length}건` : "반려 없음 · 모두 정상 진행 중"}
+                    {resultSummary.rejectedRecent > 0 ? `반려 ${resultSummary.rejectedRecent}건 확인 필요` : "반려 없음 · 모두 정상 진행 중"}
                   </p>
-                  {resultSummary.newResults.length > 0 && (
-                    <div style={{ marginTop: "10px", padding: "10px 12px", borderRadius: "8px", background: "#fff8e6", border: "1px solid #f0d58a" }}>
-                      <strong style={{ fontSize: "13px" }}>새 결과 {resultSummary.newResults.length}건 <small style={{ fontWeight: 500, color: wmsColors.muted }}>({new Date(previous!.capturedAt).toLocaleString("ko-KR")} 전송 이후 바뀐 건)</small></strong>
-                      <div style={{ display: "grid", gap: "4px", marginTop: "6px", fontSize: "13px" }}>
-                        {resultSummary.newResults.slice(0, 20).map((row, index) => (
-                          <div key={`new-${index}-${row.modelSku}`} style={{ display: "flex", justifyContent: "space-between", gap: "10px" }}>
-                            <span style={{ overflowWrap: "anywhere" }}>{row.modelSku || row.productName}</span>
-                            <strong style={{ color: row.status === "rejected" ? "#c0392b" : wmsColors.greenDark, whiteSpace: "nowrap" }}>{row.status === "rejected" ? "✖ 반려" : "✔ 검수완료"}</strong>
-                          </div>
-                        ))}
-                        {resultSummary.newResults.length > 20 && <span style={{ color: wmsColors.muted }}>외 {resultSummary.newResults.length - 20}건은 아래 날짜 줄을 펼쳐 확인</span>}
-                      </div>
-                    </div>
-                  )}
                   <div style={{ display: "grid", gap: "6px", marginTop: "10px" }}>
                     {resultSummary.days.map(group => {
                       const bad = group.rejected + group.unknown > 0;
@@ -426,7 +495,7 @@ export default function WimsRegistrationImportPanel() {
                       const statusOrder = { rejected: 0, unknown: 1, reviewing: 2, approved: 3 } as const;
                       const otherRows = group.rows.filter(row => !cardKeys.has(wimsRowKey(row))).sort((a, b) => statusOrder[a.status] - statusOrder[b.status]);
                       return (
-                        <div key={group.sortKey}>
+                        <div key={group.sortKey} id={`wims-day-${group.sortKey}`}>
                           <button type="button" aria-expanded={open} onClick={() => setOpenDays(current => ({ ...current, [group.sortKey]: !current[group.sortKey] }))}
                             style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center", gap: "10px", fontSize: "13px", padding: "7px 10px", borderRadius: "8px", border: 0, background: bad ? "#fdecea" : wmsColors.greenSoft, cursor: "pointer", textAlign: "left", font: "inherit" }}>
                             <span>{open ? "▼" : "▶"} {group.label} ({group.age === 0 ? "오늘" : `${group.age}일째`}) · {group.total}건</span>
@@ -437,7 +506,7 @@ export default function WimsRegistrationImportPanel() {
                               {otherRows.map((row, index) => {
                                 const color = row.status === "rejected" || row.status === "unknown" ? "#c0392b" : wmsColors.greenDark;
                                 return (
-                                  <div key={`${wimsRowKey(row)}-${index}`} style={{ border: `1px solid ${color}55`, borderLeft: `4px solid ${color}`, borderRadius: "9px", padding: "8px 12px", fontSize: "12px", background: "#fff" }}>
+                                  <div key={`${wimsRowKey(row)}-${index}`} data-wims-key={wimsRowKey(row)} style={{ border: `1px solid ${color}55`, borderLeft: `4px solid ${color}`, borderRadius: "9px", padding: "8px 12px", fontSize: "12px", background: "#fff" }}>
                                     <strong style={{ color }}>{row.modelSku || "모델SKU 확인 필요"} · {statusText[row.status]}</strong>
                                     <div style={{ marginTop: "2px" }}>{row.productName}</div>
                                   </div>

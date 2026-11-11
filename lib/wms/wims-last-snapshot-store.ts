@@ -16,6 +16,8 @@ export interface WimsLastSnapshot {
   capture: unknown | null;
   /** 2026-11-04: 상태가 달라진 직전 전송본의 상태 표(새 결과 표시용). 같은 내용을 다시 보내도 바뀌지 않는다. */
   previous?: { capturedAt: string; statuses: Record<string, string> } | null;
+  /** 2026-11-11: '바뀐 것' 상자에서 [확인했어요]를 누른 비교 기준 시각(previous.capturedAt). 기준이 새로 바뀌면 상자가 다시 뜬다. */
+  ackedBaseline?: string | null;
 }
 
 function useBlobStore(): boolean {
@@ -29,7 +31,8 @@ export function normalizeWimsLastSnapshot(value: unknown): WimsLastSnapshot | nu
   const previous = raw.previous && typeof raw.previous === "object" && typeof raw.previous.capturedAt === "string" && raw.previous.statuses && typeof raw.previous.statuses === "object"
     ? { capturedAt: raw.previous.capturedAt, statuses: raw.previous.statuses as Record<string, string> }
     : null;
-  return { capturedAt: raw.capturedAt, snapshot: raw.snapshot as WimsLastSnapshot["snapshot"], capture: raw.capture ?? null, previous };
+  const ackedBaseline = typeof raw.ackedBaseline === "string" ? raw.ackedBaseline : null;
+  return { capturedAt: raw.capturedAt, snapshot: raw.snapshot as WimsLastSnapshot["snapshot"], capture: raw.capture ?? null, previous, ackedBaseline };
 }
 
 export async function readWimsLastSnapshot(): Promise<WimsLastSnapshot | null> {
