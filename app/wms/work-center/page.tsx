@@ -74,6 +74,30 @@ function ShortageVendorOrdersBanner() {
 }
 
 /**
+ * 상품등록 검수 대기 배너 (2026-11-11 신규).
+ * 다른 사용자가 AI상품등록에서 '검수 요청'을 하면 대기 건수를 보여 주고 검수 화면으로 보낸다.
+ * 서버 조회는 뒤에서만 하고(화면을 막지 않음), 대기가 없으면 아무것도 그리지 않는다.
+ */
+function ProductReviewBanner() {
+  const [pending, setPending] = useState(0);
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/review", { cache: "no-store" }).then(response => response.ok ? response.json() : null)
+      .then(data => { if (active && typeof data?.pending === "number") setPending(data.pending); }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+  if (!pending) return null;
+  return (
+    <Link href="/wms/review" style={{ display: "block", textDecoration: "none", marginBottom: "18px" }}>
+      <div style={{ border: `1px solid ${wmsColors.green}`, background: wmsColors.greenSoft, borderRadius: "14px", padding: "12px" }}>
+        <div style={{ fontSize: "13px", fontWeight: 800, color: wmsColors.greenDark }}>상품등록 검수 대기 {pending}건</div>
+        <div style={{ fontSize: "11px", color: wmsColors.ink, marginTop: "2px" }}>빠진 칸·사진은 자동 검사해 두었습니다. 눌러서 확인하세요.</div>
+      </div>
+    </Link>
+  );
+}
+
+/**
  * "진행 중 발주" 섹션 (2026-09-18 신규 — 사용자 요청).
  *
  * 데이터/그룹핑 로직은 app/wms/logistics/new-orders/page.tsx의 "진행 중인 발주묶음"(입고예정일별
@@ -354,6 +378,7 @@ export default function WmsWorkCenterPage() {
         </section>
       </div>
 
+      <ProductReviewBanner />
       <ShortageVendorOrdersBanner />
       {/* 2026-11-03 사용자 요청: 가장 자주 쓰지 않는 크롬 확장 프로그램 칸은 PC·모바일 모두 맨 아래로 */}
       <ExtensionDownloads />

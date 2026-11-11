@@ -35,6 +35,8 @@ import { cropQuality, defaultFitAdjust, extendToSquareCanvas, fitToWhiteCanvas, 
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
+import { submitReview } from "@/lib/review/client";
+import type { ReviewListItem } from "@/lib/review/types";
 import { CategoryExtraFields, CategoryManager, ColorFamilyFields, ManageLink, OptionListManager, OptionSelect, useProductOptions } from "./ProductOptionsPanel";
 import { BUILTIN_CATEGORIES, DEFAULT_GENDERS, DEFAULT_MATERIALS, DEFAULT_SUPPLIER, canonicalSupplierName, categoryLetter, categoryNames } from "@/lib/product-options/defaults";
 import { PRODUCT_INFO_STORAGE_KEY, parseProductInfo, parseProductTitle } from "@/lib/product-info";
@@ -520,6 +522,10 @@ export default function Home() {
   const [draftStatus, setDraftStatus] = useState("");
   const [draftSaving, setDraftSaving] = useState(false);
   const draftSavingRef = useRef(false);
+  // 2026-11-11 검수 요청: 다른 사용자가 저장한 상품을 사장님이 검수한다(사진까지 서버에 올림).
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewMessage, setReviewMessage] = useState("");
+  const [reviewItems, setReviewItems] = useState<ReviewListItem[]>([]);
   const draftRefreshRef = useRef(0);
   const restoringDraftRef = useRef(false);
   /** 상세페이지 사진 목록을 직접 끌어 순서를 바꿨는지. 바꾸기 전에는 5번 칸 순서를 그대로 따른다. */
@@ -2125,6 +2131,51 @@ export default function Home() {
     }
   };
 
+  const refreshReviewItems = () => {
+    void fetch("/api/review", { cache: "no-store" }).then(response => response.ok ? response.json() : null)
+      .then(data => { if (Array.isArray(data?.items)) setReviewItems(data.items); }).catch(() => undefined);
+  };
+
+  /** 검수 요청: 이 기기에 임시저장한 뒤 사진·입력 내용을 서버에 올린다. 사장님이 검수 화면에서 자동 검사 결과와 사진을 본다. */
+  const requestReview = async () => {
+    if (reviewBusy) return;
+    if (!model) { setReviewMessage("모델명을 먼저 입력해주세요."); return; }
+    let payload: Record<string, unknown>;
+    try { payload = { ...exportPayload(), skuImages: {} }; }
+    catch (error) { setReviewMessage(error instanceof Error ? error.message : "색상과 사이즈를 확인해주세요."); return; }
+    setReviewBusy(true);
+    setReviewMessage("이 기기에 임시저장하는 중...");
+    try {
+      const record = buildDraftRecord();
+      try { await saveProductDraft(record); } catch { /* 이 기기 저장이 안 돼도 검수 요청은 계속한다 */ }
+      const slot = (label: string, image: SlotImage | null) => ({ group: "slots" as const, label, dataUrl: image?.dataUrl || null });
+      const item = await submitReview({
+        model,
+        summary: {
+          title, category: product.category, gender: product.gender, supplier: product.supplier, colors: product.colors,
+          sizes: product.sizes, cost: product.cost, price: product.price, tags, dimension: product.dimension,
+        },
+        payload,
+        labeled: [
+          ...variants.map(variant => ({ group: "thumbs" as const, label: `${variant.label} 썸네일`, dataUrl: activeVariantThumbs[variant.key]?.dataUrl || null })),
+          slot("전체옵션", allOptions), slot("상세컷", detailCut), slot("착용컷1", wear01), slot("착용컷2", wear02),
+          ...customSlots.filter(entry => entry.slot?.dataUrl).map((entry, index) => slot(`추가이미지 ${index + 5}`, entry.slot)),
+          ...detailImages.map((image, index) => ({ group: "details" as const, label: `상세 사진 ${index + 1}`, dataUrl: image.dataUrl })),
+        ],
+        detailPreview,
+        data: record.data,
+        onProgress: setReviewMessage,
+      });
+      const notes = [item.failCount ? `고칠 곳 ${item.failCount}개` : "", item.warnCount ? `확인할 곳 ${item.warnCount}개` : ""].filter(Boolean).join(" · ");
+      setReviewMessage(`${model} 검수 요청 완료${notes ? ` · 자동 검사: ${notes}` : " · 자동 검사 통과"}. 사장님 검수 화면에 올라갔습니다.`);
+      refreshReviewItems();
+    } catch (error) {
+      setReviewMessage(`검수 요청 실패: ${error instanceof Error ? error.message : "연결을 확인하고 다시 눌러주세요."}`);
+    } finally {
+      setReviewBusy(false);
+    }
+  };
+
   const loadDraft = (record: ProductDraftRecord) => {
     const data = record.data as any;
     Object.keys(variantUploadRevision.current).forEach(key => { variantUploadRevision.current[key] += 1; });
@@ -2200,6 +2251,20 @@ export default function Home() {
     setDraftStatus(`${record.model} 작업하던 내용을 그대로 다시 열었습니다.`);
     return true;
   };
+
+  // 2026-11-11 검수 화면의 '이 컴퓨터에서 열기'가 임시저장 목록에 넣어 둔 상품을 바로 연다(주소 ?openDraft=모델명).
+  useEffect(() => {
+    const open = new URLSearchParams(window.location.search).get("openDraft")?.trim();
+    if (!open) return;
+    try { window.history.replaceState(null, "", window.location.pathname); } catch { /* 주소를 못 바꿔도 동작 */ }
+    void (async () => {
+      const record = (await listProductDrafts().catch(() => [])).find(row => row.model === open);
+      if (!record) { setDraftStatus(`${open} 임시저장을 이 기기에서 찾지 못했습니다. 검수 화면에서 다시 열어주세요.`); return; }
+      loadDraft(record);
+      setDraftStatus(`${open} 검수 요청 내용을 불러왔습니다. 사진까지 그대로 들어 있습니다.`);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 제품사진선택으로 나가기 전에 지금 작업을 이 기기에 임시저장한다(사진까지). 돌아오면 자동으로 다시 연다.
   // AI 상세페이지 새로 만들기에서 고를 수 있는 사진: 5번 쿠팡 등록이미지 목록 + 이미 칸에 넣은 사진(중복 제외).
@@ -2940,7 +3005,7 @@ export default function Home() {
             })()}
             <button className="draftLoadButton" type="button" onClick={() => {
               setShowDrafts(value => !value);
-              if (!showDrafts) void refreshDrafts();
+              if (!showDrafts) { void refreshDrafts(); refreshReviewItems(); }
             }}>임시저장 불러오기</button>
             <button className="resetAllButton" type="button" onClick={resetAll}>전체 초기화</button>
           </div>
@@ -2955,6 +3020,12 @@ export default function Home() {
               <div className="draftItem" key={record.model}>
                 <div><strong>{record.model}</strong><span>{new Date(record.savedAt).toLocaleString("ko-KR")}</span>
                   {record.localCopy && <span>다른 기기에 더 최신 기본정보가 있습니다. 이 기기 저장본에는 이미지가 포함됩니다.</span>}
+                  {(() => {
+                    const review = reviewItems.find(item => item.model === record.model);
+                    if (!review) return null;
+                    if (review.status === "revise") return <span style={{ color: "#d92d20", fontWeight: 700 }}>보완요청: {review.memo}</span>;
+                    return <span>{review.status === "approved" ? "검수완료" : "검수 대기 중"}</span>;
+                  })()}
                 </div>
                 <button type="button" className="green" onClick={() => loadDraft(record.localCopy || record)}>{record.localCopy ? "이 기기 저장본 불러오기" : "불러오기"}</button>
                 {record.localCopy && <button type="button" className="secondaryButton" onClick={() => loadDraft(record)}>다른 기기 기본정보 불러오기</button>}
@@ -3637,7 +3708,11 @@ export default function Home() {
           <button className="finalSaveDraft" type="button" disabled={draftSaving} onClick={() => void saveDraft()}>
             {draftSaving ? "임시저장 중..." : "임시저장"}
           </button>
+          <button className="finalSaveDraft" type="button" disabled={reviewBusy || draftSaving} onClick={() => void requestReview()}>
+            {reviewBusy ? "검수 요청 중..." : "검수 요청"}
+          </button>
         </div>
+        {reviewMessage && <p className="detailMessage">{reviewMessage}</p>}
         {dbFolderName &&<p className="detailMessage">연결: {dbFolderName}</p>}
         {batchMode === "edit" && <p className="detailMessage">수정 저장 위치: {editFolderHandle ? `${editFolderHandle.name} › ${model || "모델명"}` : "처음 저장할 때 '제품이미지수정' 폴더를 한 번 골라주세요"}</p>}
         {dbStatus && <p className="note">{dbStatus}</p>}
