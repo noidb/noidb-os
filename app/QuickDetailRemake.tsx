@@ -166,6 +166,16 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   const expectedEdits = originalSections.filter(section => (sectionActions[section.id] || "edit") === "edit").length;
   const completedEdits = editedSections.filter(section => originalSections.some(original => original.id === section.id) && (sectionActions[section.id] || "edit") === "edit").length;
   const editedById = useMemo(() => new Map(editedSections.map(section => [section.id, section])), [editedSections]);
+  const [addedVersion, setAddedVersion] = useState(0);
+  // 지금 보이는 사진(AI 편집본이 있으면 편집본, 아니면 원본) 중 아직 5번 등록이미지 목록에 안 들어간 것만 센다.
+  const pendingAddCount = useMemo(() => {
+    void addedVersion;
+    return originalSections.filter(section => {
+      const edited = editedById.get(section.id);
+      const source = sectionActions[section.id] !== "original" && edited ? edited.dataUrl : section.dataUrl;
+      return !alreadyAdded.current.has(source);
+    }).length;
+  }, [originalSections, editedById, sectionActions, addedVersion]);
 
   useEffect(() => {
     void listQuickDrafts().then(items => { setDrafts(items); setDraftsReady(true); }).catch(() => setDraftsReady(true));
@@ -367,9 +377,17 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         const edited = editedById.get(section.id);
         const useEdited = sectionActions[section.id] !== "original" && edited;
         const source = useEdited ? edited.dataUrl : section.dataUrl;
+        // 이미 목록에 들어간 사진(AI 편집 후 자동 추가 포함)은 다시 넣지 않는다.
+        if (alreadyAdded.current.has(source)) continue;
         items.push({ fileName: `${base}-cut-${stamp}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(source, 1000), source });
+        alreadyAdded.current.add(source);
+      }
+      if (!items.length) {
+        setMessage("모든 사진이 이미 5번 쿠팡 등록이미지 목록에 들어 있습니다.");
+        return;
       }
       onAddToList(items);
+      setAddedVersion(value => value + 1);
       setMessage(`${items.length}장을 5번 쿠팡 등록이미지 목록에 추가했습니다. 위 이미지 목록에서 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "등록이미지에 추가하지 못했습니다.");
@@ -446,6 +464,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
           alreadyAdded.current.add(newlyEdited[index].dataUrl);
         }
         onAddToList(items);
+        setAddedVersion(value => value + 1);
       }
       setFinalSections(completed);
       setMessage(newlyEdited.length
@@ -628,8 +647,8 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       <div className={styles.preEditReview}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <h3 style={{ margin: 0 }}>사진별 확인</h3>
-          <button type="button" className="existingDetailUseButton" disabled={busy} title="지금 보이는 사진을 1000×1000 여백 없는 정사각형으로 만들어 5번 쿠팡 등록이미지 목록에 넣습니다. 썸네일·추가이미지·상세페이지에 모두 쓸 수 있습니다."
-            onClick={() => void addToRegistrationImages()}>등록이미지에 추가 ({originalSections.length}장)</button>
+          <button type="button" className="existingDetailUseButton" disabled={busy || pendingAddCount === 0} title={pendingAddCount === 0 ? "지금 보이는 사진이 모두 5번 쿠팡 등록이미지 목록에 들어 있습니다." : "지금 보이는 사진을 1000×1000 여백 없는 정사각형으로 만들어 5번 쿠팡 등록이미지 목록에 넣습니다. 썸네일·추가이미지·상세페이지에 모두 쓸 수 있습니다."}
+            onClick={() => void addToRegistrationImages()}>{pendingAddCount === 0 ? "추가됨 ✓" : `등록이미지에 추가 (${pendingAddCount}장)`}</button>
         </div>
         <div className={styles.reviewGrid}>
           {originalSections.map((section, index) => {
