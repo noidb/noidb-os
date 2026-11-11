@@ -1672,6 +1672,29 @@ export default function Home() {
     }
   };
 
+  // 2026-11-11 묶음 견적서 대기목록 전체 삭제: 모든 성별·카테고리 묶음을 한 번에 비운다(상품DB 제품 정보는 그대로).
+  const clearAllQuoteGroups = async () => {
+    if (!quoteGroups.length) return;
+    const modelTotal = quoteGroups.reduce((sum, group) => sum + group.models, 0);
+    if (!window.confirm(`묶음 견적서 대기목록 전체(${quoteGroups.length}개 묶음 · ${modelTotal.toLocaleString()}모델)를 비울까요?\n견적서를 다운로드하고 쿠팡 업로드까지 확인한 뒤 비우세요. 상품DB의 제품 정보는 삭제되지 않습니다.`)) return;
+    setQuoteQueueBusy("전체삭제");
+    try {
+      let cleared = 0;
+      for (const group of quoteGroups) {
+        const response = await postGoogleSheet({ action: "quoteQueueClear", gender: group.gender, category: group.category });
+        const data = await response.json();
+        if (!response.ok || data.error) throw new Error(`${group.gender} ${group.category}: ${data.error || "비우기 실패"}`);
+        cleared += Number(data.cleared || 0);
+      }
+      setExportMessage(`묶음 견적서 대기목록 전체를 비웠습니다. (${cleared.toLocaleString()}모델)`);
+    } catch (error) {
+      setExportMessage(`오류: ${error instanceof Error ? error.message : "대기목록 전체 삭제 실패"}`);
+    } finally {
+      try { await loadQuoteQueue(); } catch { /* 불러오기 실패는 무시 */ }
+      setQuoteQueueBusy("");
+    }
+  };
+
   const deleteQuoteModel = async (modelName: string) => {
     if (!window.confirm(`${modelName}을(를) 묶음 견적서 대기목록에서 삭제할까요?\n상품DB의 제품 정보는 삭제되지 않습니다.`)) return;
     setQuoteQueueBusy(`삭제:${modelName}`);
@@ -3848,9 +3871,16 @@ export default function Home() {
         <div className="quoteQueuePanel">
           <div className="quoteQueueHeader">
             <div><h3>카테고리별 묶음 견적서</h3><p>등록할 때 자동 누적되며 같은 성별·카테고리끼리 최대 1,000 SKU행으로 나뉩니다.</p></div>
-            <button type="button" className="softSageButton" disabled={Boolean(quoteQueueBusy)} onClick={() => void loadQuoteQueue()} style={{ flexShrink: 0, minWidth: "160px", padding: "12px 22px", whiteSpace: "nowrap", fontSize: "16px" }}>
-              {quoteQueueBusy === "목록" ? "불러오는 중..." : "대기목록 불러오기"}
-            </button>
+            <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
+              <button type="button" className="softSageButton" disabled={Boolean(quoteQueueBusy)} onClick={() => void loadQuoteQueue()} style={{ flexShrink: 0, minWidth: "160px", padding: "12px 22px", whiteSpace: "nowrap", fontSize: "16px" }}>
+                {quoteQueueBusy === "목록" ? "불러오는 중..." : "대기목록 불러오기"}
+              </button>
+              {quoteGroups.length > 0 && (
+                <button type="button" className="softPinkButton" disabled={Boolean(quoteQueueBusy)} onClick={() => void clearAllQuoteGroups()} style={{ flexShrink: 0, minWidth: "160px", padding: "12px 22px", whiteSpace: "nowrap", fontSize: "16px" }}>
+                  {quoteQueueBusy === "전체삭제" ? "삭제 중..." : "목록 전체 삭제"}
+                </button>
+              )}
+            </div>
           </div>
           {!quoteGroups.length && <p className="note">대기목록을 불러오거나 새 상품을 저장하면 여기에 표시됩니다.</p>}
           <div className="quoteGroupList">
@@ -3907,6 +3937,18 @@ export default function Home() {
           {(lightboxInfo || lightboxIndex >= 0) && <span className="lightboxInfo">{lightboxIndex >= 0 && lightboxList.length > 1 ? `${lightboxIndex + 1} / ${lightboxList.length}` : ""}{lightboxInfo && lightboxIndex >= 0 && lightboxList.length > 1 ? " · " : ""}{lightboxInfo ? `원본 ${lightboxInfo}` : ""}</span>}
         </div>
       )}
+
+      {/* 2026-11-11 자주 쓰는 저장 메뉴: 스크롤 위치와 상관없이 화면에 따라다닌다(7번 칸의 같은 버튼과 같은 동작). */}
+      <nav className="floatingSaveBar" aria-label="자주 쓰는 저장 메뉴">
+        {dbSupported && <button type="button" className="softBeigeButton" onClick={pickFolder} title="상품DB 저장 폴더 선택">폴더 선택</button>}
+        <button type="button" className="softSageButton" disabled={draftSaving} onClick={() => void saveDraft()}>
+          {draftSaving ? "저장 중..." : "임시저장"}
+        </button>
+        <button type="button" className="softPinkButton" disabled={batchBusy} onClick={batchSave}>
+          {batchBusy ? "저장 중..." : batchMode === "practice" ? "테스트 ZIP" : batchMode === "edit" ? "수정 파일 저장" : "전체 파일 저장"}
+        </button>
+      </nav>
+      <div className="floatingSaveSpacer" aria-hidden="true" />
     </main>
   );
 }
@@ -4006,7 +4048,7 @@ function PoolThumb({ src, alt, onOpen }: { src: string; alt: string; onOpen?: ()
   );
 }
 
-function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage; title: string; onChange: (v: SlotImage | null) => void; tuneHost: HTMLElement | null }) {
+function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value: SlotImage; title: string; onChange: (v: SlotImage | null) => void; tuneHost: HTMLElement | null; toolsHost: HTMLElement | null }) {
   const source = value.source || value.dataUrl;
   const [loadedImg, setLoadedImg] = useState<HTMLImageElement | null>(null);
   // 2026-11-10 화면에서 끌 때는 줄여 둔 미리보기로 그려 빠르게 하고, 저장 파일은 원본에서 만든다.
@@ -4157,13 +4199,19 @@ function SlotCropEditor({ value, title, onChange, tuneHost }: { value: SlotImage
       title={locked ? "저장됨 · 수정 버튼을 누르면 다시 조절할 수 있습니다." : active ? "끌어서 위치 이동 · 마우스 휠로 확대/축소 · 더블클릭으로 처음 상태 · 칸 바깥을 누르면 휠 확대 끔" : "사진을 한 번 클릭하면 마우스 휠로 확대/축소할 수 있습니다."}
     >
       <canvas ref={canvasRef} className="slotCropCanvas" aria-label={title} />
-      {quality && <span className={`slotQuality slotQuality-${quality.level}`} title={qualityHint}>{qualityText}</span>}
-      {!locked && <div className="slotCropTools" onPointerDown={event => event.stopPropagation()}>
-        <button type="button" onClick={() => update({ zoom: 1, x: 0, y: 0, brightness: 0, sharpness: 0 })} title="처음 상태로 되돌리기">↻</button>
-        <button type="button" onClick={() => setTuneOpen(open => !open)} title="밝기·선명도">☀</button>
-        <button type="button" onClick={() => update({ ...viewRef.current, zoom: viewRef.current.zoom / 1.1 })}>－</button>
-        <button type="button" onClick={() => update({ ...viewRef.current, zoom: viewRef.current.zoom * 1.1 })}>＋</button>
-      </div>}
+      {/* 2026-11-11: 화질 배지와 ↻ ☀ － ＋ 버튼이 사진을 가려서, 사진 바로 아래 줄(저장·삭제 버튼 위)로 옮김 */}
+      {toolsHost && (quality || !locked) && createPortal(
+        <div className="slotToolsRow" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
+          {quality && <span className={`slotQuality slotQuality-${quality.level}`} title={qualityHint}>{qualityText}</span>}
+          {!locked && <div className="slotCropTools">
+            <button type="button" onClick={() => update({ zoom: 1, x: 0, y: 0, brightness: 0, sharpness: 0 })} title="처음 상태로 되돌리기">↻</button>
+            <button type="button" onClick={() => setTuneOpen(open => !open)} title="밝기·선명도">☀</button>
+            <button type="button" onClick={() => update({ ...viewRef.current, zoom: viewRef.current.zoom / 1.1 })} title="축소">－</button>
+            <button type="button" onClick={() => update({ ...viewRef.current, zoom: viewRef.current.zoom * 1.1 })} title="확대">＋</button>
+          </div>}
+        </div>,
+        toolsHost
+      )}
       {!locked && tuneOpen && tuneHost && createPortal(
         <div className="slotCropTune" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
           <label>밝기 {view.brightness || 0}
@@ -4234,6 +4282,7 @@ function ImageSlot({
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [tuneHost, setTuneHost] = useState<HTMLDivElement | null>(null);
+  const [toolsHost, setToolsHost] = useState<HTMLDivElement | null>(null);
   const pendingFileRevision = useRef(0);
   const displaySubtitle = slotKey.startsWith("opt:") ? filename : subtitle;
   useEffect(() => () => { pendingFileRevision.current += 1; }, []);
@@ -4337,7 +4386,7 @@ function ImageSlot({
         }}
       >
         {value ? (
-          <SlotCropEditor key={value.fileName} value={value} title={title} onChange={onChange} tuneHost={tuneHost} />
+          <SlotCropEditor key={value.fileName} value={value} title={title} onChange={onChange} tuneHost={tuneHost} toolsHost={toolsHost} />
         ) : (
           <div className="slotPlaceholder">
             <strong>{title}</strong>
@@ -4345,6 +4394,7 @@ function ImageSlot({
           </div>
         )}
       </div>
+      <div ref={setToolsHost} />
       <div ref={setTuneHost} />
       <input
         ref={inputRef}

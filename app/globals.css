@@ -611,13 +611,15 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 .slotCropFrame{position:relative;width:100%;height:100%;overflow:hidden;user-select:none;touch-action:none;background:#fff}
 .slotCropFrame:active{cursor:grabbing}
 .slotCropCanvas{display:block;width:100%;height:100%}
-.slotCropTools{position:absolute;right:6px;bottom:6px;display:flex;gap:4px}
-.slotCropTools button{width:26px;height:26px;padding:0;border:1px solid #d8d3cc;border-radius:6px;background:rgba(255,255,255,.9);cursor:pointer;line-height:1}
+/* 2026-11-11 사진 밖(바로 아래 줄)으로 이동: 배지는 왼쪽, ↻ ☀ － ＋ 는 오른쪽. 좁으면 줄바꿈 */
+.slotToolsRow{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px 6px;margin-top:6px}
+.slotCropTools{display:flex;gap:4px;margin-left:auto}
+.slotCropTools button{width:26px;height:26px;padding:0;border:1px solid #d8d3cc;border-radius:6px;background:#fff;cursor:pointer;line-height:1}
 .slotCropTune{margin-top:6px;display:flex;flex-direction:column;gap:2px;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,.92);border:1px solid #d8d3cc;font-size:11px}
 .slotCropTune label{display:flex;flex-direction:column;gap:1px}
 .slotCropTune input{width:100%;margin:0}
 /* 2026-11-10 클로즈업 화질 표시(충분/주의/흐려짐) */
-.slotQuality{position:absolute;left:6px;top:6px;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:700;line-height:1.5;pointer-events:auto;cursor:help;border:1px solid transparent}
+.slotQuality{padding:2px 8px;border-radius:8px;font-size:11px;font-weight:700;line-height:1.5;pointer-events:auto;cursor:help;border:1px solid transparent}
 .slotQuality-ok{background:#e3ede6;color:#3f574b;border-color:#b9cbbc}
 .slotQuality-warn{background:#f4f1ec;color:#8a5a00;border-color:#e0c98f}
 .slotQuality-blur{background:#fee2e2;color:#b91c1c;border-color:#f3b3b3}
@@ -872,3 +874,16 @@ html,body{overflow-x:clip}
 .lightboxArrow{flex:0 0 auto;width:56px;height:56px;border:0;border-radius:50%;background:rgba(255,255,255,.88);color:#4b4744;font-size:38px;line-height:1;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0 0 4px;box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:1001}
 .lightboxArrow:hover{background:#fff}
 @media(max-width:720px){.lightboxStage img{max-width:96vw}.lightboxArrow{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;font-size:30px}.lightboxPrev{left:8px}.lightboxNext{right:8px}}
+
+/* 2026-11-11 따라다니는 저장 메뉴: 넓은 화면은 오른쪽 여백에 세로로, 좁은 화면(모바일)은 아래에 가로로 붙인다. */
+.floatingSaveBar{position:fixed;right:14px;top:50%;transform:translateY(-50%);z-index:60;display:flex;flex-direction:column;gap:8px;width:108px}
+.floatingSaveBar button{width:100%;min-height:46px;padding:8px 6px;font-size:13px;line-height:1.25;box-shadow:0 2px 8px rgba(0,0,0,.12)!important}
+.floatingSaveSpacer{display:none}
+@media (max-width:1320px) and (min-width:761px){
+  .floatingSaveBar{width:96px;right:8px}
+}
+@media (max-width:760px){
+  .floatingSaveBar{top:auto;bottom:0;left:0;right:0;transform:none;width:auto;flex-direction:row;padding:8px 10px;gap:8px;background:rgba(246,241,233,.96);border-top:1px solid #d8d0c5}
+  .floatingSaveBar button{flex:1;min-width:0;box-shadow:none!important}
+  .floatingSaveSpacer{display:block;height:68px}
+}
