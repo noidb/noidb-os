@@ -81,6 +81,78 @@ export async function ensureMinWidth(dataUrl: string): Promise<string> {
   return canvas.toDataURL("image/jpeg", 0.97);
 }
 
+/**
+ * 2026-11-11 '밝은 주얼리 화이트' 전용 자동 보정.
+ * 사진에서 "밝고 색이 거의 없는 부분"(흰 배경·흰 옷·금속 하이라이트)을 흰색 기준으로 삼아,
+ * 사진이 전체적으로 어둡거나 살짝 누런·분홍빛이면 조금 밝게 하고 색 쏠림을 줄인다.
+ * 제품 금속색이 변하지 않도록 보정 폭은 작게 제한한다(밝기 최대 6%, 색 쏠림 최대 6%).
+ * 분홍 배경·분홍 옷처럼 AI가 실제로 그려 넣은 색은 이 보정으로 바뀌지 않는다(그건 AI 지시문이 담당).
+ * 어떤 오류가 나도 원본 AI 사진을 그대로 돌려주므로 작업이 멈추지 않는다.
+ */
+export async function brightenWhiteBalance(dataUrl: string): Promise<string> {
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("사진을 불러오지 못했습니다."));
+      element.src = dataUrl;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx || !canvas.width || !canvas.height) return dataUrl;
+    ctx.drawImage(image, 0, 0);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const px = imageData.data;
+    const total = px.length / 4;
+    // 1) 흰색 기준 후보: 밝고(휘도 150 이상) 색이 거의 없는(채도 38 이하) 픽셀. 피부는 색이 진해서 제외된다.
+    const histogram = new Array<number>(256).fill(0);
+    let candidates = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      const r = px[i], g = px[i + 1], b = px[i + 2];
+      const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (luma >= 150 && Math.max(r, g, b) - Math.min(r, g, b) <= 38) {
+        histogram[Math.round(luma)] += 1;
+        candidates += 1;
+      }
+    }
+    if (candidates < total * 0.02) return dataUrl;
+    // 2) 후보 중 더 밝은 절반의 평균 색을 흰색 기준으로 삼는다.
+    let seen = 0;
+    let cut = 150;
+    for (let v = 0; v < 256; v += 1) {
+      seen += histogram[v];
+      if (seen >= candidates / 2) { cut = v; break; }
+    }
+    let sumR = 0, sumG = 0, sumB = 0, count = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      const r = px[i], g = px[i + 1], b = px[i + 2];
+      const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (luma >= cut && Math.max(r, g, b) - Math.min(r, g, b) <= 38) { sumR += r; sumG += g; sumB += b; count += 1; }
+    }
+    if (!count) return dataUrl;
+    const ref = [sumR / count, sumG / count, sumB / count];
+    const refMean = (ref[0] + ref[1] + ref[2]) / 3;
+    const refChroma = Math.max(...ref) - Math.min(...ref);
+    // 3) 배율 계산. 이미 밝고 색 쏠림이 적으면(일부러 고른 연한 베이지·회색 배경 포함) 색은 두고 밝기만 올린다.
+    const clamp = (value: number, max: number) => Math.min(max, Math.max(1, value));
+    const gains = Math.min(...ref) >= 225 && refChroma <= 20
+      ? [clamp(250 / refMean, 1.06), clamp(250 / refMean, 1.06), clamp(250 / refMean, 1.06)]
+      : ref.map(channel => clamp(250 / channel, 1.06));
+    if (gains.every(gain => gain < 1.005)) return dataUrl;
+    for (let i = 0; i < px.length; i += 4) {
+      px[i] = Math.min(255, px[i] * gains[0]);
+      px[i + 1] = Math.min(255, px[i + 1] * gains[1]);
+      px[i + 2] = Math.min(255, px[i + 2] * gains[2]);
+    }
+    ctx.putImageData(imageData, 0, 0);
+    return canvas.toDataURL("image/jpeg", 0.97);
+  } catch {
+    return dataUrl;
+  }
+}
+
 async function cropDataUrl(dataUrl: string, top: number, bottom: number, holes: CutHole[] = []): Promise<string> {
   return ensureMinWidth(await cropDataUrlRaw(dataUrl, top, bottom, holes));
 }
@@ -475,7 +547,8 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     });
     const data = await response.json() as { imageDataUrl?: string; error?: string };
     if (!response.ok || !data.imageDataUrl) throw new Error(data.error || "사진을 새로 만들지 못했습니다.");
-    return { ...section, dataUrl: data.imageDataUrl };
+    // '밝은 주얼리 화이트'일 때만 결과 사진을 살짝 밝게·색 쏠림 없이 보정한다(고급 아이보리·모던 그레이는 그대로).
+    return { ...section, dataUrl: style === "clean" ? await brightenWhiteBalance(data.imageDataUrl) : data.imageDataUrl };
   }
 
   async function create() {
