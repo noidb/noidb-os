@@ -7,7 +7,7 @@
   const panel = document.createElement("section");
   panel.id = "noidb-shipment-reader";
   panel.style.cssText = "padding:16px;margin:16px;border:2px solid #55735c;border-radius:10px;background:#f3f7f1;color:#29352f";
-  panel.innerHTML = '<h3>NOID-B 쉽먼트 입고결과</h3><p>입고예정일 9/13 이후 마감된 쉽먼트 중 새로 마감된 것만 읽습니다. 쿠팡 자료는 변경하지 않습니다.</p><div><button type="button" data-action="collect">입고결과 일괄 가져오기</button> <button type="button" data-action="cancel" hidden>중단</button> <button type="button" data-action="retry" disabled>NOID-B 전송 재시도</button> <button type="button" data-action="download" disabled>자료 파일 저장</button></div><p role="status" aria-live="polite"></p><div data-pdf style="margin-top:10px;padding:10px;border-top:1px solid #c9d6cb"><strong>Label·내역서 PDF 자동 저장</strong><p style="margin:4px 0">Label·내역서를 누르면 컴퓨터로 받지 않고 G드라이브 「쉽먼트출력세트/입고예정일(예: 20261023)」 폴더에 바로 저장합니다(폴더가 없으면 새로 만듦, 저장 창 없음).</p><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:6px 0"><label>입고예정일 <select data-pdf-date style="height:30px;border-radius:8px"></select></label><button type="button" data-action="pdf-all" style="height:30px;padding:0 12px;border:1px solid #c9d6cb;border-radius:8px;background:#e3ede6;font-weight:700;cursor:pointer">이 날짜 Label·내역서 전부 받기</button><button type="button" data-action="pdf-folder" style="height:30px;padding:0 12px;border:1px solid #d8c9b6;border-radius:8px;background:#e9ddcf;font-weight:700;cursor:pointer">저장 폴더 열기</button></div><p data-pdf-batch style="margin:4px 0"></p><p data-pdf-status style="margin:4px 0">아직 받은 PDF 없음</p><p data-pdf-url style="margin:4px 0;font-size:11px;color:#5d6b62"></p></div>';
+  panel.innerHTML = '<h3>NOID-B 쉽먼트 입고결과</h3><p>입고예정일 9/13 이후 마감된 쉽먼트 중 새로 마감된 것만 읽습니다. 쿠팡 자료는 변경하지 않습니다.</p><div><button type="button" data-action="collect">입고결과 일괄 가져오기</button> <button type="button" data-action="cancel" hidden>중단</button> <button type="button" data-action="retry" disabled>NOID-B 전송 재시도</button> <button type="button" data-action="download" disabled>자료 파일 저장</button></div><p role="status" aria-live="polite"></p><div data-pdf style="margin-top:10px;padding:10px;border-top:1px solid #c9d6cb"><strong>Label·내역서 PDF 자동 저장</strong><p style="margin:4px 0">Label·내역서를 누르면 컴퓨터로 받지 않고 G드라이브 「쉽먼트출력세트/입고예정일(예: 20261023)」 폴더에 바로 저장합니다(폴더가 없으면 새로 만듦, 저장 창 없음).</p><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:6px 0"><label>입고예정일 <select data-pdf-date style="height:30px;border-radius:8px"></select></label><label>확인할 쪽 <select data-pdf-pages style="height:30px;border-radius:8px"><option value="1">1쪽까지</option><option value="2">2쪽까지</option><option value="3">3쪽까지</option><option value="4">4쪽까지</option><option value="5" selected>5쪽까지</option></select></label><button type="button" data-action="pdf-all" style="height:30px;padding:0 12px;border:1px solid #c9d6cb;border-radius:8px;background:#e3ede6;font-weight:700;cursor:pointer">이 날짜 Label·내역서 전부 받기</button><button type="button" data-action="pdf-folder" style="height:30px;padding:0 12px;border:1px solid #d8c9b6;border-radius:8px;background:#e9ddcf;font-weight:700;cursor:pointer">저장 폴더 열기</button></div><p data-pdf-batch style="margin:4px 0"></p><p data-pdf-status style="margin:4px 0">아직 받은 PDF 없음</p><p data-pdf-url style="margin:4px 0;font-size:11px;color:#5d6b62"></p></div>';
   function placePanel() {
     if (location.pathname === PANEL_PATH) {
       if (!panel.isConnected) (document.querySelector("#app") || document.body).prepend(panel);
@@ -87,7 +87,7 @@
   // 0.9.11(2026-10-21): '이 날짜 Label·내역서 전부 받기' — 화면 목록에서 고른 입고예정일 쉽먼트의 [Label]·[내역서]를 차례로 눌러 받는다.
   // 이미 받아 저장된 쉽먼트·종류는 건너뛰어 같은 파일을 두 번 받지 않는다(30일 기억). 쿠팡 자료는 바꾸지 않고 받기 버튼만 누른다.
   const DONE_KEY = "noidbShipmentPdfDone2"; // 0.9.13: 날짜 폴더로 바꾸며 새로 기억(다시 받으면 예전 저장분은 날짜 폴더로 옮겨짐)
-  const dateSelect = panel.querySelector("[data-pdf-date]"), pdfAll = panel.querySelector('[data-action="pdf-all"]'), pdfBatch = panel.querySelector("[data-pdf-batch]");
+  const pageSelect = panel.querySelector("[data-pdf-pages]"), dateSelect = panel.querySelector("[data-pdf-date]"), pdfAll = panel.querySelector('[data-action="pdf-all"]'), pdfBatch = panel.querySelector("[data-pdf-batch]");
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
   async function readDone() {
     try { const stored = await chrome.storage.local.get(DONE_KEY); return stored[DONE_KEY] || {}; } catch { return {}; }
@@ -137,6 +137,7 @@
       if (!response.dated) pdfBatch.textContent = `${dateSelect.value || "이 날짜"} 폴더가 아직 없어 쉽먼트출력세트 폴더를 열었습니다. PDF를 받으면 날짜 폴더가 생깁니다.`;
     } catch (error) { pdfBatch.textContent = error.message; }
   });
+  // 0.9.15(2026-11-12): 70쪽까지 돌던 문제 → '확인할 쪽' 칸(1~5쪽, 기본 5쪽)에서 고른 쪽까지만 확인하고 받는다.
   // 0.9.14(2026-10-29): 쿠팡 목록이 10개씩 쪽으로 나뉘어 있어 첫 쪽만 받던 문제 → 쪽 번호(1·2·3…)와 다음(›) 버튼을 스스로 눌러 끝까지 받는다.
   const pageSignature = () => shipmentRows().map(row => row.shipment).join(",");
   const clickTarget = element => element.closest("a, button, li") || element;
@@ -164,7 +165,9 @@
   pdfAll.addEventListener("click", async () => {
     const date = dateSelect.value;
     if (!date || !shipmentRows().length) { pdfBatch.textContent = "이 화면에 쉽먼트 목록이 없습니다. 쿠팡에서 검색한 뒤 다시 눌러 주세요."; return; }
-    pdfBusy = true; pdfAll.disabled = dateSelect.disabled = true;
+    pdfBusy = true; pdfAll.disabled = dateSelect.disabled = pageSelect.disabled = true;
+    const maxPages = Math.min(5, Math.max(1, Number(pageSelect.value) || 5));
+    let capped = false;
     const done = await readDone();
     let clicked = 0, skipped = 0, total = 0, pages = 0;
     const seen = new Set(), visitedPages = new Set();
@@ -187,6 +190,7 @@
       for (let guard = 0; guard < 60; guard += 1) {
         const pager = pagination();
         if (!pager) break;
+        if (pages >= maxPages) { capped = true; break; }
         for (const item of pager.items) if (item.active) visitedPages.add(item.value);
         const nextPage = pager.items.filter(item => !visitedPages.has(item.value)).sort((a, b) => a.value - b.value)[0];
         if (nextPage) {
@@ -214,16 +218,16 @@
       if (!total) { pdfBatch.textContent = `${date} 쉽먼트를 찾지 못했습니다. 쿠팡에서 검색한 뒤 다시 눌러 주세요.`; return; }
       // 저장이 다 끝나면(최대 90초) NOID-B 날짜 작업 화면을 열어 출력세트를 자동으로 만든다.
       const failedBefore = pdfFailed;
-      pdfBatch.textContent = `${date} 쉽먼트 ${total}건(${pages}쪽 확인): 새로 받기 ${clicked}개${skipped ? ` · 이미 받은 ${skipped}개 건너뜀` : ""}. G드라이브 저장을 기다리는 중…`;
+      pdfBatch.textContent = `${date} 쉽먼트 ${total}건(${pages}쪽 확인${capped ? ` · 선택한 ${maxPages}쪽까지만` : ""}): 새로 받기 ${clicked}개${skipped ? ` · 이미 받은 ${skipped}개 건너뜀` : ""}. G드라이브 저장을 기다리는 중…`;
       const deadline = Date.now() + 90000;
       while (Date.now() < deadline && (pendingSaves > 0 || Date.now() - lastPdfEventAt < 3000)) await wait(500);
       if (pdfFailed > failedBefore || pendingSaves > 0) {
         pdfBatch.textContent = `${date}: 저장하지 못한 PDF가 있어 출력세트를 자동으로 만들지 않았습니다. 아래 결과를 확인한 뒤 다시 눌러 주세요.`;
       } else {
         await chrome.runtime.sendMessage({ type: "NOIDB_OPEN_OUTPUT_SET", date }).catch(() => null);
-        pdfBatch.textContent = `${date} 쉽먼트 ${total}건(${pages}쪽 확인) 저장 끝 (새로 ${clicked}개${skipped ? ` · 이미 받은 ${skipped}개` : ""}). NOID-B에서 출력세트를 자동으로 만드는 중입니다.`;
+        pdfBatch.textContent = `${date} 쉽먼트 ${total}건(${pages}쪽 확인${capped ? ` · 선택한 ${maxPages}쪽까지만` : ""}) 저장 끝 (새로 ${clicked}개${skipped ? ` · 이미 받은 ${skipped}개` : ""}). NOID-B에서 출력세트를 자동으로 만드는 중입니다.`;
       }
-    } finally { pdfBusy = false; pdfAll.disabled = dateSelect.disabled = false; }
+    } finally { pdfBusy = false; pdfAll.disabled = dateSelect.disabled = pageSelect.disabled = false; }
   });
   placePanel();
   refreshDates();
