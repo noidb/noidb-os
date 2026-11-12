@@ -8,10 +8,10 @@ export type ExtensionInfo = { id: string; name: string; version: string; zip: st
 export const SUPPLIER_HUB_EXTENSION: ExtensionInfo = {
   id: "supplier-hub",
   name: "NOID-B 쉽먼트 확장",
-  version: "0.9.14",
+  version: "0.9.15",
   zip: "/downloads/noidb-supplier-hub.zip",
   where: "",
-  features: ["입고결과 가져오기", "쉽먼트 PDF 다운로드(쿠팡 목록 쪽 자동 넘김)", "출력세트 생성"],
+  features: ["입고결과 가져오기", "쉽먼트 PDF 다운로드(확인할 쪽 1~5쪽 선택)", "출력세트 생성"],
 };
 
 export const SUPPLIER_SYNC_EXTENSION: ExtensionInfo = {
