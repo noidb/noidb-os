@@ -674,8 +674,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
 
   return (
     <main style={{ maxWidth: WMS_MOBILE_WIDTH, margin: "0 auto", padding: "12px 12px calc(20px + env(safe-area-inset-bottom))", fontFamily: "sans-serif", color: wmsColors.ink, background: wmsColors.background, minHeight: "100vh" }}>
-      <a href={`/wms/logistics/new-orders${fixtureMode ? "?logisticsFixture=1" : ""}`} style={{ color: wmsColors.slateDark, fontSize: "13px" }}>← 신규발주서 검색</a>
-      <h1 style={{ margin: "10px 0 4px", fontSize: "20px" }}>{expectedDate}</h1>
+      <h1 style={{ margin: "2px 0 4px", fontSize: "20px" }}>입고예정일 {expectedDate}</h1>
       <p style={{ margin: "0 0 14px", color: wmsColors.muted, fontSize: "12px", lineHeight: 1.6 }}>
         {groups.length ? <>{fulfillmentCenters.join(", ")} · 진행 중 발주 {purchaseOrderNumbers.length}건 · SKU {skuCount}종 · 총수량 {totalQuantity}개</> : "진행 중인 발주 없음"}
         {doneGroups.length ? ` · 출고완료 발주 ${doneGroups.reduce((sum, group) => sum + group.purchaseOrderNumbers.length, 0)}건` : ""}
@@ -698,12 +697,23 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
         </div>
       </section>}
       {groups.length > 0 && <>
-      <button type="button" disabled={previewLoading || loadingGroups} onClick={() => void handleRefresh()} style={{ ...wmsGhostButton, width: "100%", marginBottom: "16px", opacity: previewLoading || loadingGroups ? 0.5 : 1 }}>
-        {previewLoading || loadingGroups ? "현재 기록 확인 중..." : "현재 기록 새로고침 · 송장 생성 조건 확인"}
+      <button type="button" className="softApricotButton" disabled={previewLoading || loadingGroups} onClick={() => void handleRefresh()} style={{ width: "100%", marginBottom: "16px" }}>
+        {previewLoading || loadingGroups ? "확인 중..." : "새로고침"}
       </button>
 
       <ShipmentWorkflowStepCard step={1} title="발주확정 기록" subtitle="Supplier Hub에서 이 날짜 전체를 검색·재업로드한 뒤, 여기서는 사실만 기록합니다." status={confirmedCount === purchaseOrderNumbers.length ? "done" : "current"}>
         <p style={{ fontSize: "12px", margin: "0 0 8px" }}>발주확정 {confirmedCount}/{purchaseOrderNumbers.length}건</p>
+        <details style={{ margin: "0 0 8px" }}>
+          <summary style={{ cursor: "pointer", fontSize: "12px", color: wmsColors.muted }}>포함된 발주서 목록 ({purchaseOrderNumbers.length}건)</summary>
+          <ul style={{ margin: "6px 0 0", padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: "4px" }}>
+            {groups.flatMap(group => group.purchaseOrderNumbers.map(po => (
+              <li key={`${group.id}-${po}`} style={{ display: "flex", justifyContent: "space-between", gap: "8px", padding: "6px 9px", border: `1px solid ${wmsColors.border}`, borderRadius: "8px", fontSize: "11px", color: wmsColors.muted }}>
+                <span><strong style={{ color: wmsColors.ink }}>{po}</strong> · {group.fulfillmentCenter}</span>
+                <span style={{ color: isConfirmed(group, po) ? wmsColors.greenDark : wmsColors.warnText, fontWeight: 700, whiteSpace: "nowrap" }}>{isConfirmed(group, po) ? "확정" : "미확정"}</span>
+              </li>
+            )))}
+          </ul>
+        </details>
         {confirmError && <p style={{ color: "#c0392b", fontSize: "12px" }}>{confirmError}</p>}
         <button type="button" disabled={confirming || confirmedCount === purchaseOrderNumbers.length} onClick={() => void handleConfirmAll()} style={{ ...wmsSecondaryButton, width: "100%", opacity: confirming || confirmedCount === purchaseOrderNumbers.length ? 0.5 : 1 }}>
           {confirming ? "기록 중..." : confirmedCount === purchaseOrderNumbers.length ? "이 날짜 전부 발주확정 완료" : `이 날짜 전체 발주확정 기록 (${purchaseOrderNumbers.length - confirmedCount}건)`}
