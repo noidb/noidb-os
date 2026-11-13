@@ -3,7 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { isSameOriginActionRequest } from "@/lib/wms/noidb-action-auth";
 import { fetchProductCatalog, type ProductCatalogItem } from "@/lib/wms/product-catalog";
 import { lookupCodesAnyTab } from "@/lib/wms/product-row-lookup";
-import { mutatePickingWaveStore } from "@/lib/wms/picking-wave/server-store";
+import { mutatePickingWaveStore, readPickingWaveStore } from "@/lib/wms/picking-wave/server-store";
+import { deriveVendorOrderDrafts } from "@/lib/wms/vendor-order/derive-drafts";
+import { isVendorLineResolved } from "@/lib/wms/vendor-order/receiving-state";
 import { normalizeSkuId } from "@/lib/wms/sku-normalize";
 import { UNASSIGNED_VENDOR_NAME, type VendorOrderDraftLine } from "@/lib/wms/vendor-order/types";
 import { toVendorOrderQuantity } from "@/lib/wms/vendor-order/aggregate";
@@ -16,6 +18,7 @@ const headers = { "Cache-Control": "private, no-store" };
  * 쉽먼트별 SKU리스트에서 재고 파악 중 고른 SKU를 거래처발주로 보낸다(2026-10-15 사용자 요청).
  * 입고결과의 거래처발주와 같은 발주대기(consolidateVendorOrders)에 넣어, 제품DB 거래처별 발주서로 묶인다.
  * 같은 SKU가 이미 발주대기에 있으면 수량을 더하지 않고 그대로 둔다(두 번 눌러도 두 번 주문되지 않음).
+ * 2026-11-13 사용자 요청: 담아만 둔 것이든 주문완료한 것이든 거래처 발주 목록에 이미 있는 SKU는 넣지 않고 "이미 등록된 SKU"로 알려 준다.
  */
 export async function POST(request: NextRequest) {
   if (!isSameOriginActionRequest(request)) return NextResponse.json({ ok: false, error: "쉽먼트별 SKU리스트 화면에서 다시 진행해 주세요." }, { status: 403, headers });
@@ -36,6 +39,17 @@ export async function POST(request: NextRequest) {
       bySku.set(skuId, entry);
     }
     if (!bySku.size) throw new Error("거래처발주할 SKU를 골라 주세요.");
+    // 거래처 발주 화면에 보이는 줄(작성 중 + 주문완료 후 아직 처리 안 끝난 줄)과 같은 기준으로 이미 등록된 SKU를 찾는다.
+    const current = await readPickingWaveStore();
+    const draftById = new Map(deriveVendorOrderDrafts(current.vendorOrderDrafts, current.vendorOrderLines).map(draft => [draft.id, draft]));
+    const registered = new Set(current.vendorOrderLines.filter(line => {
+      const draft = draftById.get(line.draftId);
+      return Boolean(draft) && !current.deletedVendorLineIds[line.id] && !current.deletedVendorDraftIds[line.draftId] && !isVendorLineResolved(line) &&
+        (draft!.status === "sent" || !draft!.archivedAt);
+    }).map(line => normalizeSkuId(line.skuId)));
+    const alreadyRegistered = [...bySku.keys()].filter(skuId => registered.has(skuId));
+    for (const skuId of alreadyRegistered) bySku.delete(skuId);
+    if (!bySku.size) return NextResponse.json({ ok: true, added: 0, alreadyQueued: 0, placed: [], skipped: [], vendors: [], unassigned: [], alreadyRegistered }, { headers });
     const catalog = await fetchProductCatalog().catch(() => ({ configured: false, items: [] as ProductCatalogItem[] }));
     const catalogBySku = new Map(catalog.items.map(item => [normalizeSkuId(item.skuId), item]));
     // 2026-10-23: 제품DB에 없는 SKU(비관리SKU·판매중지SKU 등 옛 SKU 탭으로 옮긴 것)는 메모에 어느 탭인지 남긴다.
@@ -68,7 +82,7 @@ export async function POST(request: NextRequest) {
     const skipped = [...bySku.keys()].filter(skuId => !placed.includes(skuId));
     const vendors = [...new Set(queueLines.filter(line => placed.includes(normalizeSkuId(line.skuId))).map(line => line.vendorName))];
     return NextResponse.json({ ok: true, added: receipt?.added ?? 0, alreadyQueued: receipt?.duplicates ?? 0, placed, skipped, vendors,
-      unassigned: placed.filter(skuId => !catalogBySku.get(skuId)?.vendorName.trim()) }, { headers });
+      unassigned: placed.filter(skuId => !catalogBySku.get(skuId)?.vendorName.trim()), alreadyRegistered }, { headers });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "거래처발주로 보내지 못했습니다." }, { status: 400, headers });
   }

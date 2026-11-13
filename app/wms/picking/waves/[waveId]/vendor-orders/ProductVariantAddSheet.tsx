@@ -62,7 +62,7 @@ export default function ProductVariantAddSheet({ anchorSkuId, catalogItems, exis
                   <strong style={{ fontSize: "15px" }}>{option.optionLabel || "옵션명 미등록"}</strong>
                   <span style={{ fontSize: "12px", color: wmsColors.muted }}>{option.name}</span>
                   <span style={{ fontSize: "12px" }}>SKU {option.skuId}{option.product.modelSku ? ` · ${option.product.modelSku}` : ""}</span>
-                  {(option.alreadyAdded || option.discontinued) && <strong style={{ fontSize: "12px" }}>{[option.alreadyAdded ? "이미 추가됨" : "", option.discontinued ? "단종" : ""].filter(Boolean).join(" · ")}</strong>}
+                  {(option.alreadyAdded || option.discontinued) && <strong style={{ fontSize: "12px" }}>{[option.alreadyAdded ? "이미 등록된 SKU" : "", option.discontinued ? "단종" : ""].filter(Boolean).join(" · ")}</strong>}
                 </span>
               </label>
             </li>)}

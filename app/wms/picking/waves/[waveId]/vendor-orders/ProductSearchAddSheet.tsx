@@ -210,7 +210,7 @@ export default function ProductSearchAddSheet({ existingSkuIds, onClose, onSelec
                 <div style={{ fontSize: "13px", fontWeight: 700, color: wmsColors.ink, whiteSpace: "normal", wordBreak: "keep-all", lineHeight: 1.3 }}>{displayName}</div>
                 <div style={{ fontSize: "12px", fontWeight: 700, color: wmsColors.greenDark, whiteSpace: "normal", wordBreak: "keep-all", marginTop: "2px" }}>{displayOption || "옵션 없음"}</div>
                 <div style={{ fontSize: "10px", color: wmsColors.muted, marginTop: "3px" }}>SKU {item.skuId} · {item.vendorName || "거래처 미등록"}</div>
-                {alreadyAdded && <strong style={{ display: "block", fontSize: "12px", color: wmsColors.greenDark, marginTop: "4px" }}>이미 추가됨</strong>}
+                {alreadyAdded && <strong style={{ display: "block", fontSize: "12px", color: wmsColors.greenDark, marginTop: "4px" }}>이미 등록된 SKU</strong>}
               </div>
             </button>
             );

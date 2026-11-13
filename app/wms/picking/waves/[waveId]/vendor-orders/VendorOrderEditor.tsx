@@ -336,6 +336,8 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     }
     return Array.from(map.entries())
       .map(([vendorName, groupLines]) => ({ vendorName, lines: [...groupLines].sort((a, b) => {
+        // 2026-11-13 사용자 요청: 주문완료한 상품을 앞쪽에, 담아만 두고 아직 주문하지 않은 상품은 맨 끝에 둔다.
+        if (Boolean(a.orderedAt) !== Boolean(b.orderedAt)) return a.orderedAt ? -1 : 1;
         const aManualGroup = a.manualListGroup || "";
         const bManualGroup = b.manualListGroup || "";
         if (Boolean(aManualGroup) !== Boolean(bManualGroup)) return aManualGroup ? 1 : -1;
@@ -377,6 +379,9 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
       : visibleEntries;
     return orderVendorDrafts(visibleEntries, labelEntries);
   }, [groups, draftsByVendor, historyView, sharedSnapshot, completedDiscontinueSkus, discardedDraftIds, savedSentLines, excludedLineIds, routedVendorLineIds]);
+
+  // 2026-11-13 사용자 요청: 거래처·주문완료 여부와 상관없이 발주 목록에 이미 있는 SKU는 다시 넣지 않는다.
+  const registeredSkuIds = useMemo(() => orderEntries.flatMap(entry => entry.group?.lines || entry.historyLines || []).map(line => line.skuId), [orderEntries]);
 
   const variantSkuIds = useMemo(() => {
     const models = new Map<string, Set<string>>();
@@ -728,12 +733,12 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
     if (draftsRef.current[vendorName]?.status === "sent") { setSaveError("전송완료 발주서는 수정할 수 없습니다."); return; }
     const now = new Date().toISOString();
     const targetDraftId = draftIdFor(vendorName);
-    // 2026-10-21 사용자 요청: 같은 거래처에 이미 발주 중인 SKU(작성 중이든 보낸 발주든, 처리 끝나지 않은 것)는 다시 넣지 않는다.
-    const key = vendorKeyOf(vendorName);
-    const openLine = (line: VendorOrderDraftLine) => vendorKeyOf(line.vendorName || UNASSIGNED_VENDOR_NAME) === key && !excludedLineIds.has(line.id) && !routedVendorLineIds.has(line.id) && !line.orderExclusion && !removedLineIds.has(line.id) && !isVendorLineResolved(line);
+    // 2026-11-13 사용자 요청: 거래처가 달라도, 담아만 둔 것이든 주문완료한 것이든 목록에 같은 SKU가 있으면 다시 넣지 않는다.
+    const openLine = (line: VendorOrderDraftLine) => !excludedLineIds.has(line.id) && !routedVendorLineIds.has(line.id) && !line.orderExclusion && !removedLineIds.has(line.id) && !isVendorLineResolved(line);
     const sentHistory = sharedSnapshot ? sharedSnapshot.vendorOrderLines.map(line => savedSentLines[line.id] || line).filter(line => !sharedSnapshot.deletedVendorLineIds[line.id] && sharedSnapshot.vendorOrderDrafts.some(draft => draft.id === line.draftId && draft.status === "sent")) : [];
     const activeSkus = new Set([...linesRef.current, ...sentHistory].filter(line => line.draftId === targetDraftId ? !excludedLineIds.has(line.id) && !line.orderExclusion && !removedLineIds.has(line.id) : openLine(line))
       .map(line => normalizeSkuId(line.skuId)));
+    for (const skuId of registeredSkuIds) activeSkus.add(normalizeSkuId(skuId));
     const added: VendorOrderDraftLine[] = [];
     const duplicates: string[] = [];
     for (const product of products) {
@@ -762,7 +767,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
       const lastId = added[added.length - 1].id;
       setTimeout(() => document.querySelector(`[data-line-id="${CSS.escape(lastId)}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
     }
-    if (duplicates.length) window.alert(`SKU ${duplicates.join(", ")}는 이미 발주중입니다. 중복으로 추가하지 않았습니다.`);
+    if (duplicates.length) window.alert(`이미 등록된 SKU입니다: ${duplicates.join(", ")}\n중복으로 추가하지 않았습니다.`);
     setSearchAddVendor(null); setVariantTarget(null);
   }
 
@@ -1382,12 +1387,12 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
 
       {searchAddVendor && (
         <ProductSearchAddSheet
-          existingSkuIds={groups.find(group => group.vendorName === searchAddVendor)?.lines.map(line => line.skuId) || []}
+          existingSkuIds={registeredSkuIds}
           onClose={() => setSearchAddVendor(null)}
           onSelect={(product, isStockReplenishment) => addProductsFromSearch(searchAddVendor, [product], new Date().toISOString() + "::" + crypto.randomUUID(), isStockReplenishment)}
         />
       )}
-      {variantTarget && <ProductVariantAddSheet anchorSkuId={variantTarget.skuId} catalogItems={Array.from(liveCatalogByProductCode.values())} existingSkuIds={groups.find(group => group.vendorName === variantTarget.vendorName)?.lines.map(line => line.skuId) || []} onClose={() => setVariantTarget(null)} onSelect={(products: ProductCatalogItem[]) => {
+      {variantTarget && <ProductVariantAddSheet anchorSkuId={variantTarget.skuId} catalogItems={Array.from(liveCatalogByProductCode.values())} existingSkuIds={registeredSkuIds} onClose={() => setVariantTarget(null)} onSelect={(products: ProductCatalogItem[]) => {
         const anchor = linesRef.current.find(line => normalizeSkuId(line.skuId) === normalizeSkuId(variantTarget.skuId) && line.vendorName === variantTarget.vendorName);
         addProductsFromSearch(variantTarget.vendorName, products, new Date().toISOString() + "::" + crypto.randomUUID(), anchor?.isStockReplenishment);
       }} />}

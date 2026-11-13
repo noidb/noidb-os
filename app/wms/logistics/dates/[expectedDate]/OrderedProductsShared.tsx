@@ -148,6 +148,7 @@ export function PickBar({ expectedDate, picks }: { expectedDate: string; picks: 
       if (!response.ok || !data.ok) throw new Error(data.error || "거래처발주로 보내지 못했습니다.");
       const notes = [
         data.vendors?.length ? `거래처 ${data.vendors.join(", ")}` : "",
+        data.alreadyRegistered?.length ? `이미 등록된 SKU ${data.alreadyRegistered.join(", ")}는 추가하지 않음` : "",
         data.alreadyQueued ? `이미 발주대기에 있던 ${data.alreadyQueued}개는 수량 그대로 둠` : "",
         data.unassigned?.length ? `거래처 미지정 ${data.unassigned.length}개(제품DB 거래처 확인)` : "",
         data.skipped?.length ? `못 넣은 SKU ${data.skipped.join(", ")}` : "",
