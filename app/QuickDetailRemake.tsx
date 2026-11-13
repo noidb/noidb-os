@@ -277,6 +277,19 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   const [finalSections, setFinalSections] = useState<QuickDetailSection[]>([]);
   const [result, setResult] = useState<Result | null>(null);
   const [busy, setBusy] = useState(false);
+  // 사진별 확인에서 사진을 누르면 크게 보는 창(몇 번째 사진인지, 닫혀 있으면 null)
+  const [zoomIndex, setZoomIndex] = useState<number | null>(null);
+  const zoomCountRef = useRef(0);
+  useEffect(() => {
+    if (zoomIndex === null) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setZoomIndex(null);
+      else if (event.key === "ArrowLeft") setZoomIndex(current => current === null ? null : Math.max(0, current - 1));
+      else if (event.key === "ArrowRight") setZoomIndex(current => current === null ? null : Math.min(zoomCountRef.current - 1, current + 1));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zoomIndex]);
   const [progress, setProgress] = useState(0);
   const [scanSummary, setScanSummary] = useState<{ found: number; kept: number; excluded: number } | null>(null);
   const [message, setMessage] = useState("상세페이지를 올리거나, 등록이미지에서 사진을 골라주세요.");
@@ -804,7 +817,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
             const shown = !original && edited ? edited.dataUrl : section.dataUrl;
             return <article key={section.id}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={shown} alt={`사진 ${index + 1}`} />
+              <img src={shown} alt={`사진 ${index + 1}`} title="누르면 크게 봅니다" style={{ cursor: "zoom-in" }} onClick={() => setZoomIndex(index)} />
               <button type="button" className={styles.kindToggle} onClick={() => toggleSectionKind(section.id)}>{section.kind === "wear" ? "착용컷 → 제품컷으로 변경" : "제품컷 → 착용컷으로 변경"}</button>
               <strong>{index + 1}. {section.kind === "wear" ? "착용컷" : "제품컷"}{!original && edited ? " · AI 완료" : ""}</strong>
               <div>
@@ -820,6 +833,32 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       </div>
     )}
 
+
+    {(() => {
+      zoomCountRef.current = originalSections.length;
+      if (zoomIndex === null) return null;
+      const index = Math.min(zoomIndex, originalSections.length - 1);
+      const section = originalSections[index];
+      if (!section) return null;
+      const edited = editedById.get(section.id);
+      const shown = sectionActions[section.id] !== "original" && edited ? edited.dataUrl : section.dataUrl;
+      const navStyle = { width: 48, height: 48, borderRadius: 8, border: "none", background: "#f4f1ec", color: "#252525", fontSize: 18, cursor: "pointer", flex: "0 0 auto" } as const;
+      return (
+        <div role="dialog" aria-label="사진 크게 보기" onClick={() => setZoomIndex(null)}
+          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(37,37,37,0.82)", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: 16 }}>
+          <button type="button" title="이전 사진" disabled={index === 0} style={{ ...navStyle, opacity: index === 0 ? 0.35 : 1 }} onClick={event => { event.stopPropagation(); setZoomIndex(index - 1); }}>◀</button>
+          <div onClick={event => event.stopPropagation()} style={{ display: "grid", gap: 8, justifyItems: "center", minWidth: 0 }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={shown} alt={`사진 ${index + 1} 크게 보기`} style={{ maxWidth: "min(100%, calc(100vw - 160px))", maxHeight: "calc(100vh - 110px)", objectFit: "contain", borderRadius: 8, background: "#fff" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 12, color: "#fff", fontSize: 14, fontWeight: 700 }}>
+              <span>{index + 1} / {originalSections.length} · {section.kind === "wear" ? "착용컷" : "제품컷"}</span>
+              <button type="button" className="softBeigeButton" style={{ borderRadius: 8, padding: "6px 16px" }} onClick={() => setZoomIndex(null)}>닫기</button>
+            </div>
+          </div>
+          <button type="button" title="다음 사진" disabled={index === originalSections.length - 1} style={{ ...navStyle, opacity: index === originalSections.length - 1 ? 0.35 : 1 }} onClick={event => { event.stopPropagation(); setZoomIndex(index + 1); }}>▶</button>
+        </div>
+      );
+    })()}
 
     {drafts.length > 0 && (
       <div style={{ marginTop: 16, display: "grid", gap: 8 }}>
