@@ -38,7 +38,7 @@ import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
 import { submitReview } from "@/lib/review/client";
 import type { ReviewListItem } from "@/lib/review/types";
-import { CategoryExtraFields, CategoryManager, ColorFamilyFields, ManageLink, OptionListManager, OptionSelect, useProductOptions } from "./ProductOptionsPanel";
+import { CategoryExtraFields, CategoryManager, ColorFamilyFields, ManageLink, OptionListManager, OptionSelect, useProductOptions, useTemplateInfo } from "./ProductOptionsPanel";
 import { BUILTIN_CATEGORIES, DEFAULT_GENDERS, DEFAULT_MATERIALS, DEFAULT_SUPPLIER, canonicalSupplierName, categoryLetter, categoryNames } from "@/lib/product-options/defaults";
 import { PRODUCT_INFO_STORAGE_KEY, parseProductInfo, parseProductTitle } from "@/lib/product-info";
 import type { OptionListKey, ProductOptionsConfig } from "@/lib/product-options/types";
@@ -933,6 +933,13 @@ export default function Home() {
     product.supplier && product.category && product.material && product.colors &&
     product.sizes && product.modelNo && product.keyword && product.price
   );
+
+  // 2026-11-13 사이즈 칸이 필수인지는 카테고리별 쿠팡 양식의 '필수' 표시를 따른다(목걸이·팔찌·발찌 등 카테고리 이름을 코드에 적지 않는다).
+  // 양식 정보를 아직 못 읽었을 때만 예전처럼 목걸이를 필수로 본다.
+  const sizeTemplate = useTemplateInfo(productOptions.config, product.category);
+  const sizeRequired = sizeTemplate.info
+    ? sizeTemplate.info.fields.some(field => (field.header === "사이즈" || field.header === "주얼리 사이즈") && field.required)
+    : product.category === "목걸이";
 
   const variantOptions = useMemo(() => {
     try {
@@ -2568,6 +2575,8 @@ export default function Home() {
     if (!product.category) required.push("카테고리");
     // 2026-11-04 치수는 화면에 '필수입력'으로 표시돼 있으므로 비어 있으면 저장 전에 막는다.
     if (!product.dimension.trim()) required.push("치수");
+    // 2026-11-13 쿠팡 양식에서 사이즈가 필수인 카테고리(목걸이·팔찌·발찌 등)는 비어 있으면 저장 전에 막는다.
+    if (sizeRequired && !product.sizes.trim()) required.push("사이즈");
     if (isActual && !dbHandle && dbSupported) required.push("상품DB 폴더 연결");
     if (required.length) {
       setBatchStatus(`필수 항목 부족: ${required.join(", ")}`);
@@ -3268,11 +3277,11 @@ export default function Home() {
           <Field label="색상옵션">
             <input value={product.colors} onChange={e => update("colors", e.target.value)} />
           </Field>
-          <Field label={<>사이즈{product.category === "목걸이" && <span className="requiredMark">(필수입력)</span>}</>}>
+          <Field label={<>사이즈{sizeRequired && <span className="requiredMark">(필수입력)</span>}</>}>
             <input value={product.sizes} onChange={e => updateSizes(e.target.value)} />
-            {product.category === "목걸이" && !product.sizes.trim() && (
+            {sizeRequired && !product.sizes.trim() && (
               <small style={{ color: "#d92d20", fontWeight: 700 }}>
-                목걸이는 사이즈가 비어 있으면 쿠팡에서 반려됩니다.
+                {product.category}은(는) 사이즈가 비어 있으면 쿠팡에서 반려됩니다.
               </small>
             )}
           </Field>
