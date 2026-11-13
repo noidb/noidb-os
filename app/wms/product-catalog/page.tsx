@@ -321,6 +321,18 @@ export default function ProductCatalogPage() {
   useEffect(() => {
     void loadWaitingFolders().then(saved => { if (saved) setWaiting(saved); });
   }, []);
+  // 2026-11-13 폴더 이름에 모델이 여러 개(예: "wn00321 wn00322 코인 세트")면 모델명마다 같은 폴더를 연결한다.
+  // 폴더 전체 이름으로만 등록돼 있으면 wn00321·wn00322 어느 쪽으로 사진검색해도 폴더를 못 찾는다.
+  useEffect(() => {
+    (waiting?.categories || []).forEach(category => {
+      const folders = category.children.length ? category.children : [{ name: category.name, path: category.path }];
+      folders.forEach(folder => {
+        modelsInFolderName(folder.name).forEach(model => {
+          if (!newModelFolders.current[model]) newModelFolders.current[model] = folder.path;
+        });
+      });
+    });
+  }, [waiting]);
   useEffect(() => {
     void photoFolderName().then(setFolderName).catch(() => {});
     return () => { photoUrls.current.forEach(url => URL.revokeObjectURL(url)); };
