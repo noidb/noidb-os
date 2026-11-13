@@ -540,7 +540,11 @@ export async function searchPhotoFolder(searchTerms: string[], existing: LocalPh
   if (!searchTerms.some(term => term.trim())) return [];
   const index = await treeIndex(root, refresh);
   let found = await searchTreeIndex(root, index, searchTerms, existing);
-  if (!found.length && !refresh && Date.now() - index.builtAt > INDEX_RETRY_AGE_MS) {
+  // 2026-11-13 SKU ID로 된 옛 사진만 잡히고 모델명 폴더(예: "wn00321 wn00322 코인 세트")는 목록에 없을 수 있다.
+  // 사진이 하나라도 잡혔다고 새 폴더 확인을 건너뛰지 않고, 모델명(첫 검색어)으로 찾은 사진이 없으면 확인한다.
+  const primary = searchTerms[0]?.trim().toLowerCase() || "";
+  const modelFound = found.some(photo => photo.matchedBy.includes(primary));
+  if ((!found.length || !modelFound) && !refresh && Date.now() - index.builtAt > INDEX_RETRY_AGE_MS) {
     // 그 사이 새로 동기화된 사진일 수 있다 → 전체를 다시 훑지 않고 위쪽 폴더 이름만 빠르게 확인한다.
     if (await quickScanNewFolders(root, index, searchTerms).catch(() => false)) found = await searchTreeIndex(root, index, searchTerms, existing);
   }
