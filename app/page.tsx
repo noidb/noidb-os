@@ -2007,6 +2007,18 @@ export default function Home() {
     return { dataUrl: canvas.toDataURL("image/jpeg", 0.97), totalHeight };
   };
 
+  const attachDetailLogo = async () => {
+    try {
+      const next = await prependHeader(detailPreview, detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER);
+      setDetailPreview(next);
+      setLogoAppliedPreview(next);
+      setSquareImagesMessage("");
+      setDetailMessage("상세페이지 맨 위에 상단 로고를 붙였습니다.");
+    } catch (error) {
+      setDetailMessage(`오류: ${error instanceof Error ? error.message : "상단 로고를 붙이지 못했습니다."}`);
+    }
+  };
+
   const buildDetailPage = async () => {
     setDetailMessage("780px 상세페이지를 만들고 있습니다...");
     try {
@@ -3682,17 +3694,7 @@ export default function Home() {
               <button type="button" className="detailBrandUpload"
                 disabled={!detailPreview || detailPreview === logoAppliedPreview}
                 title={!detailPreview ? "아래 상세페이지 칸에 상세페이지가 있어야 합니다." : detailPreview === logoAppliedPreview ? "이미 상단 로고를 붙였습니다." : "아래 상세페이지 맨 위에 이 상단 로고를 붙입니다."}
-                onClick={async () => {
-                  try {
-                    const next = await prependHeader(detailPreview, detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER);
-                    setDetailPreview(next);
-                    setLogoAppliedPreview(next);
-                    setSquareImagesMessage("");
-                    setDetailMessage("상세페이지 맨 위에 상단 로고를 붙였습니다.");
-                  } catch (error) {
-                    setDetailMessage(`오류: ${error instanceof Error ? error.message : "상단 로고를 붙이지 못했습니다."}`);
-                  }
-                }}>상세페이지에 로고 붙이기</button>
+                onClick={() => void attachDetailLogo()}>상세페이지에 로고 붙이기</button>
             </div>
             {detailHeader && <button type="button" className="secondaryButton" onClick={() => { setDetailHeader(null); setDetailPreview(""); }}>NOID-B 기본 로고로 되돌리기</button>}
           </div>
@@ -3796,6 +3798,12 @@ export default function Home() {
           <button type="button" className="pillButtonBeige" disabled={Boolean(exportLoading)}
             onClick={() => { setExportArea("detail"); void downloadDetailPageOnly(); }}>
             {exportLoading === "detail" ? "상세이미지 생성 중..." : "상세이미지만 다운로드"}
+          </button>
+          <button type="button" className="pillButtonBeige"
+            disabled={!detailPreview || detailPreview === logoAppliedPreview}
+            title={!detailPreview ? "상세페이지를 먼저 만들어주세요." : detailPreview === logoAppliedPreview ? "이미 상단 로고를 붙였습니다." : "아래 상세페이지 맨 위에 상단 로고를 붙입니다."}
+            onClick={() => void attachDetailLogo()}>
+            상단로고삽입
           </button>
         </div>
         {detailMessage && <p className="detailMessage">{detailMessage}</p>}
