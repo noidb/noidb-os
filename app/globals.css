@@ -126,7 +126,7 @@
 .quoteGroupItem>div:first-child{display:flex;flex-direction:column;gap:4px}.quoteGroupItem span{font-size:12px;color:#64748b}
 .quoteGroupItem .quoteModelNames{font-size:13px;color:#343434;font-weight:750;line-height:1.5;overflow-wrap:anywhere}
 .replacementLinkButton{margin-top:8px;width:100%;border:0;border-radius:9px;padding:10px 12px;font-weight:800;cursor:pointer}
-.quoteGroupActions{display:flex;gap:7px;flex-wrap:wrap}.quoteGroupActions button{border:0;border-radius:8px;padding:9px 11px;font-weight:800;cursor:pointer;background:#1f3a4d;color:#fff}.quoteGroupActions .dangerTextButton{background:#fee2e2;color:#b91c1c}
+.quoteGroupItem>div:first-child{flex:1 1 auto;min-width:0}.quoteGroupActions{display:flex;gap:7px;flex-wrap:nowrap;flex:0 0 auto;align-self:center}.quoteGroupActions button{white-space:nowrap}.quoteGroupActions button{border:0;border-radius:8px;padding:9px 11px;font-weight:800;cursor:pointer;background:#1f3a4d;color:#fff}.quoteGroupActions .dangerTextButton{background:#fee2e2;color:#b91c1c}
 .coupangImportDanger{border-color:#fecaca;background:#fef2f2}
 .coupangImportDanger strong{color:#991b1b}
 @media(max-width:760px){.coupangImportGrid{grid-template-columns:1fr}.coupangImportItem span{min-height:0}.quoteQueueHeader,.quoteGroupItem{flex-direction:column;align-items:stretch}.quoteGroupActions button{flex:1}}

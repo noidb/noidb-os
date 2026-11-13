@@ -424,7 +424,7 @@ export default function Home() {
   const [logoAppliedPreview, setLogoAppliedPreview] = useState("");
   const [squareImagesBusy, setSquareImagesBusy] = useState(false);
   /** 개별 다운로드 메시지를 버튼이 있는 칸에만 보여준다(5번 이미지 · 6번 상세 · 8번 기타). */
-  const [exportArea, setExportArea] = useState<"images" | "detail" | "etc" | "thumb">("etc");
+  const [exportArea, setExportArea] = useState<"images" | "detail" | "etc" | "thumb" | "quote">("etc");
   const [squareImagesMessage, setSquareImagesMessage] = useState("");
   const [detailMessage, setDetailMessage] = useState("");
   const [detailShareUrl, setDetailShareUrl] = useState("");
@@ -1655,6 +1655,7 @@ export default function Home() {
 
   const downloadQuoteGroup = async (group: { key: string; gender: string; category: string; skuCount: number; records: QuoteQueueRecord[] }) => {
     setQuoteQueueBusy(group.key);
+    setExportArea("quote");
     setExportMessage(`${group.gender} ${group.category} 최신 대기목록을 확인하고 있습니다...`);
     try {
       // 화면에 표시된 목록이 오래되었더라도 항상 Google 시트의 최신 내용으로 생성합니다.
@@ -1672,7 +1673,7 @@ export default function Home() {
         0
       );
       setExportMessage(`${group.gender} ${group.category} 최신 정보로 묶음 견적서를 만들고 있습니다...`);
-      const response = await requestQuote({ payloads: latestRecords.map((record: QuoteQueueRecord) => record.payload) });
+      const response = await requestQuote({ payloads: latestRecords.map((record: QuoteQueueRecord) => record.payload), saveToDrive: true });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.error || "묶음 견적서 생성 실패");
@@ -1680,6 +1681,16 @@ export default function Home() {
       const encodedName = response.headers.get("X-Download-Name") || "";
       const name = encodedName ? decodeURIComponent(encodedName) : `견적서_${group.gender}_${group.category}.${latestSkuCount > 1000 ? "zip" : "xlsx"}`;
       const blob = await response.blob();
+      const summary = `${group.gender} ${group.category} · ${latestRecords.length}모델 · ${latestSkuCount.toLocaleString()} SKU`;
+      // 2026-11-13: 서버가 G:\내 드라이브\상품이미지DB\<카테고리> 폴더에 자동 저장했으면 저장창·다운로드 없이 완료 문구만 보여 준다.
+      if (response.headers.get("X-NOIDB-Drive-Saved") === "true") {
+        const driveFolder = decodeURIComponent(response.headers.get("X-NOIDB-Drive-Folder") || `상품이미지DB\\${group.category}`);
+        const savedName = decodeURIComponent(response.headers.get("X-NOIDB-Drive-File-Name") || name);
+        setExportMessage(`${summary} 묶음 견적서가 G:\\내 드라이브\\${driveFolder} 에 자동저장되었습니다. (${savedName})`);
+        return;
+      }
+      const driveWarning = response.headers.get("X-NOIDB-Drive-Save-Warning");
+      if (driveWarning) setExportMessage(`${decodeURIComponent(driveWarning)} 대신 아래 방식으로 저장합니다.`);
       if (dbHandle && await ensureReadWritePermission(dbHandle)) {
         const savedPath = await writeCategoryFile(dbHandle, group.category, name, blob);
         // 카테고리 폴더 원본 저장과 별도로 검수용 사본을 브라우저 다운로드에도 보냅니다.
@@ -1698,6 +1709,7 @@ export default function Home() {
   };
 
   const openQuoteCategoryFolder = async (group: { category: string }) => {
+    setExportArea("quote");
     if (!dbHandle) {
       setExportMessage("먼저 상품DB 폴더를 선택해주세요.");
       return;
@@ -4029,8 +4041,12 @@ export default function Home() {
                   {quoteQueueBusy === "전체삭제" ? "삭제 중..." : "목록 전체 삭제"}
                 </button>
               )}
+              <a href="https://supplier.coupang.com/qvt/registration" target="_blank" rel="noopener noreferrer" className="softBeigeButton" title="쿠팡 대량상품등록 화면을 새 탭으로 엽니다." style={{ flexShrink: 0, minWidth: "160px", padding: "12px 22px", whiteSpace: "nowrap", fontSize: "16px", fontWeight: 800, textDecoration: "none", boxSizing: "border-box", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                대략상품등록
+              </a>
             </div>
           </div>
+          {exportArea === "quote" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}
           {!quoteGroups.length && <p className="note">대기목록을 불러오거나 새 상품을 저장하면 여기에 표시됩니다.</p>}
           <div className="quoteGroupList">
             {quoteGroups.map(group => (

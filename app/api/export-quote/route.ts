@@ -4,6 +4,7 @@ import { categoryQuoteOptions } from "@/lib/product-options/quote-options";
 import { buildSkuRows } from "@/lib/excel/common";
 import type { ExportPayload } from "@/lib/excel/types";
 import JSZip from "jszip";
+import { generatedDriveSaveHeaders } from "@/lib/wms/google-drive-oauth-writer";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -16,7 +17,7 @@ function modelSummary(payloads: ExportPayload[]) {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as ExportPayload & { payloads?: ExportPayload[]; allowMissingRequired?: boolean };
+    const body = (await req.json()) as ExportPayload & { payloads?: ExportPayload[]; allowMissingRequired?: boolean; saveToDrive?: boolean };
     const payloads = Array.isArray(body.payloads) ? body.payloads : [];
     const firstCategory = payloads[0]?.product?.category || body.product?.category || "";
     const options = firstCategory ? await categoryQuoteOptions(firstCategory, Boolean(body.allowMissingRequired)) : {};
@@ -42,10 +43,17 @@ export async function POST(req: NextRequest) {
       const results = [];
       for (const chunk of chunks) results.push(await buildQuoteWorkbook(chunk, options));
       const base = `견적서_${payloads[0].product.gender}_${payloads[0].product.category}_${modelSummary(payloads)}`;
+      // 2026-11-13: 묶음 견적서는 G:\내 드라이브\상품이미지DB\<카테고리> 폴더에 자동 저장한다(탐색기 저장창 없이).
+      const driveFolder = ["상품이미지DB", String(payloads[0].product.category || "").trim()];
+      const driveHeaders = async (data: Buffer | Uint8Array, fileName: string, mime: string): Promise<Record<string, string>> => {
+        if (!body.saveToDrive || !driveFolder[1]) return {};
+        return { ...(await generatedDriveSaveHeaders(data, fileName, mime, driveFolder)), "X-NOIDB-Drive-Folder": encodeURIComponent(driveFolder.join("\\")) };
+      };
       if (results.length === 1) {
         return new NextResponse(results[0].buffer, {
           status: 200,
           headers: {
+            ...(await driveHeaders(results[0].buffer, `${base}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
             "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`${base}.xlsx`)}`,
             "X-Download-Name": encodeURIComponent(`${base}.xlsx`),
@@ -59,6 +67,7 @@ export async function POST(req: NextRequest) {
       return new NextResponse(zipBuffer, {
         status: 200,
         headers: {
+          ...(await driveHeaders(zipBuffer, `${base}.zip`, "application/zip")),
           "Content-Type": "application/zip",
           "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`${base}.zip`)}`,
           "X-Download-Name": encodeURIComponent(`${base}.zip`),
