@@ -20,7 +20,7 @@ import {
   syncProductDbToGoogleSheet,
   createLabelBlob,
 } from "@/lib/product-db/files";
-import { buildSkuRows, costWithVat, parseNumber } from "@/lib/excel/common";
+import { buildSkuRows, costWithVat, parseNumber, stripWrappingQuotes } from "@/lib/excel/common";
 import type { SkuRow } from "@/lib/excel/types";
 import { assertProductDbFilesWritable, ensureProductFolderTree, rootFolderFileExists, writeCategoryFile, writeProductDbFiles, writeRootFolderFile } from "@/lib/product-db/fs";
 import { dataUrlToBlob } from "@/lib/product-db/files";
@@ -3286,7 +3286,7 @@ export default function Home() {
             )}
           </Field>
           <Field label={<>치수<span className="requiredMark">(필수입력)</span></>}>
-            <input value={product.dimension} onChange={e => update("dimension", e.target.value)}
+            <input value={product.dimension} onChange={e => update("dimension", e.target.value.startsWith("\"") || e.target.value.startsWith("“") ? stripWrappingQuotes(e.target.value) : e.target.value)}
               placeholder="예: 폭 8mm, 길이 42cm" />
             {reregisterModelName && (
               <>

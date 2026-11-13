@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildSkuRows, formatCoupangOptionName, dimensionText, parseNumber, supplierLabel, supplyPrice } from "@/lib/excel/common";
+import { buildSkuRows, dimensionText, parseNumber, supplierLabel, supplyPrice } from "@/lib/excel/common";
 import type { ExportPayload } from "@/lib/excel/types";
 
 export const runtime = "nodejs";
@@ -97,7 +97,8 @@ export async function POST(req: NextRequest) {
       const productDbRows = skus.map(sku => productDbRow({
         supplier, gender: payload.product.gender, category: payload.product.category, model: payload.model,
         modelSku: sku.sku, warehouse: payload.product.warehouse || "", image: sku.thumbFile,
-        title: payload.title, color: formatCoupangOptionName(sku.sku, sku.color), size: sku.size, dimension, cost, sale, supply,
+        // 2026-11-13 제품DB 색상 칸에는 색상 이름만 넣는다(쿠팡 등록 엑셀의 '모델SKU | 색상' 옵션명은 그대로).
+        title: payload.title, color: sku.color, size: sku.size, dimension, cost, sale, supply,
         sourcingUrl: payload.sourcingUrl || "",
       }));
       const called = await callWebhook({
@@ -134,7 +135,8 @@ export async function POST(req: NextRequest) {
     const productDbRows = skus.map(sku => productDbRow({
       supplier, gender: payload.product.gender, category: payload.product.category, model: payload.model,
       modelSku: sku.sku, warehouse: payload.product.warehouse || "", image: sku.thumbFile,
-      title: payload.title, color: formatCoupangOptionName(sku.sku, sku.color), size: sku.size, dimension, cost, sale, supply,
+      // 2026-11-13 제품DB 색상 칸에는 색상 이름만 넣는다(쿠팡 등록 엑셀의 '모델SKU | 색상' 옵션명은 그대로).
+      title: payload.title, color: sku.color, size: sku.size, dimension, cost, sale, supply,
       sourcingUrl: payload.sourcingUrl || "",
     }));
     // 등록화면은 옵션(SKU)별 썸네일을 skuImages(모델SKU 기준)로 보낸다. 예전 방식(optionImages, 색상 기준)도 계속 받는다.

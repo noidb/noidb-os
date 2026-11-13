@@ -165,8 +165,17 @@ export function kindLabel(gender: string, category: string) {
   return `${gender} ${name}`;
 }
 
+/**
+ * 2026-11-13 구글시트의 여러 줄 칸을 복사해 붙여넣으면 앞뒤에 큰따옴표(")가 붙어 온다.
+ * 치수 칸 앞뒤에 감싸진 따옴표(직선·둥근 따옴표)만 지우고 안쪽 글자는 그대로 둔다.
+ */
+export function stripWrappingQuotes(value: string) {
+  return String(value ?? "").replace(/^[\s"“”]+/u, "").replace(/[\s"“”]+$/u, "");
+}
+
 export function dimensionText(product: ExportPayload["product"]) {
-  if (product.dimension?.trim()) return product.dimension.trim();
+  const pasted = stripWrappingQuotes(product.dimension || "");
+  if (pasted) return pasted;
   const sizes = product.sizes || "";
   if (product.category === "반지") {
     return `반지너비 약 1cm, 한국사이즈 ${sizes || "9호,11호,14호,17호,20호,22호,25호"}`;
