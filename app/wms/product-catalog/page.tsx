@@ -12,7 +12,7 @@ import { MAX_SELECTED_PHOTOS, clearPhotoSearch, connectPhotoFolder, FOLDER_TIER_
 import { finishWaitingFolder, modelsInFolderName } from "@/lib/image-search/browser-folder";
 import { ensureReadWritePermission, loadDirectoryHandle } from "@/lib/product-db/idb";
 import { findNewProductFolders, loadWaitingFolders, openNewProductFolder, readProductInfoText, refreshWaitingFolders, type NewProductFolder, type WaitingFolders } from "@/lib/image-search/browser-folder";
-import { deletePhotoFiles, loadPreparedDetail, requestPhotoDeletePermission, savePreparedDetail } from "@/lib/image-search/browser-folder";
+import { deletePhotoFiles, loadPreparedDetail, reopenPhotoUrl, requestPhotoDeletePermission, savePreparedDetail } from "@/lib/image-search/browser-folder";
 import { identifyPhoto, photoPriority, photoTier, type PhotoIdentity, type PhotoTier } from "@/lib/image-search/photo-kind";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 import type { ReregistrationExclusion } from "@/lib/wms/reregistration-exclusions";
@@ -1900,7 +1900,7 @@ export default function ProductCatalogPage() {
       {viewerHit && viewerState && viewer && <div role="dialog" aria-modal="true" aria-label="사진 크게 보기" onClick={() => setViewer(null)} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.82)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16 }}>
         <div onClick={event => event.stopPropagation()} style={{ display: "flex", alignItems: "center", gap: 12, maxWidth: "100%" }}>
           <button type="button" onClick={() => moveViewer(-1)} disabled={viewer.index === 0} aria-label="이전 사진" style={{ fontSize: 28, padding: "8px 14px", borderRadius: 8, border: 0, cursor: "pointer" }}>‹</button>
-          <ZoomableImage src={viewerHit.preview} alt={viewerHit.fileName} />
+          <ZoomableImage src={viewerHit.preview} alt={viewerHit.fileName} photoId={viewerHit.id} />
           <button type="button" onClick={() => moveViewer(1)} disabled={viewer.index >= viewerState.hits.length - 1} aria-label="다음 사진" style={{ fontSize: 28, padding: "8px 14px", borderRadius: 8, border: 0, cursor: "pointer" }}>›</button>
         </div>
         <div onClick={event => event.stopPropagation()} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "center", marginTop: 12, color: "#fff", fontSize: 13 }}>
@@ -1950,7 +1950,20 @@ function StageInfo({ stage }: { stage: StagedGroup }) {
  * 크게 보기 화면의 사진. 마우스 휠로 가리킨 곳을 확대/축소하고, 확대한 상태에서는 끌어서 옮긴다.
  * 더블클릭하면 그 자리를 3배로 확대(다시 더블클릭하면 전체 보기). 상세페이지 글씨 확인용.
  */
-function ZoomableImage({ src, alt }: { src: string; alt: string }) {
+function ZoomableImage({ src: originalSrc, alt, photoId }: { src: string; alt: string; photoId: string }) {
+  // 2026-11-13: 폴더를 열 때 받아 둔 파일 사본이 읽히지 않으면(원본 변경·권한 끊김) 폴더에서 원본을 다시 열어 한 번 더 시도한다.
+  // 그래도 안 되면 빈 화면 대신 안내 문구를 보여 준다.
+  const [retried, setRetried] = useState<{ from: string; url: string; failed: boolean } | null>(null);
+  const reopening = useRef("");
+  useEffect(() => () => { if (retried?.url) URL.revokeObjectURL(retried.url); }, [retried?.url]);
+  const current = retried?.from === originalSrc ? retried : null;
+  const src = current?.url || originalSrc;
+  const loadFailed = Boolean(current?.failed);
+  const handleBroken = () => {
+    if (current || reopening.current === originalSrc) return;
+    reopening.current = originalSrc;
+    void reopenPhotoUrl(photoId).then(url => setRetried({ from: originalSrc, url: url || "", failed: !url }));
+  };
   const boxRef = useRef<HTMLDivElement>(null);
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -2016,8 +2029,10 @@ function ZoomableImage({ src, alt }: { src: string; alt: string }) {
       style={{ width: "min(80vw, 1200px)", height: "74vh", overflow: "auto", background: "#fff", borderRadius: 8, cursor: zoom > 1 ? (drag.current ? "grabbing" : "grab") : "zoom-in" }}
     >
       <div style={{ minWidth: "100%", minHeight: "100%", width: width, height: height, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={alt} draggable={false} onLoad={event => setNatural({ w: event.currentTarget.naturalWidth, h: event.currentTarget.naturalHeight })} style={{ width, height, maxWidth: "none", display: "block", userSelect: "none" }} />
+        {loadFailed
+          ? <div style={{ padding: 24, textAlign: "center", color: wmsColors.warnText, fontSize: 14, fontWeight: 700, lineHeight: 1.6 }}>원본 사진을 불러오지 못했습니다.<br /><span style={{ color: wmsColors.muted, fontWeight: 400 }}>사진 폴더 연결이 끊겼거나 MYBOX가 파일을 동기화 중일 수 있습니다.<br />닫고 &apos;사진 폴더 다시 연결&apos;을 누른 뒤 다시 열어 주세요.</span></div>
+          : /* eslint-disable-next-line @next/next/no-img-element */
+            <img src={src} alt={alt} draggable={false} onError={handleBroken} onLoad={event => setNatural({ w: event.currentTarget.naturalWidth, h: event.currentTarget.naturalHeight })} style={{ width, height, maxWidth: "none", display: "block", userSelect: "none" }} />}
       </div>
     </div>
     <div style={{ display: "flex", gap: 6, alignItems: "center", color: "#fff", fontSize: 12 }}>

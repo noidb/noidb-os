@@ -251,6 +251,22 @@ export async function openSavedPhotos(saved: { id: string; matchedBy: string[] }
   return photos.filter((photo): photo is LocalPhoto => Boolean(photo));
 }
 
+/**
+ * 크게 보기용: 연결 폴더에서 원본을 지금 다시 읽어 새 사진 주소(blob URL)를 만든다.
+ * 폴더를 열 때 받아 둔 파일 사본은 그 뒤 원본이 바뀌거나(MYBOX 동기화 등) 권한이 끊기면 읽히지 않아 빈 화면이 된다.
+ * 목록 작은 사진은 저장해 둔 것이라 그대로 보이므로, 크게 보기만 안 열리는 증상이 생겼다(2026-11-13).
+ * 읽기까지 끝낸 뒤 만들어서, 읽기에 실패하면 null을 돌려준다.
+ */
+export async function reopenPhotoUrl(id: string): Promise<string | null> {
+  try {
+    const [photo] = await openSavedPhotos([{ id, matchedBy: [] }]);
+    if (!photo) return null;
+    const type = photo.file.type || (/\.png$/i.test(photo.name) ? "image/png" : /\.webp$/i.test(photo.name) ? "image/webp" : "image/jpeg");
+    const blob = new Blob([await photo.file.arrayBuffer()], { type });
+    return URL.createObjectURL(blob);
+  } catch { return null; }
+}
+
 /** 모델별 사진 검색 결과·선택 상태. 사진 파일이 아니라 경로만 이 브라우저에 저장한다. */
 /** level: 어디까지 열었는지(1~3 = 연결표 폴더 단계, 4 = 사진 폴더 전체 검색). 예전 저장본에는 없다. */
 export type SavedPhotoSearch = { hits: { id: string; matchedBy: string[] }[]; selectedIds: string[]; analysisId: string; savedAt: string; level?: number; grouped?: boolean; hasFolders?: boolean; hiddenIds?: string[]; detailIds?: string[]; visualGroups?: Record<string, string>; photoDecisions?: Record<string, { kind: "product" | "wear" | "exclude"; reason: string }> };
