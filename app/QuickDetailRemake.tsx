@@ -321,6 +321,8 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incomingToken]);
 
+  const panelRef = useRef<HTMLDivElement>(null);
+
   function resetWork() {
     wearLookRef.current = null;
     setOriginalSections([]);
@@ -632,6 +634,12 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   }
 
   function restoreDraft(draft: QuickDetailDraft) {
+    // 불러온 사진·안내 문구가 화면 위쪽에 있어, 눌러도 반응이 없는 것처럼 보이지 않게 위로 올려 보여 준다.
+    panelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (draft.id === draftId && originalSections.length) {
+      setMessage(`${draft.modelName || "이 작업"}은(는) 지금 열려 있는 작업입니다. 아래 사진 목록에서 이어서 하시면 됩니다.`);
+      return;
+    }
     deletedDraftIdsRef.current.delete(draft.id);
     setCut(null);
     setDraftId(draft.id);
@@ -646,7 +654,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     setResult(draft.result);
     setScanSummary(draft.scanSummary);
     setProgress(draft.editedSections.length);
-    setMessage("임시저장한 작업을 불러왔습니다.");
+    setMessage(`${draft.modelName || "임시저장한 작업"} · 사진 ${draft.originalSections.length}장 · AI 완료 ${draft.editedSections.length}장을 불러왔습니다.`);
   }
 
   async function removeDraft(id: string) {
@@ -662,7 +670,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     }
   }
 
-  return <div className={styles.quickPanel} style={{ maxWidth: "none", margin: 0 }}>
+  return <div ref={panelRef} className={styles.quickPanel} style={{ maxWidth: "none", margin: 0, scrollMarginTop: 12 }}>
     <div className={styles.quickIntro}>
       <div><span>AI DETAIL REMAKE</span><h3 style={{ fontSize: 20, margin: "0 0 6px" }}>AI 사진편집</h3></div>
     </div>
@@ -819,7 +827,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
           {drafts.map(draft => (
             <span key={draft.id} style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 10px", border: "1px solid #d8d3cc", borderRadius: 8, background: draft.id === draftId ? "#e3ede6" : "#f4f1ec", fontSize: 12 }}>
-              <button type="button" disabled={busy} className="secondaryButton compactFieldButton" onClick={() => restoreDraft(draft)}>{draft.modelName || "이름 없는 작업"} · {draft.originalSections.length}장 · AI {draft.editedSections.length}장{draft.result ? " · 완성" : ""}</button>
+              <button type="button" disabled={busy} className="secondaryButton compactFieldButton" onClick={() => restoreDraft(draft)}>{draft.modelName || "이름 없는 작업"} · {draft.originalSections.length}장 · AI {draft.editedSections.length}장{draft.result ? " · 완성" : ""}{draft.id === draftId ? " · 열려 있음" : ""}</button>
               <button type="button" disabled={busy} className="secondaryButton compactFieldButton" onClick={() => void removeDraft(draft.id)}>삭제</button>
             </span>
           ))}
