@@ -42,6 +42,7 @@ import { CategoryExtraFields, CategoryManager, ColorFamilyFields, ManageLink, Op
 import { BUILTIN_CATEGORIES, DEFAULT_GENDERS, DEFAULT_MATERIALS, DEFAULT_SUPPLIER, canonicalSupplierName, categoryLetter, categoryNames } from "@/lib/product-options/defaults";
 import { PRODUCT_INFO_STORAGE_KEY, parseProductInfo, parseProductTitle } from "@/lib/product-info";
 import type { OptionListKey, ProductOptionsConfig } from "@/lib/product-options/types";
+import { ACTIVE_REGISTRATION_TAB_KEY, ADD_PHOTOS_CHANNEL, type AddPhotosAck, type AddPhotosRequest } from "@/lib/registration-photo-channel";
 
 type Product = {
   supplier: string;
@@ -1498,6 +1499,47 @@ export default function Home() {
   // 2026-11-04 칸 위가 아닌 곳에서 Ctrl+V 하면 복사한 이미지를 5번 사진 목록에 넣는다(입력칸·다른 붙여넣기 패널은 건드리지 않음).
   const addUploadPoolFilesRef = useRef(addUploadPoolFiles);
   addUploadPoolFilesRef.current = addUploadPoolFiles;
+
+  // 2026-11-13 사진선택 화면에서 '현재 등록사진에 추가'를 누르면 5번 사진 목록 맨 앞에 바로 넣는다(이미 있는 사진은 건너뜀).
+  const uploadPoolRef = useRef(uploadPool);
+  uploadPoolRef.current = uploadPool;
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const tabId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const markActive = () => { try { window.localStorage.setItem(ACTIVE_REGISTRATION_TAB_KEY, tabId); } catch { /* 저장 불가면 무시 */ } };
+    const onVisible = () => { if (document.visibilityState === "visible") markActive(); };
+    markActive();
+    window.addEventListener("focus", markActive);
+    document.addEventListener("visibilitychange", onVisible);
+    const channel = new BroadcastChannel(ADD_PHOTOS_CHANNEL);
+    channel.onmessage = (event: MessageEvent<AddPhotosRequest>) => {
+      const request = event.data;
+      if (request?.type !== "add" || !Array.isArray(request.photos)) return;
+      let active = tabId;
+      try { active = window.localStorage.getItem(ACTIVE_REGISTRATION_TAB_KEY) || tabId; } catch { /* 저장 불가면 이 탭이 받는다 */ }
+      if (active !== tabId) return;
+      const existing = new Set(uploadPoolRef.current.map(item => item.dataUrl));
+      const fresh: SlotImage[] = [];
+      for (const photo of request.photos) {
+        if (!photo?.dataUrl || existing.has(photo.dataUrl)) continue;
+        existing.add(photo.dataUrl);
+        fresh.push({ dataUrl: photo.dataUrl, fileName: photo.fileName });
+      }
+      const skipped = request.photos.length - fresh.length;
+      if (fresh.length) {
+        const freshUrls = new Set(fresh.map(item => item.dataUrl));
+        setUploadPool(prev => [...fresh, ...prev.filter(item => !freshUrls.has(item.dataUrl))]);
+        setPhotoMessage(`사진선택에서 ${fresh.length}장을 5번 사진 목록 맨 앞에 추가했습니다.${skipped ? ` (이미 있는 ${skipped}장은 건너뜀)` : ""}`);
+      }
+      const ack: AddPhotosAck = { type: "ack", requestId: request.requestId, added: fresh.length, skipped };
+      channel.postMessage(ack);
+    };
+    return () => {
+      window.removeEventListener("focus", markActive);
+      document.removeEventListener("visibilitychange", onVisible);
+      channel.close();
+    };
+  }, []);
   useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
       if (event.defaultPrevented) return;

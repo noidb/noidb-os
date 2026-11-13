@@ -20,6 +20,7 @@ import { REREGISTRATION_TAB_TIER } from "@/lib/wms/reregistration-tab-tier";
 import LegacySkuCandidates from "./LegacySkuCandidates";
 import ProductInfoBox from "./ProductInfoBox";
 import { PRODUCT_INFO_STORAGE_KEY } from "@/lib/product-info";
+import { ADD_PHOTOS_CHANNEL, fileToDataUrl, type AddPhotosAck, type AddPhotosRequest } from "@/lib/registration-photo-channel";
 
 type PhotoHit = LocalPhoto & { fileName: string; preview: string; selected: boolean; identity: PhotoIdentity };
 /**
@@ -1382,6 +1383,47 @@ export default function ProductCatalogPage() {
     }
   }
 
+  // 2026-11-13 체크한 사진을 지금 열어 둔 AI상품등록 화면의 5번 사진 목록 맨 앞에 바로 보낸다.
+  const [addingToRegistration, setAddingToRegistration] = useState("");
+  const [addNotice, setAddNotice] = useState<Record<string, string>>({});
+  async function addSelectedToRegistration(modelName: string) {
+    const state = photoStates[modelName];
+    if (!state || addingToRegistration) return;
+    const picked = state.hits.filter(hit => hit.selected && !brokenPhotoIds.has(hit.id) && !state.hiddenIds?.includes(hit.id));
+    if (!picked.length) return;
+    if (typeof BroadcastChannel === "undefined") { setAddNotice(current => ({ ...current, [modelName]: "이 브라우저는 화면 사이 사진 전달을 지원하지 않습니다." })); return; }
+    setAddingToRegistration(modelName);
+    setAddNotice(current => ({ ...current, [modelName]: "" }));
+    const channel = new BroadcastChannel(ADD_PHOTOS_CHANNEL);
+    try {
+      // 분석용(★) 사진을 먼저, 나머지는 화면에 보이는 순서대로.
+      const ordered = [...picked.filter(hit => hit.id === state.analysisId), ...picked.filter(hit => hit.id !== state.analysisId)];
+      const photos = await Promise.all(ordered.map(async hit => ({ fileName: hit.fileName, dataUrl: await fileToDataUrl(hit.file) })));
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const ack = await new Promise<AddPhotosAck | null>(resolve => {
+        const timer = window.setTimeout(() => resolve(null), 2000);
+        channel.onmessage = (event: MessageEvent<AddPhotosAck>) => {
+          if (event.data?.type !== "ack" || event.data.requestId !== requestId) return;
+          window.clearTimeout(timer);
+          resolve(event.data);
+        };
+        const request: AddPhotosRequest = { type: "add", requestId, photos };
+        channel.postMessage(request);
+      });
+      if (!ack) {
+        setAddNotice(current => ({ ...current, [modelName]: "열려 있는 AI상품등록 화면이 없습니다. 먼저 AI상품등록을 열어 주세요." }));
+      } else {
+        setAddNotice(current => ({ ...current, [modelName]: ack.added ? `${ack.added}장을 AI상품등록 5번 사진 목록 맨 앞에 추가했습니다.${ack.skipped ? ` (이미 있는 ${ack.skipped}장은 건너뜀)` : ""}` : "선택한 사진이 이미 모두 들어 있어 추가하지 않았습니다." }));
+        clearPhotoSelection(modelName);
+      }
+    } catch (error) {
+      setAddNotice(current => ({ ...current, [modelName]: error instanceof Error ? `사진 추가 실패: ${error.message}` : "사진 추가 실패" }));
+    } finally {
+      channel.close();
+      setAddingToRegistration("");
+    }
+  }
+
   const [downloading, setDownloading] = useState("");
   // 선택한 사진을 바로 내려받는다. 1장이면 그대로, 여러 장이면 모델명 zip 하나로.
   async function downloadSelectedPhotos(modelName: string) {
@@ -1509,8 +1551,10 @@ export default function ProductCatalogPage() {
                   {photos && photos.hits.length > 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
                     <button type="button" className="softSageButton" onClick={() => selectAllPhotos(group.modelName)} disabled={photos.hits.filter(hit => hit.selected).length >= MAX_SELECTED_PHOTOS} style={{ minHeight: 36, padding: "0 14px", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>전체 선택 (최대 {MAX_SELECTED_PHOTOS}장)</button>
                     <button type="button" className="softBeigeButton" onClick={() => { setDragNotice(""); clearPhotoSelection(group.modelName); }} disabled={!photos.hits.some(hit => hit.selected)} style={{ minHeight: 36, padding: "0 14px", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>전체 해제</button>
+                    {(() => { const count = photos.hits.filter(hit => hit.selected && !brokenPhotoIds.has(hit.id) && !photos.hiddenIds?.includes(hit.id)).length; const adding = addingToRegistration === group.modelName; return <button type="button" className="softPinkButton" onClick={() => void addSelectedToRegistration(group.modelName)} disabled={!count || Boolean(addingToRegistration)} title="체크한 사진을 지금 열어 둔 AI상품등록 5번 사진 목록 맨 앞에 넣습니다." style={{ minHeight: 36, padding: "0 14px", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: !count ? "not-allowed" : adding ? "wait" : "pointer", opacity: count ? 1 : 0.55 }}>{adding ? "추가하는 중…" : `현재 등록사진에 추가 (${count}장)`}</button>; })()}
                     {(() => { const ids = photos.hits.filter(hit => hit.selected).map(hit => hit.id); return <button type="button" onClick={() => void deletePhotos(group.modelName, ids)} disabled={!ids.length || Boolean(deletingPhotos)} style={{ border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 8, background: wmsColors.warnSoft, padding: "7px 12px", cursor: ids.length ? "pointer" : "not-allowed", fontWeight: 700, fontSize: 13, color: wmsColors.warnText, opacity: ids.length ? 1 : 0.55 }}>{deletingPhotos === group.modelName ? "삭제 중…" : `선택 사진 삭제 (${ids.length}장)`}</button>; })()}
                   </div>}
+                  {addNotice[group.modelName] && <div role="status" style={{ marginTop: 6, fontSize: 12, fontWeight: 700, color: wmsColors.ink }}>{addNotice[group.modelName]}</div>}
                   {photos && photos.hits.length > 0 && <div style={{ marginTop: 6, fontSize: 12, fontWeight: 700, color: photos.hits.filter(hit => hit.selected).length >= MAX_SELECTED_PHOTOS ? wmsColors.warnText : wmsColors.muted }}>
                     {photos.hits.filter(hit => hit.selected).length >= MAX_SELECTED_PHOTOS ? `선택 ${MAX_SELECTED_PHOTOS}장이 가득 찼습니다. 더 고르려면 먼저 선택을 풀어 주세요. ` : ""}{dragNotice ? `${dragNotice} ` : ""}
                     <span style={{ fontWeight: 500, color: wmsColors.muted }}>사진 위에서 마우스를 누른 채 끌면 여러 장 선택 · 이미 선택된 사진에서 끌기 시작하면 해제</span>
