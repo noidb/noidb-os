@@ -76,7 +76,8 @@ type Analysis = {
 };
 
 type ProductPhoto = { id: string; name: string; dataUrl: string };
-type SlotImage = { dataUrl: string; fileName: string; source?: string; crop?: SquareCrop; locked?: boolean };
+// originDataUrl: 위 이미지 목록에서 칸으로 끌어올 때의 "목록 모양" 그대로의 사진. 삭제하면 편집본이 아니라 이걸로 목록에 돌아간다.
+type SlotImage = { dataUrl: string; fileName: string; source?: string; crop?: SquareCrop; locked?: boolean; originDataUrl?: string };
 
 // 2026-11-10 칸 → 칸 복사. 칸 위에서 Ctrl+C 하면 그 칸 사진을(원본·확대 위치까지) 이 앱 안에 담아 두고,
 // 시스템 클립보드에는 확인용 표시 글자만 넣는다. 다른 칸에서 Ctrl+V 하면 복사본이 들어간다.
@@ -1786,22 +1787,32 @@ export default function Home() {
   };
 
   /** 칸에서 빠진 사진(삭제·덮어쓰기·칸 삭제)은 지우지 않고 위쪽 이미지 목록으로 되돌린다. */
+  // 2026-11-13 칸에서 편집(확대·이동·밝기)하던 중 삭제하면 편집본이 아니라 맨 처음 원본이 목록으로 돌아간다.
+  const poolOriginal = (slot: SlotImage): SlotImage => {
+    const dataUrl = slot.originDataUrl || slot.source || slot.dataUrl;
+    const original: SlotImage = { dataUrl, fileName: slot.fileName };
+    if (slot.source && slot.source !== dataUrl) original.source = slot.source;
+    return original;
+  };
+
   const returnToPool = (slot: SlotImage | null | undefined) => {
     if (!slot?.dataUrl) return;
-    const { locked: _locked, ...rest } = slot;
-    setUploadPool(prev => prev.some(item => item.dataUrl === rest.dataUrl) ? prev : [...prev, rest]);
+    const original = poolOriginal(slot);
+    setUploadPool(prev => prev.some(item => item.dataUrl === original.dataUrl) ? prev : [...prev, original]);
   };
 
   const assignPoolItem = (index: number, key: string) => {
     const slot = uploadPool[index];
     if (!slot) return;
     const previous = getSlotValue(key);
-    setSlotValue(key, slot);
+    // 목록에 따로 원본(source)이 있던 사진은 목록 모양(dataUrl)을 기억해 둔다.
+    setSlotValue(key, slot.source && slot.source !== slot.dataUrl && !slot.originDataUrl ? { ...slot, originDataUrl: slot.dataUrl } : slot);
     setUploadPool(prev => {
       const next = prev.filter((_, i) => i !== index);
-      if (!previous?.dataUrl || next.some(item => item.dataUrl === previous.dataUrl)) return next;
-      const { locked: _locked, ...rest } = previous;
-      return [...next, rest];
+      if (!previous?.dataUrl) return next;
+      const original = poolOriginal(previous);
+      if (next.some(item => item.dataUrl === original.dataUrl)) return next;
+      return [...next, original];
     });
   };
 

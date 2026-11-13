@@ -465,6 +465,46 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     }
   }
 
+  // 2026-11-13 기존 상세페이지를 한 번에 두 용도로 쓴다: 자른 그대로 상세페이지 칸에 넣고, 같은 사진을 사진별로 나눠 5번 등록이미지 목록에도 올린다.
+  // 제품컷·착용컷 구분(AI 호출)은 하지 않아 사용량을 쓰지 않는다. 구분은 나중에 AI 편집을 할 때 확인하면 된다.
+  async function useCroppedAsDetailPageAndSplit() {
+    if (!cut || cut.bottom - cut.top < 0.02) {
+      setMessage("사용할 구간이 너무 좁습니다. 위·아래 자를 위치를 다시 정해주세요.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const usable = await cropDataUrl(cut.dataUrl, cut.top, cut.bottom, cut.holes);
+      const found = await splitDetailPage(usable, headerUrl);
+      const stamp = Date.now().toString(36);
+      const sections = found.map(section => ({ ...section, id: `${stamp}-${section.id}`, kind: "product" as const, reason: "직접 확인해주세요." }));
+      const base = modelName.trim() || "NOID-B";
+      const items: Array<{ fileName: string; dataUrl: string; source: string }> = [];
+      for (let index = 0; index < sections.length; index += 1) {
+        const source = sections[index].dataUrl;
+        if (alreadyAdded.current.has(source)) continue;
+        items.push({ fileName: `${base}-cut-${stamp.slice(-4)}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(source, 1000), source });
+        alreadyAdded.current.add(source);
+      }
+      onComplete({ dataUrl: usable, sections: [], logoApplied: false });
+      if (items.length) onAddToList(items);
+      setDraftId(newDraftId());
+      setSource(usable);
+      setSourceName(cut.name);
+      resetWork();
+      setOriginalSections(sections);
+      setSectionActions(Object.fromEntries(sections.map(section => [section.id, "edit"])));
+      setScanSummary({ found: found.length, kept: sections.length, excluded: 0 });
+      setAddedVersion(value => value + 1);
+      setCut(null);
+      setMessage(`상세페이지 칸에 넣고, 사진 ${items.length}장을 5번 쿠팡 등록이미지 목록에 올렸습니다. 위 목록에서 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "상세페이지를 넣고 나누지 못했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function dropFile(event: DragEvent<HTMLElement>) {
     event.preventDefault();
     setDragging(false);
@@ -764,7 +804,9 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
           <button type="button" className={cut.mode === "top" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "top", holeStart: null })}>위쪽 자를 위치 정하기</button>
           <button type="button" className={cut.mode === "bottom" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "bottom", holeStart: null })}>아래쪽 자를 위치 정하기</button>
           <button type="button" className={cut.mode === "hole" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "hole", holeStart: null })} title="지울 문구의 바로 위와 바로 아래를 클릭하면 그 사이가 빠지고, 사이트 기본 간격만 남습니다.">가운데 잘라내기</button>
-          <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPage()} title="자른 상세페이지를 로고 없이 그대로 상세페이지 칸에 넣습니다.">상세페이지 사용</button>          <button type="button" className="secondaryButton" disabled={busy} onClick={() => void confirmCutForSplit()} title="사진별로 나눠서 등록이미지에 추가하거나 AI로 새로 만들 때 씁니다.">사진별로 나누기</button>
+          <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPage()} title="자른 상세페이지를 로고 없이 그대로 상세페이지 칸에 넣습니다.">상세페이지 사용</button>
+          <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPageAndSplit()} title="상세페이지 칸에 넣고, 같은 사진을 사진별로 나눠 5번 등록이미지 목록에도 한 번에 올립니다.">{busy ? "처리 중…" : "상세페이지 사용 + 사진별 나누기"}</button>
+          <button type="button" className="secondaryButton" disabled={busy} onClick={() => void confirmCutForSplit()} title="사진별로 나눠서 등록이미지에 추가하거나 AI로 새로 만들 때 씁니다.">사진별로 나누기</button>
           <button type="button" className="secondaryButton" disabled={!cut.history.length && cut.holeStart === null} onClick={() => setCut(c => c && (c.holeStart !== null ? { ...c, holeStart: null } : c.history.length ? { ...c, ...c.history[c.history.length - 1], holeStart: null, history: c.history.slice(0, -1) } : c))}>되돌리기</button>
           <button type="button" className="secondaryButton" disabled={cut.top === 0 && cut.bottom === 1 && !cut.holes.length} onClick={() => setCut(c => c && { ...c, top: 0, bottom: 1, holes: [], holeStart: null, history: [...c.history, { top: c.top, bottom: c.bottom, holes: c.holes }] })}>초기화</button>
           <button type="button" className="secondaryButton" onClick={() => setCut(null)}>닫기</button>
