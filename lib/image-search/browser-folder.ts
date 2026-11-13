@@ -442,6 +442,53 @@ async function quickScanNewFolders(root: FileSystemDirectoryHandle, index: TreeI
   return true;
 }
 
+/**
+ * 2026-11-13 작업대기 폴더(★전체제품사진/03/_모음·분류자료/신상작업/2.작업대기/기존상품 수정/모델 폴더)는
+ * 위쪽 3단계 확인(quickScanNewFolders)으로는 닿지 않는 깊이다. 이 위치만 바로 열어 폴더 이름에 모델명이 들어간
+ * 폴더(예: "wn00321 wn00322 코인 세트")의 사진을 경로 목록에 더한다. 폴더 두 곳(2.작업대기, 그 아래 한 단계)만 열어서 빠르다.
+ */
+const WORK_WAITING_SEGMENTS = ["03", "_모음·분류자료", "신상작업", "2.작업대기"];
+async function quickScanWorkFolders(root: FileSystemDirectoryHandle, index: TreeIndex, searchTerms: string[]): Promise<boolean> {
+  const matches = termMatcher(searchTerms);
+  const known = new Set(index.files);
+  const added: string[] = [];
+  async function collect(dir: FileSystemDirectoryHandle, id: string) {
+    for await (const [name, entry] of (dir as any).entries()) {
+      if (name.startsWith(".")) continue;
+      const child = `${id}/${name}`;
+      if (entry.kind === "directory") await collect(entry, child);
+      else if (IMAGE_FILE.test(name) && !known.has(child)) { known.add(child); added.push(child); }
+    }
+  }
+  const subfolders = async (dir: FileSystemDirectoryHandle) => {
+    const list: [string, FileSystemDirectoryHandle][] = [];
+    for await (const [name, entry] of (dir as any).entries() as AsyncIterable<[string, any]>) {
+      if (entry.kind === "directory" && !name.startsWith(".")) list.push([name, entry]);
+    }
+    return list;
+  };
+  // 연결한 폴더가 ★전체제품사진이든 그 위 폴더(개인·MYBOX)든 모두 처리한다.
+  const baseSets: string[][] = [WORK_WAITING_SEGMENTS, ["★전체제품사진", ...WORK_WAITING_SEGMENTS], ["개인", "★전체제품사진", ...WORK_WAITING_SEGMENTS]];
+  for (const segments of baseSets) {
+    const base = await descend(root, segments).catch(() => null);
+    if (!base) continue;
+    const baseId = [root.name, ...segments].join("/");
+    for (const [name, entry] of await subfolders(base)) {
+      const id = `${baseId}/${name}`;
+      if (matches(name).length) { await collect(entry, id); continue; }
+      for (const [child, childEntry] of await subfolders(entry).catch(() => [] as [string, FileSystemDirectoryHandle][])) {
+        if (matches(child).length) await collect(childEntry, `${id}/${child}`);
+      }
+    }
+    break;
+  }
+  if (!added.length) return false;
+  index.files = [...index.files, ...added];
+  memoryIndex = index;
+  await write(INDEX_KEY, index).catch(() => {});
+  return true;
+}
+
 /** 저장된 경로 목록에서 찾는다. 폴더 이름 상속·작업 단계 폴더 규칙은 예전 폴더 직접 탐색과 같다. */
 async function searchTreeIndex(root: FileSystemDirectoryHandle, index: TreeIndex, searchTerms: string[], existing: LocalPhoto[]): Promise<LocalPhoto[]> {
   // Model name remains the primary term; SKU IDs are additional historical/current aliases.
@@ -544,7 +591,11 @@ export async function searchPhotoFolder(searchTerms: string[], existing: LocalPh
   // 사진이 하나라도 잡혔다고 새 폴더 확인을 건너뛰지 않고, 모델명(첫 검색어)으로 찾은 사진이 없으면 확인한다.
   const primary = searchTerms[0]?.trim().toLowerCase() || "";
   const modelFound = found.some(photo => photo.matchedBy.includes(primary));
-  if ((!found.length || !modelFound) && !refresh && Date.now() - index.builtAt > INDEX_RETRY_AGE_MS) {
+  // 작업대기 폴더는 폴더 두 곳만 열어 빠르므로 목록 나이와 상관없이 확인한다.
+  if (!modelFound && !refresh && await quickScanWorkFolders(root, index, searchTerms).catch(() => false)) {
+    found = await searchTreeIndex(root, index, searchTerms, existing);
+  }
+  if ((!found.length || !found.some(photo => photo.matchedBy.includes(primary))) && !refresh && Date.now() - index.builtAt > INDEX_RETRY_AGE_MS) {
     // 그 사이 새로 동기화된 사진일 수 있다 → 전체를 다시 훑지 않고 위쪽 폴더 이름만 빠르게 확인한다.
     if (await quickScanNewFolders(root, index, searchTerms).catch(() => false)) found = await searchTreeIndex(root, index, searchTerms, existing);
   }
