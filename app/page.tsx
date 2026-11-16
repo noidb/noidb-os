@@ -4289,7 +4289,9 @@ function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value
 
   const update = (next: SquareCrop) => {
     const img = loadedImgRef.current;
-    const maxZoom = zoomLimitRef.current && img ? Math.min(5, maxZoomForQuality(img.naturalWidth, img.naturalHeight)) : 5;
+    // 2026-11-16 확대 상한을 5배 고정에서 올림: 큰 원본(예 5500px)은 5배에서 막혀 더 못 키웠다.
+    // 흐려짐 막기가 꺼져 있으면 20배까지, 켜져 있으면 화질이 흐려지기 직전까지(5배 고정 상한 없음).
+    const maxZoom = zoomLimitRef.current && img ? Math.min(20, maxZoomForQuality(img.naturalWidth, img.naturalHeight)) : 20;
     const clamped = {
       zoom: Math.max(0.3, Math.min(maxZoom, next.zoom)),
       x: Math.max(-1.5, Math.min(1.5, next.x)),
