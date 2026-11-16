@@ -33,6 +33,23 @@ export function OpenFolderButton({ folder, label = "폴더 열기", className = 
   );
 }
 
+/**
+ * 2026-11-16: 사진이 들어 있는 폴더를 탐색기로 열고 그 사진 파일을 선택 표시한다(마이박스 N:\개인\★전체제품사진).
+ * 주소로 경로를 넘기지 않는 기존 안전 방식을 지키려고, 사진 경로(예: ★전체제품사진/01/_제품별/we011803/a.jpg)를
+ * 클립보드에 복사한 뒤 고정 주소 noidbphoto://open 만 부른다. PC의 설정 파일(public/noidb-folder-install.reg의
+ * noidbphoto)이 클립보드 경로를 검사해(.. 와 드라이브 문자 거부, ★전체제품사진 안쪽만 허용) 그 위치를 연다.
+ * 반환값이 false면 클립보드 복사가 막힌 것이다.
+ */
+export async function openPhotoLocation(photoId: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(photoId);
+  } catch {
+    return false;
+  }
+  window.location.href = "noidbphoto://open";
+  return true;
+}
+
 /** 폴더 열기가 안 열릴 때 쓰는 '처음 한 번' 설정 파일 받기 링크. */
 export function FolderInstallLink() {
   return (

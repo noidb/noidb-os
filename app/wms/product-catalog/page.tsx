@@ -19,6 +19,7 @@ import type { ReregistrationExclusion } from "@/lib/wms/reregistration-exclusion
 import { REREGISTRATION_TAB_TIER } from "@/lib/wms/reregistration-tab-tier";
 import LegacySkuCandidates from "./LegacySkuCandidates";
 import ProductInfoBox from "./ProductInfoBox";
+import { FolderInstallLink, openPhotoLocation } from "../OpenFolderButton";
 import { PRODUCT_INFO_STORAGE_KEY } from "@/lib/product-info";
 import { ADD_PHOTOS_CHANNEL, fileToDataUrl, type AddPhotosAck, type AddPhotosRequest } from "@/lib/registration-photo-channel";
 
@@ -1438,6 +1439,16 @@ export default function ProductCatalogPage() {
 
   const [downloading, setDownloading] = useState("");
   // 선택한 사진을 바로 내려받는다. 1장이면 그대로, 여러 장이면 모델명 zip 하나로.
+  /** 2026-11-16 선택한 사진(없으면 첫 사진)이 있는 폴더를 PC 탐색기로 열고 그 파일을 선택 표시한다. 다운로드를 받지 않아도 된다. */
+  async function openSelectedPhotoFolder(modelName: string) {
+    const state = photoStates[modelName];
+    const usable = (state?.hits || []).filter(hit => !brokenPhotoIds.has(hit.id) && !state?.hiddenIds?.includes(hit.id));
+    const target = usable.find(hit => hit.selected) || usable[0];
+    if (!target) return;
+    const ok = await openPhotoLocation(target.id);
+    setAddNotice(current => ({ ...current, [modelName]: ok ? "탐색기를 여는 중입니다. 안 열리면 위 '폴더 열기가 안 되면' 설정 파일을 PC에서 한 번 실행해 주세요." : "경로 복사가 막혀 폴더를 열지 못했습니다. 브라우저의 클립보드 허용을 확인해 주세요." }));
+  }
+
   async function downloadSelectedPhotos(modelName: string) {
     const state = photoStates[modelName];
     const picked = (state?.hits || []).filter(hit => hit.selected && !brokenPhotoIds.has(hit.id) && !state?.hiddenIds?.includes(hit.id));
@@ -1536,7 +1547,7 @@ export default function ProductCatalogPage() {
                       {group.items.some(isRocketPendingItem) && <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}><RocketModelEditor compact items={group.items.filter(isRocketPendingItem)} onSaved={reloadRocketItems} /><RocketDeleteButton items={group.items.filter(isRocketPendingItem)} onDone={reloadRocketItems} /></div>}
                     </div>
                     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>{photos && !photos.loading && (() => { const count = photos.hits.filter(hit => hit.selected && !brokenPhotoIds.has(hit.id) && !photos.hiddenIds?.includes(hit.id)).length; return <button type="button" onClick={() => void downloadSelectedPhotos(group.modelName)} disabled={!count || Boolean(downloading)} title={count ? "선택한 사진을 내려받습니다. 여러 장이면 zip 하나로 받습니다." : "다운로드할 사진을 먼저 선택하세요."} style={{ ...neutralPillStyle, cursor: !count ? "not-allowed" : downloading ? "wait" : "pointer", opacity: count ? 1 : 0.55 }}>{downloading === group.modelName ? "내려받는 중…" : `선택 사진 다운로드 (${count}장)`}</button>; })()}<Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={primaryPillStyle}>등록 준비</Link>{photos?.loading ? <button type="button" onClick={() => stopPhotoSearch(group.modelName)} title="지금까지 찾은 사진은 그대로 두고 검색을 멈춥니다." style={neutralPillStyle}>검색 멈춤</button> : <button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName} style={{ ...pillStyle, cursor: "pointer" }}>사진검색</button>}{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={neutralPillStyle}>사진 검색 초기화</button>}</div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>{photos && !photos.loading && (() => { const count = photos.hits.filter(hit => hit.selected && !brokenPhotoIds.has(hit.id) && !photos.hiddenIds?.includes(hit.id)).length; return <button type="button" onClick={() => void downloadSelectedPhotos(group.modelName)} disabled={!count || Boolean(downloading)} title={count ? "선택한 사진을 내려받습니다. 여러 장이면 zip 하나로 받습니다." : "다운로드할 사진을 먼저 선택하세요."} style={{ ...neutralPillStyle, cursor: !count ? "not-allowed" : downloading ? "wait" : "pointer", opacity: count ? 1 : 0.55 }}>{downloading === group.modelName ? "내려받는 중…" : `선택 사진 다운로드 (${count}장)`}</button>; })()}{photos && !photos.loading && photos.hits.length > 0 && <button type="button" onClick={() => void openSelectedPhotoFolder(group.modelName)} title="선택한 사진(없으면 첫 사진)이 있는 폴더를 이 PC 탐색기로 엽니다. 다운로드가 필요 없습니다." style={{ ...neutralPillStyle, cursor: "pointer" }}>사진 폴더 열기</button>}<Link href={`/?reregisterModel=${encodeURIComponent(group.modelName)}`} onClick={event => { event.preventDefault(); if (!preparing) void prepareModel(group.modelName, group.items); }} aria-disabled={Boolean(preparing)} style={primaryPillStyle}>등록 준비</Link>{photos?.loading ? <button type="button" onClick={() => stopPhotoSearch(group.modelName)} title="지금까지 찾은 사진은 그대로 두고 검색을 멈춥니다." style={neutralPillStyle}>검색 멈춤</button> : <button type="button" onClick={() => void searchPhotos(first, group.items)} disabled={!group.modelName} style={{ ...pillStyle, cursor: "pointer" }}>사진검색</button>}{(photos || savedHints[group.modelName] !== undefined) && !photos?.loading && <button type="button" onClick={() => void resetPhotoSearch(group.modelName)} title="저장된 검색 결과와 선택을 모두 지웁니다. 사진 파일은 그대로입니다." style={neutralPillStyle}>사진 검색 초기화</button>}</div>
                       {excludedModelKeys.has(group.key) && manualExclusions?.[clean(group.modelName)] ? <div style={{ display: "inline-flex", alignItems: "center", gap: 8, border: "1px solid #dfbdb2", borderRadius: 8, background: "#f6e3de", color: "#7f4032", fontWeight: 800, fontSize: 12, minHeight: 30, padding: "0 4px 0 12px" }}>
                         <span>✓ 재등록 제외됨 · {manualExclusions[clean(group.modelName)].reason}</span>
                         <button type="button" onClick={() => void changeExclusion(group.modelName, null)} disabled={Boolean(savingExclusion)} style={{ ...neutralPillStyle, minHeight: 24 }}>{savingExclusion === group.modelName ? "해제 중…" : "제외 해제"}</button>
@@ -1598,7 +1609,7 @@ export default function ProductCatalogPage() {
 
       <div style={{ marginBottom: 14 }}>
         <button type="button" onClick={() => void connectPhotoFolder().then(name => { setFolderName(name); setFolderMessage(""); }).catch(error => { if (error?.name !== "AbortError") setFolderMessage(error instanceof Error ? error.message : "사진 폴더 연결 실패"); })}>사진 원본 폴더 연결</button>
-        <span style={{ marginLeft: 8, fontSize: 12 }}>{folderName ? `연결: ${folderName}` : "PC에서 MYBOX 동기화 사진 폴더를 한 번 선택해주세요."}</span>
+        <span style={{ marginLeft: 8, fontSize: 12 }}>{folderName ? `연결: ${folderName}` : "PC에서 MYBOX 동기화 사진 폴더를 한 번 선택해주세요."}</span><span style={{ marginLeft: 12 }}><FolderInstallLink /></span>
         {folderMessage && <p role="status">{folderMessage}</p>}
       </div>
 
