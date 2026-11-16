@@ -37,8 +37,9 @@ async function xlsxContains(zip: JSZip, fileName: string, value: string) {
 }
 
 async function main() {
-  const deps = { loadWeeklyAdvertisingSelection: async () => advertising, buildWeeklyOutput, loadOverstockSkuIds: async () => new Set(["222"]) };
-  const marketingOutput = await generateLogisticsFollowUp(workspace, currentBoard, { token: logisticsFollowUpToken(workspace, currentBoard), expectedCollectedAt: at, kind: "marketing" }, deps);
+  const deps = { loadWeeklyAdvertisingSelection: async () => advertising, buildWeeklyOutput };
+  // 2026-11-16: 할인율은 기본 20%, 화면에서 직접 입력한 SKU만 다르게(여기서는 222만 30%).
+  const marketingOutput = await generateLogisticsFollowUp(workspace, currentBoard, { token: logisticsFollowUpToken(workspace, currentBoard), expectedCollectedAt: at, kind: "marketing", couponRates: { "222": 30 } }, deps);
   const marketingZip = await JSZip.loadAsync(Buffer.from(marketingOutput.base64, "base64"));
   const marketingFiles = Object.keys(marketingZip.files).filter(name => !marketingZip.files[name].dir).sort();
   assert.equal(marketingOutput.proof.couponCount, 1);

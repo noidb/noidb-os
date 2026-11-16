@@ -202,16 +202,20 @@ function transientRun(runs: WeeklyRun[], kind: "marketing" | "discontinue"): Wee
   return { id, revision: 0, updatedAt: now(), sentVendors: {},
     snapshot: { id, rulesVersion: 5, sourceToken: hash(runs.map(sourceKey)), createdAt: now(), period: { startDate: weeklyKoreaDay(), endDate: weeklyKoreaDay() }, source: { files: [], latestActualDate: "", firstActualDate: "", eventCount: 0, duplicateCount: 0, selectedEventCount: 0, mode: "browser" }, couponItems: kind === "marketing" ? items as any : [], couponReceiptKeys, vendorItems: kind === "discontinue" ? items as any : [], warnings: [], blockers: [] }, reviews, reviewedSkuIds: Object.keys(reviews), itemRoutes: {} };
 }
-/** 쿠폰 30% 대상: 제품DB 현재상태 과재고 또는 누적입고 100개 이상. 제품DB를 못 읽으면 생성을 멈춘다(할인율이 틀리게 나가지 않도록). */
-async function loadOverstockSkuIds(): Promise<Set<string>> {
-  const { fetchProductCatalog } = await import("./product-catalog");
-  const catalog = await fetchProductCatalog();
-  if (!catalog.configured) throw new Error("제품DB를 읽지 못해 과재고 할인율을 정할 수 없습니다. 잠시 후 다시 만들어 주세요.");
-  const cumulative = (value: string) => Number(String(value || "").replace(/,/g, ""));
-  return new Set(catalog.items.filter(item => item.currentStatus.includes("과재고") || cumulative(item.cumulativeInbound) >= 100).map(item => item.skuId));
+/** 2026-11-16: 쿠폰 할인율은 기본 20%, 사용자가 화면에서 SKU별로 직접 입력한 값만 다르게 적용한다(과재고 자동 30% 폐지). 잘못된 값은 조용히 20%로 바꾸지 않고 멈춘다. */
+function parseCouponRates(value: unknown): Record<string, number> {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error("쿠폰 할인율 입력을 확인해 주세요.");
+  const rates: Record<string, number> = {};
+  for (const [skuId, raw] of Object.entries(value as Record<string, unknown>)) {
+    const rate = typeof raw === "number" ? raw : Number(String(raw ?? "").trim());
+    if (!Number.isInteger(rate) || rate < 1 || rate > 100) throw new Error(`SKU ${skuId}의 할인율은 1~100 사이의 정수로 입력해 주세요.`);
+    rates[skuId] = rate;
+  }
+  return rates;
 }
-export async function generateLogisticsFollowUp(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, input: { token: unknown; expectedCollectedAt: unknown; kind: unknown }, deps: Partial<{ loadWeeklyAdvertisingSelection: typeof loadWeeklyAdvertisingSelection; buildWeeklyOutput: typeof buildWeeklyOutput; buildWeeklyReorderWorkbook: typeof buildWeeklyReorderWorkbook; loadOverstockSkuIds: typeof loadOverstockSkuIds }> = {}) {
-  const services = { loadWeeklyAdvertisingSelection, buildWeeklyOutput, buildWeeklyReorderWorkbook, loadOverstockSkuIds, ...deps };
+export async function generateLogisticsFollowUp(workspace: WeeklyWorkspace, board: LogisticsReceiptBoard, input: { token: unknown; expectedCollectedAt: unknown; kind: unknown; couponRates?: unknown }, deps: Partial<{ loadWeeklyAdvertisingSelection: typeof loadWeeklyAdvertisingSelection; buildWeeklyOutput: typeof buildWeeklyOutput; buildWeeklyReorderWorkbook: typeof buildWeeklyReorderWorkbook }> = {}) {
+  const services = { loadWeeklyAdvertisingSelection, buildWeeklyOutput, buildWeeklyReorderWorkbook, ...deps };
   assertCurrent(workspace, board, input.token, input.expectedCollectedAt); const kind = input.kind;
   if (kind !== "marketing" && kind !== "discontinue" && kind !== "reorder") throw new Error("생성할 후속 업무를 확인해 주세요.");
   if (kind === "reorder") {
@@ -255,8 +259,8 @@ export async function generateLogisticsFollowUp(workspace: WeeklyWorkspace, boar
   }
   const advertising = kind === "marketing" ? await services.loadWeeklyAdvertisingSelection(run) : undefined;
   if (kind === "marketing") assertWeeklyCouponEligibility(workspace, run);
-  const overstockSkuIds = kind === "marketing" ? await services.loadOverstockSkuIds() : undefined;
-  const output = await services.buildWeeklyOutput(run, kind === "marketing" ? "marketing" : "discontinue", new Date(), advertising, { overstockSkuIds });
+  const couponRates = kind === "marketing" ? parseCouponRates(input.couponRates) : undefined;
+  const output = await services.buildWeeklyOutput(run, kind === "marketing" ? "marketing" : "discontinue", new Date(), advertising, { couponRates });
   const baseKey = weeklyOutputKey(run, kind === "marketing" ? "marketing" : "discontinue", new Date(), advertising?.token);
   // Every saved output is immutable; repeat generation must not share a writable artifact key.
   const outputKey = hash([baseKey, output.fileName, output.base64, randomUUID()]);

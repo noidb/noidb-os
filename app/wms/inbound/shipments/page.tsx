@@ -242,6 +242,8 @@ export default function ShipmentReceiptsPage() {
   >({});
   const [couponStartsOn, setCouponStartsOn] = useState("");
   const [couponExpiresOn, setCouponExpiresOn] = useState("");
+  // 2026-11-16: 쿠폰 할인율은 기본 20%. 다르게 하고 싶은 SKU만 직접 입력한다(SKU ID → 입력한 글자). 비우면 20%.
+  const [couponRates, setCouponRates] = useState<Record<string, string>>({});
   const [generatedDownloads, setGeneratedDownloads] = useState<
     Record<string, { fileName: string; href: string }>
   >({});
@@ -1453,6 +1455,7 @@ export default function ShipmentReceiptsPage() {
                       <col className={styles.colInfo} />
                       <col />
                       {followUpKind !== "marketing" && <col className={styles.colNum} />}
+                      {followUpKind === "marketing" && <col style={{ width: "92px" }} />}
                       {(followUpKind === "marketing" || followUpKind === "discontinue") && !fixture && <col className={styles.colDecision} />}
                     </colgroup>
                     <thead>
@@ -1460,6 +1463,7 @@ export default function ShipmentReceiptsPage() {
                         <th>쉽먼트 정보</th>
                         <th>상품명</th>
                         {followUpKind !== "marketing" && <th>미납</th>}
+                        {followUpKind === "marketing" && <th>할인율</th>}
                         {(followUpKind === "marketing" || followUpKind === "discontinue") && !fixture && <th className={styles.decisionCell}>처리</th>}
                       </tr>
                     </thead>
@@ -1481,6 +1485,26 @@ export default function ShipmentReceiptsPage() {
                               </div>
                             </td>
                             {followUpKind !== "marketing" && <td className={styles.shortageQty}>{extra.shortageQuantity || "-"}</td>}
+                            {followUpKind === "marketing" && (
+                              <td>
+                                <label style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                                  <input
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={1}
+                                    max={100}
+                                    step={1}
+                                    placeholder="20"
+                                    aria-label={`SKU ${line.skuId} 쿠폰 할인율`}
+                                    value={couponRates[line.skuId] ?? ""}
+                                    disabled={busy}
+                                    onChange={(event) => setCouponRates((current) => ({ ...current, [line.skuId]: event.target.value }))}
+                                    style={{ width: "56px", height: "32px", textAlign: "right", borderRadius: "8px", border: "1px solid #d9d2c7", padding: "0 6px" }}
+                                  />
+                                  %
+                                </label>
+                              </td>
+                            )}
                             {followUpKind === "discontinue" && !fixture && (
                               <td className={styles.decisionCell}>
                                 <div className={styles.decisionRow}>
@@ -1615,10 +1639,26 @@ export default function ShipmentReceiptsPage() {
                         onClick={() =>
                           followUpKind === "reorder" && reorderReadyLines.length
                             ? void sendReorderAndGenerate(reorderReadyLines)
-                            : void followUpAction(
-                                { action: "generate", kind: followUpKind },
-                                `${followUpKind === "reorder" ? "미납분 재발주요청" : followUpKind === "discontinue" ? "단종" : "쿠폰·광고"} 누적 대상 파일을 생성했습니다.`,
-                              )
+                            : void (() => {
+                                // 2026-11-16: 쿠폰·광고 파일은 기본 20%, 입력칸에 숫자를 적은 SKU만 그 할인율로 만든다.
+                                const couponRatesToSend: Record<string, number> = {};
+                                if (followUpKind === "marketing") {
+                                  for (const line of activeFollowUpQueue) {
+                                    const text = (couponRates[line.skuId] ?? "").trim();
+                                    if (!text) continue;
+                                    const rate = Number(text);
+                                    if (!Number.isInteger(rate) || rate < 1 || rate > 100) {
+                                      window.alert(`SKU ${line.skuId}의 할인율은 1~100 사이의 정수로 입력해 주세요. (비워 두면 20%입니다)`);
+                                      return;
+                                    }
+                                    if (rate !== 20) couponRatesToSend[line.skuId] = rate;
+                                  }
+                                }
+                                return followUpAction(
+                                  followUpKind === "marketing" ? { action: "generate", kind: followUpKind, couponRates: couponRatesToSend } : { action: "generate", kind: followUpKind },
+                                  `${followUpKind === "reorder" ? "미납분 재발주요청" : followUpKind === "discontinue" ? "단종" : "쿠폰·광고"} 누적 대상 파일을 생성했습니다.`,
+                                );
+                              })()
                         }
                       >
                         {followUpKind === "discontinue"

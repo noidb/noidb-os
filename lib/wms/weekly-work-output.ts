@@ -48,10 +48,9 @@ async function buildVendorWorkbook(run: WeeklyRun, vendorName: string): Promise<
   sheet.pageSetup={paperSize:9,orientation:"landscape",fitToPage:true,fitToWidth:1,fitToHeight:0};
   return Buffer.from(await book.xlsx.writeBuffer());
 }
-/** 쿠폰 할인율(사용자 확정 2026-10-08): 기본 20%, 제품DB 과재고 또는 누적입고 100개 이상 SKU는 30%. */
+/** 쿠폰 할인율(사용자 변경 2026-11-16): 전체 기본 20%, 사용자가 SKU별로 직접 입력한 값(couponRates)만 다르게 적용한다. 과재고 자동 30%는 폐지. */
 export const COUPON_DISCOUNT_DEFAULT = 20;
-export const COUPON_DISCOUNT_OVERSTOCK = 30;
-export async function buildWeeklyOutput(run: WeeklyRun, kind: WeeklyOutputKind, now=new Date(), advertising?: WeeklyAdvertisingSelection, couponOptions: { overstockSkuIds?: ReadonlySet<string> } = {}): Promise<WeeklyOutput> {
+export async function buildWeeklyOutput(run: WeeklyRun, kind: WeeklyOutputKind, now=new Date(), advertising?: WeeklyAdvertisingSelection, couponOptions: { couponRates?: Readonly<Record<string,number>> } = {}): Promise<WeeklyOutput> {
   assertWeeklyCurrentRules(run);
   if(!["all","coupon","vendors","discontinue","reorder","marketing"].includes(kind))throw new Error("파일 종류를 확인해 주세요.");
   if(run.snapshot.blockers.length)throw new Error(run.snapshot.blockers.join(" "));
@@ -69,13 +68,11 @@ export async function buildWeeklyOutput(run: WeeklyRun, kind: WeeklyOutputKind, 
   if(!coupons.length&&!vendors.length&&!discontinued.length&&!reorders.length)throw new Error("선택한 종류에 생성할 파일이 없습니다.");
   const zip=new JSZip();
   const range=`${run.snapshot.period.startDate.replace(/-/g,"")}_${run.snapshot.period.endDate.replace(/-/g,"")}`;
-  // 2026-11-16: 20%·30% 쿠폰을 따로 만들지 않고 한 파일에 SKU별 할인율(C열)로 함께 담는다.
+  // 2026-11-16: 쿠폰은 한 파일에 SKU별 할인율(C열)로 담는다. 기본 20%, 입력한 SKU만 다른 값. 파일명에는 쓰인 할인율을 모두 적는다.
   if(coupons.length) {
-    const isOverstock=(item:{skuId:string})=>!!couponOptions.overstockSkuIds?.has(item.skuId);
-    const hasOverstock=coupons.some(isOverstock);
-    const hasNormal=coupons.some(item=>!isOverstock(item));
-    const rateLabel=hasOverstock&&hasNormal?`${COUPON_DISCOUNT_DEFAULT}·${COUPON_DISCOUNT_OVERSTOCK}`:String(hasOverstock?COUPON_DISCOUNT_OVERSTOCK:COUPON_DISCOUNT_DEFAULT);
-    zip.file(`쿠폰발행_${rateLabel}퍼센트_${range}.xlsx`,await buildCouponWorkbook(coupons,item=>isOverstock(item)?COUPON_DISCOUNT_OVERSTOCK:COUPON_DISCOUNT_DEFAULT));
+    const rateOf=(item:{skuId:string})=>couponOptions.couponRates?.[item.skuId]??COUPON_DISCOUNT_DEFAULT;
+    const rateLabel=[...new Set(coupons.map(rateOf))].sort((a,b)=>a-b).join("·");
+    zip.file(`쿠폰발행_${rateLabel}퍼센트_${range}.xlsx`,await buildCouponWorkbook(coupons,rateOf));
   }
   const advertisingFiles=includeAdvertising?await buildWeeklyAdvertisingFiles(advertising!.optionIds):[];
   for(const file of advertisingFiles)zip.file(file.fileName,file.buffer);
