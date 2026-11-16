@@ -1270,7 +1270,12 @@ export default function ShipmentReceiptsPage() {
     const open = openShipments.has(target.shipmentNumber);
     const delivered = detail ? detail.lines.reduce((sum, line) => sum + line.deliveredQuantity, 0) : null;
     const received = detail ? detail.lines.reduce((sum, line) => sum + line.receivedQuantity, 0) : null;
-    const shortage = delivered !== null && received !== null ? Math.max(0, delivered - received) : null;
+    // 2026-11-16: 입고상세내역(정산)으로 확인돼 미납 SKU 리스트에서 빠진 줄은 카드 표에서도 미납으로 세지 않는다
+    const clearedKeys = new Set((payload?.board.settlementCleared || []).map((item) => `${item.shipmentNumber}|${item.purchaseOrderNumber}|${item.skuId}`));
+    const isSettlementCleared = (line: { purchaseOrderNumber: string; skuId: string }) => clearedKeys.has(`${target.shipmentNumber}|${line.purchaseOrderNumber}|${line.skuId}`);
+    const missOf = (line: { purchaseOrderNumber: string; skuId: string; deliveredQuantity: number; receivedQuantity: number }) => (isSettlementCleared(line) ? 0 : Math.max(0, line.deliveredQuantity - line.receivedQuantity));
+    const clearedMiss = detail ? detail.lines.reduce((sum, line) => sum + (isSettlementCleared(line) ? Math.max(0, line.deliveredQuantity - line.receivedQuantity) : 0), 0) : 0;
+    const shortage = delivered !== null && received !== null ? Math.max(0, delivered - received - clearedMiss) : null;
     return (
       <article className={`${styles.shipment} ${open ? styles.shipmentOpen : ""}`} key={`${isNew ? "new-" : ""}${target.shipmentNumber}`} style={isNew ? { borderColor: "#dfbdb2", background: "#fff" } : undefined}>
         {/* 2026-11-16: 버튼 안의 글자는 끌어서 선택이 안 되어, 일반 칸으로 바꾸고 끌어 선택 중에는 접히지 않게 함 */}
@@ -1314,8 +1319,9 @@ export default function ShipmentReceiptsPage() {
               <thead><tr><th>SKU</th><th>상품명</th><th>납품</th><th>입고</th><th>미납</th><th>미납 처리</th><th>마케팅</th></tr></thead>
               <tbody>
                 {/* 2026-10-21: 미납이 많은 줄부터 보이게 */}
-                {[...detail.lines].sort((a, b) => Math.max(0, b.deliveredQuantity - b.receivedQuantity) - Math.max(0, a.deliveredQuantity - a.receivedQuantity)).map((line, index) => {
-                  const miss = Math.max(0, line.deliveredQuantity - line.receivedQuantity);
+                {[...detail.lines].sort((a, b) => missOf(b) - missOf(a)).map((line, index) => {
+                  const miss = missOf(line);
+                  const cleared = isSettlementCleared(line);
                   return (
                     <tr key={`${line.purchaseOrderNumber}-${line.skuId}-${index}`}>
                       <td><CopyNumber value={line.skuId} /></td>
@@ -1324,7 +1330,7 @@ export default function ShipmentReceiptsPage() {
                       <td>{line.receivedQuantity}</td>
                       <td style={{ color: miss ? "#b33f35" : undefined, fontWeight: miss ? 800 : undefined }}>{miss || "-"}</td>
                       {/* 2026-10-21: 미납 줄이 왜 미납 SKU 리스트에 없는지 여기서 바로 보이게 */}
-                      <td style={{ fontSize: "12px" }}>{miss ? (() => {
+                      <td style={{ fontSize: "12px" }}>{cleared ? "정산 입고로 확인(미납 없음)" : miss ? (() => {
                         const boardLine = lines.find((item) => item.kind === "shortage" && item.shipmentNumber === target.shipmentNumber && item.purchaseOrderNumber === line.purchaseOrderNumber && item.skuId === line.skuId);
                         return boardLine ? missStatusOf(boardLine) : "미납 목록에 없음(수량 확인 필요)";
                       })() : ""}</td>
