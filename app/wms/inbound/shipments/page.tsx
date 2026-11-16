@@ -36,6 +36,49 @@ function ThumbImage({ src, className, emptyClassName }: { src: string; className
   return <img className={className} src={getWmsDisplayImageUrl(src)} alt="" loading="lazy" onError={() => setFailed(true)} />;
 }
 
+/**
+ * 2026-11-16 번호 클릭 복사. 쉽먼트·발주·SKU 번호를 한 번 누르면 바로 복사되고 '복사됨'이 잠깐 보인다.
+ * 누른 것이 카드 접기/펼치기로 번지지 않게 막고, 마우스로 끌어 선택하는 것도 그대로 된다.
+ */
+function CopyNumber({ value, style }: { value: string; style?: React.CSSProperties }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const copy = async (event: React.SyntheticEvent) => {
+    event.stopPropagation();
+    // 끌어서 글자를 고르는 중이면 복사로 처리하지 않고 선택을 그대로 둔다.
+    if (typeof window !== "undefined" && (window.getSelection()?.toString() || "").length > 0) return;
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      const area = document.createElement("textarea");
+      area.value = value;
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      try { document.execCommand("copy"); } catch { /* 복사 실패는 조용히 넘김 */ }
+      document.body.removeChild(area);
+    }
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      title="누르면 복사됩니다"
+      onClick={copy}
+      onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void copy(event); } }}
+      style={{ cursor: "copy", userSelect: "text", borderBottom: "1px dotted #9aa8a0", ...style }}
+    >
+      {value}
+      {copied && <span style={{ marginLeft: "6px", padding: "0 6px", borderRadius: "999px", background: "#e3ede6", color: "#60766a", fontSize: "11px", fontWeight: 700, borderBottom: "none" }}>복사됨</span>}
+    </span>
+  );
+}
+
 /** 서버 규칙(lib/wms/discontinue-lists.ts DISCONTINUE_OLD_TAB_REASONS)과 같게 유지 — 서버 파일을 화면에서 불러오지 않으려고 따로 둠 */
 const DISCONTINUE_OLD_TAB_REASONS = ["비관리SKU", "판매중지SKU", "실적저조SKU", "그 외 재등록SKU"];
 type Tab = "anytime" | "results" | "pending" | "history";
@@ -1212,24 +1255,40 @@ export default function ShipmentReceiptsPage() {
     const shortage = delivered !== null && received !== null ? Math.max(0, delivered - received) : null;
     return (
       <article className={`${styles.shipment} ${open ? styles.shipmentOpen : ""}`} key={`${isNew ? "new-" : ""}${target.shipmentNumber}`} style={isNew ? { borderColor: "#dfbdb2", background: "#fff" } : undefined}>
-        <button
-          type="button"
-          onClick={() => setOpenShipments((current) => { const next = new Set(current); if (next.has(target.shipmentNumber)) next.delete(target.shipmentNumber); else next.add(target.shipmentNumber); return next; })}
-          style={{ all: "unset", cursor: "pointer", display: "block", width: "100%" }}
+        {/* 2026-11-16: 버튼 안의 글자는 끌어서 선택이 안 되어, 일반 칸으로 바꾸고 끌어 선택 중에는 접히지 않게 함 */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => {
+            if ((window.getSelection()?.toString() || "").length > 0) return;
+            setOpenShipments((current) => { const next = new Set(current); if (next.has(target.shipmentNumber)) next.delete(target.shipmentNumber); else next.add(target.shipmentNumber); return next; });
+          }}
+          onKeyDown={(event) => {
+            if (event.target !== event.currentTarget) return;
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              setOpenShipments((current) => { const next = new Set(current); if (next.has(target.shipmentNumber)) next.delete(target.shipmentNumber); else next.add(target.shipmentNumber); return next; });
+            }
+          }}
+          style={{ cursor: "pointer", display: "block", width: "100%", userSelect: "text" }}
           aria-expanded={open}
         >
           <strong>
             {isNew && <span style={{ display: "inline-block", marginRight: "6px", padding: "1px 7px", borderRadius: "999px", background: "#f2dfd8", color: "#7f4032", fontSize: "11px" }}>새로 가져옴</span>}
-            쉽먼트 {target.shipmentNumber} {open ? "▲" : "▼"}
+            쉽먼트 <CopyNumber value={target.shipmentNumber} /> {open ? "▲" : "▼"}
           </strong>
           <p className={styles.meta}>
             {[isNew ? `${target.expectedDate} 입고 · ${target.centerName}` : "", !isNew && detail?.firstSeenAt ? `처음 가져옴 ${new Date(detail.firstSeenAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : "", detail ? `SKU ${new Set(detail.lines.map((line) => line.skuId)).size}종 · 납품 ${delivered} · 입고 ${received}` : "", shortage ? `미납 ${shortage}` : detail ? "미납 없음" : ""].filter(Boolean).join(" · ")}
           </p>
           <p className={styles.meta}>
             발주{" "}
-            {target.purchaseOrderNumbers.length ? target.purchaseOrderNumbers.join(", ") : "복수 발주서 상세 확인 필요"}
+            {target.purchaseOrderNumbers.length
+              ? target.purchaseOrderNumbers.map((poNumber, poIndex) => (
+                  <span key={poNumber}>{poIndex > 0 ? ", " : ""}<CopyNumber value={poNumber} /></span>
+                ))
+              : "복수 발주서 상세 확인 필요"}
           </p>
-        </button>
+        </div>
         {pendingShipmentNumbers.has(target.shipmentNumber) && <p className={styles.meta}>마감 수량 미확인</p>}
         {open && (detail ? (
           <div className={styles.tableWrap}>
@@ -1241,7 +1300,7 @@ export default function ShipmentReceiptsPage() {
                   const miss = Math.max(0, line.deliveredQuantity - line.receivedQuantity);
                   return (
                     <tr key={`${line.purchaseOrderNumber}-${line.skuId}-${index}`}>
-                      <td>{line.skuId}</td>
+                      <td><CopyNumber value={line.skuId} /></td>
                       <td>{line.productName}</td>
                       <td>{line.deliveredQuantity}</td>
                       <td>{line.receivedQuantity}</td>
