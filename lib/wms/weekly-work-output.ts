@@ -69,10 +69,14 @@ export async function buildWeeklyOutput(run: WeeklyRun, kind: WeeklyOutputKind, 
   if(!coupons.length&&!vendors.length&&!discontinued.length&&!reorders.length)throw new Error("선택한 종류에 생성할 파일이 없습니다.");
   const zip=new JSZip();
   const range=`${run.snapshot.period.startDate.replace(/-/g,"")}_${run.snapshot.period.endDate.replace(/-/g,"")}`;
-  const overstockCoupons=coupons.filter(item=>couponOptions.overstockSkuIds?.has(item.skuId));
-  const normalCoupons=coupons.filter(item=>!couponOptions.overstockSkuIds?.has(item.skuId));
-  if(normalCoupons.length)zip.file(`쿠폰발행_${COUPON_DISCOUNT_DEFAULT}퍼센트_${range}.xlsx`,await buildCouponWorkbook(normalCoupons,COUPON_DISCOUNT_DEFAULT));
-  if(overstockCoupons.length)zip.file(`쿠폰발행_${COUPON_DISCOUNT_OVERSTOCK}퍼센트_과재고·누적입고100+_${range}.xlsx`,await buildCouponWorkbook(overstockCoupons,COUPON_DISCOUNT_OVERSTOCK));
+  // 2026-11-16: 20%·30% 쿠폰을 따로 만들지 않고 한 파일에 SKU별 할인율(C열)로 함께 담는다.
+  if(coupons.length) {
+    const isOverstock=(item:{skuId:string})=>!!couponOptions.overstockSkuIds?.has(item.skuId);
+    const hasOverstock=coupons.some(isOverstock);
+    const hasNormal=coupons.some(item=>!isOverstock(item));
+    const rateLabel=hasOverstock&&hasNormal?`${COUPON_DISCOUNT_DEFAULT}·${COUPON_DISCOUNT_OVERSTOCK}`:String(hasOverstock?COUPON_DISCOUNT_OVERSTOCK:COUPON_DISCOUNT_DEFAULT);
+    zip.file(`쿠폰발행_${rateLabel}퍼센트_${range}.xlsx`,await buildCouponWorkbook(coupons,item=>isOverstock(item)?COUPON_DISCOUNT_OVERSTOCK:COUPON_DISCOUNT_DEFAULT));
+  }
   const advertisingFiles=includeAdvertising?await buildWeeklyAdvertisingFiles(advertising!.optionIds):[];
   for(const file of advertisingFiles)zip.file(file.fileName,file.buffer);
   if(reorders.length)zip.file(`재발주요청/재발주요청_${koreaDateParts(now).compact}.xlsx`,await buildWeeklyReorderWorkbook(reorders,now));

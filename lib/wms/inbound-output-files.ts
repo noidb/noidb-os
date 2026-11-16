@@ -21,15 +21,20 @@ function templateRow(xml: string, row: number): string {
   return match[0];
 }
 
-export async function buildCouponWorkbook(items: InboundResultItem[], discountRate: number): Promise<Buffer> {
+/** 2026-11-16: 할인율은 숫자 하나(전체 동일) 또는 SKU별 함수로 줄 수 있다. 20%·30%를 한 파일에 섞을 때 함수를 쓴다. */
+export async function buildCouponWorkbook(items: InboundResultItem[], discountRate: number | ((item: InboundResultItem) => number)): Promise<Buffer> {
   if (!items.length) throw new Error("쿠폰 발행 대상 SKU가 없습니다.");
-  if (!Number.isInteger(discountRate) || discountRate < 1 || discountRate > 100) throw new Error("할인율은 1~100 사이의 정수로 입력해 주세요.");
+  const rateOf = (item: InboundResultItem) => typeof discountRate === "function" ? discountRate(item) : discountRate;
+  for (const item of items) {
+    const rate = rateOf(item);
+    if (!Number.isInteger(rate) || rate < 1 || rate > 100) throw new Error("할인율은 1~100 사이의 정수로 입력해 주세요.");
+  }
   const zip = await JSZip.loadAsync(await readFile(COUPON_TEMPLATE));
   const sheet = zip.file("xl/worksheets/sheet1.xml");
   if (!sheet) throw new Error("쿠폰 양식 입력 시트를 찾지 못했습니다.");
   const xml = await sheet.async("string");
   const fixed = `${templateRow(xml, 1)}${templateRow(xml, 2)}${templateRow(xml, 3)}`;
-  const rows = items.map((item, index) => couponRow(index + 4, item, discountRate, index === 0)).join("");
+  const rows = items.map((item, index) => couponRow(index + 4, item, rateOf(item), index === 0)).join("");
   zip.file(
     "xl/worksheets/sheet1.xml",
     xml.replace(/<x:sheetData>[\s\S]*?<\/x:sheetData>/, `<x:sheetData>${fixed}${rows}</x:sheetData>`),
