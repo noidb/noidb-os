@@ -614,7 +614,18 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 /* 2026-11-11 사진 밖(바로 아래 줄)으로 이동: 배지는 왼쪽, ↻ ☀ － ＋ 는 오른쪽. 좁으면 줄바꿈 */
 .slotToolsRow{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px 6px;margin-top:6px}
 .slotCropTools{display:flex;gap:4px;margin-left:auto}
-.slotCropTools button{width:26px;height:26px;padding:0;border:1px solid #d8d3cc;border-radius:6px;background:#fff;cursor:pointer;line-height:1}
+.slotCropTools button{width:26px;height:26px;padding:0;border:1px solid #d8d3cc;border-radius:6px;background:#fff;cursor:pointer;line-height:1;display:inline-flex;align-items:center;justify-content:center}
+/* 2026-11-17 보정 전/후 나란히 크게 보기(사진 아래 ⤢ 버튼) */
+.slotCompare{--cmp:min(46vw,calc(100vh - 190px));position:fixed;inset:0;z-index:1100;background:rgba(0,0,0,.78);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px;overflow:hidden}
+.slotCompareTitle{color:#fff;font-size:15px;font-weight:800}
+.slotCompareStage{display:grid;grid-template-columns:repeat(2,var(--cmp));gap:12px;justify-content:center;user-select:none;touch-action:none}
+.slotCompareCol{display:flex;flex-direction:column;gap:6px;min-width:0}
+.slotCompareLabel{color:#fff;font-size:13px;font-weight:800;text-align:center;line-height:1.3}
+.slotCompareBox{width:var(--cmp);height:var(--cmp);overflow:hidden;background:#fff;border-radius:8px}
+.slotCompareBox img{display:block;width:100%;height:100%;object-fit:contain;pointer-events:none;-webkit-user-drag:none;will-change:transform}
+.slotCompareFoot{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;color:#fff;font-size:13px;font-weight:700}
+.slotCompareFoot button{min-width:110px}
+@media(max-width:720px){.slotCompare{--cmp:min(94vw,calc((100vh - 250px) / 2))}.slotCompareStage{grid-template-columns:var(--cmp)}}
 .slotCropTune{margin-top:6px;display:flex;flex-direction:column;gap:2px;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,.92);border:1px solid #d8d3cc;font-size:11px}
 .slotCropTune label{display:flex;flex-direction:column;gap:1px}
 .slotCropTune input{width:100%;margin:0}

@@ -4404,6 +4404,85 @@ function PoolThumb({ src, alt, onOpen }: { src: string; alt: string; onOpen?: ()
   );
 }
 
+// 2026-11-17 보정 전/후 나란히 크게 보기: 휠로 확대·끌어서 이동하면 두 사진이 같은 위치로 함께 움직인다.
+function SlotCompareModal({ before, after, title, onClose }: { before: string; after: string; title: string; onClose: () => void }) {
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 }); // 사진 한 변 대비 비율
+  const zoomRef = useRef(1);
+  const panRef = useRef({ x: 0, y: 0 });
+  const rootRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ px: number; py: number; size: number } | null>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  const apply = (nextZoom: number, nextPan: { x: number; y: number }) => {
+    const z = Math.max(1, Math.min(8, nextZoom));
+    const limit = (z - 1) / 2;
+    const p = { x: Math.max(-limit, Math.min(limit, nextPan.x)), y: Math.max(-limit, Math.min(limit, nextPan.y)) };
+    zoomRef.current = z;
+    panRef.current = z === 1 ? { x: 0, y: 0 } : p;
+    setZoom(z);
+    setPan(panRef.current);
+  };
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") closeRef.current(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
+  // 휠은 화면 뒤쪽이 같이 내려가지 않게 막고 확대·축소에만 쓴다.
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      apply(zoomRef.current * (event.deltaY < 0 ? 1.15 : 1 / 1.15), panRef.current);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const transform = `translate(${pan.x * 100}%, ${pan.y * 100}%) scale(${zoom})`;
+  const box = (label: string, src: string) => (
+    <div className="slotCompareCol">
+      <span className="slotCompareLabel">{label}</span>
+      <div className="slotCompareBox"><img src={src} alt={label} draggable={false} style={{ transform }} /></div>
+    </div>
+  );
+
+  return (
+    <div ref={rootRef} className="slotCompare" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <div className="slotCompareTitle">{title} · 보정 전/후 비교</div>
+      <div className="slotCompareStage"
+        onPointerDown={event => {
+          if (zoomRef.current <= 1) return;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          dragRef.current = { px: event.clientX, py: event.clientY, size: event.currentTarget.querySelector(".slotCompareBox")?.getBoundingClientRect().width || 1 };
+        }}
+        onPointerMove={event => {
+          const start = dragRef.current;
+          if (!start) return;
+          const p = panRef.current;
+          dragRef.current = { ...start, px: event.clientX, py: event.clientY };
+          apply(zoomRef.current, { x: p.x + (event.clientX - start.px) / start.size, y: p.y + (event.clientY - start.py) / start.size });
+        }}
+        onPointerUp={() => { dragRef.current = null; }}
+        onPointerCancel={() => { dragRef.current = null; }}
+        onDoubleClick={() => apply(1, { x: 0, y: 0 })}>
+        {box("보정 전 (확대·밝기·선명도·각도 적용 전)", before)}
+        {box("보정 후 (지금 보정한 결과)", after)}
+      </div>
+      <div className="slotCompareFoot">
+        <span>{zoom === 1 ? "마우스 휠로 확대하면 두 사진이 같이 커집니다" : `${zoom.toFixed(1)}배 · 끌어서 이동 · 더블클릭하면 처음 크기`}</span>
+        <button type="button" className="softApricotButton" disabled={zoom === 1} onClick={() => apply(1, { x: 0, y: 0 })}>처음 크기</button>
+        <button type="button" className="softBeigeButton" onClick={onClose}>닫기 (ESC)</button>
+      </div>
+    </div>
+  );
+}
+
 function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value: SlotImage; title: string; onChange: (v: SlotImage | null) => void; tuneHost: HTMLElement | null; toolsHost: HTMLElement | null }) {
   const source = value.source || value.dataUrl;
   const [loadedImg, setLoadedImg] = useState<HTMLImageElement | null>(null);
@@ -4420,6 +4499,9 @@ function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [view, setView] = useState<SquareCrop>(value.crop || { zoom: 1, x: 0, y: 0 });
   const [tuneOpen, setTuneOpen] = useState(false);
+  // 2026-11-17 크게 보기: 보정 전(처음 확대·위치 그대로)과 보정 후(지금 결과)를 같은 크기로 만들어 나란히 보여 준다.
+  const [compare, setCompare] = useState<{ before: string; after: string } | null>(null);
+  const [compareBusy, setCompareBusy] = useState(false);
   // 마우스가 지나가기만 해도 휠로 확대·축소되면 화면을 내리다 사진이 바뀐다 → 칸을 한 번 클릭한 뒤에만 휠 확대·축소.
   const [active, setActive] = useState(false);
   const activeRef = useRef(false);
@@ -4536,6 +4618,20 @@ function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value
     setRetouchBusy(false);
   };
 
+  const openCompare = async () => {
+    if (compareBusy) return;
+    setCompareBusy(true);
+    try {
+      // 250ms 늦게 저장되는 값이 아니라, 지금 화면의 보정값으로 바로 만든다.
+      const [after, before] = await Promise.all([
+        renderSquareCrop(sourceRef.current, viewRef.current),
+        renderSquareCrop(sourceRef.current, { zoom: 1, x: 0, y: 0 }),
+      ]);
+      setCompare({ before, after });
+    } catch { /* 만들지 못하면 열지 않는다 */ }
+    setCompareBusy(false);
+  };
+
   // 사진 위 마우스 위치 → 원본 사진 위 위치(비율)
   const pointToSource = (event: { clientX: number; clientY: number }) => {
     const box = frameRef.current;
@@ -4614,6 +4710,8 @@ function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value
     : `${sourceSizeText}원본 사진 점이 충분해서 선명하게 저장됩니다.`;
 
   return (
+    <>
+    {compare && createPortal(<SlotCompareModal before={compare.before} after={compare.after} title={title} onClose={() => setCompare(null)} />, document.body)}
     <div
       ref={frameRef}
       className={"slotCropFrame" + (active && !locked ? " slotCropActive" : "") + (eraseOn && !locked ? " slotCropErase" : "")}
@@ -4668,12 +4766,19 @@ function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value
       {toolsHost && (quality || !locked) && createPortal(
         <div className="slotToolsRow" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
           {quality && <span className={`slotQuality slotQuality-${quality.level}`} title={qualityHint}>{qualityText}</span>}
-          {!locked && <div className="slotCropTools">
-            <button type="button" onClick={() => update({ zoom: 1, x: 0, y: 0, brightness: 0, sharpness: 0, angle: 0 })} title="처음 상태로 되돌리기(확대·위치·밝기·선명도·각도)">↻</button>
-            <button type="button" onClick={() => setTuneOpen(open => !open)} title="밝기·선명도·각도·잡티 지우기">☀</button>
-            <button type="button" onClick={() => update({ ...viewRef.current, zoom: viewRef.current.zoom / 1.1 })} title="축소">－</button>
-            <button type="button" onClick={() => update({ ...viewRef.current, zoom: viewRef.current.zoom * 1.1 })} title="확대">＋</button>
-          </div>}
+          <div className="slotCropTools">
+            {!locked && <>
+              <button type="button" onClick={() => update({ zoom: 1, x: 0, y: 0, brightness: 0, sharpness: 0, angle: 0 })} title="처음 상태로 되돌리기(확대·위치·밝기·선명도·각도)">↻</button>
+              <button type="button" onClick={() => setTuneOpen(open => !open)} title="밝기·선명도·각도·잡티 지우기">☀</button>
+              <button type="button" onClick={() => update({ ...viewRef.current, zoom: viewRef.current.zoom / 1.1 })} title="축소">－</button>
+              <button type="button" onClick={() => update({ ...viewRef.current, zoom: viewRef.current.zoom * 1.1 })} title="확대">＋</button>
+            </>}
+            <button type="button" disabled={compareBusy} onClick={() => void openCompare()} title="크게 보기 — 보정 전/후를 큰 화면에 나란히 봅니다(휠로 확대, 끌어서 이동)" aria-label="크게 보기">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M8.5 1.5h4v4M5.5 12.5h-4v-4M12.5 1.5 8 6M1.5 12.5 6 8" />
+              </svg>
+            </button>
+          </div>
         </div>,
         toolsHost
       )}
@@ -4720,6 +4825,7 @@ function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value
         tuneHost
       )}
     </div>
+    </>
   );
 }
 
