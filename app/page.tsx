@@ -1870,17 +1870,24 @@ export default function Home() {
     }
   };
 
-  // 칸의 사진(원본이 있으면 원본)을 AI 사진편집으로 보내 바로 편집을 시작한다. 결과는 같은 칸으로 들어온다.
-  const requestAiEdit = (keys: string[]) => {
-    const images = keys.flatMap(key => {
+  // 칸의 사진을 AI 사진편집으로 보내 바로 편집을 시작한다. 결과는 같은 칸으로 들어온다.
+  // 2026-11-17 칸에서 맞춘 확대·위치·각도·밝기·선명도가 그대로 AI에 가도록, 원본이 아니라 맞춘 모습을 다시 그려 보낸다(예전에는 원본을 보내 조정이 모두 사라졌다).
+  const requestAiEdit = async (keys: string[]) => {
+    const images: Array<{ dataUrl: string; name: string; slotKey: string }> = [];
+    for (const key of keys) {
       const slot = getSlotValue(key);
-      return slot?.dataUrl ? [{ dataUrl: slot.source || slot.dataUrl, name: slot.fileName, slotKey: key }] : [];
-    });
+      if (!slot?.dataUrl) continue;
+      let dataUrl = slot.dataUrl;
+      if (slot.source && slot.crop) {
+        try { dataUrl = await renderSquareCrop(slot.source, slot.crop, 1600); } catch { /* 다시 그리지 못하면 칸에 보이는 사진을 그대로 보낸다 */ }
+      }
+      images.push({ dataUrl, name: slot.fileName, slotKey: key });
+    }
     if (!images.length) return;
     setAiPanel(true);
     setAiRequest(prev => ({ token: (prev?.token || 0) + 1, images }));
     setAiCheckedSlots([]);
-    window.setTimeout(() => document.getElementById("aiEditAnchor")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    window.setTimeout(() => document.getElementById("aiReviewHost")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   };
   const toggleAiChecked = (key: string) => setAiCheckedSlots(prev => prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]);
   const aiSlotProps = (key: string) => ({
@@ -3699,6 +3706,7 @@ export default function Home() {
               setDetailMessage(logoApplied ? "자른 상세페이지에 상단 로고를 붙여 6번 상세페이지 칸에 넣었습니다." : "새 상세페이지를 6번 상세페이지 칸에 넣었습니다.");
             }}
             request={aiRequest}
+            reviewHostId="aiReviewHost"
             onAddToList={items => {
               // 2026-11-17 칸에서 시작한 AI 편집(slotKey 있음)은 같은 칸에 넣고, 원래 사진은 목록으로 되돌린다.
               const toSlots = items.filter(item => item.slotKey);
@@ -3729,11 +3737,7 @@ export default function Home() {
                 onDragStart={e => e.dataTransfer.setData("application/x-laura-pool-index", String(index))}>
                 <PoolThumb src={item.dataUrl} alt={item.fileName} onOpen={() => { setLightboxList(uploadPool.map(pool => pool.dataUrl)); setLightboxInfo(""); setLightbox(item.dataUrl); }} />
                 <span>{item.fileName}</span>
-                {/* 2026-11-10 AI 분석에 쓸 사진을 업로드 풀에서 언제든 바꾼다 */}
-                <button type="button" className={photos[0]?.dataUrl === item.dataUrl ? "softSageButton" : "softApricotButton"} disabled={photos[0]?.dataUrl === item.dataUrl}
-                  onClick={() => { setPhotos([{ id: `pool:${index}:${item.fileName}`, name: item.fileName, dataUrl: item.dataUrl }]); setPhotoMessage(`AI 분석용 사진을 '${item.fileName}'(으)로 바꿨습니다. 'AI 분석'을 다시 누르면 이 사진으로 분석합니다.`); }}
-                  style={{ borderRadius: 8, fontSize: 12, fontWeight: 700 }}>{photos[0]?.dataUrl === item.dataUrl ? "★ 분석용" : "분석용으로"}</button>
-                <button type="button" onClick={() => setUploadPool(prev => prev.filter((_, i) => i !== index))}>삭제</button>
+                {/* 2026-11-17 분석용 사진은 제품사진선택에서 정하고, 안 쓸 사진은 칸에 넣지 않으므로 이 목록에는 사진·크기·파일명만 둔다. */}
               </div>
             ))}
           </div>
@@ -3881,6 +3885,8 @@ export default function Home() {
             />
           ))}
         </div>
+        {/* 2026-11-17 AI 사진편집의 '사진별 확인'이 이 자리에 나타난다(칸에서 맞추고 → AI 선택 → 바로 아래에서 확인). */}
+        <div id="aiReviewHost" />
 
       </section>
 

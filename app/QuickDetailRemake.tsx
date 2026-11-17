@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { extendToSquareCanvas } from "@/lib/thumbnail/fit";
 import { readImageFile, shrinkForUpload, splitDetailPage, type QuickDetailColor, type QuickDetailSection, type QuickDetailStyle } from "@/lib/image-generator/quick-detail";
 import { deleteQuickDraft, listQuickDrafts, MAX_QUICK_DRAFTS, saveQuickDraft, type QuickDetailDraft } from "@/lib/image-generator/quick-drafts";
@@ -71,6 +72,8 @@ type Props = {
   onAddToList: (items: Array<{ fileName: string; dataUrl: string; source: string; kind?: "product" | "wear"; slotKey?: string }>) => void;
   /** 2026-11-17 칸의 [AI 편집] 버튼: 고른 칸 사진을 바로 가져와 AI 편집까지 시작한다. 결과는 slotKey 칸으로 돌아간다. */
   request?: { token: number; images: Array<{ dataUrl: string; name: string; slotKey?: string }> } | null;
+  /** 2026-11-17 "사진별 확인"을 그릴 자리(요소 id). 칸 아래에 두려고 쓴다. 없으면 이 자리에 그대로 그린다. */
+  reviewHostId?: string;
   /** 5번 쿠팡 등록이미지(목록·칸)의 사진. 상세페이지 없이 여기서 골라 바로 AI 편집을 시작할 수 있다. */
   poolImages?: Array<{ dataUrl: string; fileName: string }>;
 };
@@ -274,7 +277,7 @@ function makeWearLook(style: QuickDetailStyle = "clean"): WearLook {
   };
 }
 
-export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, incomingFile, incomingToken, onComplete, onAddToList, request = null, poolImages = [] }: Props) {
+export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, incomingFile, incomingToken, onComplete, onAddToList, request = null, reviewHostId, poolImages = [] }: Props) {
   const [pickingPool, setPickingPool] = useState(false);
   /** 이미 5번 목록에 넣은 AI 사진 — "이어서 만들기"를 다시 눌러도 같은 사진이 두 번 들어가지 않게 한다. */
   const alreadyAdded = useRef(new Set<string>());
@@ -284,6 +287,14 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   /** 가져온 사진(구역 id) → 결과를 돌려줄 칸 이름. 칸의 [AI 편집]으로 시작했을 때만 채워진다. */
   const slotKeyBySection = useRef<Record<string, string>>({});
   const [autoRun, setAutoRun] = useState(false);
+  // 2026-11-17 "사진별 확인"을 칸 아래(reviewHostId 자리)에 그린다.
+  const [reviewHost, setReviewHost] = useState<HTMLElement | null>(null);
+  useEffect(() => { setReviewHost(reviewHostId ? document.getElementById(reviewHostId) : null); }, [reviewHostId]);
+  // 2026-11-17 AI 편집 중단하기: 진행 중인 요청을 끊고, 남은 사진은 보내지 않는다. 끝난 사진은 보관된다.
+  const [editing, setEditing] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const stopRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
   const [draftId, setDraftId] = useState("");
   const [drafts, setDrafts] = useState<QuickDetailDraft[]>([]);
   const [draftsReady, setDraftsReady] = useState(false);
@@ -303,11 +314,6 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   // 사진별 확인에서 사진을 누르면 크게 보는 창(몇 번째 사진인지, 닫혀 있으면 null)
   const [zoomIndex, setZoomIndex] = useState<number | null>(null);
   const zoomCountRef = useRef(0);
-  // 2026-11-17 확대 영역 지정: 사진에서 제품 부분만 원본 화질 그대로 잘라 AI 편집에 넘긴다.
-  const [cropId, setCropId] = useState<string | null>(null);
-  const [cropBox, setCropBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-  const cropStartRef = useRef<{ x: number; y: number } | null>(null);
-  const cropBackupRef = useRef<Record<string, string>>({});
   useEffect(() => {
     if (zoomIndex === null) return;
     const onKey = (event: KeyboardEvent) => {
@@ -470,7 +476,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       setPickingPool(false);
       setPickedPool([]);
       if (autoStart) setAutoRun(true);
-      setMessage(`사진 ${sections.length}장을 가져왔습니다. 제품컷·착용컷 구분을 확인하고, AI로 바꾸지 않을 사진은 "편집 제외"를 누른 뒤 새로 만들기를 누르세요.`);
+      setMessage(`사진 ${sections.length}장을 가져왔습니다. 제품컷·착용컷 구분을 확인하세요. 잘못 들어온 사진은 삭제를 누르면 이 목록에서만 빠집니다(칸의 사진은 그대로).`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "사진을 가져오지 못했습니다.");
     } finally {
@@ -586,70 +592,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     setEditedSections(current => current.filter(section => section.id !== id));
     setSectionActions(current => { const next = { ...current }; delete next[id]; return next; });
     invalidateResult();
-    setMessage("선택한 사진을 상세페이지와 저장 파일에서 제외했습니다.");
-  }
-
-  function pointInImage(event: React.PointerEvent<HTMLDivElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    return { x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)), y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)) };
-  }
-
-  async function applyCrop() {
-    const section = originalSections.find(item => item.id === cropId);
-    if (!section || !cropBox || cropBox.w < 0.03 || cropBox.h < 0.03) {
-      setMessage("확대할 부분을 사진 위에서 마우스로 끌어 네모로 지정해주세요.");
-      return;
-    }
-    try {
-      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const element = new Image();
-        element.onload = () => resolve(element);
-        element.onerror = () => reject(new Error("사진을 불러오지 못했습니다."));
-        element.src = section.dataUrl;
-      });
-      const sx = Math.round(cropBox.x * image.naturalWidth);
-      const sy = Math.round(cropBox.y * image.naturalHeight);
-      const sw = Math.max(1, Math.round(cropBox.w * image.naturalWidth));
-      const sh = Math.max(1, Math.round(cropBox.h * image.naturalHeight));
-      const scale = Math.min(1, 4096 / Math.max(sw, sh));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(sw * scale));
-      canvas.height = Math.max(1, Math.round(sh * scale));
-      const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
-      ctx.fillStyle = "#FFFFFF";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
-      ctx.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-      const cropped = canvas.toDataURL("image/jpeg", 0.95);
-      if (!cropBackupRef.current[section.id]) cropBackupRef.current[section.id] = section.dataUrl;
-      setOriginalSections(current => current.map(item => item.id === section.id ? { ...item, dataUrl: cropped } : item));
-      setEditedSections(current => current.filter(item => item.id !== section.id));
-      invalidateResult();
-      setCropId(null);
-      setCropBox(null);
-      setMessage(`확대 영역(${canvas.width}×${canvas.height}px)으로 바꿨습니다. AI 편집을 누르면 이 부분만 편집합니다.`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "확대 영역을 만들지 못했습니다.");
-    }
-  }
-
-  function restoreCrop(id: string) {
-    const backup = cropBackupRef.current[id];
-    if (!backup) return;
-    setOriginalSections(current => current.map(item => item.id === id ? { ...item, dataUrl: backup } : item));
-    setEditedSections(current => current.filter(item => item.id !== id));
-    delete cropBackupRef.current[id];
-    invalidateResult();
-    setMessage("확대하기 전 원래 사진으로 되돌렸습니다.");
-  }
-
-  function toggleSectionEdit(id: string) {
-    setSectionActions(current => ({ ...current, [id]: current[id] === "original" ? "edit" : "original" }));
-    setEditedSections(current => current.filter(section => section.id !== id));
-    invalidateResult();
-    setMessage("선택을 반영했습니다. 예상 AI 편집 횟수를 확인해주세요.");
+    setMessage("이 사진을 사진별 확인 목록에서 뺐습니다. 칸에 넣은 사진은 그대로 있습니다.");
   }
 
   async function addToRegistrationImages() {
@@ -684,19 +627,6 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     }
   }
 
-  function moveSection(id: string, direction: -1 | 1) {
-    setOriginalSections(current => {
-      const index = current.findIndex(section => section.id === id);
-      const target = index + direction;
-      if (index < 0 || target < 0 || target >= current.length) return current;
-      const next = [...current];
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
-    invalidateResult();
-    setMessage("순서를 바꿨습니다. 새 상세페이지 만들기를 다시 누르면 AI 편집이 끝난 사진은 그대로 쓰고 순서만 반영합니다.");
-  }
-
   function toggleSectionKind(id: string) {
     // 직접 바꾼 사진은 reason을 바꿔 두어, AI 편집 전 자동 구분이 다시 덮어쓰지 않게 한다.
     setOriginalSections(current => current.map(section => section.id === id ? { ...section, kind: section.kind === "wear" ? "product" : "wear", reason: "직접 선택했습니다." } : section));
@@ -705,7 +635,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     setMessage("제품컷·착용컷 구분을 바꿨습니다. 이 사진은 새 구분에 맞춰 편집합니다.");
   }
 
-  async function editSection(section: QuickDetailSection, lookAnchor?: QuickDetailSection) {
+  async function editSection(section: QuickDetailSection, lookAnchor?: QuickDetailSection, signal?: AbortSignal) {
     const isWear = section.kind === "wear";
     if (isWear && !wearLookRef.current) wearLookRef.current = makeWearLook(style);
     // 서버가 한 번에 받는 용량(약 4.5MB)을 넘지 않도록 보내기 전에 사진을 줄인다.
@@ -716,6 +646,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ kind: "quick-detail", style, color, sectionKind: section.kind, look: isWear ? wearLookRef.current : undefined, hasLookReference: isWear && Boolean(lookAnchor), references }),
+      signal,
     });
     // 서버가 JSON이 아닌 글자(용량 초과·시간 초과 등)를 돌려줘도 알아보기 쉬운 안내가 나오게 한다.
     const raw = await response.text();
@@ -734,6 +665,11 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   async function create() {
     if (!originalSections.length) return setMessage("상세페이지를 먼저 올려주세요.");
     setBusy(true);
+    setEditing(true);
+    stopRef.current = false;
+    setStopping(false);
+    const controller = new AbortController();
+    abortRef.current = controller;
     setResult(null);
     const byId = new Map(editedSections.map(section => [section.id, section]));
     const completed: QuickDetailSection[] = [];
@@ -745,6 +681,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       const unsorted = originalSections.filter(section => (sectionActions[section.id] || "edit") === "edit" && section.reason === UNSORTED_REASON);
       if (unsorted.length) {
         const classified = await classifyKinds(unsorted);
+        if (stopRef.current) throw new Error("STOPPED");
         // 2026-11-17 구분에 실패한 사진을 몰래 제품컷으로 편집하면 모델 사진의 얼굴·옷이 안 바뀐다. 실패하면 멈추고 직접 확인하게 한다.
         const failedCount = classified.filter(section => section.reason === UNSORTED_REASON).length;
         if (failedCount) throw new Error(`제품컷·착용컷 구분에 실패한 사진이 ${failedCount}장 있습니다. 각 사진의 "제품컷 → 착용컷으로 변경" 버튼으로 직접 확인한 뒤 새로 만들기를 다시 눌러주세요.`);
@@ -766,12 +703,14 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         }
         let edited = byId.get(section.id);
         if (!edited) {
+          if (stopRef.current) throw new Error("STOPPED");
           setProgress(editIndex);
           setMessage(`AI 편집 ${expectedEdits}장 중 ${editIndex + 1}번째를 만들고 있습니다. 완성된 사진은 그대로 보관됩니다.`);
           const lookAnchor = section.kind === "wear"
             ? workingSections.map(item => byId.get(item.id)).find((item): item is QuickDetailSection => Boolean(item) && item!.kind === "wear")
             : undefined;
-          edited = await editSection(section, lookAnchor);
+          edited = await editSection(section, lookAnchor, controller.signal);
+          if (stopRef.current) { byId.set(section.id, edited); setEditedSections(Array.from(byId.values())); throw new Error("STOPPED"); }
           byId.set(section.id, edited);
           setEditedSections(Array.from(byId.values()));
           editIndex += 1;
@@ -800,10 +739,26 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
           : `AI 편집 사진 ${newlyEdited.length}장을 5번 쿠팡 등록이미지 목록에 넣었습니다. 제품 모양을 꼭 확인한 뒤 썸네일·추가이미지 칸으로 끌어 넣거나, 위 "빈 칸 자동 채우기"를 누르세요.`
         : "새로 넣을 AI 편집 사진이 없습니다. 이미 5번 목록에 넣었습니다.");
     } catch (error) {
-      setMessage(`${error instanceof Error ? error.message : "작업 중 문제가 생겼습니다."} 다시 누르면 완료된 AI 사진 다음부터 이어서 만듭니다.`);
+      if (stopRef.current) {
+        const done = byId.size;
+        setMessage(`AI 편집을 중단했습니다. 칸의 사진은 바꾸지 않았습니다.${done ? ` 이미 끝난 ${done}장은 보관했고, "이어서 AI 편집"을 누르면 나머지부터 이어서 만듭니다.` : ""}`);
+      } else {
+        setMessage(`${error instanceof Error ? error.message : "작업 중 문제가 생겼습니다."} 다시 누르면 완료된 AI 사진 다음부터 이어서 만듭니다.`);
+      }
     } finally {
+      abortRef.current = null;
+      setStopping(false);
+      setEditing(false);
       setBusy(false);
     }
+  }
+
+  /** 2026-11-17 AI 편집 중단: 지금 기다리는 요청을 끊고 남은 사진은 보내지 않는다(끝난 사진은 보관). */
+  function stopEditing() {
+    if (!editing) return;
+    stopRef.current = true;
+    setStopping(true);
+    abortRef.current?.abort();
   }
 
   function restoreDraft(draft: QuickDetailDraft) {
@@ -842,6 +797,71 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       setMessage("상세페이지를 올려주세요.");
     }
   }
+
+  // 2026-11-17 사진별 확인(+크게 보기 창). 칸 아래 자리가 있으면 거기에, 없으면 이 자리에 그린다.
+  const reviewBlock = (
+    <>
+    {originalSections.length > 0 && (
+      <div className={styles.preEditReview}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <h3 style={{ margin: 0 }}>사진별 확인</h3>
+          <button type="button" className="existingDetailUseButton" disabled={busy || pendingAddCount === 0} title={pendingAddCount === 0 ? "지금 보이는 사진이 모두 5번 쿠팡 등록이미지 목록에 들어 있습니다." : "지금 보이는 사진을 1000×1000 여백 없는 정사각형으로 만들어 5번 쿠팡 등록이미지 목록에 넣습니다. 썸네일·추가이미지·상세페이지에 모두 쓸 수 있습니다."}
+            onClick={() => void addToRegistrationImages()}>{pendingAddCount === 0 ? "추가됨 ✓" : `등록이미지에 추가 (${pendingAddCount}장)`}</button>
+          {editing
+            ? <button type="button" className="softPinkButton" style={{ borderRadius: 8, padding: "8px 18px", fontWeight: 800 }} disabled={stopping} onClick={stopEditing}
+                title="AI 편집을 멈춥니다. 끝난 사진은 보관되고 칸의 사진은 바뀌지 않습니다.">{stopping ? "중단하는 중…" : "중단하기"}</button>
+            : completedEdits > 0 && completedEdits < expectedEdits
+              ? <button type="button" className="softSageButton" style={{ borderRadius: 8, padding: "8px 18px", fontWeight: 800 }} disabled={busy} onClick={() => void create()}>이어서 AI 편집</button>
+              : null}
+        </div>
+        {(editing || message) && <p style={{ margin: "8px 0 0", fontSize: 13, color: "#4b4744" }}>{editing ? `AI 편집 중… (${Math.min(progress + 1, Math.max(expectedEdits, 1))}/${Math.max(expectedEdits, 1)}) ` : ""}{message}</p>}
+        <div className={styles.reviewGrid}>
+          {originalSections.map((section, index) => {
+            const original = sectionActions[section.id] === "original";
+            const edited = editedById.get(section.id);
+            const shown = !original && edited ? edited.dataUrl : section.dataUrl;
+            return <article key={section.id}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={shown} alt={`사진 ${index + 1}`} title="누르면 크게 봅니다" style={{ cursor: "zoom-in" }} onClick={() => setZoomIndex(index)} />
+              <button type="button" className={styles.kindToggle} onClick={() => toggleSectionKind(section.id)}>{section.kind === "wear" ? "착용컷 → 제품컷으로 변경" : "제품컷 → 착용컷으로 변경"}</button>
+              <strong>{index + 1}. {section.kind === "wear" ? "착용컷" : "제품컷"}{!original && edited ? " · AI 완료" : ""}</strong>
+              <div>
+                <button type="button" className={styles.reviewDelete} disabled={editing} title="이 목록에서만 뺍니다. 칸에 넣은 사진은 그대로 있습니다." onClick={() => deleteSection(section.id)}>삭제</button>
+              </div>
+            </article>;
+          })}
+        </div>
+        <p className={styles.reviewCost}>최종 사용 {originalSections.length}장 · 예상 AI 편집 <strong>{expectedEdits}회</strong> · 원본 사용 {originalSections.length - expectedEdits}장</p>
+      </div>
+    )}
+
+    {(() => {
+      zoomCountRef.current = originalSections.length;
+      if (zoomIndex === null) return null;
+      const index = Math.min(zoomIndex, originalSections.length - 1);
+      const section = originalSections[index];
+      if (!section) return null;
+      const edited = editedById.get(section.id);
+      const shown = sectionActions[section.id] !== "original" && edited ? edited.dataUrl : section.dataUrl;
+      const navStyle = { width: 48, height: 48, borderRadius: 8, border: "none", background: "#f4f1ec", color: "#252525", fontSize: 18, cursor: "pointer", flex: "0 0 auto" } as const;
+      return (
+        <div role="dialog" aria-label="사진 크게 보기" onClick={() => setZoomIndex(null)}
+          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(37,37,37,0.82)", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: 16 }}>
+          <button type="button" title="이전 사진" disabled={index === 0} style={{ ...navStyle, opacity: index === 0 ? 0.35 : 1 }} onClick={event => { event.stopPropagation(); setZoomIndex(index - 1); }}>◀</button>
+          <div onClick={event => event.stopPropagation()} style={{ display: "grid", gap: 8, justifyItems: "center", minWidth: 0 }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={shown} alt={`사진 ${index + 1} 크게 보기`} style={{ maxWidth: "min(100%, calc(100vw - 160px))", maxHeight: "calc(100vh - 110px)", objectFit: "contain", borderRadius: 8, background: "#fff" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 12, color: "#fff", fontSize: 14, fontWeight: 700 }}>
+              <span>{index + 1} / {originalSections.length} · {section.kind === "wear" ? "착용컷" : "제품컷"}</span>
+              <button type="button" className="softBeigeButton" style={{ borderRadius: 8, padding: "6px 16px" }} onClick={() => setZoomIndex(null)}>닫기</button>
+            </div>
+          </div>
+          <button type="button" title="다음 사진" disabled={index === originalSections.length - 1} style={{ ...navStyle, opacity: index === originalSections.length - 1 ? 0.35 : 1 }} onClick={event => { event.stopPropagation(); setZoomIndex(index + 1); }}>▶</button>
+        </div>
+      );
+    })()}
+    </>
+  );
 
   return <div ref={panelRef} className={styles.quickPanel} style={{ maxWidth: "none", margin: 0, scrollMarginTop: 12 }}>
     <div className={styles.quickIntro}>
@@ -885,6 +905,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       <article>
         <span>3</span><h3>AI 사진편집</h3>
         <button type="button" className={styles.quickCreate} disabled={!originalSections.length || busy} onClick={() => void create()}>{busy ? `작업 중… (${Math.min(progress + 1, Math.max(expectedEdits, 1))}/${Math.max(expectedEdits, 1)})` : completedEdits ? "이어서 AI 편집" : "AI 편집 시작"}</button>
+        {editing && <button type="button" className="softPinkButton" style={{ borderRadius: 8, minHeight: 40, fontWeight: 800 }} disabled={stopping} onClick={stopEditing}>{stopping ? "중단하는 중…" : "중단하기"}</button>}
         <button type="button" className={styles.splitButton} disabled={!cut || busy}
           title={cut ? "올린 상세페이지를 사진별로 나눕니다. 사진 바깥 흰 여백의 글자 줄은 잘라내고, 사진 위 글자는 그대로 둡니다." : "1단계에서 상세페이지를 먼저 올려주세요."}
           onClick={() => void confirmCutForSplit()}>{busy && cut ? "나누는 중…" : "상세페이지 분할"}</button>
@@ -998,96 +1019,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       </div>
     )}
 
-    {originalSections.length > 0 && (
-      <div className={styles.preEditReview}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <h3 style={{ margin: 0 }}>사진별 확인</h3>
-          <button type="button" className="existingDetailUseButton" disabled={busy || pendingAddCount === 0} title={pendingAddCount === 0 ? "지금 보이는 사진이 모두 5번 쿠팡 등록이미지 목록에 들어 있습니다." : "지금 보이는 사진을 1000×1000 여백 없는 정사각형으로 만들어 5번 쿠팡 등록이미지 목록에 넣습니다. 썸네일·추가이미지·상세페이지에 모두 쓸 수 있습니다."}
-            onClick={() => void addToRegistrationImages()}>{pendingAddCount === 0 ? "추가됨 ✓" : `등록이미지에 추가 (${pendingAddCount}장)`}</button>
-        </div>
-        <div className={styles.reviewGrid}>
-          {originalSections.map((section, index) => {
-            const original = sectionActions[section.id] === "original";
-            const edited = editedById.get(section.id);
-            const shown = !original && edited ? edited.dataUrl : section.dataUrl;
-            return <article key={section.id}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={shown} alt={`사진 ${index + 1}`} title="누르면 크게 봅니다" style={{ cursor: "zoom-in" }} onClick={() => setZoomIndex(index)} />
-              <button type="button" className={styles.kindToggle} onClick={() => toggleSectionKind(section.id)}>{section.kind === "wear" ? "착용컷 → 제품컷으로 변경" : "제품컷 → 착용컷으로 변경"}</button>
-              <button type="button" className={styles.kindToggle} disabled={busy} onClick={() => { setCropId(section.id); setCropBox(null); }}>확대 영역 지정(원본 화질로 자르기)</button>
-              {cropBackupRef.current[section.id] && <button type="button" className={styles.kindToggle} disabled={busy} onClick={() => restoreCrop(section.id)}>확대 취소(원래 사진)</button>}
-              <strong>{index + 1}. {section.kind === "wear" ? "착용컷" : "제품컷"}{!original && edited ? " · AI 완료" : ""}</strong>
-              <div>
-                <button type="button" title="앞으로" disabled={index === 0} onClick={() => moveSection(section.id, -1)}>◀</button>
-                <button type="button" title="뒤로" disabled={index === originalSections.length - 1} onClick={() => moveSection(section.id, 1)}>▶</button>
-                <button type="button" className={original ? styles.reviewSelected : ""} onClick={() => toggleSectionEdit(section.id)}>{original ? "원본 사용 중" : "편집 제외"}</button>
-                <button type="button" className={styles.reviewDelete} onClick={() => deleteSection(section.id)}>삭제</button>
-              </div>
-            </article>;
-          })}
-        </div>
-        <p className={styles.reviewCost}>최종 사용 {originalSections.length}장 · 예상 AI 편집 <strong>{expectedEdits}회</strong> · 원본 사용 {originalSections.length - expectedEdits}장</p>
-      </div>
-    )}
-
-
-    {(() => {
-      zoomCountRef.current = originalSections.length;
-      if (zoomIndex === null) return null;
-      const index = Math.min(zoomIndex, originalSections.length - 1);
-      const section = originalSections[index];
-      if (!section) return null;
-      const edited = editedById.get(section.id);
-      const shown = sectionActions[section.id] !== "original" && edited ? edited.dataUrl : section.dataUrl;
-      const navStyle = { width: 48, height: 48, borderRadius: 8, border: "none", background: "#f4f1ec", color: "#252525", fontSize: 18, cursor: "pointer", flex: "0 0 auto" } as const;
-      return (
-        <div role="dialog" aria-label="사진 크게 보기" onClick={() => setZoomIndex(null)}
-          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(37,37,37,0.82)", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: 16 }}>
-          <button type="button" title="이전 사진" disabled={index === 0} style={{ ...navStyle, opacity: index === 0 ? 0.35 : 1 }} onClick={event => { event.stopPropagation(); setZoomIndex(index - 1); }}>◀</button>
-          <div onClick={event => event.stopPropagation()} style={{ display: "grid", gap: 8, justifyItems: "center", minWidth: 0 }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={shown} alt={`사진 ${index + 1} 크게 보기`} style={{ maxWidth: "min(100%, calc(100vw - 160px))", maxHeight: "calc(100vh - 110px)", objectFit: "contain", borderRadius: 8, background: "#fff" }} />
-            <div style={{ display: "flex", alignItems: "center", gap: 12, color: "#fff", fontSize: 14, fontWeight: 700 }}>
-              <span>{index + 1} / {originalSections.length} · {section.kind === "wear" ? "착용컷" : "제품컷"}</span>
-              <button type="button" className="softBeigeButton" style={{ borderRadius: 8, padding: "6px 16px" }} onClick={() => setZoomIndex(null)}>닫기</button>
-            </div>
-          </div>
-          <button type="button" title="다음 사진" disabled={index === originalSections.length - 1} style={{ ...navStyle, opacity: index === originalSections.length - 1 ? 0.35 : 1 }} onClick={event => { event.stopPropagation(); setZoomIndex(index + 1); }}>▶</button>
-        </div>
-      );
-    })()}
-
-    {(() => {
-      const section = cropId ? originalSections.find(item => item.id === cropId) : undefined;
-      if (!section) return null;
-      return (
-        <div role="dialog" aria-label="확대 영역 지정" onClick={() => { setCropId(null); setCropBox(null); }}
-          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(37,37,37,0.82)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-          <div onClick={event => event.stopPropagation()} style={{ display: "grid", gap: 10, justifyItems: "center", minWidth: 0 }}>
-            <p style={{ margin: 0, color: "#fff", fontSize: 14, fontWeight: 700 }}>AI로 편집할 부분을 마우스로 끌어 네모로 지정하세요.</p>
-            <div style={{ position: "relative", display: "inline-block", touchAction: "none", cursor: "crosshair", lineHeight: 0 }}
-              onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); const point = pointInImage(event); cropStartRef.current = point; setCropBox({ x: point.x, y: point.y, w: 0, h: 0 }); }}
-              onPointerMove={event => {
-                const start = cropStartRef.current;
-                if (!start) return;
-                const point = pointInImage(event);
-                setCropBox({ x: Math.min(start.x, point.x), y: Math.min(start.y, point.y), w: Math.abs(point.x - start.x), h: Math.abs(point.y - start.y) });
-              }}
-              onPointerUp={() => { cropStartRef.current = null; }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={section.dataUrl} alt="확대 영역 지정" draggable={false} style={{ maxWidth: "calc(100vw - 48px)", maxHeight: "calc(100vh - 150px)", objectFit: "contain", borderRadius: 8, background: "#fff", userSelect: "none" }} />
-              {cropBox && cropBox.w > 0 && cropBox.h > 0 && (
-                <div style={{ position: "absolute", left: `${cropBox.x * 100}%`, top: `${cropBox.y * 100}%`, width: `${cropBox.w * 100}%`, height: `${cropBox.h * 100}%`, border: "2px solid #60766a", background: "rgba(96,118,106,0.22)", boxShadow: "0 0 0 9999px rgba(37,37,37,0.45)", pointerEvents: "none" }} />
-              )}
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="button" className="softSageButton" style={{ borderRadius: 8, padding: "8px 18px" }} disabled={!cropBox || cropBox.w < 0.03 || cropBox.h < 0.03} onClick={() => void applyCrop()}>이 부분으로 확대</button>
-              <button type="button" className="softBeigeButton" style={{ borderRadius: 8, padding: "8px 18px" }} onClick={() => { setCropId(null); setCropBox(null); }}>닫기</button>
-            </div>
-          </div>
-        </div>
-      );
-    })()}
+    {reviewHost ? createPortal(reviewBlock, reviewHost) : reviewBlock}
 
     {drafts.length > 0 && (
       <div style={{ marginTop: 16, display: "grid", gap: 8 }}>
