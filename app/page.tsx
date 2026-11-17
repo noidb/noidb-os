@@ -404,12 +404,63 @@ export default function Home() {
   lightboxStepRef.current = lightboxStep;
   const closeLightboxRef = useRef(closeLightbox);
   closeLightboxRef.current = closeLightbox;
+  // 2026-11-17 확대 화면에서 Ctrl+C를 누르면 지금 보이는 사진(원본)을 바로 복사한다(오른쪽 마우스 '이미지 복사' 없이).
+  // 크롬은 이미지 복사를 PNG만 허용하므로 PNG로 바꿔 복사하고, 이미지 Promise를 그대로 넘겨 복사 권한이 유지되게 한다.
+  const [lightboxCopyMessage, setLightboxCopyMessage] = useState("");
+  const lightboxCopy = () => {
+    if (!lightbox) return;
+    if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
+      setLightboxCopyMessage("이 브라우저는 이미지 복사를 지원하지 않습니다. 오른쪽 마우스로 복사해 주세요.");
+      return;
+    }
+    const src = lightbox;
+    const makePngBlob = async (): Promise<Blob> => {
+      let response: Response;
+      try {
+        response = await fetch(src);
+        if (!response.ok) throw new Error("fetch failed");
+      } catch {
+        // 구글드라이브·쿠팡 사진 등 다른 사이트 주소는 우리 서버 이미지 프록시로 받아 온다.
+        response = await fetch(`/api/wms/image-proxy?url=${encodeURIComponent(src)}`);
+        if (!response.ok) throw new Error("proxy failed");
+      }
+      const original = await response.blob();
+      if (original.type === "image/png") return original;
+      const bitmap = await createImageBitmap(original);
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("canvas failed");
+      context.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      return await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => (blob ? resolve(blob) : reject(new Error("toBlob failed"))), "image/png"));
+    };
+    setLightboxCopyMessage("복사 중...");
+    void navigator.clipboard.write([new ClipboardItem({ "image/png": makePngBlob() })])
+      .then(() => setLightboxCopyMessage("복사됨 — 붙여넣기(Ctrl+V) 하세요"))
+      .catch(() => setLightboxCopyMessage("복사하지 못했습니다. 다시 Ctrl+C를 눌러 주세요."));
+  };
+  const lightboxCopyRef = useRef(lightboxCopy);
+  lightboxCopyRef.current = lightboxCopy;
+  useEffect(() => { setLightboxCopyMessage(""); }, [lightbox]);
+  useEffect(() => {
+    if (!lightboxCopyMessage || lightboxCopyMessage === "복사 중...") return;
+    const timer = window.setTimeout(() => setLightboxCopyMessage(""), 2500);
+    return () => window.clearTimeout(timer);
+  }, [lightboxCopyMessage]);
   useEffect(() => {
     if (!lightbox) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "ArrowLeft") { event.preventDefault(); lightboxStepRef.current(-1); }
       else if (event.key === "ArrowRight") { event.preventDefault(); lightboxStepRef.current(1); }
       else if (event.key === "Escape") closeLightboxRef.current();
+      else if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "c") {
+        // 글자를 드래그해서 선택한 상태면 평소처럼 글자 복사가 되도록 그대로 둔다.
+        if (window.getSelection()?.toString()) return;
+        event.preventDefault();
+        lightboxCopyRef.current();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -4230,6 +4281,7 @@ export default function Home() {
             )}
           </div>
           {(lightboxInfo || lightboxIndex >= 0) && <span className="lightboxInfo">{lightboxIndex >= 0 && lightboxList.length > 1 ? `${lightboxIndex + 1} / ${lightboxList.length}` : ""}{lightboxInfo && lightboxIndex >= 0 && lightboxList.length > 1 ? " · " : ""}{lightboxInfo ? `원본 ${lightboxInfo}` : ""}</span>}
+          {lightboxCopyMessage && <span className="lightboxInfo" role="status">{lightboxCopyMessage}</span>}
         </div>
       )}
 
