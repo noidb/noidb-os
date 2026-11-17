@@ -3789,8 +3789,9 @@ export default function Home() {
             setDetailMessage(logoApplied ? "자른 상세페이지에 상단 로고를 붙여 아래 상세페이지 칸에 넣었습니다." : "새 상세페이지를 아래 상세페이지 칸에 넣었습니다.");
           }}
           onAddToList={items => {
-            setUploadPool(prev => [...prev, ...items]);
-            setPhotoMessage(`${items.length}장을 5번 쿠팡 등록이미지 목록에 추가했습니다. 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
+            // 2026-11-17 새로 넣은 사진을 바로 확인할 수 있게 목록 맨 앞에 넣는다.
+            setUploadPool(prev => [...items, ...prev]);
+            setPhotoMessage(`${items.length}장을 5번 쿠팡 등록이미지 목록 맨 앞에 추가했습니다. 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
           }}
         />
 

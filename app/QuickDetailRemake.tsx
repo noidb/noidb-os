@@ -46,6 +46,21 @@ function keptRanges(top: number, bottom: number, holes: CutHole[]): Array<[numbe
   return ranges;
 }
 
+/** 2026-11-17 5번 목록에 넣는 정사각형 크기. 예전엔 1000px로 고정해 큰 원본도 작게 줄어 확대하면 깨졌다. 원본 긴 변을 따르되 1000~2000px로 한다(원본보다 키우지는 않는다). */
+async function listSquareSize(dataUrl: string): Promise<number> {
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("사진을 불러오지 못했습니다."));
+      element.src = dataUrl;
+    });
+    return Math.max(1000, Math.min(2000, Math.max(image.naturalWidth, image.naturalHeight)));
+  } catch {
+    return 1000;
+  }
+}
+
 type Props = {
   headerUrl: string;
   footerUrl: string;
@@ -283,6 +298,11 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   // 사진별 확인에서 사진을 누르면 크게 보는 창(몇 번째 사진인지, 닫혀 있으면 null)
   const [zoomIndex, setZoomIndex] = useState<number | null>(null);
   const zoomCountRef = useRef(0);
+  // 2026-11-17 확대 영역 지정: 사진에서 제품 부분만 원본 화질 그대로 잘라 AI 편집에 넘긴다.
+  const [cropId, setCropId] = useState<string | null>(null);
+  const [cropBox, setCropBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const cropStartRef = useRef<{ x: number; y: number } | null>(null);
+  const cropBackupRef = useRef<Record<string, string>>({});
   useEffect(() => {
     if (zoomIndex === null) return;
     const onKey = (event: KeyboardEvent) => {
@@ -499,7 +519,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       for (let index = 0; index < sections.length; index += 1) {
         const source = sections[index].dataUrl;
         if (alreadyAdded.current.has(source)) continue;
-        items.push({ fileName: `${base}-cut-${stamp.slice(-4)}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(source, 1000), source });
+        items.push({ fileName: `${base}-cut-${stamp.slice(-4)}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(source, await listSquareSize(source)), source });
         alreadyAdded.current.add(source);
       }
       onComplete({ dataUrl: usable, sections: [], logoApplied: false });
@@ -547,6 +567,62 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     setMessage("선택한 사진을 상세페이지와 저장 파일에서 제외했습니다.");
   }
 
+  function pointInImage(event: React.PointerEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return { x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)), y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)) };
+  }
+
+  async function applyCrop() {
+    const section = originalSections.find(item => item.id === cropId);
+    if (!section || !cropBox || cropBox.w < 0.03 || cropBox.h < 0.03) {
+      setMessage("확대할 부분을 사진 위에서 마우스로 끌어 네모로 지정해주세요.");
+      return;
+    }
+    try {
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const element = new Image();
+        element.onload = () => resolve(element);
+        element.onerror = () => reject(new Error("사진을 불러오지 못했습니다."));
+        element.src = section.dataUrl;
+      });
+      const sx = Math.round(cropBox.x * image.naturalWidth);
+      const sy = Math.round(cropBox.y * image.naturalHeight);
+      const sw = Math.max(1, Math.round(cropBox.w * image.naturalWidth));
+      const sh = Math.max(1, Math.round(cropBox.h * image.naturalHeight));
+      const scale = Math.min(1, 4096 / Math.max(sw, sh));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(sw * scale));
+      canvas.height = Math.max(1, Math.round(sh * scale));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      const cropped = canvas.toDataURL("image/jpeg", 0.95);
+      if (!cropBackupRef.current[section.id]) cropBackupRef.current[section.id] = section.dataUrl;
+      setOriginalSections(current => current.map(item => item.id === section.id ? { ...item, dataUrl: cropped } : item));
+      setEditedSections(current => current.filter(item => item.id !== section.id));
+      invalidateResult();
+      setCropId(null);
+      setCropBox(null);
+      setMessage(`확대 영역(${canvas.width}×${canvas.height}px)으로 바꿨습니다. AI 편집을 누르면 이 부분만 편집합니다.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "확대 영역을 만들지 못했습니다.");
+    }
+  }
+
+  function restoreCrop(id: string) {
+    const backup = cropBackupRef.current[id];
+    if (!backup) return;
+    setOriginalSections(current => current.map(item => item.id === id ? { ...item, dataUrl: backup } : item));
+    setEditedSections(current => current.filter(item => item.id !== id));
+    delete cropBackupRef.current[id];
+    invalidateResult();
+    setMessage("확대하기 전 원래 사진으로 되돌렸습니다.");
+  }
+
   function toggleSectionEdit(id: string) {
     setSectionActions(current => ({ ...current, [id]: current[id] === "original" ? "edit" : "original" }));
     setEditedSections(current => current.filter(section => section.id !== id));
@@ -568,7 +644,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         const source = useEdited ? edited.dataUrl : section.dataUrl;
         // 이미 목록에 들어간 사진(AI 편집 후 자동 추가 포함)은 다시 넣지 않는다.
         if (alreadyAdded.current.has(source)) continue;
-        items.push({ fileName: `${base}-cut-${stamp}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(source, 1000), source });
+        items.push({ fileName: `${base}-cut-${stamp}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(source, await listSquareSize(source)), source });
         alreadyAdded.current.add(source);
       }
       if (!items.length) {
@@ -684,7 +760,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         const base = modelName.trim() || "NOID-B";
         const items: Array<{ fileName: string; dataUrl: string; source: string }> = [];
         for (let index = 0; index < newlyEdited.length; index += 1) {
-          items.push({ fileName: `${base}-ai-${stamp}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(newlyEdited[index].dataUrl, 1000), source: newlyEdited[index].dataUrl });
+          items.push({ fileName: `${base}-ai-${stamp}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(newlyEdited[index].dataUrl, await listSquareSize(newlyEdited[index].dataUrl)), source: newlyEdited[index].dataUrl });
           alreadyAdded.current.add(newlyEdited[index].dataUrl);
         }
         onAddToList(items);
@@ -936,6 +1012,8 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={shown} alt={`사진 ${index + 1}`} title="누르면 크게 봅니다" style={{ cursor: "zoom-in" }} onClick={() => setZoomIndex(index)} />
               <button type="button" className={styles.kindToggle} onClick={() => toggleSectionKind(section.id)}>{section.kind === "wear" ? "착용컷 → 제품컷으로 변경" : "제품컷 → 착용컷으로 변경"}</button>
+              <button type="button" className={styles.kindToggle} disabled={busy} onClick={() => { setCropId(section.id); setCropBox(null); }}>확대 영역 지정(원본 화질로 자르기)</button>
+              {cropBackupRef.current[section.id] && <button type="button" className={styles.kindToggle} disabled={busy} onClick={() => restoreCrop(section.id)}>확대 취소(원래 사진)</button>}
               <strong>{index + 1}. {section.kind === "wear" ? "착용컷" : "제품컷"}{!original && edited ? " · AI 완료" : ""}</strong>
               <div>
                 <button type="button" title="앞으로" disabled={index === 0} onClick={() => moveSection(section.id, -1)}>◀</button>
@@ -973,6 +1051,38 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
             </div>
           </div>
           <button type="button" title="다음 사진" disabled={index === originalSections.length - 1} style={{ ...navStyle, opacity: index === originalSections.length - 1 ? 0.35 : 1 }} onClick={event => { event.stopPropagation(); setZoomIndex(index + 1); }}>▶</button>
+        </div>
+      );
+    })()}
+
+    {(() => {
+      const section = cropId ? originalSections.find(item => item.id === cropId) : undefined;
+      if (!section) return null;
+      return (
+        <div role="dialog" aria-label="확대 영역 지정" onClick={() => { setCropId(null); setCropBox(null); }}
+          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(37,37,37,0.82)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div onClick={event => event.stopPropagation()} style={{ display: "grid", gap: 10, justifyItems: "center", minWidth: 0 }}>
+            <p style={{ margin: 0, color: "#fff", fontSize: 14, fontWeight: 700 }}>AI로 편집할 부분을 마우스로 끌어 네모로 지정하세요.</p>
+            <div style={{ position: "relative", display: "inline-block", touchAction: "none", cursor: "crosshair", lineHeight: 0 }}
+              onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); const point = pointInImage(event); cropStartRef.current = point; setCropBox({ x: point.x, y: point.y, w: 0, h: 0 }); }}
+              onPointerMove={event => {
+                const start = cropStartRef.current;
+                if (!start) return;
+                const point = pointInImage(event);
+                setCropBox({ x: Math.min(start.x, point.x), y: Math.min(start.y, point.y), w: Math.abs(point.x - start.x), h: Math.abs(point.y - start.y) });
+              }}
+              onPointerUp={() => { cropStartRef.current = null; }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={section.dataUrl} alt="확대 영역 지정" draggable={false} style={{ maxWidth: "calc(100vw - 48px)", maxHeight: "calc(100vh - 150px)", objectFit: "contain", borderRadius: 8, background: "#fff", userSelect: "none" }} />
+              {cropBox && cropBox.w > 0 && cropBox.h > 0 && (
+                <div style={{ position: "absolute", left: `${cropBox.x * 100}%`, top: `${cropBox.y * 100}%`, width: `${cropBox.w * 100}%`, height: `${cropBox.h * 100}%`, border: "2px solid #60766a", background: "rgba(96,118,106,0.22)", boxShadow: "0 0 0 9999px rgba(37,37,37,0.45)", pointerEvents: "none" }} />
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" className="softSageButton" style={{ borderRadius: 8, padding: "8px 18px" }} disabled={!cropBox || cropBox.w < 0.03 || cropBox.h < 0.03} onClick={() => void applyCrop()}>이 부분으로 확대</button>
+              <button type="button" className="softBeigeButton" style={{ borderRadius: 8, padding: "8px 18px" }} onClick={() => { setCropId(null); setCropBox(null); }}>닫기</button>
+            </div>
+          </div>
         </div>
       );
     })()}
