@@ -35,6 +35,9 @@ function promptFor(body: Record<string, unknown>) {
       ? "skin tone: bright, clean and luminous fair skin that stays as light as the input photo or lighter; neutral and natural, with NO pink, rosy, peach, orange, yellow or beige cast and never darker or duller than the input"
       : look?.skin ? `skin tone: exactly ${look.skin}` : "skin tone: a noticeably different natural skin tone and undertone";
     const eyesLine = look?.eyes ? `eyes: ${look.eyes}, without changing where the eyes are` : "eyes: a different natural eye shape and eye color, without changing where the eyes are";
+    const faceLine = hasLookReference
+      ? "face: the same face impression as the SECOND input image (face shape, eyebrow shape, nose and lip shape), not the face of the first input image"
+      : "face: a clearly different face impression from the input (different face shape, eyebrow shape, nose shape and lip shape), still a natural adult face of the same gender and age range, keeping the same head position, angle, expression and the same placement of the eyes, nose and mouth";
     const hairLine = look?.hair ? `hair color: exactly ${look.hair}, the same shade on every photo of this set` : "hair color: a clearly different natural hair color";
     const clothingLine = isClean
       ? "clothing color: white or off-white ONLY (keep the same neckline and garment position). Any blue, floral, patterned, pink, colored or dark clothing in the input must be repainted plain white so nothing distracts from the jewelry; the garment pattern may change"
@@ -50,6 +53,7 @@ function promptFor(body: Record<string, unknown>) {
 This is a WEAR SHOT. Keep the photograph's composition exactly as it is: the same framing, crop, camera angle and distance, the same pose, the same head and body position and orientation, the same position and scale of the face, ear, neck, hand and shoulders. Nothing may move, rotate, zoom or reframe. Only the following appearance attributes must change, and each change must be clearly visible when the output is compared side by side with the input:
 - ${skinLine};
 - ${eyesLine};
+- ${faceLine};
 - ${hairLine};
 - hairstyle design: restyle ONLY the hair that already exists in the input, within the same head position and never covering the jewelry. Keep the same hair length and roughly the same amount of hair: short hair stays short, long hair stays long. Change only the parting, fringe direction, texture, wave or neatness within that same length. Never add hair that is not there: no longer hair, extensions, ponytails, buns, bangs or strands falling on the neck, shoulders or ears;
 - ${clothingLine};

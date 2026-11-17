@@ -220,6 +220,9 @@ function newDraftId() {
   return `quick-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** 아직 제품컷·착용컷을 구분하지 않은 사진의 표시. AI 편집을 시작할 때 이 표시가 있는 사진만 자동으로 구분한다. */
+const UNSORTED_REASON = "직접 확인해주세요.";
+
 type WearLook = { skin: string; eyes: string; hair: string; clothing: string; background: string };
 
 const WEAR_LOOK_OPTIONS: { skin: string[]; eyes: string[]; hair: string[]; clothing: string[]; background: string[] } = {
@@ -373,7 +376,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         for (const decision of data.decisions) if (decision.kind === "product" || decision.kind === "wear") kinds.set(decision.id, { kind: decision.kind, reason: decision.reason });
       }
     } catch { /* 구분하지 못한 사진은 제품컷으로 두고 직접 바꿀 수 있게 한다. */ }
-    return sections.map(section => ({ ...section, kind: kinds.get(section.id)?.kind || ("product" as const), reason: kinds.get(section.id)?.reason || "직접 확인해주세요." }));
+    return sections.map(section => ({ ...section, kind: kinds.get(section.id)?.kind || ("product" as const), reason: kinds.get(section.id)?.reason || UNSORTED_REASON }));
   }
 
   // 사진별로 나눠서 등록이미지·AI 새로 만들기에 쓴다. 자를 때마다 이전에 나눠 둔 사진은 새 사진으로 바뀐다.
@@ -477,7 +480,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       const usable = await cropDataUrl(cut.dataUrl, cut.top, cut.bottom, cut.holes);
       const found = await splitDetailPage(usable, headerUrl);
       const stamp = Date.now().toString(36);
-      const sections = found.map(section => ({ ...section, id: `${stamp}-${section.id}`, kind: "product" as const, reason: "직접 확인해주세요." }));
+      const sections = found.map(section => ({ ...section, id: `${stamp}-${section.id}`, kind: "product" as const, reason: UNSORTED_REASON }));
       const base = modelName.trim() || "NOID-B";
       const items: Array<{ fileName: string; dataUrl: string; source: string }> = [];
       for (let index = 0; index < sections.length; index += 1) {
@@ -583,7 +586,8 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   }
 
   function toggleSectionKind(id: string) {
-    setOriginalSections(current => current.map(section => section.id === id ? { ...section, kind: section.kind === "wear" ? "product" : "wear" } : section));
+    // 직접 바꾼 사진은 reason을 바꿔 두어, AI 편집 전 자동 구분이 다시 덮어쓰지 않게 한다.
+    setOriginalSections(current => current.map(section => section.id === id ? { ...section, kind: section.kind === "wear" ? "product" : "wear", reason: "직접 선택했습니다." } : section));
     setEditedSections(current => current.filter(section => section.id !== id));
     invalidateResult();
     setMessage("제품컷·착용컷 구분을 바꿨습니다. 이 사진은 새 구분에 맞춰 편집합니다.");
@@ -623,7 +627,23 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     const completed: QuickDetailSection[] = [];
     let editIndex = completedEdits;
     try {
-      for (const section of originalSections) {
+      // 2026-11-17 가져온 사진은 모두 '제품컷'으로 시작해서, 모델 사진도 배경만 바뀌는 문제가 있었다.
+      // 아직 구분하지 않은 사진만 AI 편집 전에 한 번에 구분한다(직접 바꾼 사진·이미 구분된 사진은 건드리지 않는다).
+      let workingSections = originalSections;
+      const unsorted = originalSections.filter(section => (sectionActions[section.id] || "edit") === "edit" && section.reason === UNSORTED_REASON);
+      if (unsorted.length) {
+        const sorted = new Map((await classifyKinds(unsorted)).map(section => [section.id, section]));
+        workingSections = originalSections.map(section => sorted.get(section.id) || section);
+        for (const section of workingSections) {
+          const before = originalSections.find(item => item.id === section.id);
+          // 구분이 바뀐 사진은 예전에 만든 AI 사진(배경만 바뀐 것)을 버리고 새 구분으로 다시 만든다.
+          if (before && before.kind !== section.kind) byId.delete(section.id);
+        }
+        setOriginalSections(workingSections);
+        setEditedSections(Array.from(byId.values()));
+        editIndex = workingSections.filter(section => (sectionActions[section.id] || "edit") === "edit" && byId.has(section.id)).length;
+      }
+      for (const section of workingSections) {
         if ((sectionActions[section.id] || "edit") === "original") {
           completed.push(section);
           continue;
@@ -633,7 +653,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
           setProgress(editIndex);
           setMessage(`AI 편집 ${expectedEdits}장 중 ${editIndex + 1}번째를 만들고 있습니다. 완성된 사진은 그대로 보관됩니다.`);
           const lookAnchor = section.kind === "wear"
-            ? originalSections.map(item => byId.get(item.id)).find((item): item is QuickDetailSection => Boolean(item) && item!.kind === "wear")
+            ? workingSections.map(item => byId.get(item.id)).find((item): item is QuickDetailSection => Boolean(item) && item!.kind === "wear")
             : undefined;
           edited = await editSection(section, lookAnchor);
           byId.set(section.id, edited);
