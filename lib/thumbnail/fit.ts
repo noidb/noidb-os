@@ -265,9 +265,199 @@ export async function extendToSquareCanvas(sourceDataUrl: string, size = 1000): 
   return canvas.toDataURL("image/jpeg", 0.95);
 }
 
-export type SquareCrop = { zoom: number; x: number; y: number; brightness?: number; sharpness?: number };
+// angle: 2026-11-17 사진 기울기(도, -45~45). 사진 중심을 기준으로 돌리고, 돌려서 생긴 모서리 빈 곳은 흰색.
+export type SquareCrop = { zoom: number; x: number; y: number; brightness?: number; sharpness?: number; angle?: number };
 
 export function sharpenAmount(sharpness: number) { return Math.max(0, Math.min(1, sharpness)); }
+
+/** 사진 중심을 기준으로 deg도 돌린 사본을 만든다(같은 크기, 모서리 빈 곳은 흰색). 저장 때 큰 원본은 그릴 크기에 맞춰 줄여서 돌린다. */
+function rotateOnWhite(img: DrawableImage, deg: number, drawW: number, drawH: number): DrawableImage {
+  const { w, h } = dims(img);
+  const ratio = Math.min(1, Math.min(4000, Math.max(drawW, drawH)) / Math.max(w, h));
+  const iw = Math.max(1, Math.round(w * ratio));
+  const ih = Math.max(1, Math.round(h * ratio));
+  const canvas = document.createElement("canvas");
+  canvas.width = iw;
+  canvas.height = ih;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return img;
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, iw, ih);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.translate(iw / 2, ih / 2);
+  ctx.rotate((deg * Math.PI) / 180);
+  ctx.drawImage(img, -iw / 2, -ih / 2, iw, ih);
+  return canvas;
+}
+
+/** 화면 캔버스 위의 점(0~size) → 원본 사진 위의 위치(가로·세로 0~1 비율). 사진 밖이면 null. */
+export function canvasToSource(crop: SquareCrop, w: number, h: number, size: number, cx: number, cy: number) {
+  const scale = Math.min(size / w, size / h) * crop.zoom;
+  const px = (cx - size / 2 - crop.x * size) / scale;
+  const py = (cy - size / 2 - crop.y * size) / scale;
+  const a = -((crop.angle || 0) * Math.PI) / 180;
+  const ox = px * Math.cos(a) - py * Math.sin(a);
+  const oy = px * Math.sin(a) + py * Math.cos(a);
+  const fx = ox / w + 0.5;
+  const fy = oy / h + 0.5;
+  if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
+  return { fx, fy };
+}
+
+/** 원본 사진 위의 위치(0~1 비율) → 화면 캔버스 위의 점. canvasToSource의 반대. */
+export function sourceToCanvas(crop: SquareCrop, w: number, h: number, size: number, fx: number, fy: number) {
+  const scale = Math.min(size / w, size / h) * crop.zoom;
+  const ox = (fx - 0.5) * w;
+  const oy = (fy - 0.5) * h;
+  const a = ((crop.angle || 0) * Math.PI) / 180;
+  const px = ox * Math.cos(a) - oy * Math.sin(a);
+  const py = ox * Math.sin(a) + oy * Math.cos(a);
+  return { cx: size / 2 + crop.x * size + px * scale, cy: size / 2 + crop.y * size + py * scale };
+}
+
+/** 화면 캔버스 위 브러시 반지름(px) → 원본 사진 가로 길이에 대한 비율. */
+export function brushToSourceFrac(crop: SquareCrop, w: number, h: number, size: number, brushPx: number) {
+  return brushPx / (Math.min(size / w, size / h) * crop.zoom * w);
+}
+
+export type BlemishStroke = { points: { fx: number; fy: number }[]; radiusFrac: number };
+
+/**
+ * 잡티 지우기: 칠한 곳을 바로 둘레의 색으로 안쪽까지 채운 뒤 살짝 풀어 자연스럽게 만든다(AI 아님, 비용 없음).
+ * 원본 사진 자체를 고쳐 새 JPG를 돌려준다. 확대·위치·각도는 그대로 두고 쓴다.
+ */
+export async function removeBlemishes(sourceDataUrl: string, strokes: BlemishStroke[]): Promise<string> {
+  const img = await loadImage(sourceDataUrl);
+  const W = img.naturalWidth;
+  const H = img.naturalHeight;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) throw new Error("캔버스를 만들 수 없습니다.");
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, W, H);
+  ctx.drawImage(img, 0, 0);
+
+  // 끌어서 칠한 길을 촘촘한 동그라미들로 바꾼다.
+  const circles: { x: number; y: number; r: number }[] = [];
+  for (const stroke of strokes) {
+    const r = Math.max(2, stroke.radiusFrac * W);
+    const pts = stroke.points.map(p => ({ x: p.fx * W, y: p.fy * H }));
+    const stepLen = Math.max(1, r * 0.4);
+    pts.forEach((p, i) => {
+      circles.push({ x: p.x, y: p.y, r });
+      const q = pts[i + 1];
+      if (!q) return;
+      const dist = Math.hypot(q.x - p.x, q.y - p.y);
+      const n = Math.floor(dist / stepLen);
+      for (let k = 1; k <= n; k += 1) {
+        circles.push({ x: p.x + ((q.x - p.x) * k) / (n + 1), y: p.y + ((q.y - p.y) * k) / (n + 1), r });
+      }
+    });
+  }
+  if (!circles.length) return sourceDataUrl;
+
+  const maxR = Math.max(...circles.map(c => c.r));
+  const margin = Math.ceil(6 + maxR * 0.4);
+  const bx0 = Math.max(0, Math.floor(Math.min(...circles.map(c => c.x - c.r)) - margin));
+  const by0 = Math.max(0, Math.floor(Math.min(...circles.map(c => c.y - c.r)) - margin));
+  const bx1 = Math.min(W, Math.ceil(Math.max(...circles.map(c => c.x + c.r)) + margin));
+  const by1 = Math.min(H, Math.ceil(Math.max(...circles.map(c => c.y + c.r)) + margin));
+  const bw = bx1 - bx0;
+  const bh = by1 - by0;
+  if (bw < 3 || bh < 3) return sourceDataUrl;
+
+  const image = ctx.getImageData(bx0, by0, bw, bh);
+  const data = image.data;
+  const mask = new Uint8Array(bw * bh);
+  let remaining = 0;
+  for (const c of circles) {
+    const rr = c.r + 1.5;
+    const y0 = Math.max(0, Math.floor(c.y - rr - by0));
+    const y1 = Math.min(bh - 1, Math.ceil(c.y + rr - by0));
+    const x0 = Math.max(0, Math.floor(c.x - rr - bx0));
+    const x1 = Math.min(bw - 1, Math.ceil(c.x + rr - bx0));
+    for (let yy = y0; yy <= y1; yy += 1) {
+      for (let xx = x0; xx <= x1; xx += 1) {
+        if (mask[yy * bw + xx]) continue;
+        if (Math.hypot(xx + bx0 - c.x, yy + by0 - c.y) <= rr) { mask[yy * bw + xx] = 1; remaining += 1; }
+      }
+    }
+  }
+  if (!remaining) return sourceDataUrl;
+
+  // 1) 바깥 가장자리부터 한 겹씩 이웃의 색 평균으로 안쪽을 채운다.
+  const known = new Uint8Array(bw * bh);
+  for (let i = 0; i < known.length; i += 1) known[i] = mask[i] ? 0 : 1;
+  const hasKnown = known.some(v => v === 1);
+  if (!hasKnown) return sourceDataUrl;
+  let guard = bw + bh;
+  while (remaining > 0 && guard > 0) {
+    guard -= 1;
+    const fillIdx: number[] = [];
+    const fillRgb: number[] = [];
+    for (let yy = 0; yy < bh; yy += 1) {
+      for (let xx = 0; xx < bw; xx += 1) {
+        const idx = yy * bw + xx;
+        if (known[idx]) continue;
+        let r = 0; let g = 0; let b = 0; let n = 0;
+        for (let dy = -1; dy <= 1; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            if (!dx && !dy) continue;
+            const nx = xx + dx;
+            const ny = yy + dy;
+            if (nx < 0 || ny < 0 || nx >= bw || ny >= bh) continue;
+            const ni = ny * bw + nx;
+            if (!known[ni]) continue;
+            r += data[ni * 4]; g += data[ni * 4 + 1]; b += data[ni * 4 + 2]; n += 1;
+          }
+        }
+        if (n) { fillIdx.push(idx); fillRgb.push(r / n, g / n, b / n); }
+      }
+    }
+    if (!fillIdx.length) break;
+    fillIdx.forEach((idx, k) => {
+      data[idx * 4] = fillRgb[k * 3];
+      data[idx * 4 + 1] = fillRgb[k * 3 + 1];
+      data[idx * 4 + 2] = fillRgb[k * 3 + 2];
+      data[idx * 4 + 3] = 255;
+      known[idx] = 1;
+    });
+    remaining -= fillIdx.length;
+  }
+
+  // 2) 채운 곳만 여러 번 부드럽게 섞어 줄무늬를 없앤다(바깥 사진은 그대로).
+  const maskIdx: number[] = [];
+  for (let i = 0; i < mask.length; i += 1) if (mask[i]) maskIdx.push(i);
+  const iterations = Math.min(80, Math.max(8, Math.round(maxR)));
+  let buf = new Uint8ClampedArray(data);
+  for (let it = 0; it < iterations; it += 1) {
+    for (const idx of maskIdx) {
+      const xx = idx % bw;
+      const yy = (idx - xx) / bw;
+      let r = 0; let g = 0; let b = 0; let n = 0;
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          const nx = xx + dx;
+          const ny = yy + dy;
+          if (nx < 0 || ny < 0 || nx >= bw || ny >= bh) continue;
+          const ni = (ny * bw + nx) * 4;
+          r += data[ni]; g += data[ni + 1]; b += data[ni + 2]; n += 1;
+        }
+      }
+      buf[idx * 4] = r / n; buf[idx * 4 + 1] = g / n; buf[idx * 4 + 2] = b / n;
+    }
+    for (const idx of maskIdx) {
+      data[idx * 4] = buf[idx * 4]; data[idx * 4 + 1] = buf[idx * 4 + 1]; data[idx * 4 + 2] = buf[idx * 4 + 2];
+    }
+  }
+  buf = new Uint8ClampedArray(0);
+
+  ctx.putImageData(image, bx0, by0);
+  return canvas.toDataURL("image/jpeg", 0.97);
+}
 
 /** 화면 미리보기와 저장이 같은 결과가 되도록 한 함수로 그린다. */
 export function drawSquareCrop(canvas: HTMLCanvasElement, img: DrawableImage, crop: SquareCrop, size: number, reference?: { width: number; height: number }) {
@@ -280,7 +470,8 @@ export function drawSquareCrop(canvas: HTMLCanvasElement, img: DrawableImage, cr
   const drawW = w * scale;
   const drawH = h * scale;
   // 원본이 그릴 크기의 2배보다 크면 절반씩 줄여 두고 그린다(고화질 축소).
-  const source = scale < 0.5 ? halveToward(img, Math.max(1, Math.round(drawW))) : img;
+  let source = scale < 0.5 ? halveToward(img, Math.max(1, Math.round(drawW))) : img;
+  if (crop.angle) source = rotateOnWhite(source, crop.angle, drawW, drawH);
   drawWithEdgeFill(ctx, source, (size - drawW) / 2 + crop.x * size, (size - drawH) / 2 + crop.y * size, drawW, drawH, size);
 
   const brightness = crop.brightness || 0;

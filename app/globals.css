@@ -623,6 +623,12 @@ button:focus-visible{outline:3px solid rgba(83,109,120,.24);outline-offset:2px}
 .slotQuality-ok{background:#e3ede6;color:#3f574b;border-color:#b9cbbc}
 .slotQuality-warn{background:#f4f1ec;color:#8a5a00;border-color:#e0c98f}
 .slotQuality-blur{background:#fee2e2;color:#b91c1c;border-color:#f3b3b3}
+/* 2026-11-17 잡티 지우기·각도: ☀ 패널 안. 버튼 두 개는 같은 폭·높이로 나란히 */
+.slotRetouch{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:6px}
+.slotCropTune .slotRetouch button{min-height:30px;padding:4px 6px;font-size:11px;white-space:nowrap}
+.slotCropTune .slotRetouch button.slotRetouchOn{background:#e3ede6!important;border-color:#b9cbbc!important;color:#3f574b!important}
+.slotRetouchHint{font-size:11px;color:#60766a;line-height:1.4}
+.slotCropFrame.slotCropErase,.slotCropFrame.slotCropErase:active{cursor:crosshair}
 .slotCropTune .slotZoomLimit{flex-direction:row;align-items:center;gap:6px;margin-top:4px;font-weight:600}
 .slotCropTune .slotZoomLimit input{width:auto}
 

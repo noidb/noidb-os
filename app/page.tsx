@@ -32,7 +32,7 @@ import QuickDetailRemake, { ensureMinWidth, prependHeader } from "./QuickDetailR
 import { normalizeCoupangImage } from "@/lib/image/normalize-coupang";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { loadPreparedDetail, loadPreparedPhotos, type PreparedDetail } from "@/lib/image-search/browser-folder";
-import { cropQuality, defaultFitAdjust, extendToSquareCanvas, fitToWhiteCanvas, drawSquareCrop, makePreviewSource, maxZoomForQuality, renderSquareCrop, sharpenAmount, type FitAdjust, type SquareCrop } from "@/lib/thumbnail/fit";
+import { brushToSourceFrac, canvasToSource, cropQuality, defaultFitAdjust, extendToSquareCanvas, fitToWhiteCanvas, drawSquareCrop, makePreviewSource, maxZoomForQuality, removeBlemishes, renderSquareCrop, sharpenAmount, sourceToCanvas, type BlemishStroke, type FitAdjust, type SquareCrop } from "@/lib/thumbnail/fit";
 import { deleteProductDraft, listProductDrafts, saveProductDraft, type ProductDraftRecord } from "@/lib/drafts/idb";
 import { mergeProductDrafts, readDraftResponse, type ListedProductDraft } from "@/lib/drafts/records";
 import { ensureNoidbActionSession } from "@/lib/wms/noidb-action-session-client";
@@ -4255,6 +4255,22 @@ function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value
   const sourceRef = useRef(source);
   sourceRef.current = source;
 
+  // 2026-11-17 잡티 지우기: 켜면 사진 위를 끌어 칠한 곳을 둘레 색으로 지운다(원본 사진을 고침). 끄면 평소처럼 끌어서 위치 이동.
+  const [eraseOn, setEraseOn] = useState(false);
+  const eraseRef = useRef(false);
+  eraseRef.current = eraseOn;
+  const [brush, setBrush] = useState(14);
+  const brushRef = useRef(14);
+  brushRef.current = brush;
+  const [paint, setPaint] = useState<BlemishStroke[]>([]);
+  const strokeRef = useRef<BlemishStroke | null>(null);
+  const [retouchBusy, setRetouchBusy] = useState(false);
+  const retouchBusyRef = useRef(false);
+  retouchBusyRef.current = retouchBusy;
+  // 지우기 되돌리기용: 지우기 전 원본을 최대 3개까지 기억
+  const undoRef = useRef<string[]>([]);
+  const [undoCount, setUndoCount] = useState(0);
+
   useEffect(() => {
     let alive = true;
     const img = new Image();
@@ -4299,10 +4315,55 @@ function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value
       y: Math.max(-1.5, Math.min(1.5, next.y)),
       brightness: Math.max(-60, Math.min(60, next.brightness || 0)),
       sharpness: Math.max(0, Math.min(1, next.sharpness || 0)),
+      angle: Math.max(-45, Math.min(45, next.angle || 0)),
     };
     viewRef.current = clamped;
     setView(clamped);
     commit(clamped);
+  };
+
+  // 칠한 길을 받아 원본 사진에서 지우고, 같은 확대·위치·각도로 다시 만든다.
+  const swapSource = async (nextSource: string) => {
+    const dataUrl = await renderSquareCrop(nextSource, viewRef.current);
+    onChange({ ...valueRef.current, dataUrl, source: nextSource, crop: viewRef.current });
+  };
+
+  const applyStroke = async (stroke: BlemishStroke) => {
+    setRetouchBusy(true);
+    try {
+      const before = sourceRef.current;
+      const after = await removeBlemishes(before, [stroke]);
+      if (after !== before) {
+        undoRef.current = [...undoRef.current, before].slice(-3);
+        setUndoCount(undoRef.current.length);
+        await swapSource(after);
+      }
+    } catch { /* 지우기에 실패하면 사진은 그대로 둔다 */ }
+    setPaint([]);
+    setRetouchBusy(false);
+  };
+
+  const undoRetouch = async () => {
+    const before = undoRef.current[undoRef.current.length - 1];
+    if (!before || retouchBusyRef.current) return;
+    setRetouchBusy(true);
+    try {
+      undoRef.current = undoRef.current.slice(0, -1);
+      setUndoCount(undoRef.current.length);
+      await swapSource(before);
+    } catch { /* 무시 */ }
+    setRetouchBusy(false);
+  };
+
+  // 사진 위 마우스 위치 → 원본 사진 위 위치(비율)
+  const pointToSource = (event: { clientX: number; clientY: number }) => {
+    const box = frameRef.current;
+    const img = loadedImgRef.current;
+    if (!box || !img) return null;
+    const rect = box.getBoundingClientRect();
+    const cx = ((event.clientX - rect.left) / (rect.width || 1)) * 540;
+    const cy = ((event.clientY - rect.top) / (rect.height || 1)) * 540;
+    return canvasToSource(viewRef.current, img.naturalWidth, img.naturalHeight, 540, cx, cy);
   };
 
   useEffect(() => {
@@ -4337,9 +4398,29 @@ function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value
     const canvas = canvasRef.current;
     const frame = requestAnimationFrame(() => {
       drawSquareCrop(canvas, previewImg, view, 540, { width: loadedImg.naturalWidth, height: loadedImg.naturalHeight });
+      // 지울 곳으로 칠한 부분을 붉게 보여 준다(화면 전용 — 저장 파일에는 들어가지 않는다).
+      if (paint.length) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          const w = loadedImg.naturalWidth;
+          const h = loadedImg.naturalHeight;
+          ctx.save();
+          ctx.fillStyle = "rgba(220,40,70,0.45)";
+          for (const stroke of paint) {
+            const radius = stroke.radiusFrac * w * Math.min(540 / w, 540 / h) * view.zoom;
+            for (const p of stroke.points) {
+              const c = sourceToCanvas(view, w, h, 540, p.fx, p.fy);
+              ctx.beginPath();
+              ctx.arc(c.cx, c.cy, radius, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+          ctx.restore();
+        }
+      }
     });
     return () => cancelAnimationFrame(frame);
-  }, [previewImg, loadedImg, view]);
+  }, [previewImg, loadedImg, view, paint]);
 
   const quality = loadedImg ? cropQuality(loadedImg.naturalWidth, loadedImg.naturalHeight, view.zoom) : null;
   const qualityText = quality
@@ -4354,14 +4435,32 @@ function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value
   return (
     <div
       ref={frameRef}
-      className={"slotCropFrame" + (active && !locked ? " slotCropActive" : "")}
+      className={"slotCropFrame" + (active && !locked ? " slotCropActive" : "") + (eraseOn && !locked ? " slotCropErase" : "")}
       onPointerDown={event => {
         if (lockedRef.current) return;
         setActive(true);
         event.currentTarget.setPointerCapture(event.pointerId);
+        if (eraseRef.current) {
+          if (retouchBusyRef.current) return;
+          const img = loadedImgRef.current;
+          const p = pointToSource(event);
+          if (!img || !p) return;
+          strokeRef.current = { points: [p], radiusFrac: brushToSourceFrac(viewRef.current, img.naturalWidth, img.naturalHeight, 540, brushRef.current) };
+          setPaint([strokeRef.current]);
+          return;
+        }
         dragRef.current = { px: event.clientX, py: event.clientY };
       }}
       onPointerMove={event => {
+        const stroke = strokeRef.current;
+        if (stroke) {
+          const p = pointToSource(event);
+          if (p) {
+            stroke.points.push(p);
+            setPaint([{ ...stroke, points: [...stroke.points] }]);
+          }
+          return;
+        }
         const start = dragRef.current;
         const box = frameRef.current;
         if (!start || !box) return;
@@ -4370,10 +4469,18 @@ function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value
         dragRef.current = { px: event.clientX, py: event.clientY };
         update({ ...v, x: v.x + (event.clientX - start.px) / size, y: v.y + (event.clientY - start.py) / size });
       }}
-      onPointerUp={() => { dragRef.current = null; }}
-      onPointerCancel={() => { dragRef.current = null; }}
-      onDoubleClick={() => { if (!lockedRef.current) update({ zoom: 1, x: 0, y: 0 }); }}
-      title={locked ? "저장됨 · 수정 버튼을 누르면 다시 조절할 수 있습니다." : active ? "끌어서 위치 이동 · 마우스 휠로 확대/축소 · 더블클릭으로 처음 상태 · 칸 바깥을 누르면 휠 확대 끔" : "사진을 한 번 클릭하면 마우스 휠로 확대/축소할 수 있습니다."}
+      onPointerUp={() => {
+        dragRef.current = null;
+        const stroke = strokeRef.current;
+        strokeRef.current = null;
+        if (stroke) void applyStroke(stroke);
+      }}
+      onPointerCancel={() => {
+        dragRef.current = null;
+        if (strokeRef.current) { strokeRef.current = null; setPaint([]); }
+      }}
+      onDoubleClick={() => { if (!lockedRef.current && !eraseRef.current) update({ zoom: 1, x: 0, y: 0 }); }}
+      title={locked ? "저장됨 · 수정 버튼을 누르면 다시 조절할 수 있습니다." : eraseOn ? "지울 곳을 끌어서 칠하세요 · 손을 떼면 바로 지워집니다 · 끄려면 ☀ 안의 '잡티 지우기'를 다시 누르세요." : active ? "끌어서 위치 이동 · 마우스 휠로 확대/축소 · 더블클릭으로 처음 상태 · 칸 바깥을 누르면 휠 확대 끔" : "사진을 한 번 클릭하면 마우스 휠로 확대/축소할 수 있습니다."}
     >
       <canvas ref={canvasRef} className="slotCropCanvas" aria-label={title} />
       {/* 2026-11-11: 화질 배지와 ↻ ☀ － ＋ 버튼이 사진을 가려서, 사진 바로 아래 줄(저장·삭제 버튼 위)로 옮김 */}
@@ -4381,8 +4488,8 @@ function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value
         <div className="slotToolsRow" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
           {quality && <span className={`slotQuality slotQuality-${quality.level}`} title={qualityHint}>{qualityText}</span>}
           {!locked && <div className="slotCropTools">
-            <button type="button" onClick={() => update({ zoom: 1, x: 0, y: 0, brightness: 0, sharpness: 0 })} title="처음 상태로 되돌리기">↻</button>
-            <button type="button" onClick={() => setTuneOpen(open => !open)} title="밝기·선명도">☀</button>
+            <button type="button" onClick={() => update({ zoom: 1, x: 0, y: 0, brightness: 0, sharpness: 0, angle: 0 })} title="처음 상태로 되돌리기(확대·위치·밝기·선명도·각도)">↻</button>
+            <button type="button" onClick={() => setTuneOpen(open => !open)} title="밝기·선명도·각도·잡티 지우기">☀</button>
             <button type="button" onClick={() => update({ ...viewRef.current, zoom: viewRef.current.zoom / 1.1 })} title="축소">－</button>
             <button type="button" onClick={() => update({ ...viewRef.current, zoom: viewRef.current.zoom * 1.1 })} title="확대">＋</button>
           </div>}
@@ -4399,6 +4506,24 @@ function SlotCropEditor({ value, title, onChange, tuneHost, toolsHost }: { value
             <input type="range" min={0} max={1} step={0.05} value={sharp}
               onChange={event => update({ ...viewRef.current, sharpness: Number(event.target.value) })} />
           </label>
+          <label>각도 {view.angle || 0}°
+            <input type="range" min={-45} max={45} step={1} value={view.angle || 0}
+              onChange={event => update({ ...viewRef.current, angle: Number(event.target.value) })}
+              onDoubleClick={() => update({ ...viewRef.current, angle: 0 })} />
+          </label>
+          <div className="slotRetouch">
+            <button type="button" className={"softApricotButton" + (eraseOn ? " slotRetouchOn" : "")}
+              onClick={() => { setEraseOn(on => !on); setPaint([]); strokeRef.current = null; }}>
+              {eraseOn ? "잡티 지우기 끄기" : "잡티 지우기 켜기"}
+            </button>
+            <button type="button" className="softBeigeButton" disabled={undoCount === 0 || retouchBusy} onClick={() => void undoRetouch()}>
+              지우기 되돌리기
+            </button>
+          </div>
+          {eraseOn && <label>브러시 크기 {brush}
+            <input type="range" min={4} max={60} step={1} value={brush} onChange={event => setBrush(Number(event.target.value))} />
+          </label>}
+          {eraseOn && <span className="slotRetouchHint">{retouchBusy ? "지우는 중…" : "지울 곳을 사진 위에서 끌어 칠하세요. 손을 떼면 지워집니다."}</span>}
           <label className="slotZoomLimit">
             <input type="checkbox" checked={zoomLimit}
               onChange={event => {
