@@ -535,6 +535,8 @@ export default function Home() {
   const [drafts, setDrafts] = useState<ListedProductDraft[]>([]);
   const [showDrafts, setShowDrafts] = useState(false);
   const [draftStatus, setDraftStatus] = useState("");
+  /** 2026-11-17 임시저장 목록에서 체크한 모델명(선택 삭제용). */
+  const [selectedDrafts, setSelectedDrafts] = useState<string[]>([]);
   const [draftSaving, setDraftSaving] = useState(false);
   const draftSavingRef = useRef(false);
   // 2026-11-11 따라다니는 저장 메뉴를 내용 칸 바로 옆에 붙인다: 내용 칸 오른쪽 끝을 재서 그 옆 위치를 정한다(자리가 없으면 null → 화면 오른쪽 끝).
@@ -2242,6 +2244,46 @@ export default function Home() {
     }
   };
 
+  /**
+   * 2026-11-17 임시저장 삭제를 빠르게: 누르는 즉시 화면 목록에서 먼저 빼고, 서버(다른 기기)·이 기기 삭제는 뒤에서 처리한다.
+   * 예전에는 서버 응답을 기다린 뒤 사진이 든 전체 목록을 다시 읽어 매우 느렸다. 실패한 항목만 목록에 되돌린다.
+   */
+  const removeDrafts = async (models: string[]) => {
+    const targets = drafts.filter(draft => models.includes(draft.model));
+    if (!targets.length) return;
+    try {
+      if (!await ensureNoidbActionSession()) {
+        setDraftStatus("관리자 잠금 해제를 취소해서 삭제하지 않았습니다.");
+        return;
+      }
+    } catch (error) {
+      setDraftStatus(`임시저장 삭제 실패: ${error instanceof Error ? error.message : "다시 시도해주세요."}`);
+      return;
+    }
+    // 진행 중이던 목록 새로고침 결과가 지운 항목을 다시 살리지 못하게 한다.
+    draftRefreshRef.current += 1;
+    const removed = new Set(targets.map(target => target.model));
+    setDrafts(current => current.filter(draft => !removed.has(draft.model)));
+    setSelectedDrafts(current => current.filter(model => !removed.has(model)));
+    const results = await Promise.all(targets.map(async record => {
+      try {
+        const response = await postGoogleSheet({ action: "cloudDraftDelete", model: record.model });
+        await readDraftResponse(response);
+        await deleteProductDraft(record.model);
+        return null;
+      } catch (error) {
+        return { record, message: error instanceof Error ? error.message : "다시 시도해주세요." };
+      }
+    }));
+    const failed = results.filter((item): item is { record: ListedProductDraft; message: string } => item !== null);
+    if (failed.length) {
+      setDrafts(current => mergeProductDrafts(current, failed.map(item => item.record)));
+      setDraftStatus(`임시저장 삭제 실패(${failed.map(item => item.record.model).join(", ")}): ${failed[0].message}`);
+    } else {
+      setDraftStatus(targets.length > 1 ? `임시저장 ${targets.length}개를 삭제했습니다.` : `${targets[0].model} 임시저장을 삭제했습니다.`);
+    }
+  };
+
   const buildDraftRecord = (): ProductDraftRecord => ({
     model,
     savedAt: Date.now(),
@@ -3243,9 +3285,26 @@ export default function Home() {
         <section id="product-draft-list" className="card full draftPanel">
           <h2>임시저장 목록 ({drafts.length}/20)</h2>
           {!drafts.length && <p className="note">임시저장된 상품이 없습니다.</p>}
+          {drafts.length > 0 && (
+            <div className="draftBulkBar">
+              <button type="button" className="softApricotButton" onClick={() => setSelectedDrafts(selectedDrafts.length === drafts.length ? [] : drafts.map(draft => draft.model))}>
+                {selectedDrafts.length === drafts.length ? "선택 해제" : "전체 선택"}
+              </button>
+              <button type="button" className="softPinkButton" disabled={!selectedDrafts.length} onClick={() => void removeDrafts(selectedDrafts)}>
+                선택 삭제{selectedDrafts.length ? ` (${selectedDrafts.length})` : ""}
+              </button>
+            </div>
+          )}
           <div className="draftList">
             {drafts.map(record => (
               <div className="draftItem" key={record.model}>
+                <input
+                  type="checkbox"
+                  className="draftCheck"
+                  aria-label={`${record.model} 선택`}
+                  checked={selectedDrafts.includes(record.model)}
+                  onChange={event => setSelectedDrafts(current => event.target.checked ? [...current, record.model] : current.filter(model => model !== record.model))}
+                />
                 <div><strong>{record.model}</strong><span>{new Date(record.savedAt).toLocaleString("ko-KR")}</span>
                   {record.localCopy && <span>다른 기기에 더 최신 기본정보가 있습니다. 이 기기 저장본에는 이미지가 포함됩니다.</span>}
                   {(() => {
@@ -3257,17 +3316,7 @@ export default function Home() {
                 </div>
                 <button type="button" className="green" onClick={() => loadDraft(record.localCopy || record)}>{record.localCopy ? "이 기기 저장본 불러오기" : "불러오기"}</button>
                 {record.localCopy && <button type="button" className="secondaryButton" onClick={() => loadDraft(record)}>다른 기기 기본정보 불러오기</button>}
-                <button type="button" className="removeButton" onClick={() => void (async () => {
-                  try {
-                    const response = await postGoogleSheet({ action: "cloudDraftDelete", model: record.model });
-                    await readDraftResponse(response);
-                    await deleteProductDraft(record.model);
-                    setDrafts(current => current.filter(draft => draft.model !== record.model));
-                    await refreshDrafts();
-                  } catch (error) {
-                    setDraftStatus(`임시저장 삭제 실패: ${error instanceof Error ? error.message : "다시 시도해주세요."}`);
-                  }
-                })()}>삭제</button>
+                <button type="button" className="removeButton" onClick={() => void removeDrafts([record.model])}>삭제</button>
               </div>
             ))}
           </div>

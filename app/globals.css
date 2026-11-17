@@ -912,3 +912,10 @@ html,body{overflow-x:clip}
 .slotActions .softSageButton{background:#e3ede6;color:#292929}
 .slotAiCheck{flex-basis:100%;display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:#4b4744;cursor:pointer}
 .slotAiCheck input{width:16px;height:16px;accent-color:#60766a}
+
+/* 2026-11-17 임시저장 목록: 체크박스 + 전체 선택·선택 삭제 줄 */
+.draftBulkBar{display:grid;grid-template-columns:repeat(2,minmax(0,160px));gap:8px;margin:0 0 10px}
+.draftItem{grid-template-columns:auto 1fr auto auto}
+.draftCheck{width:20px;height:20px;accent-color:#60766a;cursor:pointer;margin:0}
+.draftItem .removeButton{grid-column:4}
+@media(max-width:760px){.draftItem{grid-template-columns:auto 1fr auto auto}.draftBulkBar{grid-template-columns:repeat(2,1fr)}}
