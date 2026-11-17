@@ -29,7 +29,8 @@ const STORAGE_KEY = "noidb_wims_registration_snapshot_v1";
 const EXTENSION_EVENT_TYPE = "NOIDB_WIMS_EXTENSION_TRANSFER";
 const EXTENSION_ACK_TYPE = "NOIDB_WIMS_EXTENSION_ACK";
 const MAX_WIMS_TRANSFER_ROWS = 1000;
-const RECENT_DAYS = 14;
+// 2026-11-17: 검수는 한 달을 넘기지 않으므로 '최근 등록분' 기준을 14일 → 30일로 넓힘.
+const RECENT_DAYS = 30;
 
 interface PreviousStatuses {
   capturedAt: string;
@@ -342,7 +343,7 @@ export default function WimsRegistrationImportPanel() {
     };
     type DayGroup = { label: string; sortKey: number; age: number; reviewing: number; approved: number; rejected: number; unknown: number; total: number; rows: WimsRegistrationSnapshot["rows"] };
     const days = new Map<number, DayGroup>();
-    let slow = 0, slowMax = 0, rejectedRecent = 0;
+    let slow = 0, slowMax = 0, rejectedRecent = 0, reviewingRecent = 0;
     for (const row of snapshot.rows) {
       const day = dayOf(row.registeredAt);
       if (!day) continue;
@@ -353,10 +354,11 @@ export default function WimsRegistrationImportPanel() {
       group.total += 1;
       group.rows.push(row);
       if (row.status === "rejected") rejectedRecent += 1;
+      if (row.status === "reviewing") reviewingRecent += 1;
       days.set(day.sortKey, group);
     }
     const recentTotal = [...days.values()].reduce((sum, group) => sum + group.total, 0);
-    return { days: [...days.values()].sort((a, b) => b.sortKey - a.sortKey), recentTotal, rejectedRecent, slow, slowMax };
+    return { days: [...days.values()].sort((a, b) => b.sortKey - a.sortKey), recentTotal, rejectedRecent, reviewingRecent, slow, slowMax };
   }, [snapshot]);
   // 2026-11-11: 지난 수집본과 비교해 바뀐 것(새 반려·승인·새 등록). 맨 위 '바뀐 것' 상자에 보여준다.
   const changes = useMemo(() => (snapshot && previous ? diffWimsStatuses(snapshot.rows, previous.statuses) : null), [snapshot, previous]);
@@ -478,7 +480,10 @@ export default function WimsRegistrationImportPanel() {
                 <p style={{ margin: "8px 0 0", color: wmsColors.muted, fontSize: "13px" }}>최근 {RECENT_DAYS}일 안에 등록한 건이 보이지 않습니다. 등록 직후라면 위의 `상품등록상태 확인하기`에서 다시 전송해 주세요.</p>
               ) : (
                 <>
-                  <p style={{ margin: "8px 0 0", fontSize: "18px", fontWeight: 800, color: resultSummary.rejectedRecent > 0 ? "#c0392b" : wmsColors.greenDark }}>
+                  <p style={{ margin: "8px 0 0", fontSize: "18px", fontWeight: 800, color: wmsColors.greenDark }}>
+                    한 달 내 검수중 {resultSummary.reviewingRecent}건
+                  </p>
+                  <p style={{ margin: "4px 0 0", fontSize: "18px", fontWeight: 800, color: resultSummary.rejectedRecent > 0 ? "#c0392b" : wmsColors.greenDark }}>
                     {resultSummary.rejectedRecent > 0 ? `반려 ${resultSummary.rejectedRecent}건 확인 필요` : "반려 없음 · 모두 정상 진행 중"}
                   </p>
                   <div style={{ display: "grid", gap: "6px", marginTop: "10px" }}>
@@ -522,7 +527,7 @@ export default function WimsRegistrationImportPanel() {
                   </div>
                   {resultSummary.slow > 0 && (
                     <p style={{ margin: "10px 0 0", padding: "8px 10px", borderRadius: "8px", background: "#fff3d6", color: "#a06118", fontSize: "13px", fontWeight: 700 }}>
-                      검수중이 {RECENT_DAYS}일을 넘긴 건 {resultSummary.slow}건 (최대 {resultSummary.slowMax}일째) · 쿠팡에서 멈췄는지 확인하세요.
+                      30일 초과 검수중 {resultSummary.slow}건 (최대 {resultSummary.slowMax}일째) · 쿠팡에서 멈췄는지 확인하세요.
                     </p>
                   )}
                 </>
