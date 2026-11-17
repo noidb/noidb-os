@@ -32,6 +32,37 @@ function loadImage(src: string) {
   });
 }
 
+/**
+ * 2026-11-17 AI 편집 서버(Vercel)는 한 번에 약 4.5MB까지만 받는다. 원본 사진이 크면 서버가
+ * "Request Entity Too Large"라는 글자로 거절해 화면에 JSON 오류가 뜬다. 그래서 AI로 보내기 전에
+ * 긴 변을 maxSide px 이하로 줄여 JPEG로 다시 저장한다(AI 결과는 1024×1024라 화질 차이 없음).
+ * 이미 작고 가벼운 사진은 그대로 돌려준다. 어떤 오류가 나도 원본을 그대로 돌려줘 작업이 멈추지 않는다.
+ */
+export async function shrinkForUpload(dataUrl: string, maxSide = 1536, quality = 0.92): Promise<string> {
+  try {
+    const image = await loadImage(dataUrl);
+    const longSide = Math.max(image.naturalWidth, image.naturalHeight);
+    if (!longSide) return dataUrl;
+    const isJpeg = dataUrl.startsWith("data:image/jpeg");
+    if (longSide <= maxSide && isJpeg && dataUrl.length < 1_200_000) return dataUrl;
+    const scale = Math.min(1, maxSide / longSide);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return dataUrl;
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const shrunk = canvas.toDataURL("image/jpeg", quality);
+    return shrunk.length < dataUrl.length ? shrunk : dataUrl;
+  } catch {
+    return dataUrl;
+  }
+}
+
 export function readImageFile(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();

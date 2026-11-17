@@ -3,7 +3,7 @@
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
 import { extendToSquareCanvas } from "@/lib/thumbnail/fit";
-import { composeQuickDetailPage, readImageFile, resizeSectionTo1000, splitDetailPage, type QuickDetailColor, type QuickDetailSection, type QuickDetailStyle } from "@/lib/image-generator/quick-detail";
+import { composeQuickDetailPage, readImageFile, resizeSectionTo1000, shrinkForUpload, splitDetailPage, type QuickDetailColor, type QuickDetailSection, type QuickDetailStyle } from "@/lib/image-generator/quick-detail";
 import { deleteQuickDraft, listQuickDrafts, MAX_QUICK_DRAFTS, saveQuickDraft, type QuickDetailDraft } from "@/lib/image-generator/quick-drafts";
 import styles from "./quick-detail.module.css";
 
@@ -592,16 +592,25 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   async function editSection(section: QuickDetailSection, lookAnchor?: QuickDetailSection) {
     const isWear = section.kind === "wear";
     if (isWear && !wearLookRef.current) wearLookRef.current = makeWearLook(style);
-    const references: Array<{ dataUrl: string; role: string }> = [{ dataUrl: section.dataUrl, role: section.kind || "detail-section" }];
+    // 서버가 한 번에 받는 용량(약 4.5MB)을 넘지 않도록 보내기 전에 사진을 줄인다.
+    const references: Array<{ dataUrl: string; role: string }> = [{ dataUrl: await shrinkForUpload(section.dataUrl), role: section.kind || "detail-section" }];
     // 먼저 완성된 착용컷이 있으면 두 번째 참고 사진으로 보내 같은 모델·같은 분위기로 맞춘다.
-    if (isWear && lookAnchor) references.push({ dataUrl: lookAnchor.dataUrl, role: "approved-look" });
+    if (isWear && lookAnchor) references.push({ dataUrl: await shrinkForUpload(lookAnchor.dataUrl), role: "approved-look" });
     const response = await fetch("/api/image-generator/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ kind: "quick-detail", style, color, sectionKind: section.kind, look: isWear ? wearLookRef.current : undefined, hasLookReference: isWear && Boolean(lookAnchor), references }),
     });
-    const data = await response.json() as { imageDataUrl?: string; error?: string };
-    if (!response.ok || !data.imageDataUrl) throw new Error(data.error || "사진을 새로 만들지 못했습니다.");
+    // 서버가 JSON이 아닌 글자(용량 초과·시간 초과 등)를 돌려줘도 알아보기 쉬운 안내가 나오게 한다.
+    const raw = await response.text();
+    let data: { imageDataUrl?: string; error?: string } = {};
+    try { data = JSON.parse(raw) as typeof data; } catch { /* JSON이 아닌 응답 */ }
+    if (!response.ok || !data.imageDataUrl) {
+      if (data.error) throw new Error(data.error);
+      if (response.status === 413 || /Request Entity/i.test(raw)) throw new Error("사진 용량이 너무 커서 서버가 받지 못했습니다. 더 작은 사진으로 다시 시도해주세요.");
+      if (response.status === 504 || response.status === 408 || /timeout|timed out/i.test(raw)) throw new Error("AI 편집 시간이 오래 걸려 서버가 중단했습니다. 잠시 후 다시 눌러주세요.");
+      throw new Error(`서버 응답이 올바르지 않습니다(${response.status}). 잠시 후 다시 눌러주세요.`);
+    }
     // '밝은 주얼리 화이트'일 때만 결과 사진을 살짝 밝게·색 쏠림 없이 보정한다(고급 아이보리·모던 그레이는 그대로).
     return { ...section, dataUrl: style === "clean" ? await brightenWhiteBalance(data.imageDataUrl) : data.imageDataUrl };
   }
