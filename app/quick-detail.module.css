@@ -69,6 +69,8 @@
 .quickSteps .quickCreate{background:#e3ede6;border:1px solid #b9cbbc;color:#3f574b;border-radius:8px;min-height:46px}
 .quickSteps .quickCreate:hover:not(:disabled){background:#d3e3d9}
 .splitButton{min-height:46px}
+/* 2026-11-17 중단하기: 작업 중 버튼·상세페이지 분할 버튼과 같은 폭·높이·모서리·간격(색만 연한 분홍) */
+.quickSteps .stopButton{display:flex;align-items:center;justify-content:center;width:100%;min-height:46px;margin-top:8px;padding:11px;border-radius:8px;font-size:14px;font-weight:800;box-sizing:border-box}
 /* 2026-11-11: 제품 컬러 — 동그란 색 견본 4개(원본 유지·로즈골드·실버·골드), 한 번에 하나만 선택 */
 .colorPick{margin-top:12px;padding-top:12px;border-top:1px solid #ece8e2;display:grid;gap:8px}
 .colorPick>strong{font-size:13px}

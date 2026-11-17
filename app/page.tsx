@@ -1887,7 +1887,8 @@ export default function Home() {
     setAiPanel(true);
     setAiRequest(prev => ({ token: (prev?.token || 0) + 1, images }));
     setAiCheckedSlots([]);
-    window.setTimeout(() => document.getElementById("aiReviewHost")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    // 2026-11-17 AI 사진편집 패널이 칸 아래로 내려왔으므로, 패널(진행 상태·중단하기)이 보이게 그 자리로 내려간다.
+    window.setTimeout(() => document.getElementById("aiPanelBox")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   };
   const toggleAiChecked = (key: string) => setAiCheckedSlots(prev => prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]);
   const aiSlotProps = (key: string) => ({
@@ -3692,43 +3693,6 @@ export default function Home() {
             onClick={autoFillEmptySlots}>빈 칸 자동 채우기</button>
         </div>
         {autoFillMessage && <p className="note">{autoFillMessage}</p>}
-        <div style={{ display: aiPanelOpen ? "block" : "none" }}>
-          <QuickDetailRemake
-            headerUrl={detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER}
-            footerUrl={detailFooter?.dataUrl || ""}
-            modelName={model}
-            poolImages={quickRemakePool}
-            incomingFile={incomingDetailFile}
-            incomingToken={incomingDetailToken}
-            onComplete={({ dataUrl, logoApplied }) => {
-              setDetailPreview(dataUrl);
-              setLogoAppliedPreview(logoApplied ? dataUrl : "");
-              setDetailMessage(logoApplied ? "자른 상세페이지에 상단 로고를 붙여 6번 상세페이지 칸에 넣었습니다." : "새 상세페이지를 6번 상세페이지 칸에 넣었습니다.");
-            }}
-            request={aiRequest}
-            reviewHostId="aiReviewHost"
-            onAddToList={items => {
-              // 2026-11-17 칸에서 시작한 AI 편집(slotKey 있음)은 같은 칸에 넣고, 원래 사진은 목록으로 되돌린다.
-              const toSlots = items.filter(item => item.slotKey);
-              const toPool = items.filter(item => !item.slotKey);
-              const returned: SlotImage[] = [];
-              for (const { slotKey, ...image } of toSlots) {
-                const previous = getSlotValue(slotKey!);
-                setSlotValue(slotKey!, image.source && image.source !== image.dataUrl ? { ...image, originDataUrl: image.dataUrl } : image);
-                if (previous?.dataUrl) returned.push(poolOriginal(previous));
-              }
-              // 2026-11-17 새로 넣은 사진을 바로 확인할 수 있게 목록 맨 앞에 넣는다.
-              setUploadPool(prev => {
-                const next = [...toPool, ...prev];
-                for (const image of returned) if (!next.some(item => item.dataUrl === image.dataUrl)) next.push(image);
-                return next;
-              });
-              setPhotoMessage(toSlots.length
-                ? `AI 편집 사진 ${toSlots.length}장을 해당 칸에 넣었습니다. 원래 사진은 아래 사진 목록으로 되돌렸습니다.${toPool.length ? ` 나머지 ${toPool.length}장은 목록 맨 앞에 추가했습니다.` : ""}`
-                : `${items.length}장을 아래 사진 목록 맨 앞에 추가했습니다. 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
-            }}
-          />
-        </div>
         <div className="uploadPoolSticky" title="5번 안에서 아래로 내려도 이 사진 목록과 추가 버튼은 화면 위에 붙어 있습니다.">
         {!!uploadPool.length && (
           <div className="uploadPool">
@@ -3884,6 +3848,44 @@ export default function Home() {
               onRemoveSlot={() => { returnToPool(item.slot); setCustomSlots(prev => prev.filter(slot => slot.id !== item.id)); }}
             />
           ))}
+        </div>
+        {/* 2026-11-17 AI 사진편집 패널을 칸 카드 바로 아래로 옮김: 칸에서 'AI 편집'을 누르고 위로 올라가지 않고 진행 상황·중단하기를 볼 수 있다. 접기/펼치기 버튼은 위에 그대로 있다. */}
+        <div id="aiPanelBox" style={{ display: aiPanelOpen ? "block" : "none" }}>
+          <QuickDetailRemake
+            headerUrl={detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER}
+            footerUrl={detailFooter?.dataUrl || ""}
+            modelName={model}
+            poolImages={quickRemakePool}
+            incomingFile={incomingDetailFile}
+            incomingToken={incomingDetailToken}
+            onComplete={({ dataUrl, logoApplied }) => {
+              setDetailPreview(dataUrl);
+              setLogoAppliedPreview(logoApplied ? dataUrl : "");
+              setDetailMessage(logoApplied ? "자른 상세페이지에 상단 로고를 붙여 6번 상세페이지 칸에 넣었습니다." : "새 상세페이지를 6번 상세페이지 칸에 넣었습니다.");
+            }}
+            request={aiRequest}
+            reviewHostId="aiReviewHost"
+            onAddToList={items => {
+              // 2026-11-17 칸에서 시작한 AI 편집(slotKey 있음)은 같은 칸에 넣고, 원래 사진은 목록으로 되돌린다.
+              const toSlots = items.filter(item => item.slotKey);
+              const toPool = items.filter(item => !item.slotKey);
+              const returned: SlotImage[] = [];
+              for (const { slotKey, ...image } of toSlots) {
+                const previous = getSlotValue(slotKey!);
+                setSlotValue(slotKey!, image.source && image.source !== image.dataUrl ? { ...image, originDataUrl: image.dataUrl } : image);
+                if (previous?.dataUrl) returned.push(poolOriginal(previous));
+              }
+              // 2026-11-17 새로 넣은 사진을 바로 확인할 수 있게 목록 맨 앞에 넣는다.
+              setUploadPool(prev => {
+                const next = [...toPool, ...prev];
+                for (const image of returned) if (!next.some(item => item.dataUrl === image.dataUrl)) next.push(image);
+                return next;
+              });
+              setPhotoMessage(toSlots.length
+                ? `AI 편집 사진 ${toSlots.length}장을 해당 칸에 넣었습니다. 원래 사진은 위쪽 사진 목록으로 되돌렸습니다.${toPool.length ? ` 나머지 ${toPool.length}장은 목록 맨 앞에 추가했습니다.` : ""}`
+                : `${items.length}장을 위쪽 사진 목록 맨 앞에 추가했습니다. 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
+            }}
+          />
         </div>
         {/* 2026-11-17 AI 사진편집의 '사진별 확인'이 이 자리에 나타난다(칸에서 맞추고 → AI 선택 → 바로 아래에서 확인). */}
         <div id="aiReviewHost" />

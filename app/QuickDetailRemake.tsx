@@ -561,7 +561,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       setScanSummary({ found: found.length, kept: sections.length, excluded: 0 });
       setAddedVersion(value => value + 1);
       setCut(null);
-      setMessage(`6번 상세페이지 칸에 넣고, 사진 ${items.length}장을 아래 등록이미지 목록에 올렸습니다. 아래 목록에서 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
+      setMessage(`6번 상세페이지 칸에 넣고, 사진 ${items.length}장을 위쪽 등록이미지 목록에 올렸습니다. 위 목록에서 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "상세페이지를 넣고 나누지 못했습니다.");
     } finally {
@@ -765,7 +765,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     // 불러온 사진·안내 문구가 화면 위쪽에 있어, 눌러도 반응이 없는 것처럼 보이지 않게 위로 올려 보여 준다.
     panelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     if (draft.id === draftId && originalSections.length) {
-      setMessage(`${draft.modelName || "이 작업"}은(는) 지금 열려 있는 작업입니다. 아래 사진 목록에서 이어서 하시면 됩니다.`);
+      setMessage(`${draft.modelName || "이 작업"}은(는) 지금 열려 있는 작업입니다. 위쪽 사진 목록에서 이어서 하시면 됩니다.`);
       return;
     }
     deletedDraftIdsRef.current.delete(draft.id);
@@ -905,11 +905,11 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       <article>
         <span>3</span><h3>AI 사진편집</h3>
         <button type="button" className={styles.quickCreate} disabled={!originalSections.length || busy} onClick={() => void create()}>{busy ? `작업 중… (${Math.min(progress + 1, Math.max(expectedEdits, 1))}/${Math.max(expectedEdits, 1)})` : completedEdits ? "이어서 AI 편집" : "AI 편집 시작"}</button>
-        {editing && <button type="button" className="softPinkButton" style={{ borderRadius: 8, minHeight: 40, fontWeight: 800 }} disabled={stopping} onClick={stopEditing}>{stopping ? "중단하는 중…" : "중단하기"}</button>}
+        {editing && <button type="button" className={`softPinkButton ${styles.stopButton}`} disabled={stopping} onClick={stopEditing}>{stopping ? "중단하는 중…" : "중단하기"}</button>}
         <button type="button" className={styles.splitButton} disabled={!cut || busy}
           title={cut ? "올린 상세페이지를 사진별로 나눕니다. 사진 바깥 흰 여백의 글자 줄은 잘라내고, 사진 위 글자는 그대로 둡니다." : "1단계에서 상세페이지를 먼저 올려주세요."}
           onClick={() => void confirmCutForSplit()}>{busy && cut ? "나누는 중…" : "상세페이지 분할"}</button>
-        <small className={styles.wrapNote}>완성된 사진은 아래 등록이미지 목록 맨 앞에 들어갑니다. 6번 상세페이지 칸은 바꾸지 않습니다.</small>
+        <small className={styles.wrapNote}>완성된 사진은 위쪽 등록이미지 목록 맨 앞에 들어갑니다. 6번 상세페이지 칸은 바꾸지 않습니다.</small>
         <p>{message}</p>
         {scanSummary && <div className={styles.scanSummary}><span>가져온 사진 <strong>{originalSections.length}</strong></span><span>AI 편집 예정 <strong>{expectedEdits}</strong></span><span>원본 사용 <strong>{originalSections.length - expectedEdits}</strong></span></div>}
         {originalSections.length > 0 && <small>예상 AI 편집: {expectedEdits}회 · 완료: {completedEdits}장</small>}
@@ -979,7 +979,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
           <button type="button" className={cut.mode === "bottom" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "bottom", holeStart: null })}>아래쪽 자를 위치 정하기</button>
           <button type="button" className={cut.mode === "hole" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "hole", holeStart: null })} title="지울 문구의 바로 위와 바로 아래를 클릭하면 그 사이가 빠지고, 사이트 기본 간격만 남습니다.">가운데 잘라내기</button>
           <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPage()} title="자른 상세페이지를 로고 없이 그대로 6번 상세페이지 칸에 넣습니다.">상세페이지 사용</button>
-          <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPageAndSplit()} title="6번 상세페이지 칸에 넣고, 같은 사진을 사진별로 나눠 아래 등록이미지 목록에도 한 번에 올립니다.">{busy ? "처리 중…" : "상세페이지 사용 + 사진별 나누기"}</button>
+          <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPageAndSplit()} title="6번 상세페이지 칸에 넣고, 같은 사진을 사진별로 나눠 위쪽 등록이미지 목록에도 한 번에 올립니다.">{busy ? "처리 중…" : "상세페이지 사용 + 사진별 나누기"}</button>
           <button type="button" className="secondaryButton" disabled={busy} onClick={() => void confirmCutForSplit()} title="사진별로 나눠서 등록이미지에 추가하거나 AI로 새로 만들 때 씁니다.">사진별로 나누기</button>
           <button type="button" className="secondaryButton" disabled={!cut.history.length && cut.holeStart === null} onClick={() => setCut(c => c && (c.holeStart !== null ? { ...c, holeStart: null } : c.history.length ? { ...c, ...c.history[c.history.length - 1], holeStart: null, history: c.history.slice(0, -1) } : c))}>되돌리기</button>
           <button type="button" className="secondaryButton" disabled={cut.top === 0 && cut.bottom === 1 && !cut.holes.length} onClick={() => setCut(c => c && { ...c, top: 0, bottom: 1, holes: [], holeStart: null, history: [...c.history, { top: c.top, bottom: c.bottom, holes: c.holes }] })}>초기화</button>
