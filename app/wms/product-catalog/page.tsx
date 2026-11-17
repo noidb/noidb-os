@@ -1528,7 +1528,7 @@ export default function ProductCatalogPage() {
                   const chosen = openTiers[`${group.key}|folder|${node.id}`];
                   return chosen !== undefined ? chosen : isRoot;
                 };
-                const shownInNode = (node: FolderNode, isRoot: boolean): { hit: PhotoHit; index: number }[] => !folderOpen(node, isRoot) ? [] : [...[...node.photos].sort(byName), ...sortedChildren(node).flatMap(child => shownInNode(child, false))];
+                const shownInNode = (node: FolderNode, isRoot: boolean): { hit: PhotoHit; index: number }[] => !folderOpen(node, isRoot) ? [] : [...sortedChildren(node).flatMap(child => shownInNode(child, false)), ...[...node.photos].sort(byName)];
                 const modelShown = [...modelRoots.values()].flatMap(root => shownInNode(root, true));
                 const tierHits = (tier: PhotoTier) => visibleHits.filter(({ hit }) => !modelIds.has(hit.id) && photoTier(hit.identity.kind) === tier);
                 const primaryHits = tierHits("primary");
@@ -1578,8 +1578,9 @@ export default function ProductCatalogPage() {
                 const renderNode = (node: FolderNode, isRoot: boolean, depth: number): React.ReactNode[] => {
                   const out: React.ReactNode[] = [folderHeader(node, isRoot, depth)];
                   if (!folderOpen(node, isRoot)) return out;
-                  for (const item of [...node.photos].sort(byName)) if (limited.has(item.hit.id)) out.push(renderHit(item));
+                  // 2026-11-17 하위 폴더 줄을 사진보다 먼저 보여 준다(스크롤을 오래 내리지 않도록).
                   for (const child of sortedChildren(node)) out.push(...renderNode(child, false, depth + 1));
+                  for (const item of [...node.photos].sort(byName)) if (limited.has(item.hit.id)) out.push(renderHit(item));
                   return out;
                 };
                 const renderHit = ({ hit, index: hitIndex }: { hit: PhotoHit; index: number }) => {
