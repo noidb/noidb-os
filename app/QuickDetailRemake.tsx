@@ -293,6 +293,19 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [zoomIndex]);
+  // 2026-11-17 AI로 편집할 사진 고르기에서도 사진을 누르면 크게 본다(선택은 사진 왼쪽 위 원을 눌러서).
+  const [poolZoomIndex, setPoolZoomIndex] = useState<number | null>(null);
+  const poolZoomCountRef = useRef(0);
+  useEffect(() => {
+    if (poolZoomIndex === null) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPoolZoomIndex(null);
+      else if (event.key === "ArrowLeft") setPoolZoomIndex(current => current === null ? null : Math.max(0, current - 1));
+      else if (event.key === "ArrowRight") setPoolZoomIndex(current => current === null ? null : Math.min(poolZoomCountRef.current - 1, current + 1));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [poolZoomIndex]);
   const [progress, setProgress] = useState(0);
   const [scanSummary, setScanSummary] = useState<{ found: number; kept: number; excluded: number } | null>(null);
   const [message, setMessage] = useState("상세페이지를 올리거나, 등록이미지에서 사진을 골라주세요.");
@@ -812,20 +825,53 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
             onClick={() => void startFromPhotos(poolImages.filter(image => pickedPool.includes(image.dataUrl)).map(image => ({ dataUrl: image.dataUrl, name: image.fileName })), `등록이미지 ${pickedPool.length}장`)}>
             {busy ? "가져오는 중…" : "선택한 사진으로 시작"}
           </button>
-          <button type="button" className="secondaryButton compactFieldButton" onClick={() => { setPickingPool(false); setPickedPool([]); }}>닫기</button>
+          <button type="button" className="secondaryButton compactFieldButton" onClick={() => { setPickingPool(false); setPickedPool([]); setPoolZoomIndex(null); }}>닫기</button>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8 }}>
           {poolImages.map((image, index) => {
             const picked = pickedPool.includes(image.dataUrl);
-            return <button key={`${image.fileName}-${index}`} type="button" onClick={() => setPickedPool(current => picked ? current.filter(url => url !== image.dataUrl) : [...current, image.dataUrl])}
-              style={{ position: "relative", padding: 0, border: picked ? "3px solid #60766a" : "1px solid #d8d3cc", borderRadius: 8, background: "#fff", cursor: "pointer", overflow: "hidden" }}>
-              <img src={image.dataUrl} alt={image.fileName} style={{ display: "block", width: "100%", aspectRatio: "1 / 1", objectFit: "contain" }} />
-              {picked && <span style={{ position: "absolute", top: 4, left: 4, background: "#60766a", color: "#fff", borderRadius: 999, minWidth: 22, height: 22, fontSize: 12, fontWeight: 800, display: "grid", placeItems: "center" }}>{pickedPool.indexOf(image.dataUrl) + 1}</span>}
-            </button>;
+            const togglePick = () => setPickedPool(current => picked ? current.filter(url => url !== image.dataUrl) : [...current, image.dataUrl]);
+            return <div key={`${image.fileName}-${index}`}
+              style={{ position: "relative", border: picked ? "3px solid #60766a" : "1px solid #d8d3cc", borderRadius: 8, background: "#fff", overflow: "hidden" }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={image.dataUrl} alt={image.fileName} title="누르면 크게 봅니다" onClick={() => setPoolZoomIndex(index)}
+                style={{ display: "block", width: "100%", aspectRatio: "1 / 1", objectFit: "contain", cursor: "zoom-in" }} />
+              <button type="button" title={picked ? "선택 해제" : "이 사진 선택"} onClick={togglePick}
+                style={{ position: "absolute", top: 4, left: 4, padding: 0, cursor: "pointer", background: picked ? "#60766a" : "rgba(255,255,255,0.92)", color: picked ? "#fff" : "#60766a", border: "2px solid #60766a", borderRadius: 999, minWidth: 24, height: 24, fontSize: 12, fontWeight: 800, display: "grid", placeItems: "center" }}>
+                {picked ? pickedPool.indexOf(image.dataUrl) + 1 : ""}
+              </button>
+            </div>;
           })}
         </div>
       </div>
     )}
+
+    {pickingPool && (() => {
+      poolZoomCountRef.current = poolImages.length;
+      if (poolZoomIndex === null) return null;
+      const index = Math.min(poolZoomIndex, poolImages.length - 1);
+      const image = poolImages[index];
+      if (!image) return null;
+      const picked = pickedPool.includes(image.dataUrl);
+      const navStyle = { width: 48, height: 48, borderRadius: 8, border: "none", background: "#f4f1ec", color: "#252525", fontSize: 18, cursor: "pointer", flex: "0 0 auto" } as const;
+      return (
+        <div role="dialog" aria-label="사진 크게 보기" onClick={() => setPoolZoomIndex(null)}
+          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(37,37,37,0.82)", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: 16 }}>
+          <button type="button" title="이전 사진" disabled={index === 0} style={{ ...navStyle, opacity: index === 0 ? 0.35 : 1 }} onClick={event => { event.stopPropagation(); setPoolZoomIndex(index - 1); }}>◀</button>
+          <div onClick={event => event.stopPropagation()} style={{ display: "grid", gap: 8, justifyItems: "center", minWidth: 0 }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={image.dataUrl} alt={`사진 ${index + 1} 크게 보기`} style={{ maxWidth: "min(100%, calc(100vw - 160px))", maxHeight: "calc(100vh - 110px)", objectFit: "contain", borderRadius: 8, background: "#fff" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 12, color: "#fff", fontSize: 14, fontWeight: 700 }}>
+              <span>{index + 1} / {poolImages.length}</span>
+              <button type="button" className="softBeigeButton" style={{ borderRadius: 8, padding: "6px 16px" }}
+                onClick={() => setPickedPool(current => picked ? current.filter(url => url !== image.dataUrl) : [...current, image.dataUrl])}>{picked ? "선택 해제" : "이 사진 선택"}</button>
+              <button type="button" className="softBeigeButton" style={{ borderRadius: 8, padding: "6px 16px" }} onClick={() => setPoolZoomIndex(null)}>닫기</button>
+            </div>
+          </div>
+          <button type="button" title="다음 사진" disabled={index === poolImages.length - 1} style={{ ...navStyle, opacity: index === poolImages.length - 1 ? 0.35 : 1 }} onClick={event => { event.stopPropagation(); setPoolZoomIndex(index + 1); }}>▶</button>
+        </div>
+      );
+    })()}
 
     {cut && (
       <div className="pageCutPanel" style={{ marginTop: 16 }}>
