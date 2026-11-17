@@ -13,7 +13,7 @@ import { finishWaitingFolder, modelsInFolderName } from "@/lib/image-search/brow
 import { ensureReadWritePermission, loadDirectoryHandle } from "@/lib/product-db/idb";
 import { findNewProductFolders, loadWaitingFolders, openNewProductFolder, readProductInfoText, refreshWaitingFolders, type NewProductFolder, type WaitingFolders } from "@/lib/image-search/browser-folder";
 import { deletePhotoFiles, loadPreparedDetail, reopenPhotoUrl, requestPhotoDeletePermission, savePreparedDetail } from "@/lib/image-search/browser-folder";
-import { identifyPhoto, photoPriority, photoTier, type PhotoIdentity, type PhotoTier } from "@/lib/image-search/photo-kind";
+import { identifyPhoto, modelFolderOf, photoPriority, photoTier, type PhotoIdentity, type PhotoTier } from "@/lib/image-search/photo-kind";
 import type { WimsRegistrationRow, WimsRegistrationSnapshot } from "@/lib/wms/wims-registration";
 import type { ReregistrationExclusion } from "@/lib/wms/reregistration-exclusions";
 import { REREGISTRATION_TAB_TIER } from "@/lib/wms/reregistration-tab-tier";
@@ -24,6 +24,8 @@ import { PRODUCT_INFO_STORAGE_KEY } from "@/lib/product-info";
 import { ADD_PHOTOS_CHANNEL, fileToDataUrl, type AddPhotosAck, type AddPhotosRequest } from "@/lib/registration-photo-channel";
 
 type PhotoHit = LocalPhoto & { fileName: string; preview: string; selected: boolean; identity: PhotoIdentity };
+/** 2026-11-17 모델명 폴더 보기: 폴더 하나(이름·경로·바로 든 사진·하위 폴더). 하위 폴더 안에 또 하위 폴더가 있어도 같은 모양으로 이어진다. */
+type FolderNode = { name: string; id: string; photos: { hit: PhotoHit; index: number }[]; children: Map<string, FolderNode> };
 /**
  * analysisId: AI 분석용으로 지정한 사진 1장(선택한 사진 중 하나). source: 사진을 어디서 가져왔는지.
  * level: 어디까지 열었는지 — 1~3 = 연결표 폴더 단계(FolderTier), 4 = 사진 폴더 전체 검색.
@@ -1050,10 +1052,15 @@ export default function ProductCatalogPage() {
 
   // 2026-11-10 폴더 묶음(보정본·원본)마다 그 폴더 사진만 전체 선택/해제. 선택은 최대 20장까지만 채우고 넘으면 안내한다.
   function selectTierPhotos(model: string, tier: PhotoTier, on: boolean) {
+    // 모델명 폴더 칸에 따로 보여주는 사진은 아래 폴더 묶음에 넣지 않으므로 그 사진은 뺀다.
+    selectPhotosWhere(model, photo => photoTier(photo.identity.kind) === tier && !modelFolderOf(photo.id, model), on);
+  }
+
+  // 2026-11-17 폴더 하나(모델명 폴더·하위 폴더)의 사진만 전체 선택/해제. 선택은 최대 20장까지만 채우고 넘으면 안내한다.
+  function selectPhotosWhere(model: string, inTier: (photo: PhotoHit) => boolean, on: boolean) {
     const state = photoStatesRef.current[model];
     if (!state) return;
     const usable = (photo: PhotoHit) => photo.identity.kind !== "detail" && !state.hiddenIds?.includes(photo.id) && !brokenPhotoIds.has(photo.id);
-    const inTier = (photo: PhotoHit) => photoTier(photo.identity.kind) === tier;
     if (on) {
       const wanted = state.hits.filter(photo => usable(photo) && inTier(photo) && !photo.selected).length;
       const room = MAX_SELECTED_PHOTOS - state.hits.filter(photo => photo.selected).length;
@@ -1445,7 +1452,12 @@ export default function ProductCatalogPage() {
     const usable = (state?.hits || []).filter(hit => !brokenPhotoIds.has(hit.id) && !state?.hiddenIds?.includes(hit.id));
     const target = usable.find(hit => hit.selected) || usable[0];
     if (!target) return;
-    const ok = await openPhotoLocation(target.id);
+    await openPhotoFolderOf(modelName, target.id);
+  }
+
+  /** 2026-11-17 사진 한 장(id)이 들어 있는 폴더를 탐색기로 연다. 폴더 줄의 "이 폴더 열기"와 사진 카드의 폴더 이름이 같이 쓴다. */
+  async function openPhotoFolderOf(modelName: string, photoId: string) {
+    const ok = await openPhotoLocation(photoId);
     setAddNotice(current => ({ ...current, [modelName]: ok ? "탐색기를 여는 중입니다. 안 열리면 위 '폴더 열기가 안 되면' 설정 파일을 PC에서 한 번 실행해 주세요." : "경로 복사가 막혀 폴더를 열지 못했습니다. 브라우저의 클립보드 허용을 확인해 주세요." }));
   }
 
@@ -1491,17 +1503,45 @@ export default function ProductCatalogPage() {
                 const photos = photoStates[group.modelName];
                 const detailHits = photos?.hits.filter(hit => hit.identity.kind === "detail" && !photos.hiddenIds?.includes(hit.id)) || [];
                 const visibleHits = (photos?.hits || []).map((hit, index) => ({ hit, index })).filter(({ hit }) => !(photos?.hiddenIds?.includes(hit.id) && !showHiddenPhotos[group.modelName]));
-                const tierHits = (tier: PhotoTier) => visibleHits.filter(({ hit }) => photoTier(hit.identity.kind) === tier);
+                // 2026-11-17 모델명 폴더(예: we00486) 안의 사진은 종류와 상관없이 맨 앞 칸에 폴더 모양 그대로 보여준다.
+                // 하위 폴더(보정원본 등)는 줄을 누르면 펼쳐지고, 그 안에 또 하위 폴더가 있어도 같은 방식이다.
+                const modelRoots = new Map<string, FolderNode>();
+                for (const entry of visibleHits) {
+                  const placed = modelFolderOf(entry.hit.id, group.modelName);
+                  if (!placed) continue;
+                  let root = modelRoots.get(placed.folderId);
+                  if (!root) { root = { name: placed.folderId.slice(placed.folderId.lastIndexOf("/") + 1), id: placed.folderId, photos: [], children: new Map() }; modelRoots.set(placed.folderId, root); }
+                  let node: FolderNode = root;
+                  for (const part of placed.relative) {
+                    let child = node.children.get(part);
+                    if (!child) { child = { name: part, id: `${node.id}/${part}`, photos: [], children: new Map() }; node.children.set(part, child); }
+                    node = child;
+                  }
+                  node.photos.push(entry);
+                }
+                const byName = (a: { hit: PhotoHit }, b: { hit: PhotoHit }) => a.hit.fileName.localeCompare(b.hit.fileName, "ko", { numeric: true });
+                const nodeAll = (node: FolderNode): { hit: PhotoHit; index: number }[] => [...node.photos, ...[...node.children.values()].flatMap(nodeAll)];
+                const sortedChildren = (node: FolderNode) => [...node.children.values()].sort((a, b) => a.name.localeCompare(b.name, "ko", { numeric: true }));
+                const modelIds = new Set([...modelRoots.values()].flatMap(root => nodeAll(root).map(({ hit }) => hit.id)));
+                // 모델명 폴더 줄은 처음부터 펼치고, 하위 폴더 줄은 누르면 펼친다.
+                const folderOpen = (node: FolderNode, isRoot: boolean) => {
+                  const chosen = openTiers[`${group.key}|folder|${node.id}`];
+                  return chosen !== undefined ? chosen : isRoot;
+                };
+                const shownInNode = (node: FolderNode, isRoot: boolean): { hit: PhotoHit; index: number }[] => !folderOpen(node, isRoot) ? [] : [...[...node.photos].sort(byName), ...sortedChildren(node).flatMap(child => shownInNode(child, false))];
+                const modelShown = [...modelRoots.values()].flatMap(root => shownInNode(root, true));
+                const tierHits = (tier: PhotoTier) => visibleHits.filter(({ hit }) => !modelIds.has(hit.id) && photoTier(hit.identity.kind) === tier);
                 const primaryHits = tierHits("primary");
                 const editedHits = tierHits("edited");
                 const originalHits = tierHits("original");
-                // 상세페이지·1000 폴더 편집본이 없을 때만 보정본 폴더, 그것도 없을 때만 원본 폴더를 처음부터 펼친다.
+                // 모델명 폴더가 있으면 그 칸이 먼저이므로 나머지 묶음은 접어 둔다. 없으면 예전처럼: 상세페이지·1000 폴더 편집본이 없을 때만 보정본 폴더, 그것도 없을 때만 원본 폴더를 처음부터 펼친다.
                 const tierOpen = (tier: "edited" | "original") => {
                   const chosen = openTiers[`${group.key}|${tier}`];
                   if (chosen !== undefined) return chosen;
+                  if (modelIds.size > 0) return false;
                   return tier === "edited" ? primaryHits.length === 0 : primaryHits.length === 0 && editedHits.length === 0;
                 };
-                const shownFlat = [...primaryHits, ...(tierOpen("edited") ? editedHits : []), ...(tierOpen("original") ? originalHits : [])];
+                const shownFlat = [...modelShown, ...primaryHits, ...(tierOpen("edited") ? editedHits : []), ...(tierOpen("original") ? originalHits : [])];
                 const shownLimit = shownCounts[group.modelName] || THUMBNAIL_PAGE;
                 const limited = new Set(shownFlat.slice(0, shownLimit).map(({ hit }) => hit.id));
                 const primarySlice = primaryHits.filter(({ hit }) => limited.has(hit.id));
@@ -1517,6 +1557,31 @@ export default function ProductCatalogPage() {
                     <button type="button" className="softBeigeButton" onClick={() => selectTierPhotos(group.modelName, tier, false)} title="이 폴더 사진의 선택을 모두 풉니다" style={{ minHeight: 30, padding: "0 12px", borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}>이 폴더 전체 해제</button>
                   </div>
                 );
+                // 모델명 폴더·하위 폴더 줄: 누르면 펼침/접힘, "이 폴더 열기"는 탐색기로 그 폴더를 연다(그 폴더에 바로 든 사진이 있을 때만).
+                const folderHeader = (node: FolderNode, isRoot: boolean, depth: number) => {
+                  const open = folderOpen(node, isRoot);
+                  const ids = new Set(nodeAll(node).map(({ hit }) => hit.id));
+                  const direct = node.photos.find(({ hit }) => !brokenPhotoIds.has(hit.id));
+                  const small: React.CSSProperties = { minHeight: 30, padding: "0 12px", borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" };
+                  return (
+                    <div key={`folder-${node.id}`} data-no-drag style={{ flexBasis: `calc(100% - ${depth * 16}px)`, marginLeft: depth * 16, display: "flex", gap: 8, alignItems: "stretch" }}>
+                      <button type="button" onClick={() => setOpenTiers(current => ({ ...current, [`${group.key}|folder|${node.id}`]: !open }))}
+                        style={{ flex: 1, textAlign: "left", minHeight: 30, padding: "6px 10px", border: `1px solid ${isRoot ? "#b9cbbc" : "#d8d3cc"}`, borderRadius: 8, background: isRoot ? "#e3ede6" : "#f4f1ec", color: isRoot ? "#3f574b" : "#4b4744", fontWeight: 700, fontSize: 12, cursor: "pointer" }}>
+                        {open ? "▾" : "▸"} {isRoot ? `모델명 폴더 · ${node.name}` : node.name} · {ids.size}장
+                      </button>
+                      {direct && <button type="button" className="softBeigeButton" onClick={() => void openPhotoFolderOf(group.modelName, direct.hit.id)} title="이 폴더를 이 PC 탐색기로 엽니다." style={small}>이 폴더 열기</button>}
+                      <button type="button" className="softSageButton" onClick={() => selectPhotosWhere(group.modelName, photo => ids.has(photo.id), true)} title="이 폴더 사진을 선택합니다(전체 최대 20장)" style={small}>이 폴더 전체 선택</button>
+                      <button type="button" className="softApricotButton" onClick={() => selectPhotosWhere(group.modelName, photo => ids.has(photo.id), false)} title="이 폴더 사진의 선택을 모두 풉니다" style={small}>이 폴더 전체 해제</button>
+                    </div>
+                  );
+                };
+                const renderNode = (node: FolderNode, isRoot: boolean, depth: number): React.ReactNode[] => {
+                  const out: React.ReactNode[] = [folderHeader(node, isRoot, depth)];
+                  if (!folderOpen(node, isRoot)) return out;
+                  for (const item of [...node.photos].sort(byName)) if (limited.has(item.hit.id)) out.push(renderHit(item));
+                  for (const child of sortedChildren(node)) out.push(...renderNode(child, false, depth + 1));
+                  return out;
+                };
                 const renderHit = ({ hit, index: hitIndex }: { hit: PhotoHit; index: number }) => {
                   const photos = photoStates[group.modelName];
                   if (!photos) return null;
@@ -1530,7 +1595,7 @@ export default function ProductCatalogPage() {
                        {hit.identity.kind !== "detail" && <label title={isAnalysis ? "AI 분석에 쓰는 사진 (처음 선택한 사진)" : "선택"} style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 3, padding: "5px 6px", border: `1px solid ${hit.selected ? wmsColors.slate : wmsColors.border}`, borderRadius: 6, background: hit.selected ? wmsColors.surface : "#fff", cursor: full || brokenPhotoIds.has(hit.id) || photos.hiddenIds?.includes(hit.id) ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={hit.selected} disabled={full || brokenPhotoIds.has(hit.id) || photos.hiddenIds?.includes(hit.id)} onChange={event => setPhotoSelected(group.modelName, hit.id, event.target.checked)} style={{ width: 20, height: 20, margin: 0, cursor: "inherit" }} />{isAnalysis && <span style={{ color: wmsColors.greenDark }}>★</span>}</label>}
                        {hit.identity.kind !== "detail" && <button type="button" className={isAnalysis ? "softSageButton" : "softApricotButton"} onClick={() => setAnalysisPhoto(group.modelName, hit.id)} disabled={isAnalysis || brokenPhotoIds.has(hit.id) || Boolean(photos.hiddenIds?.includes(hit.id))} title="AI 분석에 이 사진을 씁니다" style={{ width: "100%", marginTop: 3, minHeight: 26, padding: "2px 0", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: isAnalysis ? "default" : "pointer" }}>{isAnalysis ? "★ 분석용" : "분석용으로"}</button>}
                        {brokenPhotoIds.has(hit.id) && <div style={{ color: wmsColors.warnText }}>미리보기를 열지 못해 선택을 막았습니다.</div>}
-                       <div>{hit.fileName}</div><div style={{ color: wmsColors.muted }}>{hit.identity.folder} · {hit.identity.width && hit.identity.height ? `${hit.identity.width}×${hit.identity.height}` : "크기 미확인"}</div>
+                       <div>{hit.fileName}</div><div style={{ color: wmsColors.muted }}>{hit.identity.folder ? <button type="button" onClick={() => void openPhotoFolderOf(group.modelName, hit.id)} title="이 사진이 있는 폴더를 이 PC 탐색기로 엽니다." style={{ border: 0, background: "none", padding: 0, font: "inherit", color: "inherit", textAlign: "left", textDecoration: "underline", textUnderlineOffset: 2, cursor: "pointer", overflowWrap: "anywhere" }}>{hit.identity.folder}</button> : null} · {hit.identity.width && hit.identity.height ? `${hit.identity.width}×${hit.identity.height}` : "크기 미확인"}</div>
                        <button type="button" onClick={() => void deletePhotos(group.modelName, [hit.id])} disabled={Boolean(deletingPhotos)} title="이 사진을 MYBOX에서 삭제합니다" style={{ width: "100%", marginTop: 3, padding: "3px 0", border: `1px solid ${wmsColors.warnSoftBorder}`, borderRadius: 6, background: wmsColors.warnSoft, color: wmsColors.warnText, fontSize: 11, fontWeight: 700, cursor: deletingPhotos ? "wait" : "pointer" }}>삭제</button>
                        {photos.hiddenIds?.includes(hit.id) && <button type="button" onClick={() => hidePhoto(group.modelName, hit.id, false)} style={{ border: 0, background: "none", color: wmsColors.warnText, padding: 0, cursor: "pointer", textAlign: "left" }}>다시 사용</button>}
                     </div>;
@@ -1583,6 +1648,8 @@ export default function ProductCatalogPage() {
                     <span style={{ fontWeight: 500, color: wmsColors.muted }}>사진 위에서 마우스를 누른 채 끌면 여러 장 선택 · 이미 선택된 사진에서 끌기 시작하면 해제</span>
                   </div>}
                   {photos && photos.hits.length > 0 && <div onPointerDown={event => startPhotoDrag(group.modelName, event)} onDragStart={event => event.preventDefault()} title="빈 곳에서 마우스를 누른 채 끌면 여러 장이 한꺼번에 선택됩니다. 이미 선택된 사진에서 끌면 해제됩니다." style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8, paddingBottom: 6 }}>
+                     {[...modelRoots.values()].flatMap(root => renderNode(root, true, 0))}
+                     {modelRoots.size > 0 && primarySlice.length + editedHits.length + originalHits.length > 0 && <div style={{ flexBasis: "100%", fontSize: 12, fontWeight: 700, color: wmsColors.muted }}>그 외 폴더 사진 · 사진 아래 폴더 이름을 누르면 그 폴더가 열립니다</div>}
                      {primarySlice.map(item => renderHit(item))}
                      {editedHits.length > 0 && tierHeader("edited", "보정본 폴더 (EVOTO 등)", editedHits.length)}
                      {tierOpen("edited") && editedSlice.map(item => renderHit(item))}

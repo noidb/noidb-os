@@ -63,6 +63,22 @@ export function photoPriority(kind: PhotoKind): number {
   return kind === "detail" ? 0 : kind === "edited-1000" ? 1 : kind === "edited" ? 2 : kind === "unspecified" ? 3 : 4;
 }
 
+/**
+ * 2026-11-17 사진 경로(id)에서 '모델명 폴더'(예: .../큐빅 묶음 폴더/we00486/보정원본/2.jpg 의 we00486)를 찾는다.
+ * 폴더 이름이 모델명 그대로이거나 "we00486 귀걸이"처럼 모델명 뒤에 글자·숫자가 붙지 않고 이어지면 모델명 폴더로 본다.
+ * 여러 모델이 한 폴더 이름에 들어 있는 묶음 폴더("… wn00486 we00486 ws00486")는 모델명 폴더가 아니다.
+ * 찾으면 그 폴더의 경로(folderId)와 그 아래 하위 폴더 이름들(relative)을 돌려준다. 없으면 null.
+ */
+export function modelFolderOf(id: string, modelName: string): { folderId: string; relative: string[] } | null {
+  const key = modelName.trim().toLowerCase();
+  if (!key) return null;
+  const folders = id.replace(/\\/g, "/").split("/").slice(0, -1);
+  // 하위 폴더 이름에 같은 모델명이 또 있어도 가장 위쪽(바깥) 모델명 폴더를 기준으로 삼는다.
+  const at = folders.findIndex((name, index) => index > 0 && name.toLowerCase().startsWith(key) && !/[a-z0-9]/.test(name.toLowerCase()[key.length] || ""));
+  if (at < 0) return null;
+  return { folderId: folders.slice(0, at + 1).join("/"), relative: folders.slice(at + 1) };
+}
+
 /** 화면 묶음: 바로 보여줄 사진(상세페이지·1000 폴더 편집본) / 보정본 폴더 / 원본 폴더(폴더 바깥 사진 포함). */
 export type PhotoTier = "primary" | "edited" | "original";
 export function photoTier(kind: PhotoKind): PhotoTier {
