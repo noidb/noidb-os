@@ -896,3 +896,14 @@ html,body{overflow-x:clip}
   .floatingSaveBar button{flex:1;min-width:0;box-shadow:none!important}
   .floatingSaveSpacer{display:block;height:68px}
 }
+
+/* 2026-11-17 5번 안의 AI 사진편집 칸 머리줄, 6번 사진 목록 머리줄·작은 목록 */
+.aiEditHeader{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:12px 0}
+.aiEditToggle{border:1px solid #c7b9a8;border-radius:8px;padding:9px 18px;background:#e9ddcf;color:#252525;font-weight:800;cursor:pointer}
+.aiEditToggle:hover{background:#e0d2c1}
+.detailListHeader{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:4px}
+.detailListHeader strong span{margin-left:8px;color:#77716a;font-size:12px;font-weight:600}
+.detailListHeader button{border-radius:8px;padding:8px 14px;font-weight:800;cursor:pointer}
+.detailList{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+.detailList .detailItem img{width:64px;height:64px}
+

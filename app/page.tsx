@@ -77,7 +77,8 @@ type Analysis = {
 
 type ProductPhoto = { id: string; name: string; dataUrl: string };
 // originDataUrl: 위 이미지 목록에서 칸으로 끌어올 때의 "목록 모양" 그대로의 사진. 삭제하면 편집본이 아니라 이걸로 목록에 돌아간다.
-type SlotImage = { dataUrl: string; fileName: string; source?: string; crop?: SquareCrop; locked?: boolean; originDataUrl?: string };
+// kind: AI 사진편집에서 확인한 제품컷·착용컷 구분(빈 칸 자동 채우기에 쓴다).
+type SlotImage = { dataUrl: string; fileName: string; source?: string; crop?: SquareCrop; locked?: boolean; originDataUrl?: string; kind?: "product" | "wear" };
 
 // 2026-11-10 칸 → 칸 복사. 칸 위에서 Ctrl+C 하면 그 칸 사진을(원본·확대 위치까지) 이 앱 안에 담아 두고,
 // 시스템 클립보드에는 확인용 표시 글자만 넣는다. 다른 칸에서 Ctrl+V 하면 복사본이 들어간다.
@@ -422,10 +423,8 @@ export default function Home() {
   const [detailPreview, setDetailPreview] = useState("");
   // 상단 로고를 붙인 결과 그대로면 같은 로고가 두 번 붙지 않게 버튼을 막는다.
   const [logoAppliedPreview, setLogoAppliedPreview] = useState("");
-  const [squareImagesBusy, setSquareImagesBusy] = useState(false);
   /** 개별 다운로드 메시지를 버튼이 있는 칸에만 보여준다(5번 이미지 · 6번 상세 · 8번 기타). */
   const [exportArea, setExportArea] = useState<"images" | "detail" | "etc" | "thumb" | "quote">("etc");
-  const [squareImagesMessage, setSquareImagesMessage] = useState("");
   const [detailMessage, setDetailMessage] = useState("");
   const [detailShareUrl, setDetailShareUrl] = useState("");
   const [detailShareLoading, setDetailShareLoading] = useState(false);
@@ -437,6 +436,15 @@ export default function Home() {
   const [incomingDetailFile, setIncomingDetailFile] = useState<File | null>(null);
   const [incomingDetailToken, setIncomingDetailToken] = useState(0);
   const [preparedDetail, setPreparedDetail] = useState<PreparedDetail | null>(null);
+  // 2026-11-17 5번 안의 AI 사진편집 칸 열림 상태. 마지막 상태를 기억해 다시 열 때 바로 같은 모양으로 보인다.
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  useEffect(() => {
+    try { if (window.localStorage.getItem("noidb-ai-panel-open") === "1") setAiPanelOpen(true); } catch { /* 저장 공간 없음 */ }
+  }, []);
+  const setAiPanel = (open: boolean) => {
+    setAiPanelOpen(open);
+    try { window.localStorage.setItem("noidb-ai-panel-open", open ? "1" : "0"); } catch { /* 저장 공간 없음 */ }
+  };
   const [dragDetailIndex, setDragDetailIndex] = useState<number | null>(null);
 
   const [sourcingUrls, setSourcingUrls] = useState(["", "", ""]);
@@ -448,6 +456,7 @@ export default function Home() {
   const [sourcingSaveStatus, setSourcingSaveStatus] = useState("");
   const [uploadPool, setUploadPool] = useState<SlotImage[]>([]);
   const [slotCopyMessage, setSlotCopyMessage] = useState("");
+  const [autoFillMessage, setAutoFillMessage] = useState("");
 
   const [exportLoading, setExportLoading] = useState("");
   const [exportMessage, setExportMessage] = useState("");
@@ -1465,31 +1474,6 @@ export default function Home() {
     }
   };
 
-  const prepareApprovedSquareImages = async () => {
-    if (!detailPreview || squareImagesBusy) return;
-    setSquareImagesBusy(true);
-    setSquareImagesMessage("확정된 상세페이지에서 사진을 분리하고 있습니다...");
-    try {
-      if (!model) throw new Error("모델명을 먼저 확인해주세요.");
-      const sections = await splitDetailPage(detailPreview, detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER);
-      const images: SlotImage[] = [];
-      for (let index = 0; index < sections.length; index += 1) {
-        setSquareImagesMessage(`${sections.length}장 중 ${index + 1}장을 1000×1000으로 만드는 중...`);
-        images.push({
-          dataUrl: await extendToSquareCanvas(sections[index].dataUrl),
-          source: sections[index].dataUrl,
-          fileName: `${model}-detail-square-${String(index + 1).padStart(2, "0")}.jpg`,
-        });
-      }
-      setUploadPool(prev => [...prev.filter(item => !item.fileName.startsWith(`${model}-detail-square-`)), ...images]);
-      setSquareImagesMessage(`${images.length}장을 5번 이미지 풀에 넣었습니다. 쓸 사진을 대표·추가이미지 칸으로 끌어 넣으세요.`);
-    } catch (error) {
-      setSquareImagesMessage(`오류: ${error instanceof Error ? error.message : "등록 이미지 생성 실패"}`);
-    } finally {
-      setSquareImagesBusy(false);
-    }
-  };
-
   const addUploadPoolFiles = async (fileList: FileList | File[]) => {
     const items: SlotImage[] = [];
     for (const file of Array.from(fileList).filter(isAccepted)) {
@@ -1594,7 +1578,6 @@ export default function Home() {
     setWear02(null);
     setCustomSlots([]);
     setUploadPool([]);
-    setSquareImagesMessage("");
     setAdjustKey("");
     setAdjustPreview("");
     setDetailPreview("");
@@ -1826,6 +1809,36 @@ export default function Home() {
       if (next.some(item => item.dataUrl === original.dataUrl)) return next;
       return [...next, original];
     });
+  };
+
+  // 2026-11-17 AI 편집 사진 빈 칸 자동 채우기: 이미 채운 칸은 건드리지 않고, 비어 있는 칸에만 넣는다.
+  // 제품컷 → 전체옵션 이미지·디테일컷, 착용컷 → 착용컷 01·02. 옵션 썸네일과 메인착용컷은 색상·용도를 알 수 없어 직접 넣는다.
+  const autoFillEmptySlots = () => {
+    const targets: Array<{ key: string; label: string; kind: "product" | "wear" }> = [
+      { key: "all", label: "전체옵션 이미지", kind: "product" },
+      { key: "detail", label: "디테일컷", kind: "product" },
+      { key: "wear01", label: "착용컷 01", kind: "wear" },
+      { key: "wear02", label: "착용컷 02", kind: "wear" },
+    ];
+    const used = new Set<number>();
+    const placed: Array<{ key: string; label: string; item: SlotImage }> = [];
+    for (const target of targets) {
+      if (getSlotValue(target.key)) continue;
+      const index = uploadPool.findIndex((item, i) => item.kind === target.kind && !used.has(i));
+      if (index < 0) continue;
+      used.add(index);
+      placed.push({ key: target.key, label: target.label, item: uploadPool[index] });
+    }
+    if (!placed.length) {
+      setAutoFillMessage(uploadPool.some(item => item.kind) ? "채울 수 있는 빈 칸이 없습니다. 이미 채워진 칸은 바꾸지 않습니다." : "자동으로 넣을 AI 사진이 없습니다. AI 사진편집으로 만든 사진이 목록에 있어야 합니다.");
+      return;
+    }
+    for (const { key, item } of placed) {
+      setSlotValue(key, item.source && item.source !== item.dataUrl && !item.originDataUrl ? { ...item, originDataUrl: item.dataUrl } : item);
+    }
+    const placedUrls = new Set(placed.map(entry => entry.item.dataUrl));
+    setUploadPool(prev => prev.filter(item => !placedUrls.has(item.dataUrl)));
+    setAutoFillMessage(`${placed.map(entry => entry.label).join(", ")} 칸에 넣었습니다. 위치가 다르면 칸을 끌어 바꾸거나 칸에서 사진을 빼 목록으로 되돌리세요. 옵션 썸네일은 직접 끌어 넣어주세요.`);
   };
 
   const getSlotValue = (key: string): SlotImage | null => {
@@ -2077,7 +2090,6 @@ export default function Home() {
       const next = await prependHeader(detailPreview, detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER);
       setDetailPreview(next);
       setLogoAppliedPreview(next);
-      setSquareImagesMessage("");
       setDetailMessage("상세페이지 맨 위에 상단 로고를 붙였습니다.");
     } catch (error) {
       setDetailMessage(`오류: ${error instanceof Error ? error.message : "상단 로고를 붙이지 못했습니다."}`);
@@ -2089,6 +2101,8 @@ export default function Home() {
     try {
       const built = await composeDetailPage();
       setDetailPreview(built.dataUrl);
+      // 2026-11-17 직접 만든 780px 상세페이지에는 상단 로고가 이미 들어 있다(로고 붙이기를 또 누르면 로고가 두 번 들어간다).
+      setLogoAppliedPreview(built.dataUrl);
       setDetailMessage(`상세페이지 완성 · ${detailImages.length}장 · ${built.totalHeight}px`);
     } catch (e) {
       setDetailMessage(`오류: ${e instanceof Error ? e.message : "상세페이지 실패"}`);
@@ -2104,8 +2118,12 @@ export default function Home() {
     try {
       setExportMessage("상세이미지만 만들고 있습니다...");
       // 2026-11-04 쿠팡 상세페이지 최소 가로 780px — 어떤 경로로 만든 상세페이지든 내려받기 직전에 한 번 더 맞춘다.
+      const hadLogo = Boolean(detailPreview) && detailPreview === logoAppliedPreview;
+      const composedNow = !detailPreview;
       const dataUrl = await ensureMinWidth(detailPreview || (await composeDetailPage()).dataUrl);
       setDetailPreview(dataUrl);
+      // 780px로 키우거나 새로 만들어도 로고 상태는 그대로 이어간다.
+      if (hadLogo || composedNow) setLogoAppliedPreview(dataUrl);
       downloadDataUrl(dataUrl, `${model}.jpg`);
       setExportMessage("상세이미지 다운로드 완료");
     } catch (e) {
@@ -2353,7 +2371,6 @@ export default function Home() {
     setReregisterModelName(prev => data.reregisterModelName
       ? String(data.reregisterModelName)
       : prev && prev.trim().toLowerCase() === draftModel ? prev : "");
-    setSquareImagesMessage("");
     setSourcingUrls(Array.isArray(data.sourcingUrls) ? data.sourcingUrls : ["", "", ""]);
     setSourcingUrlInputs(Array.isArray(data.sourcingUrlInputs) ? data.sourcingUrlInputs : ["", "", ""]);
     setSourcingImages(Array.isArray(data.sourcingImages) ? data.sourcingImages : []);
@@ -2609,6 +2626,7 @@ export default function Home() {
           const built = await composeDetailPage();
           preview = built.dataUrl;
           setDetailPreview(preview);
+          setLogoAppliedPreview(preview);
         } catch { /* 상세페이지를 못 만들어도 나머지는 저장한다 */ }
       }
       stage = "이미지·라벨 파일 만들기";
@@ -2728,6 +2746,7 @@ export default function Home() {
         const built = await composeDetailPage();
         preview = built.dataUrl;
         setDetailPreview(preview);
+        setLogoAppliedPreview(preview);
       }
 
       const { files, skipped, readyFiles } = await collectInput(preview, false, false, colorAddExisting);
@@ -3583,6 +3602,40 @@ export default function Home() {
           <strong>여러 이미지를 한 번에 업로드</strong>
           <span>클릭하거나 이미지를 이곳으로 드래그한 뒤 각 등록 칸에 배치하세요.</span>
         </div>
+        {/* 2026-11-17 AI 사진편집을 6번에서 5번으로 옮김: 사진을 올린 바로 아래에서 편집하고, 완성된 사진은 아래 사진 목록 맨 앞에 들어온다. */}
+        <div className="aiEditHeader">
+          <button type="button" className="aiEditToggle" aria-expanded={aiPanelOpen} onClick={() => setAiPanel(!aiPanelOpen)}>
+            {aiPanelOpen ? "▼ AI 사진편집 접기" : "▶ AI 사진편집 열기"}
+          </button>
+          {preparedDetail && (
+            <button type="button" className="existingDetailUseButton" title={`MYBOX 후보: ${preparedDetail.name}`}
+              onClick={() => { setAiPanel(true); setIncomingDetailFile(preparedDetail.file); setIncomingDetailToken(token => token + 1); }}>기존상세페이지 사용</button>
+          )}
+          <button type="button" className="softSageButton" disabled={!uploadPool.some(item => item.kind)}
+            title={uploadPool.some(item => item.kind) ? "AI로 만든 사진을 비어 있는 칸(전체옵션·디테일컷·착용컷 01·02)에만 자동으로 넣습니다. 이미 채운 칸은 바꾸지 않습니다." : "AI 사진편집으로 만든 사진이 아래 목록에 있을 때 사용할 수 있습니다."}
+            onClick={autoFillEmptySlots}>빈 칸 자동 채우기</button>
+        </div>
+        {autoFillMessage && <p className="note">{autoFillMessage}</p>}
+        <div style={{ display: aiPanelOpen ? "block" : "none" }}>
+          <QuickDetailRemake
+            headerUrl={detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER}
+            footerUrl={detailFooter?.dataUrl || ""}
+            modelName={model}
+            poolImages={quickRemakePool}
+            incomingFile={incomingDetailFile}
+            incomingToken={incomingDetailToken}
+            onComplete={({ dataUrl, logoApplied }) => {
+              setDetailPreview(dataUrl);
+              setLogoAppliedPreview(logoApplied ? dataUrl : "");
+              setDetailMessage(logoApplied ? "자른 상세페이지에 상단 로고를 붙여 6번 상세페이지 칸에 넣었습니다." : "새 상세페이지를 6번 상세페이지 칸에 넣었습니다.");
+            }}
+            onAddToList={items => {
+              // 2026-11-17 새로 넣은 사진을 바로 확인할 수 있게 목록 맨 앞에 넣는다.
+              setUploadPool(prev => [...items, ...prev]);
+              setPhotoMessage(`${items.length}장을 아래 사진 목록 맨 앞에 추가했습니다. 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
+            }}
+          />
+        </div>
         <div className="uploadPoolSticky" title="5번 안에서 아래로 내려도 이 사진 목록과 추가 버튼은 화면 위에 붙어 있습니다.">
         {!!uploadPool.length && (
           <div className="uploadPool">
@@ -3740,27 +3793,17 @@ export default function Home() {
       <section className="card full">
         <div className="sectionTitleRow">
           <h2>6. 상세페이지</h2>
-          {preparedDetail && (
-            <button type="button" className="existingDetailUseButton" title={`MYBOX 후보: ${preparedDetail.name}`}
-              onClick={() => { setIncomingDetailFile(preparedDetail.file); setIncomingDetailToken(token => token + 1); }}>기존상세페이지 사용</button>
-          )}
         </div>
         <div className="detailBrandImages">
           <div className="detailBrandBlock">
             <strong>상단 로고 이미지</strong>
             <img src={detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER} alt="상단 로고 이미지" />
-            <div className="detailBrandActions">
-              <label className="detailBrandUpload"
-                onDragOver={event => event.preventDefault()}
-                onDrop={event => { event.preventDefault(); void changeDetailBrandImage("header", event.dataTransfer.files?.[0]); }}>
-                이미지 변경하기
-                <input type="file" accept="image/jpeg,image/jpg,image/png" onChange={event => { void changeDetailBrandImage("header", event.target.files?.[0]); event.target.value = ""; }} />
-              </label>
-              <button type="button" className="detailBrandUpload"
-                disabled={!detailPreview || detailPreview === logoAppliedPreview}
-                title={!detailPreview ? "아래 상세페이지 칸에 상세페이지가 있어야 합니다." : detailPreview === logoAppliedPreview ? "이미 상단 로고를 붙였습니다." : "아래 상세페이지 맨 위에 이 상단 로고를 붙입니다."}
-                onClick={() => void attachDetailLogo()}>상세페이지에 로고 붙이기</button>
-            </div>
+            <label className="detailBrandUpload"
+              onDragOver={event => event.preventDefault()}
+              onDrop={event => { event.preventDefault(); void changeDetailBrandImage("header", event.dataTransfer.files?.[0]); }}>
+              이미지 변경하기
+              <input type="file" accept="image/jpeg,image/jpg,image/png" onChange={event => { void changeDetailBrandImage("header", event.target.files?.[0]); event.target.value = ""; }} />
+            </label>
             {detailHeader && <button type="button" className="secondaryButton" onClick={() => { setDetailHeader(null); setDetailPreview(""); }}>NOID-B 기본 로고로 되돌리기</button>}
           </div>
           <div className="detailBrandBlock">
@@ -3775,34 +3818,15 @@ export default function Home() {
             {detailFooter && <button type="button" className="secondaryButton" onClick={() => { setDetailFooter(null); setDetailPreview(""); }}>하단 이미지 빼기</button>}
           </div>
         </div>
-        <QuickDetailRemake
-          headerUrl={detailHeader?.dataUrl || DEFAULT_DETAIL_HEADER}
-          footerUrl={detailFooter?.dataUrl || ""}
-          modelName={model}
-          poolImages={quickRemakePool}
-          incomingFile={incomingDetailFile}
-          incomingToken={incomingDetailToken}
-          onComplete={({ dataUrl, logoApplied }) => {
-            setDetailPreview(dataUrl);
-            setLogoAppliedPreview(logoApplied ? dataUrl : "");
-            setSquareImagesMessage("");
-            setDetailMessage(logoApplied ? "자른 상세페이지에 상단 로고를 붙여 아래 상세페이지 칸에 넣었습니다." : "새 상세페이지를 아래 상세페이지 칸에 넣었습니다.");
-          }}
-          onAddToList={items => {
-            // 2026-11-17 새로 넣은 사진을 바로 확인할 수 있게 목록 맨 앞에 넣는다.
-            setUploadPool(prev => [...items, ...prev]);
-            setPhotoMessage(`${items.length}장을 5번 쿠팡 등록이미지 목록 맨 앞에 추가했습니다. 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
-          }}
-        />
-
-        <div className="detailActions">
+        <div className="detailListHeader">
+          <strong>상세페이지에 들어갈 사진 <span>{detailImages.length}장 · 5번 칸의 사진이 자동으로 들어옵니다</span></strong>
           <button type="button" className="softSageButton" onClick={() => {
             dismissedDetailSlotsRef.current.clear();
             detailForceSyncRef.current = true;
             setDetailRestoreRevision(value => value + 1);
             setDetailPreview("");
             setDetailMessage("5번 칸에 있는 사진 중 목록에 빠진 것을 다시 넣었습니다.");
-          }}>빠진 사진 다시 넣기 (5번 칸 기준)</button>
+          }}>빠진 사진 다시 넣기</button>
         </div>
         <div className="detailList">
           {detailImages.map((item, index) => (
@@ -3853,8 +3877,9 @@ export default function Home() {
         </div>
 
         <div className="detailActions">
-          <button type="button" className="purpleButton" onClick={() => void buildDetailPage()}>
-            780px 상세페이지 만들기
+          <button type="button" className="purpleButton" title="위 사진 목록으로 780px 상세페이지(상단 로고 포함)를 만들어 확인합니다. 7번에서 저장할 때는 없으면 자동으로 만들어집니다."
+            onClick={() => void buildDetailPage()}>
+            상세페이지 미리보기 (780px)
           </button>
           <button type="button" className="pillButtonBeige" disabled={!detailPreview || detailShareLoading}
             title={detailPreview ? "휴대폰에서 상세페이지를 볼 수 있는 링크를 만듭니다." : "상세페이지를 먼저 만들어주세요."}
@@ -3865,12 +3890,13 @@ export default function Home() {
             onClick={() => { setExportArea("detail"); void downloadDetailPageOnly(); }}>
             {exportLoading === "detail" ? "상세이미지 생성 중..." : "상세이미지만 다운로드"}
           </button>
-          <button type="button" className="pillButtonBeige"
-            disabled={!detailPreview || detailPreview === logoAppliedPreview}
-            title={!detailPreview ? "상세페이지를 먼저 만들어주세요." : detailPreview === logoAppliedPreview ? "이미 상단 로고를 붙였습니다." : "아래 상세페이지 맨 위에 상단 로고를 붙입니다."}
-            onClick={() => void attachDetailLogo()}>
-            상단로고삽입
-          </button>
+          {detailPreview && detailPreview !== logoAppliedPreview && (
+            <button type="button" className="pillButtonBeige"
+              title="기존 상세페이지처럼 상단 로고가 없는 상세페이지 맨 위에 위의 상단 로고 이미지를 붙입니다."
+              onClick={() => void attachDetailLogo()}>
+              상단 로고 붙이기
+            </button>
+          )}
         </div>
         {detailMessage && <p className="detailMessage">{detailMessage}</p>}
         {exportArea === "detail" && exportMessage && <p className={exportMessage.startsWith("오류") ? "error" : "detailMessage"}>{exportMessage}</p>}

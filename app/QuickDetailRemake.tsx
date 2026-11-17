@@ -1,9 +1,8 @@
 "use client";
 
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
-import JSZip from "jszip";
 import { extendToSquareCanvas } from "@/lib/thumbnail/fit";
-import { composeQuickDetailPage, readImageFile, resizeSectionTo1000, shrinkForUpload, splitDetailPage, type QuickDetailColor, type QuickDetailSection, type QuickDetailStyle } from "@/lib/image-generator/quick-detail";
+import { readImageFile, shrinkForUpload, splitDetailPage, type QuickDetailColor, type QuickDetailSection, type QuickDetailStyle } from "@/lib/image-generator/quick-detail";
 import { deleteQuickDraft, listQuickDrafts, MAX_QUICK_DRAFTS, saveQuickDraft, type QuickDetailDraft } from "@/lib/image-generator/quick-drafts";
 import styles from "./quick-detail.module.css";
 
@@ -68,7 +67,7 @@ type Props = {
   incomingFile: File | null;
   incomingToken: number;
   onComplete: (result: { dataUrl: string; sections: QuickDetailSection[]; logoApplied?: boolean }) => void;
-  onAddToList: (items: Array<{ fileName: string; dataUrl: string; source: string }>) => void;
+  onAddToList: (items: Array<{ fileName: string; dataUrl: string; source: string; kind?: "product" | "wear" }>) => void;
   /** 5번 쿠팡 등록이미지(목록·칸)의 사진. 상세페이지 없이 여기서 골라 바로 AI 편집을 시작할 수 있다. */
   poolImages?: Array<{ dataUrl: string; fileName: string }>;
 };
@@ -482,7 +481,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     }
   }
 
-  // 이미 완성된 상세페이지를 위·아래만 자르고 그대로 상세페이지 칸에 넣는다(로고는 자동으로 붙이지 않는다 — 기존 상세페이지에 로고가 있으면 두 번 들어가기 때문. 필요하면 6번 칸 "상세페이지에 로고 붙이기").
+  // 이미 완성된 상세페이지를 위·아래만 자르고 그대로 상세페이지 칸에 넣는다(로고는 자동으로 붙이지 않는다 — 기존 상세페이지에 로고가 있으면 두 번 들어가기 때문. 필요하면 6번 상세페이지 칸의 "상단 로고 붙이기").
   async function useCroppedAsDetailPage() {
     if (!cut || cut.bottom - cut.top < 0.02) {
       setMessage("사용할 구간이 너무 좁습니다. 위·아래 자를 위치를 다시 정해주세요.");
@@ -493,7 +492,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       const usable = await cropDataUrl(cut.dataUrl, cut.top, cut.bottom, cut.holes);
       onComplete({ dataUrl: usable, sections: [], logoApplied: false });
       setCut(null);
-      setMessage("자른 상세페이지를 로고 없이 그대로 아래 상세페이지 칸에 넣었습니다. 로고가 필요하면 위 6번 칸의 \"상세페이지에 로고 붙이기\"를 누르세요.");
+      setMessage("자른 상세페이지를 로고 없이 그대로 6번 상세페이지 칸에 넣었습니다. 로고가 필요하면 6번의 \"상단 로고 붙이기\"를 누르세요.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "상세페이지를 자르지 못했습니다.");
     } finally {
@@ -533,7 +532,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       setScanSummary({ found: found.length, kept: sections.length, excluded: 0 });
       setAddedVersion(value => value + 1);
       setCut(null);
-      setMessage(`상세페이지 칸에 넣고, 사진 ${items.length}장을 5번 쿠팡 등록이미지 목록에 올렸습니다. 위 목록에서 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
+      setMessage(`6번 상세페이지 칸에 넣고, 사진 ${items.length}장을 아래 등록이미지 목록에 올렸습니다. 아래 목록에서 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "상세페이지를 넣고 나누지 못했습니다.");
     } finally {
@@ -636,7 +635,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     try {
       const stamp = Date.now().toString(36).slice(-4);
       const base = modelName.trim() || "NOID-B";
-      const items: Array<{ fileName: string; dataUrl: string; source: string }> = [];
+      const items: Array<{ fileName: string; dataUrl: string; source: string; kind?: "product" | "wear" }> = [];
       for (let index = 0; index < originalSections.length; index += 1) {
         const section = originalSections[index];
         const edited = editedById.get(section.id);
@@ -644,7 +643,8 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         const source = useEdited ? edited.dataUrl : section.dataUrl;
         // 이미 목록에 들어간 사진(AI 편집 후 자동 추가 포함)은 다시 넣지 않는다.
         if (alreadyAdded.current.has(source)) continue;
-        items.push({ fileName: `${base}-cut-${stamp}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(source, await listSquareSize(source)), source });
+        // 제품컷·착용컷을 확인한 사진만 구분을 함께 넘긴다(빈 칸 자동 채우기에 쓴다).
+        items.push({ fileName: `${base}-cut-${stamp}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(source, await listSquareSize(source)), source, kind: section.reason !== UNSORTED_REASON ? section.kind : undefined });
         alreadyAdded.current.add(source);
       }
       if (!items.length) {
@@ -653,7 +653,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       }
       onAddToList(items);
       setAddedVersion(value => value + 1);
-      setMessage(`${items.length}장을 5번 쿠팡 등록이미지 목록에 추가했습니다. 위 이미지 목록에서 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
+      setMessage(`${items.length}장을 5번 쿠팡 등록이미지 목록에 추가했습니다. 아래 이미지 목록에서 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "등록이미지에 추가하지 못했습니다.");
     } finally {
@@ -762,9 +762,9 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       if (newlyEdited.length) {
         const stamp = Date.now().toString(36).slice(-4);
         const base = modelName.trim() || "NOID-B";
-        const items: Array<{ fileName: string; dataUrl: string; source: string }> = [];
+        const items: Array<{ fileName: string; dataUrl: string; source: string; kind?: "product" | "wear" }> = [];
         for (let index = 0; index < newlyEdited.length; index += 1) {
-          items.push({ fileName: `${base}-ai-${stamp}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(newlyEdited[index].dataUrl, await listSquareSize(newlyEdited[index].dataUrl)), source: newlyEdited[index].dataUrl });
+          items.push({ fileName: `${base}-ai-${stamp}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(newlyEdited[index].dataUrl, await listSquareSize(newlyEdited[index].dataUrl)), source: newlyEdited[index].dataUrl, kind: newlyEdited[index].kind });
           alreadyAdded.current.add(newlyEdited[index].dataUrl);
         }
         onAddToList(items);
@@ -772,37 +772,10 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       }
       setFinalSections(completed);
       setMessage(newlyEdited.length
-        ? `AI 편집 사진 ${newlyEdited.length}장을 5번 쿠팡 등록이미지 목록에 넣었습니다. 제품 모양을 꼭 확인한 뒤 썸네일·추가이미지 칸으로 끌어 넣으세요.`
+        ? `AI 편집 사진 ${newlyEdited.length}장을 5번 쿠팡 등록이미지 목록에 넣었습니다. 제품 모양을 꼭 확인한 뒤 썸네일·추가이미지 칸으로 끌어 넣거나, 위 "빈 칸 자동 채우기"를 누르세요.`
         : "새로 넣을 AI 편집 사진이 없습니다. 이미 5번 목록에 넣었습니다.");
     } catch (error) {
       setMessage(`${error instanceof Error ? error.message : "작업 중 문제가 생겼습니다."} 다시 누르면 완료된 AI 사진 다음부터 이어서 만듭니다.`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function saveZip() {
-    if (!result || !finalSections.length) return;
-    setBusy(true);
-    setMessage("상세페이지와 1000×1000 개별 이미지를 ZIP으로 묶고 있습니다.");
-    try {
-      const zip = new JSZip();
-      const baseName = modelName.trim() || "NOID-B-새상세페이지";
-      const composed = await composeQuickDetailPage(headerUrl, finalSections, footerUrl || undefined);
-      zip.file(`${baseName}.jpg`, composed.dataUrl.split(",")[1], { base64: true });
-      for (let index = 0; index < finalSections.length; index += 1) {
-        const square = await resizeSectionTo1000(finalSections[index].dataUrl);
-        zip.file(`${baseName}-${String(index + 1).padStart(2, "0")}.jpg`, square.split(",")[1], { base64: true });
-      }
-      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = `${baseName}-전체이미지.zip`;
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-      setMessage(`상세페이지 1장과 1000×1000 개별 이미지 ${finalSections.length}장을 ZIP으로 저장했습니다.`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "ZIP 파일을 만들지 못했습니다.");
     } finally {
       setBusy(false);
     }
@@ -890,7 +863,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
         <button type="button" className={styles.splitButton} disabled={!cut || busy}
           title={cut ? "올린 상세페이지를 사진별로 나눕니다. 사진 바깥 흰 여백의 글자 줄은 잘라내고, 사진 위 글자는 그대로 둡니다." : "1단계에서 상세페이지를 먼저 올려주세요."}
           onClick={() => void confirmCutForSplit()}>{busy && cut ? "나누는 중…" : "상세페이지 분할"}</button>
-        <small className={styles.wrapNote}>완성된 사진은 5번 쿠팡 등록이미지 목록에 들어갑니다. 아래 상세페이지 칸은 바꾸지 않습니다.</small>
+        <small className={styles.wrapNote}>완성된 사진은 아래 등록이미지 목록 맨 앞에 들어갑니다. 6번 상세페이지 칸은 바꾸지 않습니다.</small>
         <p>{message}</p>
         {scanSummary && <div className={styles.scanSummary}><span>가져온 사진 <strong>{originalSections.length}</strong></span><span>AI 편집 예정 <strong>{expectedEdits}</strong></span><span>원본 사용 <strong>{originalSections.length - expectedEdits}</strong></span></div>}
         {originalSections.length > 0 && <small>예상 AI 편집: {expectedEdits}회 · 완료: {completedEdits}장</small>}
@@ -959,8 +932,8 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
           <button type="button" className={cut.mode === "top" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "top", holeStart: null })}>위쪽 자를 위치 정하기</button>
           <button type="button" className={cut.mode === "bottom" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "bottom", holeStart: null })}>아래쪽 자를 위치 정하기</button>
           <button type="button" className={cut.mode === "hole" ? "green" : "secondaryButton"} onClick={() => setCut(c => c && { ...c, mode: "hole", holeStart: null })} title="지울 문구의 바로 위와 바로 아래를 클릭하면 그 사이가 빠지고, 사이트 기본 간격만 남습니다.">가운데 잘라내기</button>
-          <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPage()} title="자른 상세페이지를 로고 없이 그대로 상세페이지 칸에 넣습니다.">상세페이지 사용</button>
-          <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPageAndSplit()} title="상세페이지 칸에 넣고, 같은 사진을 사진별로 나눠 5번 등록이미지 목록에도 한 번에 올립니다.">{busy ? "처리 중…" : "상세페이지 사용 + 사진별 나누기"}</button>
+          <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPage()} title="자른 상세페이지를 로고 없이 그대로 6번 상세페이지 칸에 넣습니다.">상세페이지 사용</button>
+          <button type="button" className="purpleButton" disabled={busy} onClick={() => void useCroppedAsDetailPageAndSplit()} title="6번 상세페이지 칸에 넣고, 같은 사진을 사진별로 나눠 아래 등록이미지 목록에도 한 번에 올립니다.">{busy ? "처리 중…" : "상세페이지 사용 + 사진별 나누기"}</button>
           <button type="button" className="secondaryButton" disabled={busy} onClick={() => void confirmCutForSplit()} title="사진별로 나눠서 등록이미지에 추가하거나 AI로 새로 만들 때 씁니다.">사진별로 나누기</button>
           <button type="button" className="secondaryButton" disabled={!cut.history.length && cut.holeStart === null} onClick={() => setCut(c => c && (c.holeStart !== null ? { ...c, holeStart: null } : c.history.length ? { ...c, ...c.history[c.history.length - 1], holeStart: null, history: c.history.slice(0, -1) } : c))}>되돌리기</button>
           <button type="button" className="secondaryButton" disabled={cut.top === 0 && cut.bottom === 1 && !cut.holes.length} onClick={() => setCut(c => c && { ...c, top: 0, bottom: 1, holes: [], holeStart: null, history: [...c.history, { top: c.top, bottom: c.bottom, holes: c.holes }] })}>초기화</button>
