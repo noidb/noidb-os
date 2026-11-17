@@ -535,6 +535,20 @@ export default function WimsRegistrationImportPanel() {
             </div>
           )}
           {auditing && <p style={{ fontSize: "11px", margin: "8px 0 0", color: wmsColors.muted }}>제품DB와 대조 중...</p>}
+          {audit && (audit.approvedCandidateCount + audit.reviewingCandidateCount) > 0 && (
+            <div style={{ marginTop: "10px", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "8px 12px", background: "#fff", fontSize: "12px" }}>
+              <strong style={{ display: "block", marginBottom: "4px", color: wmsColors.ink }}>이번에 반영될 건</strong>
+              <div style={{ display: "grid", gap: "4px" }}>
+                {audit.rows.filter(row => (row.type === "approved_candidate" || (row.type === "reviewing" && row.proposedStatus)) && row.sheetRowNumber).map(row => (
+                  <div key={`apply-${row.sheetRowNumber}`}>
+                    <strong>{row.productDbModelSku || row.wims.modelSku || "모델SKU 확인 필요"}</strong>
+                    <span style={{ color: wmsColors.muted }}> · {row.productDbStatus || "-"} → {row.proposedStatus}</span>
+                    <div style={{ color: wmsColors.muted }}>{row.productDbProductName || row.wims.productName}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {audit && (audit.approvedCandidateCount + audit.reviewingCandidateCount) > 0 && <button type="button" onClick={applyApprovedCandidates} disabled={applying} className="softBeigeButton" style={{ width: "100%", marginTop: "10px", fontSize: "15px" }}>{applying ? "백업 후 반영·검증 중..." : `검수상태 ${audit.approvedCandidateCount + audit.reviewingCandidateCount}건 반영`}</button>}
         </div>
       )}
