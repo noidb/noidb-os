@@ -721,7 +721,11 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       let workingSections = originalSections;
       const unsorted = originalSections.filter(section => (sectionActions[section.id] || "edit") === "edit" && section.reason === UNSORTED_REASON);
       if (unsorted.length) {
-        const sorted = new Map((await classifyKinds(unsorted)).map(section => [section.id, section]));
+        const classified = await classifyKinds(unsorted);
+        // 2026-11-17 구분에 실패한 사진을 몰래 제품컷으로 편집하면 모델 사진의 얼굴·옷이 안 바뀐다. 실패하면 멈추고 직접 확인하게 한다.
+        const failedCount = classified.filter(section => section.reason === UNSORTED_REASON).length;
+        if (failedCount) throw new Error(`제품컷·착용컷 구분에 실패한 사진이 ${failedCount}장 있습니다. 각 사진의 "제품컷 → 착용컷으로 변경" 버튼으로 직접 확인한 뒤 새로 만들기를 다시 눌러주세요.`);
+        const sorted = new Map(classified.map(section => [section.id, section]));
         workingSections = originalSections.map(section => sorted.get(section.id) || section);
         for (const section of workingSections) {
           const before = originalSections.find(item => item.id === section.id);

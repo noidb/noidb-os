@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
 
 keep=true로 남길 것:
 - 주얼리 제품 자체가 선명하게 보이는 단독 제품컷
-- 사람이 실제 제품을 착용한 착용컷
+- 사람이 실제 제품을 착용한 착용컷 (사람의 얼굴·목·귀·손 등 신체가 조금이라도 보이면 kind는 반드시 wear. 얼굴이 보이는 사진을 product로 판정하지 마세요)
 - 제품 사진에 작은 옵션명만 붙어 있는 경우는 유지
 
 keep=false로 제외할 것:
