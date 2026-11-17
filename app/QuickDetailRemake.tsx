@@ -67,7 +67,10 @@ type Props = {
   incomingFile: File | null;
   incomingToken: number;
   onComplete: (result: { dataUrl: string; sections: QuickDetailSection[]; logoApplied?: boolean }) => void;
-  onAddToList: (items: Array<{ fileName: string; dataUrl: string; source: string; kind?: "product" | "wear" }>) => void;
+  /** slotKey가 있으면 그 사진은 목록이 아니라 해당 칸(같은 칸)으로 들어간다. */
+  onAddToList: (items: Array<{ fileName: string; dataUrl: string; source: string; kind?: "product" | "wear"; slotKey?: string }>) => void;
+  /** 2026-11-17 칸의 [AI 편집] 버튼: 고른 칸 사진을 바로 가져와 AI 편집까지 시작한다. 결과는 slotKey 칸으로 돌아간다. */
+  request?: { token: number; images: Array<{ dataUrl: string; name: string; slotKey?: string }> } | null;
   /** 5번 쿠팡 등록이미지(목록·칸)의 사진. 상세페이지 없이 여기서 골라 바로 AI 편집을 시작할 수 있다. */
   poolImages?: Array<{ dataUrl: string; fileName: string }>;
 };
@@ -271,13 +274,16 @@ function makeWearLook(style: QuickDetailStyle = "clean"): WearLook {
   };
 }
 
-export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, incomingFile, incomingToken, onComplete, onAddToList, poolImages = [] }: Props) {
+export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, incomingFile, incomingToken, onComplete, onAddToList, request = null, poolImages = [] }: Props) {
   const [pickingPool, setPickingPool] = useState(false);
   /** 이미 5번 목록에 넣은 AI 사진 — "이어서 만들기"를 다시 눌러도 같은 사진이 두 번 들어가지 않게 한다. */
   const alreadyAdded = useRef(new Set<string>());
   /** 같은 상세페이지의 착용컷은 모두 같은 모델 느낌(머리색·피부·옷·배경)이 되도록 한 번만 정해서 계속 쓴다. */
   const wearLookRef = useRef<WearLook | null>(null);
   const [pickedPool, setPickedPool] = useState<string[]>([]);
+  /** 가져온 사진(구역 id) → 결과를 돌려줄 칸 이름. 칸의 [AI 편집]으로 시작했을 때만 채워진다. */
+  const slotKeyBySection = useRef<Record<string, string>>({});
+  const [autoRun, setAutoRun] = useState(false);
   const [draftId, setDraftId] = useState("");
   const [drafts, setDrafts] = useState<QuickDetailDraft[]>([]);
   const [draftsReady, setDraftsReady] = useState(false);
@@ -444,8 +450,9 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
    * 상세페이지 없이 사진 몇 장으로 바로 시작한다(모델컷·제품컷만 골라 AI 편집).
    * 고른 사진이 그대로 "사진별 확인" 목록이 되고, 2·3단계는 상세페이지를 나눴을 때와 똑같다.
    */
-  async function startFromPhotos(images: Array<{ dataUrl: string; name: string }>, label: string) {
-    if (!images.length || busy) return;
+  async function startFromPhotos(images: Array<{ dataUrl: string; name: string; slotKey?: string }>, label: string, autoStart = false) {
+    if (!images.length) return;
+    if (busy) { setMessage("지금 다른 AI 편집이 진행 중입니다. 끝난 뒤 다시 눌러주세요."); return; }
     setBusy(true);
     try {
       const stamp = Date.now().toString(36);
@@ -456,11 +463,13 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       setSourceName(label);
       resetWork();
       setOriginalSections(sections);
+      slotKeyBySection.current = Object.fromEntries(found.flatMap((item, index) => images[index].slotKey ? [[item.id, images[index].slotKey as string]] : []));
       setSectionActions(Object.fromEntries(sections.map(section => [section.id, "edit"])));
       setScanSummary({ found: sections.length, kept: sections.length, excluded: 0 });
       setCut(null);
       setPickingPool(false);
       setPickedPool([]);
+      if (autoStart) setAutoRun(true);
       setMessage(`사진 ${sections.length}장을 가져왔습니다. 제품컷·착용컷 구분을 확인하고, AI로 바꾸지 않을 사진은 "편집 제외"를 누른 뒤 새로 만들기를 누르세요.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "사진을 가져오지 못했습니다.");
@@ -468,6 +477,20 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       setBusy(false);
     }
   }
+
+  // 2026-11-17 칸의 [AI 편집]을 누르면(요청 번호가 바뀌면) 사진을 가져온 뒤 곧바로 AI 편집을 시작한다.
+  useEffect(() => {
+    if (!request?.images.length) return;
+    void startFromPhotos(request.images, `칸에서 고른 사진 ${request.images.length}장`, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request?.token]);
+  useEffect(() => {
+    if (autoRun && !busy && originalSections.length) {
+      setAutoRun(false);
+      void create();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun, busy, originalSections]);
 
   async function choosePhotoFiles(event: ChangeEvent<HTMLInputElement>) {
     const files = [...(event.target.files || [])].filter(file => file.type.startsWith("image/"));
@@ -762,9 +785,9 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       if (newlyEdited.length) {
         const stamp = Date.now().toString(36).slice(-4);
         const base = modelName.trim() || "NOID-B";
-        const items: Array<{ fileName: string; dataUrl: string; source: string; kind?: "product" | "wear" }> = [];
+        const items: Array<{ fileName: string; dataUrl: string; source: string; kind?: "product" | "wear"; slotKey?: string }> = [];
         for (let index = 0; index < newlyEdited.length; index += 1) {
-          items.push({ fileName: `${base}-ai-${stamp}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(newlyEdited[index].dataUrl, await listSquareSize(newlyEdited[index].dataUrl)), source: newlyEdited[index].dataUrl, kind: newlyEdited[index].kind });
+          items.push({ fileName: `${base}-ai-${stamp}-${String(index + 1).padStart(2, "0")}.jpg`, dataUrl: await extendToSquareCanvas(newlyEdited[index].dataUrl, await listSquareSize(newlyEdited[index].dataUrl)), source: newlyEdited[index].dataUrl, kind: newlyEdited[index].kind, slotKey: slotKeyBySection.current[newlyEdited[index].id] });
           alreadyAdded.current.add(newlyEdited[index].dataUrl);
         }
         onAddToList(items);
@@ -772,7 +795,9 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       }
       setFinalSections(completed);
       setMessage(newlyEdited.length
-        ? `AI 편집 사진 ${newlyEdited.length}장을 5번 쿠팡 등록이미지 목록에 넣었습니다. 제품 모양을 꼭 확인한 뒤 썸네일·추가이미지 칸으로 끌어 넣거나, 위 "빈 칸 자동 채우기"를 누르세요.`
+        ? newlyEdited.some(section => slotKeyBySection.current[section.id])
+          ? `AI 편집이 끝났습니다. 편집한 사진을 해당 칸에 넣었습니다(원래 사진은 사진 목록으로 되돌렸습니다). 제품 모양을 꼭 확인해주세요.`
+          : `AI 편집 사진 ${newlyEdited.length}장을 5번 쿠팡 등록이미지 목록에 넣었습니다. 제품 모양을 꼭 확인한 뒤 썸네일·추가이미지 칸으로 끌어 넣거나, 위 "빈 칸 자동 채우기"를 누르세요.`
         : "새로 넣을 AI 편집 사진이 없습니다. 이미 5번 목록에 넣었습니다.");
     } catch (error) {
       setMessage(`${error instanceof Error ? error.message : "작업 중 문제가 생겼습니다."} 다시 누르면 완료된 AI 사진 다음부터 이어서 만듭니다.`);

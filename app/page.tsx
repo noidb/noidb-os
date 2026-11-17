@@ -445,6 +445,9 @@ export default function Home() {
     setAiPanelOpen(open);
     try { window.localStorage.setItem("noidb-ai-panel-open", open ? "1" : "0"); } catch { /* 저장 공간 없음 */ }
   };
+  // 2026-11-17 칸마다 [AI 편집] / 체크한 칸 한꺼번에 AI 편집. 결과는 같은 칸으로 돌아온다.
+  const [aiCheckedSlots, setAiCheckedSlots] = useState<string[]>([]);
+  const [aiRequest, setAiRequest] = useState<{ token: number; images: Array<{ dataUrl: string; name: string; slotKey: string }> } | null>(null);
   const [dragDetailIndex, setDragDetailIndex] = useState<number | null>(null);
 
   const [sourcingUrls, setSourcingUrls] = useState(["", "", ""]);
@@ -1864,6 +1867,23 @@ export default function Home() {
       setCustomSlots(prev => prev.map(item => item.id === key.slice(7) ? { ...item, slot: value } : item));
     }
   };
+
+  // 칸의 사진(원본이 있으면 원본)을 AI 사진편집으로 보내 바로 편집을 시작한다. 결과는 같은 칸으로 들어온다.
+  const requestAiEdit = (keys: string[]) => {
+    const images = keys.flatMap(key => {
+      const slot = getSlotValue(key);
+      return slot?.dataUrl ? [{ dataUrl: slot.source || slot.dataUrl, name: slot.fileName, slotKey: key }] : [];
+    });
+    if (!images.length) return;
+    setAiPanel(true);
+    setAiRequest(prev => ({ token: (prev?.token || 0) + 1, images }));
+    setAiCheckedSlots([]);
+    window.setTimeout(() => document.getElementById("aiEditAnchor")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  };
+  const toggleAiChecked = (key: string) => setAiCheckedSlots(prev => prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]);
+  const aiSlotProps = (key: string) => ({
+    aiEdit: { checked: aiCheckedSlots.includes(key), onToggle: () => toggleAiChecked(key), onEdit: () => requestAiEdit([key]) },
+  });
 
   const swapSlots = (sourceKey: string, targetKey: string) => {
     if (!sourceKey || sourceKey === targetKey) return;
@@ -3603,7 +3623,7 @@ export default function Home() {
           <span>클릭하거나 이미지를 이곳으로 드래그한 뒤 각 등록 칸에 배치하세요.</span>
         </div>
         {/* 2026-11-17 AI 사진편집을 6번에서 5번으로 옮김: 사진을 올린 바로 아래에서 편집하고, 완성된 사진은 아래 사진 목록 맨 앞에 들어온다. */}
-        <div className="aiEditHeader">
+        <div id="aiEditAnchor" className="aiEditHeader">
           <button type="button" className="aiEditToggle" aria-expanded={aiPanelOpen} onClick={() => setAiPanel(!aiPanelOpen)}>
             {aiPanelOpen ? "▼ AI 사진편집 접기" : "▶ AI 사진편집 열기"}
           </button>
@@ -3629,10 +3649,26 @@ export default function Home() {
               setLogoAppliedPreview(logoApplied ? dataUrl : "");
               setDetailMessage(logoApplied ? "자른 상세페이지에 상단 로고를 붙여 6번 상세페이지 칸에 넣었습니다." : "새 상세페이지를 6번 상세페이지 칸에 넣었습니다.");
             }}
+            request={aiRequest}
             onAddToList={items => {
+              // 2026-11-17 칸에서 시작한 AI 편집(slotKey 있음)은 같은 칸에 넣고, 원래 사진은 목록으로 되돌린다.
+              const toSlots = items.filter(item => item.slotKey);
+              const toPool = items.filter(item => !item.slotKey);
+              const returned: SlotImage[] = [];
+              for (const { slotKey, ...image } of toSlots) {
+                const previous = getSlotValue(slotKey!);
+                setSlotValue(slotKey!, image.source && image.source !== image.dataUrl ? { ...image, originDataUrl: image.dataUrl } : image);
+                if (previous?.dataUrl) returned.push(poolOriginal(previous));
+              }
               // 2026-11-17 새로 넣은 사진을 바로 확인할 수 있게 목록 맨 앞에 넣는다.
-              setUploadPool(prev => [...items, ...prev]);
-              setPhotoMessage(`${items.length}장을 아래 사진 목록 맨 앞에 추가했습니다. 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
+              setUploadPool(prev => {
+                const next = [...toPool, ...prev];
+                for (const image of returned) if (!next.some(item => item.dataUrl === image.dataUrl)) next.push(image);
+                return next;
+              });
+              setPhotoMessage(toSlots.length
+                ? `AI 편집 사진 ${toSlots.length}장을 해당 칸에 넣었습니다. 원래 사진은 아래 사진 목록으로 되돌렸습니다.${toPool.length ? ` 나머지 ${toPool.length}장은 목록 맨 앞에 추가했습니다.` : ""}`
+                : `${items.length}장을 아래 사진 목록 맨 앞에 추가했습니다. 썸네일·추가이미지 칸으로 끌어 넣으세요.`);
             }}
           />
         </div>
@@ -3658,6 +3694,9 @@ export default function Home() {
           <button type="button" onClick={() => addCustomSlot("all")}>+ 전체옵션 이미지</button>
           <button type="button" onClick={() => addCustomSlot("detail")}>+ 디테일컷</button>
           <button type="button" onClick={() => addCustomSlot("wear")}>+ 착용컷</button>
+          <button type="button" className="softSageButton" disabled={!aiCheckedSlots.filter(key => getSlotValue(key)).length}
+            title="각 칸의 'AI 선택'에 체크한 사진을 한꺼번에 AI로 편집합니다. 사진 1장마다 AI 사용량이 듭니다."
+            onClick={() => requestAiEdit(aiCheckedSlots)}>체크한 칸 AI 편집 ({aiCheckedSlots.filter(key => getSlotValue(key)).length}장)</button>
         </div>
         {slotCopyMessage && <p className="note">{slotCopyMessage}</p>}
         </div>
@@ -3674,6 +3713,7 @@ export default function Home() {
         <div className="imageSlotGrid" key={draftRestoreRevision}>
           <ImageSlot
             slotKey="mainWear"
+            {...aiSlotProps("mainWear")}
             title="메인착용컷"
             subtitle="상세페이지 전용"
             filename=""
@@ -3687,6 +3727,7 @@ export default function Home() {
           />
           <ImageSlot
             slotKey="all"
+            {...aiSlotProps("all")}
             title="전체옵션 이미지"
             subtitle="추가이미지 01"
             filename={model ? `${model}-01.jpg` : "모델명-01.jpg"}
@@ -3706,6 +3747,7 @@ export default function Home() {
           {variants.map(variant => (
             <ImageSlot
               slotKey={`opt:${variant.key}`}
+              {...aiSlotProps(`opt:${variant.key}`)}
               key={variant.key}
               title={`${variant.label} 썸네일`}
               filename={`${model || "모델명"}${variant.thumbFile}`}
@@ -3726,6 +3768,7 @@ export default function Home() {
 
           <ImageSlot
             slotKey="detail"
+            {...aiSlotProps("detail")}
             title="디테일컷"
             subtitle="추가이미지 02"
             filename={model ? `${model}-02.jpg` : "모델명-02.jpg"}
@@ -3740,6 +3783,7 @@ export default function Home() {
           />
           <ImageSlot
             slotKey="wear01"
+            {...aiSlotProps("wear01")}
             title="착용컷 01"
             subtitle="추가이미지 03"
             filename={model ? `${model}-03.jpg` : "모델명-03.jpg"}
@@ -3754,6 +3798,7 @@ export default function Home() {
           />
           <ImageSlot
             slotKey="wear02"
+            {...aiSlotProps("wear02")}
             title="착용컷 02"
             subtitle="추가이미지 04"
             filename={model ? `${model}-04.jpg` : "모델명-04.jpg"}
@@ -3770,6 +3815,7 @@ export default function Home() {
             <ImageSlot
               key={item.id}
               slotKey={`custom:${item.id}`}
+              {...aiSlotProps(`custom:${item.id}`)}
               title={customSlotTitle(item, index)}
               subtitle={index < MAX_FILE_CUSTOM_SLOTS ? `사용자 추가 이미지 ${String(index + 5).padStart(2, "0")}` : "상세페이지 전용"}
               detailOnly={index >= MAX_FILE_CUSTOM_SLOTS}
@@ -4582,6 +4628,7 @@ function ImageSlot({
   onSlotSwap,
   onRemoveSlot,
   onCopy,
+  aiEdit,
   coverSquare = false,
   pickOnClick = true,
   detailOnly = false,
@@ -4601,6 +4648,8 @@ function ImageSlot({
   onRemoveSlot?: () => void;
   /** 이 칸의 사진을 다음 빈 칸에 복사한다(복사 버튼). */
   onCopy?: () => void;
+  /** 2026-11-17 AI 선택 체크와 [AI 편집] 버튼. 편집 결과는 이 칸으로 돌아온다. */
+  aiEdit?: { checked: boolean; onToggle: () => void; onEdit: () => void };
   coverSquare?: boolean;
   /** false면 빈 칸을 눌러도 파일 선택 창(탐색기)을 열지 않는다. 붙여넣기 전용 칸에서 칸을 눌러 붙여넣기를 준비할 때 창이 뜨지 않게 한다. */
   pickOnClick?: boolean;
@@ -4735,6 +4784,8 @@ function ImageSlot({
         }}
       />
       <div className="slotActions">
+        {value && aiEdit && <label className="slotAiCheck" title="체크한 칸을 아래 '체크한 칸 AI 편집'으로 한꺼번에 편집합니다."><input type="checkbox" checked={aiEdit.checked} onChange={aiEdit.onToggle} /> AI 선택</label>}
+        {value && aiEdit && <button type="button" className="softSageButton" onClick={aiEdit.onEdit} title="이 칸의 사진을 AI로 바로 편집합니다. 결과는 이 칸에 들어갑니다(AI 사용량 1장).">AI 편집</button>}
         {value && <button type="button" className={value.locked ? "secondaryButton" : "green"} onClick={() => onChange({ ...value, locked: !value.locked })}>{value.locked ? "수정" : "저장"}</button>}
         {value && onCopy && <button type="button" onClick={onCopy} title="같은 사진을 다음 빈 칸에 복사합니다. 복사본은 확대·위치를 따로 조절할 수 있습니다. (칸 위에서 Ctrl+C → 다른 칸 위에서 Ctrl+V도 됩니다)">복사</button>}
         {value && <button type="button" className="removeButton" onClick={() => { pendingFileRevision.current += 1; onReturnToPool?.(value); onChange(null); }} title="칸에서 빼서 위쪽 이미지 목록으로 되돌립니다.">삭제</button>}

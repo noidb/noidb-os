@@ -907,3 +907,8 @@ html,body{overflow-x:clip}
 .detailList{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
 .detailList .detailItem img{width:64px;height:64px}
 
+
+/* 2026-11-17 칸별 AI 편집 버튼·체크 */
+.slotActions .softSageButton{background:#e3ede6;color:#292929}
+.slotAiCheck{flex-basis:100%;display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:#4b4744;cursor:pointer}
+.slotAiCheck input{width:16px;height:16px;accent-color:#60766a}
