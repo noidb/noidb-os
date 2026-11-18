@@ -31,6 +31,8 @@ export interface WimsRegistrationAudit {
   approvedCandidateCount: number;
   reviewingCandidateCount: number;
   reviewingCount: number;
+  /** WIMS 반려인데 제품DB 현재상태가 아직 승인대기류라 '반려'로 바꿀 건수 */
+  rejectedCandidateCount: number;
   rejectedCount: number;
   alreadyLinkedCount: number;
   conflictCount: number;
@@ -52,6 +54,11 @@ export interface WimsRegistrationApplyResult {
 
 const PENDING = new Set(["신상승인대기", "기존상품승인대기", "등록파일생성", "재등록파일생성"]);
 const REJECTION_DECISIONS = new Set(["등록불가", "재등록시도"]);
+
+/** 반려 건 중 제품DB 현재상태가 아직 승인대기류인 줄 — 현재상태를 '반려'로 바꿀 대상(등록불가·재등록시도로 이미 정한 줄은 건드리지 않는다). */
+function isRejectedToMark(row: WimsAuditResultRow): boolean {
+  return row.type === "rejected" && Boolean(row.sheetRowNumber) && PENDING.has(row.productDbStatus || "");
+}
 
 function normalize(value: unknown): string {
   return String(value ?? "").trim().toUpperCase().replace(/[\s_-]+/g, "");
@@ -304,6 +311,7 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
     approvedCandidateCount: rows.filter(row => row.type === "approved_candidate").length,
     reviewingCandidateCount: rows.filter(row => row.type === "reviewing" && row.proposedStatus).length,
     reviewingCount: wimsRows.filter(row => row.status === "reviewing").length,
+    rejectedCandidateCount: rows.filter(isRejectedToMark).length,
     rejectedCount: wimsRows.filter(row => row.status === "rejected").length,
     alreadyLinkedCount: rows.filter(row => row.type === "already_linked").length,
     conflictCount: rows.filter(row => row.type === "conflict").length,
@@ -371,7 +379,7 @@ export async function applyWimsRejectionDecision(
   const statusIndex = headerIndex(headers, ["현재상태", "상태"]);
   if (statusIndex < 0) throw new Error("제품DB 현재상태 열을 찾지 못했습니다.");
   const currentStatus = String(sheetRows[sheetRowNumber - 1]?.[statusIndex] ?? "").trim();
-  const allowed = new Set([...PENDING, "등록불가", "재등록시도"]);
+  const allowed = new Set([...PENDING, "반려", "등록불가", "재등록시도"]);
   if (!allowed.has(currentStatus)) throw new Error(`현재상태가 ${currentStatus || "빈값"}이라 반려 상태로 변경하지 않았습니다.`);
   if (currentStatus === decision) return { applied: false, decision, sheetRowNumber, backupSheetName: "" };
 
@@ -474,7 +482,8 @@ export function buildWimsRegistrationCellUpdates(
   for (const candidate of audit.rows) {
     const approved = candidate.type === "approved_candidate";
     const reviewing = includeReviewing && candidate.type === "reviewing" && candidate.proposedStatus;
-    if (!candidate.sheetRowNumber || (!approved && !reviewing)) continue;
+    const rejected = includeReviewing && isRejectedToMark(candidate);
+    if (!candidate.sheetRowNumber || (!approved && !reviewing && !rejected)) continue;
     const row = candidate.sheetRowNumber;
     if (seen.has(row)) throw new Error("동일 제품DB 행에 여러 WIMS 결과가 연결되어 반영을 중단했습니다.");
     seen.add(row);
@@ -488,6 +497,11 @@ export function buildWimsRegistrationCellUpdates(
     }
     if (reviewing) {
       cellUpdates.push({ row, col: idx.status + 1, value: candidate.proposedStatus! });
+      continue;
+    }
+    if (rejected) {
+      // 반려는 현재상태만 '반려'로 바꾼다. SKU·바코드·상품명은 건드리지 않는다.
+      cellUpdates.push({ row, col: idx.status + 1, value: "반려" });
       continue;
     }
     cellUpdates.push(
@@ -548,7 +562,7 @@ export async function applyWimsRegistrationAudit(
 ): Promise<WimsRegistrationApplyResult> {
   const audit = await buildWimsRegistrationAudit(wimsRows);
   if (!expectedDryRunToken || audit.dryRunToken !== expectedDryRunToken) throw new Error("WIMS 또는 제품DB 내용이 미리보기 이후 변경되었습니다. 다시 대조해주세요.");
-  if (audit.approvedCandidateCount === 0 && (!includeReviewing || audit.reviewingCandidateCount === 0)) {
+  if (audit.approvedCandidateCount === 0 && (!includeReviewing || (audit.reviewingCandidateCount === 0 && audit.rejectedCandidateCount === 0))) {
     return { applied: false, audit, writtenRowCount: 0, writtenCellCount: 0 };
   }
   const backup = await backupSheetWithinSpreadsheet(PRODUCT_DB_SHEET_NAME);

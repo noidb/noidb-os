@@ -247,8 +247,8 @@ export default function WimsRegistrationImportPanel() {
   }
 
   async function applyApprovedCandidates() {
-    if (!snapshot || !audit || applying || (audit.approvedCandidateCount + audit.reviewingCandidateCount) === 0) return;
-    if (!window.confirm("검수완료 " + audit.approvedCandidateCount + "건 연결 · 검수중 " + audit.reviewingCandidateCount + "건 승인대기 상태 반영\n\n전체 시트를 먼저 백업합니다. 검수중은 현재상태만 변경하고, 검수완료는 상품명·SKU ID·R바코드·현재상태를 반영합니다. 누적입고·창고번호·발주가능상태 등 다른 정보는 유지합니다.")) return;
+    if (!snapshot || !audit || applying || (audit.approvedCandidateCount + audit.reviewingCandidateCount + audit.rejectedCandidateCount) === 0) return;
+    if (!window.confirm("검수완료 " + audit.approvedCandidateCount + "건 연결 · 검수중 " + audit.reviewingCandidateCount + "건 승인대기 상태 반영 · 반려 " + audit.rejectedCandidateCount + "건 반려 상태 반영\n\n전체 시트를 먼저 백업합니다. 검수중·반려는 현재상태만 변경하고, 검수완료는 상품명·SKU ID·R바코드·현재상태를 반영합니다. 누적입고·창고번호·발주가능상태 등 다른 정보는 유지합니다.")) return;
     setApplying(true);
     setError("");
     setMessage("");
@@ -535,21 +535,21 @@ export default function WimsRegistrationImportPanel() {
             </div>
           )}
           {auditing && <p style={{ fontSize: "11px", margin: "8px 0 0", color: wmsColors.muted }}>제품DB와 대조 중...</p>}
-          {audit && (audit.approvedCandidateCount + audit.reviewingCandidateCount) > 0 && (
+          {audit && (audit.approvedCandidateCount + audit.reviewingCandidateCount + audit.rejectedCandidateCount) > 0 && (
             <div style={{ marginTop: "10px", border: `1px solid ${wmsColors.border}`, borderRadius: "10px", padding: "8px 12px", background: "#fff", fontSize: "12px" }}>
               <strong style={{ display: "block", marginBottom: "4px", color: wmsColors.ink }}>이번에 반영될 건</strong>
               <div style={{ display: "grid", gap: "4px" }}>
-                {audit.rows.filter(row => (row.type === "approved_candidate" || (row.type === "reviewing" && row.proposedStatus)) && row.sheetRowNumber).map(row => (
+                {audit.rows.filter(row => (row.type === "approved_candidate" || (row.type === "reviewing" && row.proposedStatus) || (row.type === "rejected" && ["신상승인대기", "기존상품승인대기", "등록파일생성", "재등록파일생성"].includes(row.productDbStatus || ""))) && row.sheetRowNumber).map(row => (
                   <div key={`apply-${row.sheetRowNumber}`}>
                     <strong>{row.productDbModelSku || row.wims.modelSku || "모델SKU 확인 필요"}</strong>
-                    <span style={{ color: wmsColors.muted }}> · {row.productDbStatus || "-"} → {row.proposedStatus}</span>
+                    <span style={{ color: wmsColors.muted }}> · {row.productDbStatus || "-"} → {row.proposedStatus || "반려"}</span>
                     <div style={{ color: wmsColors.muted }}>{row.productDbProductName || row.wims.productName}</div>
                   </div>
                 ))}
               </div>
             </div>
           )}
-          {audit && (audit.approvedCandidateCount + audit.reviewingCandidateCount) > 0 && <button type="button" onClick={applyApprovedCandidates} disabled={applying} className="softBeigeButton" style={{ width: "100%", marginTop: "10px", fontSize: "15px" }}>{applying ? "백업 후 반영·검증 중..." : `검수상태 ${audit.approvedCandidateCount + audit.reviewingCandidateCount}건 반영`}</button>}
+          {audit && (audit.approvedCandidateCount + audit.reviewingCandidateCount + audit.rejectedCandidateCount) > 0 && <button type="button" onClick={applyApprovedCandidates} disabled={applying} className="softBeigeButton" style={{ width: "100%", marginTop: "10px", fontSize: "15px" }}>{applying ? "백업 후 반영·검증 중..." : `검수상태 ${audit.approvedCandidateCount + audit.reviewingCandidateCount + audit.rejectedCandidateCount}건 반영`}</button>}
         </div>
       )}
     </section>
