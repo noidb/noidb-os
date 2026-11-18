@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildQuoteWorkbook, MissingRequiredError } from "@/lib/excel/quote";
+import { buildQuoteWorkbook, MissingRequiredError, UnsupportedMaterialError } from "@/lib/excel/quote";
 import { categoryQuoteOptions } from "@/lib/product-options/quote-options";
 import { buildSkuRows } from "@/lib/excel/common";
 import type { ExportPayload } from "@/lib/excel/types";
@@ -92,6 +92,9 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     if (error instanceof MissingRequiredError) {
       return NextResponse.json({ error: error.message, missingRequired: error.missing }, { status: 422 });
+    }
+    if (error instanceof UnsupportedMaterialError) {
+      return NextResponse.json({ error: error.message }, { status: 422 });
     }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "견적서 생성 실패" },

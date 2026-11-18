@@ -112,11 +112,28 @@ function earringPostType(title: string) {
 // 사이트의 소재 이름은 그대로 두고, 견적서에 넣을 때만 쿠팡 드롭다운 값으로 바꾼다.
 const COUPANG_JEWELRY_MATERIAL: Record<string, string> = {
   "신주": "Brass",
+  "925실버": "Silver 92.5%~99%",
 };
 
+// 쿠팡 양식(귀걸이·목걸이·반지·발찌·팔찌 5종 공통)의 "주얼리 소재" 드롭다운 전체 값 (2026-11-18 확인).
+const COUPANG_JEWELRY_MATERIAL_CHOICES = [
+  "천연가죽", "써지컬스틸", "Brass", "합성섬유", "인조가죽(합성피혁)", "Silver 92.5%~99%", "14K", "18K",
+  "24K", "24K+18K(뒷장식)", "Pt(플래티넘)", "Silver+14K", "Brass+14K Pin", "10K", "22K", "8K",
+];
+
+export class UnsupportedMaterialError extends Error {
+  constructor(material: string) {
+    super(`소재 '${material}'은(는) 쿠팡 '주얼리 소재' 목록에 없습니다. 소재를 쿠팡 목록에 맞게 바꿔야 합니다. (선택 가능: ${COUPANG_JEWELRY_MATERIAL_CHOICES.join(", ")})`);
+    this.name = "UnsupportedMaterialError";
+  }
+}
+
+// 목록에 없는 값을 그대로 넣으면 쿠팡이 반려하므로, 알려 주고 견적서 생성을 멈춘다.
 function coupangJewelryMaterial(value: string) {
   const text = String(value || "").trim();
-  return COUPANG_JEWELRY_MATERIAL[text] || text;
+  const mapped = COUPANG_JEWELRY_MATERIAL[text] || text;
+  if (mapped && !COUPANG_JEWELRY_MATERIAL_CHOICES.includes(mapped)) throw new UnsupportedMaterialError(text);
+  return mapped;
 }
 
 function commonDefaults(payload: ExportPayload) {
