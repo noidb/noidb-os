@@ -3,7 +3,6 @@
 import { readLastView, saveLastView } from "@/lib/wms/last-view-cache";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { wmsColors } from "@/lib/wms/ui-tokens";
 import { getWmsDisplayImageUrl } from "@/lib/wms/image-display-url";
 import { resolveDisplayNameAndOption } from "@/lib/wms/display-name";
@@ -302,9 +301,10 @@ function RocketDeleteButton({ items, onDone, restore }: { items: RocketPendingIt
 }
 
 export default function ProductCatalogPage() {
-  const router = useRouter();
   const [folderName, setFolderName] = useState("");
   const [folderMessage, setFolderMessage] = useState("");
+  // 등록 준비 뒤 새 탭이 막혔을 때 직접 눌러 여는 등록 화면 주소(비어 있으면 안 보임).
+  const [openRegistrationHref, setOpenRegistrationHref] = useState("");
   // 2026-11-10 제품DB에 없는 신상품: 검색 결과가 0건이면 사진 폴더(신상등록대기 등)에서 같은 이름 폴더를 찾는다.
   const [newFolders, setNewFolders] = useState<{ query: string; loading: boolean; wide: boolean; folders: NewProductFolder[]; error: string } | null>(null);
   const newFolderAbort = useRef<AbortController | null>(null);
@@ -1333,13 +1333,23 @@ export default function ProductCatalogPage() {
       }
       const targetHref = newProduct ? `/?newPhotoModel=${encodeURIComponent(modelName.toLowerCase())}` : rocketOnly ? `/?rocketModel=${encodeURIComponent(modelName)}` : reregisterHref;
       // 먼저 열어 둔 새 탭에 등록 화면을 연다. 새 탭을 못 열었으면(팝업 차단) 다시 한 번 열어 보고, 그래도 안 되면 이 창에서 연다.
-      if (registrationTab && !registrationTab.closed) {
-        registrationTab.location.href = targetHref;
+      // 2026-11-18 수정: 이 창(사진선택)은 어떤 경우에도 등록 화면으로 바꾸지 않는다(검색·선택 상태가 접히며 사라지는 문제).
+      // 크롬이 .closed를 잘못 알려 줘도 빈 탭이 남지 않게, 닫힘 여부를 믿지 않고 먼저 주소 이동을 시도한다.
+      let opened = false;
+      if (registrationTab) {
+        try { registrationTab.location.href = targetHref; opened = true; } catch { opened = false; }
+      }
+      if (!opened) {
+        closeRegistrationTab();
+        try { opened = Boolean(window.open(targetHref, "_blank")); } catch { opened = false; }
+      }
+      if (opened) {
+        setOpenRegistrationHref("");
         setFolderMessage(`${modelName}: 등록 준비를 마치고 새 탭에서 등록 화면을 열었습니다.`);
       } else {
-        const reopened = window.open(targetHref, "_blank");
-        if (reopened) setFolderMessage(`${modelName}: 등록 준비를 마치고 새 탭에서 등록 화면을 열었습니다.`);
-        else router.push(targetHref);
+        // 팝업이 막힌 경우: 아래 "등록 화면 열기"를 직접 누르면 새 탭으로 열린다(이 창은 그대로).
+        setOpenRegistrationHref(targetHref);
+        setFolderMessage(`${modelName}: 등록 준비를 마쳤습니다. 새 탭이 막혀 있으니 아래 "등록 화면 열기"를 눌러주세요.`);
       }
     } catch {
       closeRegistrationTab();
@@ -1679,6 +1689,7 @@ export default function ProductCatalogPage() {
         <button type="button" onClick={() => void connectPhotoFolder().then(name => { setFolderName(name); setFolderMessage(""); }).catch(error => { if (error?.name !== "AbortError") setFolderMessage(error instanceof Error ? error.message : "사진 폴더 연결 실패"); })}>사진 원본 폴더 연결</button>
         <span style={{ marginLeft: 8, fontSize: 12 }}>{folderName ? `연결: ${folderName}` : "PC에서 MYBOX 동기화 사진 폴더를 한 번 선택해주세요."}</span><span style={{ marginLeft: 12 }}><FolderInstallLink /></span>
         {folderMessage && <p role="status">{folderMessage}</p>}
+        {openRegistrationHref && <a href={openRegistrationHref} target="_blank" rel="noopener" onClick={() => setOpenRegistrationHref("")} style={{ display: "inline-block", margin: "4px 0", padding: "8px 16px", fontWeight: 800, textDecoration: "none", border: "1px solid currentColor", borderRadius: 8 }}>등록 화면 열기</a>}
       </div>
 
       <div style={{ border: `1px solid ${wmsColors.border}`, background: "#fff", borderRadius: 14, padding: 16, marginBottom: 16 }}>
