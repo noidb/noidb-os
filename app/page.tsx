@@ -1938,8 +1938,7 @@ export default function Home() {
     setAiPanel(true);
     setAiRequest(prev => ({ token: (prev?.token || 0) + 1, images }));
     setAiCheckedSlots([]);
-    // 2026-11-17 AI 사진편집 패널이 칸 아래로 내려왔으므로, 패널(진행 상태·중단하기)이 보이게 그 자리로 내려간다.
-    window.setTimeout(() => document.getElementById("aiPanelBox")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    // 2026-11-18 사진만 담고 AI 편집은 시작하지 않으므로 화면은 그대로 둔다(아래 2번에서 분위기·컬러를 고른 뒤 3번 버튼을 눌러야 시작).
   };
   const toggleAiChecked = (key: string) => setAiCheckedSlots(prev => prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]);
   const aiSlotProps = (key: string) => ({
@@ -3763,7 +3762,7 @@ export default function Home() {
           <button type="button" onClick={() => addCustomSlot("detail")}>+ 디테일컷</button>
           <button type="button" onClick={() => addCustomSlot("wear")}>+ 착용컷</button>
           <button type="button" className="softSageButton" disabled={!aiCheckedSlots.filter(key => getSlotValue(key)).length}
-            title="각 칸의 'AI 선택'에 체크한 사진을 한꺼번에 AI로 편집합니다. 사진 1장마다 AI 사용량이 듭니다."
+            title="각 칸의 'AI 선택'에 체크한 사진을 아래 AI 사진편집에 담습니다. 분위기·컬러를 고르고 3번 버튼을 눌러야 편집이 시작됩니다(사진 1장마다 AI 사용량)."
             onClick={() => requestAiEdit(aiCheckedSlots)}>체크한 칸 AI 편집 ({aiCheckedSlots.filter(key => getSlotValue(key)).length}장)</button>
         </div>
         {slotCopyMessage && <p className="note">{slotCopyMessage}</p>}
@@ -5000,7 +4999,7 @@ function ImageSlot({
       />
       <div className="slotActions">
         {value && aiEdit && <label className="slotAiCheck" title="체크한 칸을 아래 '체크한 칸 AI 편집'으로 한꺼번에 편집합니다."><input type="checkbox" checked={aiEdit.checked} onChange={aiEdit.onToggle} /> AI 선택</label>}
-        {value && aiEdit && <button type="button" className="softSageButton" onClick={aiEdit.onEdit} title="이 칸의 사진을 AI로 바로 편집합니다. 결과는 이 칸에 들어갑니다(AI 사용량 1장).">AI 편집</button>}
+        {value && aiEdit && <button type="button" className="softSageButton" onClick={aiEdit.onEdit} title="이 칸의 사진을 아래 AI 사진편집에 담습니다. 분위기·컬러를 고르고 3번 버튼을 눌러야 편집이 시작됩니다(AI 사용량 1장).">AI 편집</button>}
         {value && <button type="button" className={value.locked ? "secondaryButton" : "green"} onClick={() => onChange({ ...value, locked: !value.locked })}>{value.locked ? "수정" : "저장"}</button>}
         {value && onCopy && <button type="button" onClick={onCopy} title="같은 사진을 다음 빈 칸에 복사합니다. 복사본은 확대·위치를 따로 조절할 수 있습니다. (칸 위에서 Ctrl+C → 다른 칸 위에서 Ctrl+V도 됩니다)">복사</button>}
         {value && <button type="button" className="removeButton" onClick={() => { pendingFileRevision.current += 1; onReturnToPool?.(value); onChange(null); }} title="칸에서 빼서 위쪽 이미지 목록으로 되돌립니다.">삭제</button>}

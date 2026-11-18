@@ -456,7 +456,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
    * 상세페이지 없이 사진 몇 장으로 바로 시작한다(모델컷·제품컷만 골라 AI 편집).
    * 고른 사진이 그대로 "사진별 확인" 목록이 되고, 2·3단계는 상세페이지를 나눴을 때와 똑같다.
    */
-  async function startFromPhotos(images: Array<{ dataUrl: string; name: string; slotKey?: string }>, label: string, autoStart = false) {
+  async function startFromPhotos(images: Array<{ dataUrl: string; name: string; slotKey?: string }>, label: string, autoStart = false, fromSlot = false) {
     if (!images.length) return;
     if (busy) { setMessage("지금 다른 AI 편집이 진행 중입니다. 끝난 뒤 다시 눌러주세요."); return; }
     setBusy(true);
@@ -476,7 +476,9 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       setPickingPool(false);
       setPickedPool([]);
       if (autoStart) setAutoRun(true);
-      setMessage(`사진 ${sections.length}장을 가져왔습니다. 제품컷·착용컷 구분을 확인하세요. 잘못 들어온 사진은 삭제를 누르면 이 목록에서만 빠집니다(칸의 사진은 그대로).`);
+      setMessage(fromSlot
+        ? `사진 ${sections.length}장을 가져왔습니다. 아래 2번에서 분위기와 제품 컬러를 고른 뒤, 3번의 "AI 편집 시작" 버튼을 눌러야 시작됩니다.`
+        : `사진 ${sections.length}장을 가져왔습니다. 제품컷·착용컷 구분을 확인하세요. 잘못 들어온 사진은 삭제를 누르면 이 목록에서만 빠집니다(칸의 사진은 그대로).`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "사진을 가져오지 못했습니다.");
     } finally {
@@ -484,10 +486,11 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     }
   }
 
-  // 2026-11-17 칸의 [AI 편집]을 누르면(요청 번호가 바뀌면) 사진을 가져온 뒤 곧바로 AI 편집을 시작한다.
+  // 2026-11-18 칸의 [AI 편집]·[체크한 칸 AI 편집]을 누르면(요청 번호가 바뀌면) 사진만 가져온다.
+  // 예전에는 곧바로 AI 편집이 시작됐지만, 분위기·제품 컬러를 고른 뒤 3번의 버튼을 눌러야 시작하도록 바꿨다.
   useEffect(() => {
     if (!request?.images.length) return;
-    void startFromPhotos(request.images, `칸에서 고른 사진 ${request.images.length}장`, true);
+    void startFromPhotos(request.images, `칸에서 고른 사진 ${request.images.length}장`, false, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request?.token]);
   useEffect(() => {
