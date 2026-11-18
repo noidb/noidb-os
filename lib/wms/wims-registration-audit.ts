@@ -60,6 +60,11 @@ function isRejectedToMark(row: WimsAuditResultRow): boolean {
   return row.type === "rejected" && Boolean(row.sheetRowNumber) && PENDING.has(row.productDbStatus || "");
 }
 
+/** 모델SKU 끝에 붙은 한글 꼬리(예: wh0113623종)를 뺀 비교 키. 견적서(WIMS)에서는 영문·숫자만 읽어 한글 꼬리가 빠진다. */
+function modelSkuWithoutHangulTail(value: unknown): string {
+  return identityKey(String(value ?? "").replace(/[가-힣]+$/, ""));
+}
+
 function normalize(value: unknown): string {
   return String(value ?? "").trim().toUpperCase().replace(/[\s_-]+/g, "");
 }
@@ -193,6 +198,7 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
     row,
     sheetRowNumber: index + 2,
     legacyKey: legacyModelSkuKey(String(row[idx.modelSku] ?? ""), modelNameIdx >= 0 ? String(row[modelNameIdx] ?? "") : ""),
+    tailKey: /[가-힣]$/.test(String(row[idx.modelSku] ?? "").trim()) ? modelSkuWithoutHangulTail(row[idx.modelSku]) : "",
     status: String(row[idx.status] ?? "").trim(),
     modelSku: String(row[idx.modelSku] ?? "").trim(),
     skuId: String(row[idx.skuId] ?? "").trim(),
@@ -203,7 +209,9 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
   const bySkuId = new Map<string, typeof products>();
   const byProductName = new Map<string, typeof products>();
   const byLegacyKey = new Map<string, typeof products>();
+  const byTailKey = new Map<string, typeof products>();
   for (const product of products) {
+    if (product.tailKey) byTailKey.set(product.tailKey, [...(byTailKey.get(product.tailKey) || []), product]);
     if (product.legacyKey) byLegacyKey.set(product.legacyKey, [...(byLegacyKey.get(product.legacyKey) || []), product]);
     if (identityKey(product.modelSku)) byModelSku.set(identityKey(product.modelSku), [...(byModelSku.get(identityKey(product.modelSku)) || []), product]);
     if (identityKey(product.skuId)) bySkuId.set(identityKey(product.skuId), [...(bySkuId.get(identityKey(product.skuId)) || []), product]);
@@ -222,7 +230,11 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
     const legacyMatches = !skuMatches.length && !modelMatches.length && wims.modelSku
       ? (byLegacyKey.get(legacyModelSkuKey(wims.modelSku)) || []) : [];
     const legacyMatch = legacyMatches.length === 1 ? legacyMatches : [];
-    return { modelMatches, matches: skuMatches.length > 0 ? skuMatches : modelMatches.length > 0 ? modelMatches : legacyMatch.length > 0 ? legacyMatch : rejectedNameMatches };
+    // 2026-11-18: 제품DB 모델SKU 끝에 한글이 붙은 줄(wh0113623종)은 한글을 뺀 값과 같고 후보가 정확히 1행일 때만 연결한다.
+    const tailMatches = !skuMatches.length && !modelMatches.length && !legacyMatch.length && wims.modelSku
+      ? (byTailKey.get(identityKey(wims.modelSku)) || []) : [];
+    const tailMatch = tailMatches.length === 1 ? tailMatches : [];
+    return { modelMatches, matches: skuMatches.length > 0 ? skuMatches : modelMatches.length > 0 ? modelMatches : legacyMatch.length > 0 ? legacyMatch : tailMatch.length > 0 ? tailMatch : rejectedNameMatches };
   };
   const modelFallback = rejectedModelFallback(
     wimsRows.filter(wims => wims.status === "rejected" && !retired(wims) && directMatches(wims).matches.length === 0),
@@ -261,7 +273,8 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
       continue;
     }
     if ((wims.modelSku && identityKey(product.modelSku) !== identityKey(wims.modelSku)
-        && product.legacyKey !== legacyModelSkuKey(wims.modelSku))
+        && product.legacyKey !== legacyModelSkuKey(wims.modelSku)
+        && !(product.tailKey && product.tailKey === identityKey(wims.modelSku)))
       || modelMatches.some(match => match.sheetRowNumber !== product.sheetRowNumber)
       // 2026-10-23: 재등록 줄은 승인 전까지 옛 SKU ID·바코드를 그대로 갖고 있다(승인 때 새 값으로 덮어씀) → 다른 게 정상이다.
       || (!isReregistration && product.skuId && wims.skuId && identityKey(product.skuId) !== identityKey(wims.skuId))
@@ -329,7 +342,7 @@ export function buildWimsRegistrationAuditFromRows(wimsRows: WimsRegistrationRow
  */
 function rejectedModelFallback(
   rejected: WimsRegistrationRow[],
-  products: { row: string[]; sheetRowNumber: number; status: string; modelSku: string; skuId: string; barcode: string; productName: string; legacyKey: string }[],
+  products: { row: string[]; sheetRowNumber: number; status: string; modelSku: string; skuId: string; barcode: string; productName: string; legacyKey: string; tailKey: string }[],
   headers: string[],
 ): Map<WimsRegistrationRow, (typeof products)[number]> {
   const result = new Map<WimsRegistrationRow, (typeof products)[number]>();
