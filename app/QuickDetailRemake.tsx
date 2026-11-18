@@ -343,6 +343,8 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   const expectedEdits = originalSections.filter(section => (sectionActions[section.id] || "edit") === "edit").length;
   const completedEdits = editedSections.filter(section => originalSections.some(original => original.id === section.id) && (sectionActions[section.id] || "edit") === "edit").length;
   const editedById = useMemo(() => new Map(editedSections.map(section => [section.id, section])), [editedSections]);
+  // 2026-11-18 체크한(편집할) 사진 중 아직 AI 편집이 안 끝난 사진 수. 3번 "AI 편집 시작"은 이 사진들만 편집한다.
+  const pendingCount = originalSections.filter(section => (sectionActions[section.id] || "edit") === "edit" && !editedById.has(section.id)).length;
   const [addedVersion, setAddedVersion] = useState(0);
   // 지금 보이는 사진(AI 편집본이 있으면 편집본, 아니면 원본) 중 아직 5번 등록이미지 목록에 안 들어간 것만 센다.
   const pendingAddCount = useMemo(() => {
@@ -408,13 +410,16 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     }
   }
 
-  async function classifyKinds(sections: QuickDetailSection[]) {
+  async function classifyKinds(sections: QuickDetailSection[], kindOnly = false) {
     const kinds = new Map<string, { kind: "product" | "wear"; reason: string }>();
     try {
-      for (let offset = 0; offset < sections.length; offset += 8) {
-        const batch = sections.slice(offset, offset + 8);
+      // 2026-11-18 칸에서 가져온 사진은 6000×4000(10MB 이상)도 있어, 그대로 보내면 서버가 받지 못해 전부 제품컷으로 처리됐다.
+      // 구분에는 큰 사진이 필요 없으므로 작게 줄여서 보내고, 한 번에 보내는 장수도 줄인다.
+      const step = kindOnly ? 4 : 8;
+      for (let offset = 0; offset < sections.length; offset += step) {
+        const batch = await Promise.all(sections.slice(offset, offset + step).map(async section => kindOnly ? { ...section, dataUrl: await shrinkForUpload(section.dataUrl, 768, 0.8) } : section));
         setMessage(`${sections.length}장의 제품컷·착용컷 구분을 확인하고 있습니다.`);
-        const response = await fetch("/api/image-generator/quick-analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sections: batch }) });
+        const response = await fetch("/api/image-generator/quick-analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sections: batch, mode: kindOnly ? "kind" : undefined }) });
         const data = await response.json() as { decisions?: Array<{ id: string; keep: boolean; kind: "product" | "wear" | "exclude"; reason: string }>; error?: string };
         if (!response.ok || !data.decisions) throw new Error(data.error || "구분하지 못했습니다.");
         for (const decision of data.decisions) if (decision.kind === "product" || decision.kind === "wear") kinds.set(decision.id, { kind: decision.kind, reason: decision.reason });
@@ -459,11 +464,12 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
   async function startFromPhotos(images: Array<{ dataUrl: string; name: string; slotKey?: string }>, label: string, autoStart = false, fromSlot = false) {
     if (!images.length) return;
     if (busy) { setMessage("지금 다른 AI 편집이 진행 중입니다. 끝난 뒤 다시 눌러주세요."); return; }
-    setBusy(true);
+    // 2026-11-18 가져올 때는 제품컷·착용컷을 AI로 구분하지 않는다(예전에는 여기서 1분쯤 기다렸고, 3번 버튼이 "작업 중"으로 바뀌었다).
+    // 사진은 바로 보여 주고, 구분은 3번의 "AI 편집 시작"을 눌렀을 때 체크한 사진만 한다.
     try {
       const stamp = Date.now().toString(36);
       const found = images.map((image, index) => ({ id: `${stamp}-p${index + 1}`, dataUrl: image.dataUrl }));
-      const sections = await classifyKinds(found);
+      const sections = found.map(item => ({ ...item, kind: "product" as const, reason: UNSORTED_REASON }));
       setDraftId(newDraftId());
       setSource("");
       setSourceName(label);
@@ -477,12 +483,10 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       setPickedPool([]);
       if (autoStart) setAutoRun(true);
       setMessage(fromSlot
-        ? `사진 ${sections.length}장을 가져왔습니다. 아래 2번에서 분위기와 제품 컬러를 고른 뒤, 3번의 "AI 편집 시작" 버튼을 눌러야 시작됩니다.`
-        : `사진 ${sections.length}장을 가져왔습니다. 제품컷·착용컷 구분을 확인하세요. 잘못 들어온 사진은 삭제를 누르면 이 목록에서만 빠집니다(칸의 사진은 그대로).`);
+        ? `사진 ${sections.length}장을 가져왔습니다. 편집할 사진을 체크하고, 아래 2번에서 분위기와 제품 컬러를 고른 뒤, 3번의 "AI 편집 시작" 버튼을 눌러야 시작됩니다.`
+        : `사진 ${sections.length}장을 가져왔습니다. 편집할 사진만 체크하세요. 제품컷·착용컷은 AI 편집을 시작할 때 자동으로 구분합니다.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "사진을 가져오지 못했습니다.");
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -590,12 +594,19 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
     setResult(null);
   }
 
-  function deleteSection(id: string) {
-    setOriginalSections(current => current.filter(section => section.id !== id));
+  // 2026-11-18 사진마다 체크칸: 체크한 사진만 AI 편집하고, 체크 안 한 사진은 원본 그대로 둔다(삭제 버튼 대신).
+  function toggleChecked(id: string) {
+    if (editing || editedById.has(id)) return;
+    setSectionActions(current => ({ ...current, [id]: (current[id] || "edit") === "edit" ? "original" : "edit" }));
+  }
+
+  // 편집이 끝난 사진을 다시 편집할 수 있게 AI 결과만 지운다(원본 사진은 그대로).
+  function redoSection(id: string) {
+    if (editing) return;
     setEditedSections(current => current.filter(section => section.id !== id));
-    setSectionActions(current => { const next = { ...current }; delete next[id]; return next; });
+    setSectionActions(current => ({ ...current, [id]: "edit" }));
     invalidateResult();
-    setMessage("이 사진을 사진별 확인 목록에서 뺐습니다. 칸에 넣은 사진은 그대로 있습니다.");
+    setMessage("이 사진을 다시 편집할 수 있게 했습니다. 컬러를 고르고 3번의 \"AI 편집 시작\"을 누르세요. (이미 등록이미지 목록에 들어간 AI 사진은 그대로 있습니다.)");
   }
 
   async function addToRegistrationImages() {
@@ -667,6 +678,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
 
   async function create() {
     if (!originalSections.length) return setMessage("상세페이지를 먼저 올려주세요.");
+    if (!pendingCount) return setMessage("편집할 사진이 없습니다. 위 \"사진별 확인\"에서 AI로 편집할 사진을 체크해주세요.");
     setBusy(true);
     setEditing(true);
     stopRef.current = false;
@@ -683,7 +695,7 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       let workingSections = originalSections;
       const unsorted = originalSections.filter(section => (sectionActions[section.id] || "edit") === "edit" && section.reason === UNSORTED_REASON);
       if (unsorted.length) {
-        const classified = await classifyKinds(unsorted);
+        const classified = await classifyKinds(unsorted, true);
         if (stopRef.current) throw new Error("STOPPED");
         // 2026-11-17 구분에 실패한 사진을 몰래 제품컷으로 편집하면 모델 사진의 얼굴·옷이 안 바뀐다. 실패하면 멈추고 직접 확인하게 한다.
         const failedCount = classified.filter(section => section.reason === UNSORTED_REASON).length;
@@ -823,18 +835,26 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
             const original = sectionActions[section.id] === "original";
             const edited = editedById.get(section.id);
             const shown = !original && edited ? edited.dataUrl : section.dataUrl;
-            return <article key={section.id}>
+            const done = !original && Boolean(edited);
+            const unsorted = section.reason === UNSORTED_REASON;
+            return <article key={section.id} style={{ position: "relative", outline: !original && !done ? "2px solid #60766a" : "none", outlineOffset: -2 }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={shown} alt={`사진 ${index + 1}`} title="누르면 크게 봅니다" style={{ cursor: "zoom-in" }} onClick={() => setZoomIndex(index)} />
-              <button type="button" className={styles.kindToggle} onClick={() => toggleSectionKind(section.id)}>{section.kind === "wear" ? "착용컷 → 제품컷으로 변경" : "제품컷 → 착용컷으로 변경"}</button>
-              <strong>{index + 1}. {section.kind === "wear" ? "착용컷" : "제품컷"}{!original && edited ? " · AI 완료" : ""}</strong>
-              <div>
-                <button type="button" className={styles.reviewDelete} disabled={editing} title="이 목록에서만 뺍니다. 칸에 넣은 사진은 그대로 있습니다." onClick={() => deleteSection(section.id)}>삭제</button>
-              </div>
+              <label title={done ? "AI 편집이 끝난 사진입니다." : "체크한 사진만 AI로 편집합니다."}
+                style={{ position: "absolute", top: 6, left: 6, display: "flex", alignItems: "center", gap: 5, padding: "4px 9px 4px 6px", borderRadius: 8, background: "rgba(255,255,255,0.94)", border: "1px solid #60766a", color: "#3f4943", fontSize: 12, fontWeight: 800, cursor: done || editing ? "default" : "pointer" }}>
+                <input type="checkbox" checked={done || !original} disabled={done || editing} onChange={() => toggleChecked(section.id)} style={{ width: 16, height: 16, margin: 0, accentColor: "#60766a" }} />
+                {done ? "편집 완료" : "선택"}
+              </label>
+              <button type="button" className={styles.kindToggle} disabled={editing} onClick={() => toggleSectionKind(section.id)}>{section.kind === "wear" ? "착용컷 → 제품컷으로 변경" : "제품컷 → 착용컷으로 변경"}</button>
+              <strong>{index + 1}. {unsorted ? "구분 전" : section.kind === "wear" ? "착용컷" : "제품컷"}{done ? " · AI 완료" : ""}</strong>
+              {unsorted && !done && <small style={{ minHeight: 0 }}>AI 편집을 시작할 때 자동으로 구분합니다.</small>}
+              {done && <div>
+                <button type="button" className={styles.reviewDelete} disabled={editing} title="AI 결과를 지우고 이 사진을 다시 편집할 수 있게 합니다." onClick={() => redoSection(section.id)}>다시 편집</button>
+              </div>}
             </article>;
           })}
         </div>
-        <p className={styles.reviewCost}>최종 사용 {originalSections.length}장 · 예상 AI 편집 <strong>{expectedEdits}회</strong> · 원본 사용 {originalSections.length - expectedEdits}장</p>
+        <p className={styles.reviewCost}>선택 {pendingCount}장 · 예상 AI 편집 <strong>{pendingCount}회</strong> · 편집 완료 {completedEdits}장 · 원본 그대로 {originalSections.length - expectedEdits}장</p>
       </div>
     )}
 
@@ -892,13 +912,13 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       </article>
       <article>
         <span>2</span><h3>분위기·컬러 선택</h3>
-        <div className={styles.styleChoices}>{STYLE_OPTIONS.map(option => <label key={option.value} className={style === option.value ? styles.selectedStyle : ""}><input type="radio" name="quick-style" value={option.value} checked={style === option.value} onChange={() => { setStyle(option.value); setEditedSections([]); invalidateResult(); setProgress(0); }} /><strong>{option.title}</strong><small>{option.description}</small></label>)}</div>
+        <div className={styles.styleChoices}>{STYLE_OPTIONS.map(option => <label key={option.value} className={style === option.value ? styles.selectedStyle : ""}><input type="radio" name="quick-style" value={option.value} checked={style === option.value} onChange={() => { setStyle(option.value); invalidateResult(); }} /><strong>{option.title}</strong><small>{option.description}</small></label>)}</div>
         <div className={styles.colorPick}>
           <strong>제품 컬러</strong>
           <div role="radiogroup" aria-label="제품 컬러">
             {COLOR_OPTIONS.map(option => <button key={option.value} type="button" role="radio" aria-checked={color === option.value} disabled={busy}
               className={color === option.value ? styles.colorSelected : ""}
-              onClick={() => { if (color === option.value) return; setColor(option.value); setEditedSections([]); invalidateResult(); setProgress(0); }}>
+              onClick={() => { if (color === option.value) return; setColor(option.value); invalidateResult(); }}>
               <i style={{ background: option.swatch }} />{option.title}
             </button>)}
           </div>
@@ -907,15 +927,15 @@ export default function QuickDetailRemake({ headerUrl, footerUrl, modelName, inc
       </article>
       <article>
         <span>3</span><h3>AI 사진편집</h3>
-        <button type="button" className={styles.quickCreate} disabled={!originalSections.length || busy} onClick={() => void create()}>{busy ? `작업 중… (${Math.min(progress + 1, Math.max(expectedEdits, 1))}/${Math.max(expectedEdits, 1)})` : completedEdits ? "이어서 AI 편집" : "AI 편집 시작"}</button>
+        <button type="button" className={styles.quickCreate} disabled={!originalSections.length || busy} onClick={() => void create()}>{busy ? `작업 중… (${Math.min(progress + 1, Math.max(expectedEdits, 1))}/${Math.max(expectedEdits, 1)})` : "AI 편집 시작"}</button>
         {editing && <button type="button" className={`softPinkButton ${styles.stopButton}`} disabled={stopping} onClick={stopEditing}>{stopping ? "중단하는 중…" : "중단하기"}</button>}
         <button type="button" className={styles.splitButton} disabled={!cut || busy}
           title={cut ? "올린 상세페이지를 사진별로 나눕니다. 사진 바깥 흰 여백의 글자 줄은 잘라내고, 사진 위 글자는 그대로 둡니다." : "1단계에서 상세페이지를 먼저 올려주세요."}
           onClick={() => void confirmCutForSplit()}>{busy && cut ? "나누는 중…" : "상세페이지 분할"}</button>
         <small className={styles.wrapNote}>완성된 사진은 위쪽 등록이미지 목록 맨 앞에 들어갑니다. 6번 상세페이지 칸은 바꾸지 않습니다.</small>
         <p>{message}</p>
-        {scanSummary && <div className={styles.scanSummary}><span>가져온 사진 <strong>{originalSections.length}</strong></span><span>AI 편집 예정 <strong>{expectedEdits}</strong></span><span>원본 사용 <strong>{originalSections.length - expectedEdits}</strong></span></div>}
-        {originalSections.length > 0 && <small>예상 AI 편집: {expectedEdits}회 · 완료: {completedEdits}장</small>}
+        {scanSummary && <div className={styles.scanSummary}><span>가져온 사진 <strong>{originalSections.length}</strong></span><span>AI 편집 예정 <strong>{pendingCount}</strong></span><span>원본 사용 <strong>{originalSections.length - expectedEdits}</strong></span></div>}
+        {originalSections.length > 0 && <small>예상 AI 편집: {pendingCount}회 · 완료: {completedEdits}장</small>}
       </article>
     </div>
 

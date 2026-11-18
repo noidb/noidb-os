@@ -38,11 +38,17 @@ export async function POST(request: NextRequest) {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) return NextResponse.json({ error: "서버에 이미지 분석 API 키가 설정되지 않았습니다." }, { status: 500 });
-    const body = await request.json() as { sections?: SectionInput[] };
+    const body = await request.json() as { sections?: SectionInput[]; mode?: string };
     const sections = (body.sections || []).filter(section => section.id && section.dataUrl?.startsWith("data:image/")).slice(0, 12);
     if (!sections.length) return NextResponse.json({ error: "선별할 상세페이지 구간이 없습니다." }, { status: 400 });
+    // 2026-11-18 "구분만" 모드: 사진을 제외하지 않고 제품컷(product)·착용컷(wear)만 정한다. 얼굴·귀·목·손 등 사람이 보이면 무조건 wear.
+    const kindOnly = body.mode === "kind";
 
-    const prompt = `당신은 주얼리 쇼핑몰 상세페이지의 사진 선별 담당자입니다. 입력 이미지를 각각 독립적으로 판단하세요.
+    const prompt = kindOnly ? `주얼리 쇼핑몰 사진을 각각 독립적으로 보고 제품컷인지 착용컷인지만 구분하세요. 사진을 제외하지 마세요.
+- wear: 사람의 얼굴, 눈, 코, 입, 귀, 목, 머리카락, 손, 몸이 조금이라도 보이는 사진. 제품이 작게 보이거나 귀·목이 일부만 나와도 반드시 wear입니다.
+- product: 사람이 전혀 없이 주얼리 제품만 놓여 있는 사진.
+각 입력 id를 빠짐없이 아래 JSON 배열 하나로만 답하세요. kind는 product 또는 wear 둘 중 하나입니다.
+[{"id":"quick-1","keep":true,"kind":"wear","reason":"얼굴과 귀가 보이는 착용컷"}]` : `당신은 주얼리 쇼핑몰 상세페이지의 사진 선별 담당자입니다. 입력 이미지를 각각 독립적으로 판단하세요.
 
 keep=true로 남길 것:
 - 주얼리 제품 자체가 선명하게 보이는 단독 제품컷
@@ -63,7 +69,7 @@ kind는 product, wear, exclude 중 하나입니다.`;
     const content: Array<Record<string, unknown>> = [{ type: "input_text", text: prompt }];
     sections.forEach(section => {
       content.push({ type: "input_text", text: `구간 id: ${section.id}` });
-      content.push({ type: "input_image", image_url: section.dataUrl, detail: "high" });
+      content.push({ type: "input_image", image_url: section.dataUrl, detail: kindOnly ? "low" : "high" });
     });
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
