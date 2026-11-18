@@ -75,6 +75,8 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
   const [shipmentNumberSaveMessage, setShipmentNumberSaveMessage] = useState<string | null>(null);
   const [shipmentNumberSaveError, setShipmentNumberSaveError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<"confirm" | "dispatched" | null>(null);
+  /** 2026-11-18: 최근 추가한 발주서번호가 이 날짜 목록에 제대로 들어갔는지 복붙으로 확인하는 검색칸. */
+  const [poSearch, setPoSearch] = useState("");
   const initialLoadKey = useRef<string | null>(null);
   const initialLoadRepository = useRef<typeof invoiceGroupRepository | null>(null);
   const loadRequestId = useRef(0);
@@ -229,6 +231,23 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
 
   const isConfirmed = (group: InvoiceGroup, po: string) => group.poConfirmations.some(entry => entry.purchaseOrderNumber === po);
   const confirmedCount = groups.reduce((sum, group) => sum + group.purchaseOrderNumbers.filter(po => isConfirmed(group, po)).length, 0);
+  // 발주서번호 검색: 여러 개를 줄바꿈·띄어쓰기·쉼표로 붙여넣어도 번호마다 결과를 보여 준다.
+  const poSearchTokens = Array.from(new Set(poSearch.split(/[\s,;]+/).map(token => token.trim()).filter(Boolean)));
+  const poMatches = (po: string, token: string) => po === token || (token.length >= 5 && po.includes(token));
+  const poSearchResults = poSearchTokens.map(token => {
+    for (const group of groups) {
+      const po = group.purchaseOrderNumbers.find(item => poMatches(item, token));
+      if (po) return { token, po, kind: "found" as const, center: group.fulfillmentCenter, confirmed: isConfirmed(group, po) };
+    }
+    for (const group of doneGroups) {
+      const po = group.purchaseOrderNumbers.find(item => poMatches(item, token));
+      if (po) return { token, po, kind: "done" as const, center: group.fulfillmentCenter, confirmed: true };
+    }
+    const missed = missedOrders.find(order => poMatches(order.purchaseOrderNumber, token));
+    if (missed) return { token, po: missed.purchaseOrderNumber, kind: "missed" as const, center: missed.fulfillmentCenter, confirmed: false };
+    return { token, po: token, kind: "none" as const, center: "", confirmed: false };
+  });
+  const poSearchHitSet = new Set(poSearchResults.filter(result => result.kind === "found").map(result => result.po));
   const hasUnsavedShipmentNumbers = groups.some(group => (shipmentNumberDrafts[group.id] ?? group.shipmentNumbers[0] ?? "").trim() !== (group.shipmentNumbers[0] ?? ""));
 
   /** base: 방금 저장한 최신 묶음이 있으면 그것을 기준으로(렌더 시점 groups는 낡았을 수 있음). */
@@ -703,11 +722,35 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
 
       <ShipmentWorkflowStepCard step={1} title="발주확정 기록" subtitle="Supplier Hub에서 이 날짜 전체를 검색·재업로드한 뒤, 여기서는 사실만 기록합니다." status={confirmedCount === purchaseOrderNumbers.length ? "done" : "current"}>
         <p style={{ fontSize: "12px", margin: "0 0 8px" }}>발주확정 {confirmedCount}/{purchaseOrderNumbers.length}건</p>
+        <div style={{ margin: "0 0 8px" }}>
+          <textarea
+            value={poSearch}
+            onChange={event => setPoSearch(event.target.value)}
+            placeholder="확인할 발주서번호를 붙여넣으세요 (여러 개도 가능)"
+            rows={2}
+            style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", borderRadius: "8px", border: "1px solid #d8d3cc", fontSize: "14px", background: "#fff", color: "#252525", resize: "vertical", fontFamily: "inherit" }}
+          />
+          {poSearchResults.length > 0 && <>
+            <ul style={{ margin: "6px 0 0", padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: "4px" }}>
+              {poSearchResults.map(result => (
+                <li key={result.token} style={{ padding: "7px 9px", borderRadius: "8px", fontSize: "12px", lineHeight: 1.5, border: `1px solid ${result.kind === "found" || result.kind === "done" ? "#60766a" : "#dfbdb2"}`, background: result.kind === "found" || result.kind === "done" ? "#e3ede6" : "#f2dfd8", color: wmsColors.ink }}>
+                  <strong>{result.po}</strong>
+                  {" · "}
+                  {result.kind === "found" && `✓ 있음 · ${result.center} · ${result.confirmed ? "발주확정 완료" : "발주확정 전"}`}
+                  {result.kind === "done" && `✓ 출고완료로 이동됨 · ${result.center}`}
+                  {result.kind === "missed" && `⚠ 아직 담기지 않음 (${result.center}) — 위 경고에서 담아야 합니다`}
+                  {result.kind === "none" && "✗ 이 날짜 목록에 없습니다"}
+                </li>
+              ))}
+            </ul>
+            <button type="button" className="softApricotButton" onClick={() => setPoSearch("")} style={{ width: "100%", marginTop: "6px" }}>검색 지우기</button>
+          </>}
+        </div>
         <details style={{ margin: "0 0 8px" }}>
           <summary style={{ cursor: "pointer", fontSize: "12px", color: wmsColors.muted }}>포함된 발주서 목록 ({purchaseOrderNumbers.length}건)</summary>
           <ul style={{ margin: "6px 0 0", padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: "4px" }}>
             {groups.flatMap(group => group.purchaseOrderNumbers.map(po => (
-              <li key={`${group.id}-${po}`} style={{ display: "flex", justifyContent: "space-between", gap: "8px", padding: "6px 9px", border: `1px solid ${wmsColors.border}`, borderRadius: "8px", fontSize: "11px", color: wmsColors.muted }}>
+              <li key={`${group.id}-${po}`} style={{ display: "flex", justifyContent: "space-between", gap: "8px", padding: "6px 9px", border: `1px solid ${poSearchHitSet.has(po) ? "#60766a" : wmsColors.border}`, background: poSearchHitSet.has(po) ? "#e3ede6" : undefined, borderRadius: "8px", fontSize: "11px", color: wmsColors.muted }}>
                 <span><strong style={{ color: wmsColors.ink }}>{po}</strong> · {group.fulfillmentCenter}</span>
                 <span style={{ color: isConfirmed(group, po) ? wmsColors.greenDark : wmsColors.warnText, fontWeight: 700, whiteSpace: "nowrap" }}>{isConfirmed(group, po) ? "확정" : "미확정"}</span>
               </li>
