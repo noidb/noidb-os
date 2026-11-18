@@ -54,7 +54,7 @@ function normalizeStatus(raw: string): WimsRegistrationStatus {
  * 2026-10-23: 예전 규칙은 숫자 뒤에 글자가 바로 붙으면 못 읽어, 오늘 등록한 건이 전부 '제품DB에 없음'으로 나왔다.
  */
 export function extractModelSku(productName: string): string {
-  const tokens = productName.match(/\b[A-Za-z]{1,8}\d{3,}[A-Za-z]{0,3}(?:[-_][A-Za-z0-9]+)*\b/g) || [];
+  const tokens = productName.match(/\b[A-Za-z]{1,8}\d{3,}[A-Za-z]{0,6}(?:[-_][A-Za-z0-9]+)*\b/g) || [];
   return tokens.length > 0 ? tokens[tokens.length - 1] : "";
 }
 
