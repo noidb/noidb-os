@@ -10,6 +10,15 @@ type Match = { skuId: string; productName: string; barcode: string; sheetName: s
 type Lookup = { code: string; matches: Match[] };
 export type DiscontinueAutoRow = { skuId: string; productName: string; orderableStatus: string; key: string; reason?: string; currentStatus?: string; origin?: string; moveReason?: string; currentTab?: string };
 
+/** 2026-11-18: 단종신청 엑셀·공문 만들기 결과(버튼 바로 아래에 계속 보여 준다) */
+type MakeResult = { kind: "success" | "warn" | "error"; time: string; listKey: string; count: number; folder: string; fileNames: string[]; note: string };
+const MAKE_RESULT_COLORS = {
+  success: { background: "#e3ece5", border: "#b9cdbf", color: "#2f4a3a" },
+  warn: { background: "#f7efdc", border: "#e3d3a8", color: "#6b531a" },
+  error: { background: "#f6e3df", border: "#e2b8b0", color: "#8a2f25" },
+} as const;
+const koreaTime = () => new Date().toLocaleTimeString("ko-KR", { timeZone: "Asia/Seoul", hour: "numeric", minute: "2-digit", second: "2-digit" });
+
 type LatestOrderable = { fileMtime: string; orderable: Record<string, string> } | null;
 type Row = { skuId: string; productName: string; orderable: string; auto: boolean; autoKey: string; codes: string[]; sheetName: string; autoLabel?: string; autoTitle?: string };
 
@@ -61,6 +70,15 @@ export default function DiscontinueByCode({ autoRows, pendingRows = [], latestOr
   }, []);
   const today = new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
   const [busy, setBusy] = useState<"make" | "mark" | "clear" | null>(null);
+  // 2026-11-18: 만들기가 끝났는지·어디에 저장됐는지가 화면 맨 아래 알림창에만 떠서 몰라 계속 눌렀다 → 버튼 바로 아래에 결과를 남겨 둔다.
+  const [makeResult, setMakeResult] = useState<MakeResult | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (busy !== "make") { setElapsed(0); return; }
+    const startedAt = Date.now();
+    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [busy]);
   const [lookup, setLookup] = useState<Lookup[] | null>(null);
   const [lookupState, setLookupState] = useState<"idle" | "loading" | "error">("idle");
   const codes = [...new Set(text.split(/[\s,]+/).map(value => value.trim()).filter(Boolean))];
@@ -174,16 +192,31 @@ export default function DiscontinueByCode({ autoRows, pendingRows = [], latestOr
 
   async function makeFiles() {
     if (working || !list.length) return;
+    // 같은 목록으로 방금 만들었다면 같은 이름 파일이 또 생기지 않게 한 번 더 물어본다.
+    const listKey = list.map(row => row.skuId).sort().join(",");
+    if (makeResult && makeResult.kind !== "error" && makeResult.listKey === listKey
+      && !window.confirm(`방금(${makeResult.time}) 같은 목록으로 이미 만들었어요.\n다시 만들면 같은 이름의 파일이 한 번 더 생길 수 있어요. 그래도 만들까요?`)) return;
+    setMakeResult(null);
     setBusy("make");
     try {
       const response = await fetch("/api/wms/logistics/discontinue-file", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ skuIds: autoRows.map(row => row.skuId), codes }) });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "단종신청 파일을 만들지 못했습니다.");
       if (!data.driveSaved) download(data); // 2026-11-06: 단종신청 폴더에 저장됐으면 따로 내려받지 않는다.
-      const missing = (data.notFound as string[] | undefined)?.length ? ` 못 찾은 코드 ${data.notFound.length}개는 빠졌습니다.` : "";
-      onDone(`${data.driveSaved ? `저장완료 · ${(data.driveFileNames || []).join(", ")} (${data.driveFolder}) · ` : `저장하지 못해 내려받았습니다. ${data.driveWarning || ""} `}단종신청 엑셀과 공문(SKU ${data.count}건).${missing}${discontinueMarkMessage(data.productDb)} 쿠팡에 신청한 뒤 '단종 신청 완료 · 목록 비우기'를 눌러 주세요.`, false);
+      const missing = (data.notFound as string[] | undefined)?.length ? `못 찾은 코드 ${data.notFound.length}개는 빠졌습니다.` : "";
+      const markNote = discontinueMarkMessage(data.productDb).trim();
+      setMakeResult({
+        kind: data.driveSaved && !data.productDb?.warning ? "success" : "warn",
+        time: koreaTime(), listKey, count: data.count, folder: data.driveFolder || "",
+        fileNames: data.driveSaved ? (data.driveFileNames || []) : [],
+        note: [data.driveSaved ? "" : `단종신청 폴더에 저장하지 못해 내 컴퓨터로 내려받았어요. ${data.driveWarning || ""}`.trim(), missing, markNote].filter(Boolean).join(" "),
+      });
     } catch (cause) {
-      onDone(cause instanceof Error ? cause.message : "단종신청 파일을 만들지 못했습니다.", true);
+      // 서버가 오래 걸려 응답이 끊기면 JSON을 읽지 못한다. 이때도 파일은 이미 만들어졌을 수 있어 폴더 확인을 안내한다.
+      const note = cause instanceof SyntaxError || (cause instanceof TypeError && /fetch|network/i.test(cause.message))
+        ? "서버 응답이 늦거나 끊겼어요. 파일이 이미 저장됐을 수 있으니 아래 '단종신청 폴더 열기'로 먼저 확인하고, 없을 때만 다시 눌러 주세요."
+        : cause instanceof Error ? cause.message : "단종신청 파일을 만들지 못했습니다.";
+      setMakeResult({ kind: "error", time: koreaTime(), listKey, count: 0, folder: "", fileNames: [], note });
     } finally { setBusy(null); }
   }
 
@@ -221,6 +254,7 @@ export default function DiscontinueByCode({ autoRows, pendingRows = [], latestOr
       if (autoRows.length && !(await onClearAuto(autoRows.map(row => row.key)))) return;
       setText("");
       setLookup(null);
+      setMakeResult(null);
       saveDraft("", 0);
       onDone(`단종 신청 완료 · 목록 ${list.length}건을 비웠습니다.${markNote}`, false);
     } finally { setBusy(null); }
@@ -306,12 +340,32 @@ export default function DiscontinueByCode({ autoRows, pendingRows = [], latestOr
       />
       <div className={styles.pairButtons}>
         <button type="button" className={`softSageButton ${styles.fullButton}`} disabled={!list.length || working || lookupState === "loading"} onClick={() => void makeFiles()}>
-          {busy === "make" ? "만드는 중…" : `단종신청 엑셀·공문 만들기${list.length ? ` (${list.length}건)` : ""}`}
+          {busy === "make" ? `만드는 중… ${elapsed}초` : `단종신청 엑셀·공문 만들기${list.length ? ` (${list.length}건)` : ""}`}
         </button>
         <button type="button" className={`softPinkButton ${styles.fullButton}`} disabled={(!autoRows.length && !text.trim()) || working} onClick={() => void finish()}>
           {busy === "clear" || clearing ? "비우는 중…" : "단종 신청 완료 · 목록 비우기"}
         </button>
       </div>
+      {busy === "make" && (
+        <p className={styles.meta} role="status">
+          파일을 만들어 단종신청 폴더에 저장하는 중이에요. 끝나면 여기에 결과가 나옵니다. 다시 누르지 말고 기다려 주세요.{elapsed >= 20 ? " 평소보다 오래 걸리고 있어요. 1분이 넘으면 폴더를 먼저 확인해 주세요." : ""}
+        </p>
+      )}
+      {makeResult && busy !== "make" && (
+        <div role={makeResult.kind === "error" ? "alert" : "status"} style={{ marginTop: "8px", padding: "10px 12px", borderRadius: "8px", fontSize: "13px", lineHeight: 1.6, border: `1px solid ${MAKE_RESULT_COLORS[makeResult.kind].border}`, background: MAKE_RESULT_COLORS[makeResult.kind].background, color: MAKE_RESULT_COLORS[makeResult.kind].color }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", alignItems: "flex-start" }}>
+            <strong>
+              {makeResult.kind === "error" ? `❌ ${makeResult.time} 만들지 못했어요` : makeResult.kind === "warn" ? `⚠️ ${makeResult.time} 만들었지만 확인이 필요해요` : `✅ ${makeResult.time} 만들기 완료 · SKU ${makeResult.count}건`}
+            </strong>
+            <button type="button" onClick={() => setMakeResult(null)} aria-label="결과 닫기" style={{ border: 0, background: "transparent", color: "inherit", cursor: "pointer", fontSize: "13px" }}>닫기</button>
+          </div>
+          {makeResult.fileNames.length > 0 && (
+            <div>저장 위치: {makeResult.folder}<br />{makeResult.fileNames.map(name => <span key={name} style={{ display: "block" }}>· {name}</span>)}</div>
+          )}
+          {makeResult.note && <div>{makeResult.note}</div>}
+          {makeResult.kind !== "error" && <div>쿠팡에 신청한 뒤 '단종 신청 완료 · 목록 비우기'를 눌러 주세요. 저장된 파일은 아래 '단종신청 폴더 열기'로 볼 수 있어요.</div>}
+        </div>
+      )}
       <div style={{ marginTop: "8px" }}>
         <OpenFolderButton folder="discontinue" label="단종신청 폴더 열기" className={`softBeigeButton ${styles.fullButton}`} style={{ width: "100%" }} />
         <p className={styles.meta}><FolderInstallLink /></p>
