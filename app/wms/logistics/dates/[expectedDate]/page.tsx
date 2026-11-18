@@ -253,8 +253,11 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
   /** base: 방금 저장한 최신 묶음이 있으면 그것을 기준으로(렌더 시점 groups는 낡았을 수 있음). */
   async function updateAllGroups(patch: (group: InvoiceGroup) => InvoiceGroup, base?: InvoiceGroup[]) {
     for (const group of base || groups || []) {
-      const next = patch(group);
-      if (next === group) continue;
+      // 2026-11-18: 저장 직전에 서버의 최신 기록을 받아 그 위에 변경을 얹는다. 화면의 묶음이 낡으면(단계가 먼저 바뀐 경우)
+      // 서버가 "발주묶음 단계는 한 단계씩만 명시적으로 변경할 수 있습니다"로 거부하기 때문이다.
+      const latest = (await invoiceGroupRepository.get(group.id)) ?? group;
+      const next = patch(latest);
+      if (next === latest) continue;
       await invoiceGroupRepository.save(next);
       setGroups(previous => (previous || []).map(item => item.id === group.id ? next : item));
     }
@@ -424,8 +427,16 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     let saved = 0;
     try {
       for (const { group, value } of pending) {
+        // 2026-11-18: 화면이 들고 있는 묶음은 낡았을 수 있다(다른 화면·다른 PC에서 단계가 먼저 바뀐 경우).
+        // 낡은 단계를 그대로 보내면 서버가 "한 단계씩만 변경" 오류로 0건 저장 후 중단하므로, 저장 직전에 서버의 최신 기록을 받아 그 위에 번호만 얹는다.
+        const latest = (await invoiceGroupRepository.get(group.id)) ?? group;
+        if (latest.shipmentNumbers[0] === value && latest.shipmentRegisteredAt) {
+          saved += 1;
+          setGroups(previous => (previous || []).map(item => item.id === group.id ? latest : item));
+          continue;
+        }
         const now = new Date().toISOString();
-        const updated: InvoiceGroup = { ...group, shipmentNumbers: [value], shipmentRegisteredAt: now, barcodeFileName: undefined, barcodeGeneratedAt: undefined, outputSetGeneratedAt: undefined, outputSetFiles: undefined, updatedAt: now };
+        const updated: InvoiceGroup = { ...latest, shipmentNumbers: [value], shipmentRegisteredAt: now, barcodeFileName: undefined, barcodeGeneratedAt: undefined, outputSetGeneratedAt: undefined, outputSetFiles: undefined, updatedAt: now };
         await invoiceGroupRepository.save(updated);
         saved += 1;
         setGroups(previous => (previous || []).map(item => item.id === group.id ? updated : item));
@@ -600,7 +611,8 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
       let resultMessage: string;
       try {
         const saved = await saveOutputSetToDrive(expectedDate, outputFiles, message => setOutputSetMessage(message));
-        resultMessage = `출력세트 생성 완료 · G드라이브 쉽먼트출력세트/${saved.folder} 폴더에 저장 · ${saved.fileNames.join(", ")}`;
+        const savedAtText = new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
+        resultMessage = `${savedAtText}에 G드라이브 쉽먼트출력세트/${saved.folder} 폴더에 저장되었습니다 · ${saved.fileNames.join(", ")}`;
       } catch (saveError) {
         const zip = await buildShipmentPrintZip(outputFiles);
         const fileName = `Shipment_출력세트_${outputDateToken}.zip`;
@@ -870,6 +882,7 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
       <ShipmentWorkflowStepCard step={4} title="출력세트 생성" subtitle="쿠팡 쉽먼트 화면의 확장에서 [이 날짜 Label·내역서 전부 받기]를 누르면, 다 받은 뒤 이 화면이 열리며 자동으로 만들어집니다. 직접 눌러도 됩니다(쉽먼트번호 자동 채움 → 부착문서·동봉내역서·바코드)." status={outputSetGeneratedForAll ? "done" : shipmentGeneratedForAll ? "current" : "blocked"}>
         {outputSetError && <p style={{ color: "#c0392b", fontSize: "12px", whiteSpace: "pre-wrap" }}>{outputSetError}</p>}
         {outputSetMessage && <p style={{ color: wmsColors.greenDark, fontSize: "12px" }}>{outputSetMessage}</p>}
+        {!generatingOutputSet && (hasUnsavedShipmentNumbers || !shipmentGeneratedForAll) && <p style={{ color: "#c0392b", fontSize: "12px", margin: "0 0 8px" }}>{hasUnsavedShipmentNumbers ? "쉽먼트번호가 아직 저장되지 않아 누를 수 없습니다. 위의 '이 날짜 쉽먼트번호 전체 저장'을 먼저 눌러 주세요." : "쉽먼트 업로드파일 생성이 아직 끝나지 않아 누를 수 없습니다. 위 단계를 먼저 끝내 주세요."}</p>}
         <button type="button" disabled={generatingOutputSet || hasUnsavedShipmentNumbers || !shipmentGeneratedForAll} onClick={() => void handleGenerateOutputSet()} style={{ ...wmsPrimaryButton, width: "100%", opacity: generatingOutputSet || hasUnsavedShipmentNumbers || !shipmentGeneratedForAll ? 0.5 : 1 }}>
           {generatingOutputSet ? "생성 중..." : outputSetGeneratedForAll ? "출력세트 다시 생성" : "이 날짜 출력세트 한 번에 생성"}
         </button>
