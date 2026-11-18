@@ -108,6 +108,17 @@ function earringPostType(title: string) {
   return EARRING_POST_TYPES.has(firstWord) ? firstWord : "";
 }
 
+// 쿠팡 "주얼리 소재" 드롭다운에는 '신주'가 없고 'Brass'로만 있다(없는 값을 넣으면 반려).
+// 사이트의 소재 이름은 그대로 두고, 견적서에 넣을 때만 쿠팡 드롭다운 값으로 바꾼다.
+const COUPANG_JEWELRY_MATERIAL: Record<string, string> = {
+  "신주": "Brass",
+};
+
+function coupangJewelryMaterial(value: string) {
+  const text = String(value || "").trim();
+  return COUPANG_JEWELRY_MATERIAL[text] || text;
+}
+
 function commonDefaults(payload: ExportPayload) {
   const sale = parseNumber(payload.product.price);
   const supply = supplyPrice(sale || 0);
@@ -204,7 +215,7 @@ export async function buildQuoteWorkbook(input: ExportPayload | ExportPayload[],
     setByHeader(row, headers, "주얼리 사이즈", sku.size);
     setByHeader(row, headers, "사이즈", sku.size);
     setByHeader(row, headers, "반지 사이즈", "");
-    setByHeader(row, headers, "주얼리 소재", defaults.material);
+    setByHeader(row, headers, "주얼리 소재", coupangJewelryMaterial(defaults.material));
     setByHeader(row, headers, "주문제작 여부", defaults.custom);
     setByHeader(row, headers, "사이즈 조절여부", defaults.sizeAdjust);
     setByHeader(row, headers, "주얼리 스톤", defaults.stone);
