@@ -230,12 +230,22 @@ function buildGoogleSheetPayload(input: CollectInput, optionImages: Record<strin
 export async function syncProductDbToGoogleSheet(input: CollectInput, options: { addColorsOnly?: boolean } = {}): Promise<GoogleSheetSyncResult> {
   if (!input.title) return { ok: false, message: "Google 시트 (상품명 없음)" };
   try {
-    const sheetImages = Object.fromEntries(await Promise.all(
-      Object.entries(input.skuImages !== undefined ? input.skuImages || {} : input.optionThumbs || {}).map(async ([option, dataUrl]) => [
-        option,
-        dataUrl?.startsWith("data:image/") ? await normalizeCoupangImage(dataUrl, 240) : dataUrl,
-      ])
-    ));
+    // 2026-11-25 옵션 사진을 240px로 줄여 보내서 거래처 발주서(984px 카드)에서 흐렸다. 1000px로 보내고,
+    // 한 번에 보내는 양이 서버 요청 한도(약 4.5MB)에 가까우면 700px → 480px 순서로 자동으로 줄인다.
+    const sheetImageSource = Object.entries(input.skuImages !== undefined ? input.skuImages || {} : input.optionThumbs || {});
+    const SHEET_IMAGE_SIZES = [1000, 700, 480];
+    const SHEET_IMAGE_MAX_CHARS = 3_000_000;
+    let sheetImages: Record<string, string> = {};
+    for (const size of SHEET_IMAGE_SIZES) {
+      sheetImages = Object.fromEntries(await Promise.all(
+        sheetImageSource.map(async ([option, dataUrl]) => [
+          option,
+          dataUrl?.startsWith("data:image/") ? await normalizeCoupangImage(dataUrl, size) : dataUrl,
+        ])
+      ));
+      const totalChars = Object.values(sheetImages).reduce((sum, value) => sum + (value?.length || 0), 0);
+      if (totalChars <= SHEET_IMAGE_MAX_CHARS) break;
+    }
     const operationId = globalThis.crypto?.randomUUID?.() || `registration-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const requestBody = JSON.stringify({ ...buildGoogleSheetPayload(input, input.skuImages !== undefined ? {} : sheetImages, input.skuImages !== undefined ? sheetImages : undefined), syncMode: options.addColorsOnly ? "addColors" : "reregisterStopped", operationId });
     let syncRes: Response | null = null;

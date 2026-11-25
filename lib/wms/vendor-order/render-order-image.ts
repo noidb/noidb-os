@@ -101,6 +101,55 @@ function loadImageSafe(url: string, skuId: string): Promise<HTMLImageElement | n
   return pending;
 }
 
+/** 이 크기(가로 px)보다 작은 사진은 984px 칸에 늘려 그리면 흐려지므로 고화질을 먼저 찾아 쓴다. */
+const SHARP_MIN_WIDTH = 600;
+
+/**
+ * 2026-11-25 거래처 발주서 사진 선명도: 제품DB 이미지 칸의 사진은 등록 때 240px로 줄어 올라간 경우가 있어
+ * 카드(984px 칸)에서 흐렸다. 같은 모델SKU 이름(모델SKU.jpg)의 1000px 사진이 상품DB 사진 폴더에 있으면
+ * 그것을 먼저 쓰고, 없거나 작으면 기존 이미지 주소로 되돌아간다. 모델SKU는 옵션명의 `모델SKU | 색상` 형태에서
+ * 뽑는다(modelName에는 모델명과 모델SKU가 섞여 있어 쓰지 않는다 — 모델명 사진은 다른 사진일 수 있다).
+ */
+function modelSkusOf(line: VendorOrderDraftLine): string[] {
+  const found: string[] = [];
+  for (const text of [line.optionLabel, line.productName]) {
+    for (const match of String(text || "").matchAll(/([A-Za-z]{1,3}\d[A-Za-z0-9_-]{4,38})\s*\|/g)) {
+      if (!found.includes(match[1])) found.push(match[1]);
+    }
+  }
+  return found.slice(0, 2);
+}
+
+const sharpImages = new Map<string, Promise<HTMLImageElement | null>>();
+
+function loadSharpImage(modelSku: string): Promise<HTMLImageElement | null> {
+  const cached = sharpImages.get(modelSku);
+  if (cached) return cached;
+  const pending = new Promise<HTMLImageElement | null>(resolve => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    const finish = (result: HTMLImageElement | null) => { clearTimeout(timer); resolve(result); };
+    const timer = setTimeout(() => finish(null), 8000);
+    img.onload = () => finish(img.naturalWidth >= SHARP_MIN_WIDTH ? img : null);
+    img.onerror = () => finish(null);
+    img.src = `/api/wms/product-image/from-drive?model=${encodeURIComponent(modelSku)}&exact=1`;
+  }).then(image => {
+    if (!image) sharpImages.delete(modelSku); // 못 찾은 결과는 기억하지 않는다(브라우저가 404를 10분 캐시한다)
+    return image;
+  });
+  sharpImages.set(modelSku, pending);
+  if (sharpImages.size > 80) sharpImages.delete(sharpImages.keys().next().value!);
+  return pending;
+}
+
+async function loadLineImage(line: VendorOrderDraftLine): Promise<HTMLImageElement | null> {
+  for (const modelSku of modelSkusOf(line)) {
+    const sharp = await loadSharpImage(modelSku);
+    if (sharp) return sharp;
+  }
+  return loadImageSafe(line.imageUrl, line.skuId);
+}
+
 /** 한글은 공백 없이 길게 이어지는 경우가 많아 단어 단위 대신 글자 단위로 줄바꿈한다. */
 function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
   if (!text) return [];
@@ -125,7 +174,7 @@ export async function renderVendorOrderImage(
   _waveId: string,
   options: { strictImages?: boolean; orderDate?: string } = {}
 ): Promise<Blob | null> {
-  const images = await Promise.all(lines.map(line => loadImageSafe(line.imageUrl, line.skuId)));
+  const images = await Promise.all(lines.map(line => loadLineImage(line)));
   if (options.strictImages) {
     const missing = lines.filter((_, index) => !images[index]);
     if (missing.length) {
