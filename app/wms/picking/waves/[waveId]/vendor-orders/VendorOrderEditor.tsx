@@ -767,7 +767,7 @@ export default function VendorOrdersPage({ params, sharedSnapshot, historyView =
       const lastId = added[added.length - 1].id;
       setTimeout(() => document.querySelector(`[data-line-id="${CSS.escape(lastId)}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
     }
-    if (duplicates.length) window.alert(`이미 등록된 SKU입니다: ${duplicates.join(", ")}\n중복으로 추가하지 않았습니다.`);
+    if (duplicates.length) window.alert(`이미 거래처발주서에 담김\n\nSKU ${duplicates.join(", ")}\n\n확인을 누르면 이 SKU는 담지 않습니다.`);
     setSearchAddVendor(null); setVariantTarget(null);
   }
 
