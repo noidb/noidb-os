@@ -69,6 +69,10 @@ export class LocalInvoiceGroupRepository implements InvoiceGroupRepository {
     writeList(list);
   }
 
+  async saveMany(groups: InvoiceGroup[]): Promise<void> {
+    for (const group of groups) await this.save(group);
+  }
+
   async delete(id: string): Promise<void> {
     writeList(readList().filter(item => item.id !== id));
   }

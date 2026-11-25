@@ -680,10 +680,9 @@ export default function InvoiceGroupsByDatePage({ params }: { params: { expected
     setHideError(null);
     try {
       const now = new Date().toISOString();
-      for (const group of doneGroups) {
-        await invoiceGroupRepository.save({ ...group, hiddenAt: now, updatedAt: now });
-        setDoneGroups(previous => previous.filter(item => item.id !== group.id));
-      }
+      // 2026-11-25: 묶음마다 저장하지 않고 한 번에 저장한다(서버 저장 1번).
+      await invoiceGroupRepository.saveMany(doneGroups.map(group => ({ ...group, hiddenAt: now, updatedAt: now })));
+      setDoneGroups([]);
     } catch (error) {
       setHideError(error instanceof Error ? error.message : "삭제하지 못했습니다.");
     } finally { setHiding(false); }

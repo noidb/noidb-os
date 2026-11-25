@@ -183,7 +183,7 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
       const ready = latest.filter(canMarkInvoiceGroupDispatched);
       if (!ready.length) throw new Error("출고준비완료(출력세트까지 끝남)인 발주묶음이 없습니다.");
       const now = new Date().toISOString();
-      for (const group of ready) await invoiceGroupRepository.save({ ...group, stage: "dispatched", dispatchedAt: now, updatedAt: now });
+      await invoiceGroupRepository.saveMany(ready.map(group => ({ ...group, stage: "dispatched" as const, dispatchedAt: now, updatedAt: now })));
       live.setGroups(fixture ? await invoiceGroupRepository.list() : readLocalInvoiceGroupSnapshot());
     } catch (error) {
       setDispatchError({ date: expectedDate, message: error instanceof Error ? error.message : "출고완료로 기록하지 못했습니다." });
@@ -201,10 +201,20 @@ function InProgressOrdersSection({ live }: { live: InvoiceGroupsLive }) {
     setHidingDate(expectedDate);
     setDispatchError(null);
     try {
-      const latest = (await invoiceGroupRepository.list()).filter(group => group.expectedDate === expectedDate && isVisibleDispatchedInvoiceGroup(group));
+      // 2026-11-25: 서버를 다시 조회하지 않고 화면에 있는 목록으로 바로 처리하고, 화면은 먼저 바꾼다(저장 1번).
+      const latest = (live.groups || []).filter(group => group.expectedDate === expectedDate && isVisibleDispatchedInvoiceGroup(group));
       const now = new Date().toISOString();
-      for (const group of latest) await invoiceGroupRepository.save({ ...group, hiddenAt: now, updatedAt: now });
-      live.setGroups(fixture ? await invoiceGroupRepository.list() : readLocalInvoiceGroupSnapshot());
+      const hidden = latest.map(group => ({ ...group, hiddenAt: now, updatedAt: now }));
+      const hiddenIds = new Set(hidden.map(group => group.id));
+      const before = live.groups;
+      live.setGroups((before || []).map(group => hiddenIds.has(group.id) ? { ...group, hiddenAt: now, updatedAt: now } : group));
+      try {
+        await invoiceGroupRepository.saveMany(hidden);
+      } catch (saveError) {
+        live.setGroups(before);
+        void refresh();
+        throw saveError;
+      }
     } catch (error) {
       setDispatchError({ date: expectedDate, message: error instanceof Error ? error.message : "삭제하지 못했습니다." });
     } finally {

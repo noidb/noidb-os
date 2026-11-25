@@ -130,6 +130,12 @@ function outputEvidenceChanged(existing: InvoiceGroup, incoming: InvoiceGroup): 
 }
 
 export function applyInvoiceGroupStoreMutation(current: InvoiceGroupStoreSnapshot, mutation: InvoiceGroupStoreMutation): InvoiceGroupStoreSnapshot {
+  if (mutation.action === "saveMany") {
+    // 묶음마다 기존 검사를 그대로 거치고, 하나라도 실패하면 전체를 저장하지 않는다.
+    let snapshot = current;
+    for (const group of mutation.groups) snapshot = applyInvoiceGroupStoreMutation(snapshot, { action: "save", group });
+    return snapshot;
+  }
   const next = normalizeSnapshot(structuredClone(current));
   if (mutation.action === "save") {
     const incoming = mutation.group as InvoiceGroup;

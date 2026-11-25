@@ -18,6 +18,7 @@ export class FixtureInvoiceGroupRepository implements InvoiceGroupRepository {
     if (index >= 0) this.groups[index] = structuredClone(group); else this.groups.push(structuredClone(group));
     this.persist();
   }
+  async saveMany(groups: InvoiceGroup[]) { for (const group of groups) await this.save(group); }
   async delete(id: string) { this.groups = this.groups.filter(group => group.id !== id); this.persist(); }
   async listExcludedPurchaseOrderNumbers() { return [...this.excluded]; }
   async excludePurchaseOrders(purchaseOrderNumbers: string[]) { for (const po of purchaseOrderNumbers) this.excluded.add(po); }

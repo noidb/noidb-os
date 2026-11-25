@@ -28,6 +28,8 @@ export function emptyInvoiceGroupStoreSnapshot(): InvoiceGroupStoreSnapshot {
 
 export type InvoiceGroupStoreMutation =
   | { action: "save"; group: InvoiceGroup }
+  // 2026-11-25: 여러 묶음을 서버 저장 1번으로 처리(출고완료·삭제가 묶음마다 저장해 느렸음).
+  | { action: "saveMany"; groups: InvoiceGroup[] }
   | { action: "delete"; id: string; deletedAt: string }
   | { action: "excludePurchaseOrders"; purchaseOrderNumbers: string[]; excludedAt: string };
 
@@ -35,6 +37,10 @@ export function isInvoiceGroupStoreMutation(value: unknown): value is InvoiceGro
   if (!value || typeof value !== "object" || !("action" in value)) return false;
   const candidate = value as { action?: unknown };
   if (candidate.action === "save") return typeof (value as { group?: unknown }).group === "object";
+  if (candidate.action === "saveMany") {
+    const groups = (value as { groups?: unknown }).groups;
+    return Array.isArray(groups) && groups.every(group => group && typeof group === "object");
+  }
   if (candidate.action === "delete") {
     const v = value as { id?: unknown; deletedAt?: unknown };
     return typeof v.id === "string" && typeof v.deletedAt === "string";

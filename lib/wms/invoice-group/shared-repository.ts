@@ -41,6 +41,12 @@ export class SharedInvoiceGroupRepository implements InvoiceGroupRepository {
     replaceLocalInvoiceGroupSnapshot(snapshot.groups);
   }
 
+  async saveMany(groups: InvoiceGroup[]): Promise<void> {
+    if (!groups.length) return;
+    const snapshot = await requestSnapshot({ action: "saveMany", groups });
+    replaceLocalInvoiceGroupSnapshot(snapshot.groups);
+  }
+
   async delete(id: string): Promise<void> {
     await this.local.delete(id);
     const snapshot = await requestSnapshot({ action: "delete", id, deletedAt: new Date().toISOString() });
