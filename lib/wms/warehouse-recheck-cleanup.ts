@@ -153,7 +153,7 @@ export function planReregistrationTab(reregRows: string[][], productDb: string[]
   return { rebuild: undefined, leaving, returning, keepIds };
 }
 
-export function planWarehouseRecheckCleanup(recheck: string[][], productDb: string[][], storage: string[][] | null, reregisteredSkuIds: ReadonlySet<string> = new Set(), reregHeaders: readonly string[] = [], today = "", reregRows?: string[][], retiredSkuIds: ReadonlySet<string> = new Set(), extraTabs: { other?: string[][] | null; stopped?: string[][] | null } = {}): CleanupPlan & { reregRebuild?: { headers: string[]; rows: string[][]; filled: number }; deleteReregRows: number[]; appendRereg: string[][]; appendOtherRereg: string[][]; appendStopped: string[][]; appendStorage: string[][]; appendProductDb: string[][]; clearStatusRows: number[]; deleteRows: number[]; deleteStorageRows: number[]; deleteProductDbRows: number[] } {
+export function planWarehouseRecheckCleanup(recheck: string[][], productDb: string[][], storage: string[][] | null, reregisteredSkuIds: ReadonlySet<string> = new Set(), reregHeaders: readonly string[] = [], today = "", reregRows?: string[][], retiredSkuIds: ReadonlySet<string> = new Set(), extraTabs: { other?: string[][] | null; stopped?: string[][] | null } = {}): CleanupPlan & { keptRejected: number; reregRebuild?: { headers: string[]; rows: string[][]; filled: number }; deleteReregRows: number[]; appendRereg: string[][]; appendOtherRereg: string[][]; appendStopped: string[][]; appendStorage: string[][]; appendProductDb: string[][]; clearStatusRows: number[]; deleteRows: number[]; deleteStorageRows: number[]; deleteProductDbRows: number[] } {
   const token = createHash("sha256").update(JSON.stringify([recheck, storage, productDb, [...reregisteredSkuIds].sort(), reregHeaders, today, reregRows || null, [...retiredSkuIds].sort(), extraTabs.other || null, extraTabs.stopped || null])).digest("hex").slice(0, 32);
   const problems: string[] = [];
   const reregPlan = reregRows && reregRows.length ? planReregistrationTab(reregRows, productDb, storage) : null;
@@ -163,7 +163,7 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
     const rb = reregPlan.rebuild;
     const at = (name: string) => find(rb.headers, name);
     const moves: CleanupMove[] = rb.rows.map((row, index) => ({ source: "재등록SKU", rowNumber: index + 2, skuId: String(row[at("SKU ID")] ?? "").trim(), productName: String(row[at("상품명")] ?? "").trim(), result: "제품DB 열로 형식 맞추고 정보 채우기", orderableStatus: String(row[at("발주가능상태")] ?? "").trim(), target: "재등록SKU", mode: "fill", release: false }));
-    return { token, pending: 0, moves, unknown: [], problems, reregRebuild: rb, deleteReregRows, appendRereg: [], appendOtherRereg: [], appendStopped: [], appendStorage: [], appendProductDb: [], clearStatusRows: [], deleteRows: [], deleteStorageRows: [], deleteProductDbRows: [] };
+    return { token, pending: 0, keptRejected: 0, moves, unknown: [], problems, reregRebuild: rb, deleteReregRows, appendRereg: [], appendOtherRereg: [], appendStopped: [], appendStorage: [], appendProductDb: [], clearStatusRows: [], deleteRows: [], deleteStorageRows: [], deleteProductDbRows: [] };
   }
   // 재등록SKU 탭에 남는 SKU(단종·중복으로 빠지는 줄 제외)
   reregisteredSkuIds = reregPlan ? reregPlan.keepIds : reregisteredSkuIds;
@@ -415,6 +415,7 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
   }
   // 제품DB: 현재상태 비관리(중복등록)·'단종'이 들어간 모든 상태(거래처단종·단종(중복등록) 등) → 보관 탭, 제품DB에서 지움
   const deleteProductDbRows: number[] = [];
+  let keptRejected = 0;
   if (!problems.length && pd.status >= 0) {
     const stSku = find(stHeaders, "SKU ID", "SKUID", "SKU");
     const inStorage = new Set<string>();
@@ -431,6 +432,9 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       // 2026-10-23: 재등록·신규 등록 진행 중인 줄(등록파일생성·승인대기·재등록시도)은 승인 전까지 옛 SKU 정보를 그대로 갖고 있다.
       // 옛 SKU가 실적저조·판매중지 목록에 있어도 다시 재등록 목록으로 보내지 않고 제품DB에 둔다.
       if (/등록파일생성|승인대기|재등록시도/.test(squash(status))) return;
+      // 2026-11-25 사용자 요청: 쿠팡에서 '반려'된 재등록 줄은 사용자가 계속 재등록하거나 담당자와 협의 중이라
+      // 현재상태만 '반려'로 바꾸고 아직 실적저조SKU 등 옛 SKU 탭으로 옮기지 않는다(제품DB에 그대로 둠). 단종·비관리가 같이 적힌 줄은 기존 규칙대로.
+      if (squash(status).includes("반려") && !isProductDbToStorageStatus(status) && !(skuId && leavingRereg.has(skuId))) { keptRejected++; return; }
       if (skuId && leavingRereg.has(skuId) && !keep.has(rowNumber)) {
         moves.push({ source: "제품DB", rowNumber, skuId, productName: pdName >= 0 ? String(row[pdName] ?? "").trim() : "", result: "재등록SKU에서 비관리SKU로 옮기는 SKU", orderableStatus: pd.orderable >= 0 ? String(row[pd.orderable] ?? "").trim() : "", target: STORAGE_LABEL, mode: "delete-only", release: false });
         deleteProductDbRows.push(rowNumber);
@@ -463,5 +467,5 @@ export function planWarehouseRecheckCleanup(recheck: string[][], productDb: stri
       deleteProductDbRows.push(rowNumber);
     });
   }
-  return { token, pending, moves, unknown, problems: [...new Set(problems)], deleteReregRows, appendRereg, appendOtherRereg, appendStopped, appendStorage, appendProductDb, clearStatusRows: [...new Set(clearStatusRows)], deleteRows, deleteStorageRows, deleteProductDbRows };
+  return { token, pending, keptRejected, moves, unknown, problems: [...new Set(problems)], deleteReregRows, appendRereg, appendOtherRereg, appendStopped, appendStorage, appendProductDb, clearStatusRows: [...new Set(clearStatusRows)], deleteRows, deleteStorageRows, deleteProductDbRows };
 }

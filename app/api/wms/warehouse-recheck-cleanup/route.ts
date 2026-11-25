@@ -76,7 +76,7 @@ async function assertSameSkus(title: string, before: string[][] | undefined, row
   }
 }
 
-const summary = ({ plan, fill }: Awaited<ReturnType<typeof load>>) => ({ token: plan.token, pending: plan.pending, moves: plan.moves, unknown: plan.unknown, problems: plan.problems,
+const summary = ({ plan, fill }: Awaited<ReturnType<typeof load>>) => ({ token: plan.token, pending: plan.pending, keptRejected: plan.keptRejected, moves: plan.moves, unknown: plan.unknown, problems: plan.problems,
   fill: { cost: fill.updates.filter(item => item.field.startsWith("원가")).length, dimension: fill.updates.filter(item => item.field === "치수").length,
     cells: fill.updates.map(item => ({ tab: item.title, row: item.row, skuId: item.skuId, model: item.model, field: item.field, value: item.value })), conflicts: fill.conflicts } });
 

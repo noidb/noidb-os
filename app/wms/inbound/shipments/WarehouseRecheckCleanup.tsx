@@ -11,7 +11,7 @@ const isRetired = (name: string): name is RetiredTab => name === "재등록SKU" 
 const targetLabel = (move: { source: string; target: string; mode: string }) => `${tabLabel(move.target)}${move.mode === "fill" ? " (제품DB 정보 채우기)" : move.mode === "clear-status" ? ` (제품DB에 이미 있음 · ${tabLabel(move.source)}에서 지움)` : move.mode === "delete-only" ? (isRetired(move.target) ? ` (${tabLabel(move.target)}에 이미 있음 · ${tabLabel(move.source)}에서만 지움)` : move.source === "보관" ? " (중복 · 비관리SKU에서만 지움)" : " (비관리SKU에 이미 있음 · 제품DB에서만 지움)") : ""}`;
 type Move = { source: "창고재확인" | "보관" | "제품DB" | "재등록SKU"; rowNumber: number; skuId: string; productName: string; result: string; orderableStatus: string; target: "보관" | "제품DB" | RetiredTab; mode: "append" | "clear-status" | "delete-only" | "fill"; release: boolean; pair?: string };
 type Fill = { cost: number; dimension: number; cells: Array<{ tab: string; row: number; skuId: string; model: string; field: string; value: string }>; conflicts: Array<{ model: string; field: string; values: string[]; used: string }> };
-type Preview = { token: string; pending: number; moves: Move[]; unknown: Array<{ rowNumber: number; skuId: string; productName: string; result: string }>; problems: string[]; fill?: Fill };
+type Preview = { token: string; pending: number; keptRejected?: number; moves: Move[]; unknown: Array<{ rowNumber: number; skuId: string; productName: string; result: string }>; problems: string[]; fill?: Fill };
 
 /** 창고재확인 탭 정리: 미리보기로 옮길 행을 확인한 뒤 실행해야 시트가 바뀐다. */
 export default function WarehouseRecheckCleanup({ onDone, embedded = false, autoLoad = false, onClose }: {
@@ -74,7 +74,7 @@ export default function WarehouseRecheckCleanup({ onDone, embedded = false, auto
           {preview.problems.length > 0 && <p className={`${styles.notice} ${styles.error}`}>{preview.problems.join(" ")}</p>}
           <p className={styles.meta}>
             옮길 행 {preview.moves.length}건 (비관리SKU {preview.moves.filter((m) => m.target === "보관").length} · 제품DB {preview.moves.filter((m) => m.target === "제품DB").length}{(["재등록SKU", "그 외 재등록SKU", "판매중지SKU"] as const).map((tab) => preview.moves.some((m) => m.target === tab) ? ` · ${tabLabel(tab)} ${preview.moves.filter((m) => m.target === tab).length}` : "").join("")}
-            {preview.moves.some((m) => m.release) ? ` · 그중 단종해제 대상 ${preview.moves.filter((m) => m.release).length}` : ""}) · 확인 중(공란) {preview.pending}건
+            {preview.moves.some((m) => m.release) ? ` · 그중 단종해제 대상 ${preview.moves.filter((m) => m.release).length}` : ""}) · 확인 중(공란) {preview.pending}건{preview.keptRejected ? ` · 반려 유지 ${preview.keptRejected}건(아직 안 옮김)` : ""}
             {preview.unknown.length ? ` · 기준 없는 결과 ${preview.unknown.length}건(그대로 둠)` : ""}
           </p>
           {preview.moves.length > 0 && (
